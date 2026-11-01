@@ -34,31 +34,47 @@ Try: 2 trials with 10 ms bins (noisy), 60 trials with 10 ms bins (better), 60 tr
 Spike times usually arrive as a list per trial. `np.histogram` counts how many fall into each bin.
 
 <PyCell code={String.raw`
-import numpy as np
-rng = np.random.default_rng(0)
+  import numpy as np
+  rng = np.random.default_rng(0)
 
-def true_rate(t):                       # t in seconds, rate in Hz
-    return 8 + 55 * np.exp(-((t - 0.35) ** 2) / (2 * 0.06 ** 2)) + 20 * np.exp(-((t - 0.65) ** 2) / (2 * 0.04 ** 2))
+  def true_rate(t):                       # t in seconds, rate in Hz
+      return 8 + 55 * np.exp(-((t - 0.35) ** 2) / (2 * 0.06 ** 2)) + 20 * np.exp(-((t - 0.65) ** 2) / (2 * 0.04 ** 2))
 
-# Simulate 40 trials, 1 s each, at 1 ms resolution
-dt, T, n_trials = 0.001, 1.0, 40
-t = np.arange(0, T, dt)
-spike_trains = [t[rng.random(t.size) < true_rate(t) * dt] for _ in range(n_trials)]
-print("spikes on first 3 trials:", [len(s) for s in spike_trains[:3]])
+  # Simulate 40 trials, 1 s each, at 1 ms resolution
+  dt, T, n_trials = 0.001, 1.0, 40
+  t = np.arange(0, T, dt)
+  spike_trains = [t[rng.random(t.size) < true_rate(t) * dt] for _ in range(n_trials)]
+  print("spikes on first 3 trials:", [len(s) for s in spike_trains[:3]])
 
-edges = np.arange(0, T + 1e-9, 0.02)                       # 20 ms bins
-counts = np.array([np.histogram(s, bins=edges)[0] for s in spike_trains])   # (trials, bins)
-psth = counts.mean(axis=0) / 0.02                          # Hz
-print(counts.shape, psth.shape, "peak rate:", psth.max().round(1), "Hz")
+  edges = np.arange(0, T + 1e-9, 0.02)                       # 20 ms bins
+  counts = np.array([np.histogram(s, bins=edges)[0] for s in spike_trains])   # (trials, bins)
+  psth = counts.mean(axis=0) / 0.02                          # Hz
+  print(counts.shape, psth.shape, "peak rate:", psth.max().round(1), "Hz")
 `} />
 
 The PSTH is the mean count per bin divided by the bin width, so its units are spikes per second. Its standard error across trials is the SEM you met in Week 1, and it tells you how much to trust each bar.
 
 <Derivation title="The noise in one PSTH bar">
-  <div>In a bin of width $\Delta$ where the true rate is $r$, a Poisson neuron's count has mean and variance $r\Delta$.</div>
-  <div>The PSTH bar averages $n$ trials and divides by $\Delta$: $\hat{r} = \frac{1}{n\Delta}\sum_{k} c_k$.</div>
-  <div>Its variance is $\frac{1}{n^2\Delta^2}\cdot n \cdot r\Delta = \frac{r}{n\Delta}$.</div>
-  <div>So the relative noise, standard deviation over mean, is $\frac{\sqrt{r/(n\Delta)}}{r} = \frac{1}{\sqrt{r\, n \Delta}}$. Halving the bin width increases the noise by $\sqrt{2}$; quadrupling the trials halves it. That answers today's prediction.</div>
+  <div>
+
+In a bin of width $\Delta$ where the true rate is $r$, a Poisson neuron's count has mean and variance $r\Delta$.
+
+  </div>
+  <div>
+
+The PSTH bar averages $n$ trials and divides by $\Delta$: $\hat{r} = \frac{1}{n\Delta}\sum_{k} c_k$.
+
+  </div>
+  <div>
+
+Its variance is $\frac{1}{n^2\Delta^2}\cdot n \cdot r\Delta = \frac{r}{n\Delta}$.
+
+  </div>
+  <div>
+
+So the relative noise, standard deviation over mean, is $\frac{\sqrt{r/(n\Delta)}}{r} = \frac{1}{\sqrt{r\, n \Delta}}$. Halving the bin width increases the noise by $\sqrt{2}$; quadrupling the trials halves it. That answers today's prediction.
+
+  </div>
 </Derivation>
 
 <Step n={3} title="Smoothing" minutes={25} />
@@ -66,23 +82,23 @@ The PSTH is the mean count per bin divided by the bin width, so its units are sp
 Instead of wide bins, you can use narrow bins and then **smooth** with a kernel: replace each value by a weighted average of its neighbours. A Gaussian kernel of width $\sigma$ is the usual choice. This is a **convolution**, an operation you will study properly in Week 10 and meet again as the core of convolutional networks in Week 84.
 
 <PyCell code={String.raw`
-import matplotlib.pyplot as plt
+  import matplotlib.pyplot as plt
 
-fine = np.array([np.histogram(s, bins=np.arange(0, T + 1e-9, 0.001))[0] for s in spike_trains])   # 1 ms bins
-raw_rate = fine.mean(axis=0) / 0.001
+  fine = np.array([np.histogram(s, bins=np.arange(0, T + 1e-9, 0.001))[0] for s in spike_trains])   # 1 ms bins
+  raw_rate = fine.mean(axis=0) / 0.001
 
-def gaussian_kernel(sigma, dt):
-    x = np.arange(-4 * sigma, 4 * sigma + dt / 2, dt)
-    k = np.exp(-x ** 2 / (2 * sigma ** 2))
-    return k / k.sum()                       # weights sum to 1, so the mean rate is unchanged
+  def gaussian_kernel(sigma, dt):
+      x = np.arange(-4 * sigma, 4 * sigma + dt / 2, dt)
+      k = np.exp(-x ** 2 / (2 * sigma ** 2))
+      return k / k.sum()                       # weights sum to 1, so the mean rate is unchanged
 
-plt.figure(figsize=(7, 3))
-plt.plot(t, raw_rate, color="0.8", lw=0.5, label="1 ms bins")
-for sigma in [0.005, 0.02, 0.08]:
-    plt.plot(t, np.convolve(raw_rate, gaussian_kernel(sigma, 0.001), mode="same"), label=f"σ = {sigma*1000:.0f} ms")
-plt.plot(t, true_rate(t), "k--", lw=1, label="true rate")
-plt.xlabel("time (s)"); plt.ylabel("rate (Hz)"); plt.legend(fontsize=7); plt.ylim(0, 120)
-plt.show()
+  plt.figure(figsize=(7, 3))
+  plt.plot(t, raw_rate, color="0.8", lw=0.5, label="1 ms bins")
+  for sigma in [0.005, 0.02, 0.08]:
+      plt.plot(t, np.convolve(raw_rate, gaussian_kernel(sigma, 0.001), mode="same"), label=f"σ = {sigma*1000:.0f} ms")
+  plt.plot(t, true_rate(t), "k--", lw=1, label="true rate")
+  plt.xlabel("time (s)"); plt.ylabel("rate (Hz)"); plt.legend(fontsize=7); plt.ylim(0, 120)
+  plt.show()
 `} />
 
 <Bridge title="Rates are a model"
@@ -96,84 +112,84 @@ Whether rates or spike times are the brain's code is an old debate. In Week 34 y
 <Step n={4} title="Exercises" minutes={30} />
 
 <PyCell id="bin" title="Bin spike times" tests={String.raw`
-import numpy as np
-def test_counts():
-    "bin_spikes counts spikes per bin for each trial"
-    trains = [np.array([0.01, 0.015, 0.5]), np.array([0.99])]
-    c = bin_spikes(trains, T=1.0, width=0.1)
-    assert c.shape == (2, 10)
-    assert c[0, 0] == 2 and c[0, 5] == 1 and c[1, 9] == 1 and c.sum() == 4
+  import numpy as np
+  def test_counts():
+      "bin_spikes counts spikes per bin for each trial"
+      trains = [np.array([0.01, 0.015, 0.5]), np.array([0.99])]
+      c = bin_spikes(trains, T=1.0, width=0.1)
+      assert c.shape == (2, 10)
+      assert c[0, 0] == 2 and c[0, 5] == 1 and c[1, 9] == 1 and c.sum() == 4
 `} prompt="Write `bin_spikes(trains, T, width)` that returns a (trials, bins) array of spike counts for bins of the given width from 0 to T."
 code={String.raw`
-def bin_spikes(trains, T, width):
-    edges = ...
-    return ...
+  def bin_spikes(trains, T, width):
+      edges = ...
+      return ...
 
-print(bin_spikes(spike_trains, 1.0, 0.1).shape)
+  print(bin_spikes(spike_trains, 1.0, 0.1).shape)
 `}
 hint="edges = np.arange(0, T + 1e-9, width). Then np.array([np.histogram(s, bins=edges)[0] for s in trains])."
 solution={String.raw`
-def bin_spikes(trains, T, width):
-    edges = np.arange(0, T + 1e-9, width)
-    return np.array([np.histogram(s, bins=edges)[0] for s in trains])
+  def bin_spikes(trains, T, width):
+      edges = np.arange(0, T + 1e-9, width)
+      return np.array([np.histogram(s, bins=edges)[0] for s in trains])
 
-print(bin_spikes(spike_trains, 1.0, 0.1).shape)
+  print(bin_spikes(spike_trains, 1.0, 0.1).shape)
 `} />
 
 <PyCell id="latency" title="Peak and latency" tests={String.raw`
-import numpy as np
-def test_peak():
-    "peak_time is the centre of the bin with the highest smoothed rate"
-    assert 0.32 <= peak_time <= 0.38, f"peak_time was {peak_time}; the main peak is near 0.35 s."
+  import numpy as np
+  def test_peak():
+      "peak_time is the centre of the bin with the highest smoothed rate"
+      assert 0.32 <= peak_time <= 0.38, f"peak_time was {peak_time}; the main peak is near 0.35 s."
 
-def test_latency():
-    "latency is the first time the smoothed rate exceeds half its peak"
-    assert 0.2 <= latency <= 0.33, f"latency was {latency}"
+  def test_latency():
+      "latency is the first time the smoothed rate exceeds half its peak"
+      assert 0.2 <= latency <= 0.33, f"latency was {latency}"
 `} prompt="Smooth `raw_rate` with a 20 ms Gaussian into `smooth`. Find `peak_time` (time of the maximum, using `np.argmax`) and `latency`: the first time the smoothed rate exceeds half of its peak. These two numbers are reported in nearly every study of sensory responses."
 code={String.raw`
-smooth = ...
-peak_time = ...
-latency = ...
-print(f"peak at {peak_time:.3f} s, latency {latency:.3f} s")
+  smooth = ...
+  peak_time = ...
+  latency = ...
+  print(f"peak at {peak_time:.3f} s, latency {latency:.3f} s")
 `}
 hint="smooth = np.convolve(raw_rate, gaussian_kernel(0.02, 0.001), mode='same'). peak_time = t[np.argmax(smooth)]. For latency, the mask smooth > smooth.max() / 2 is True after onset; np.argmax on a boolean array gives the first True."
 solution={String.raw`
-smooth = np.convolve(raw_rate, gaussian_kernel(0.02, 0.001), mode="same")
-peak_time = t[np.argmax(smooth)]
-latency = t[np.argmax(smooth > smooth.max() / 2)]
-print(f"peak at {peak_time:.3f} s, latency {latency:.3f} s")
+  smooth = np.convolve(raw_rate, gaussian_kernel(0.02, 0.001), mode="same")
+  peak_time = t[np.argmax(smooth)]
+  latency = t[np.argmax(smooth > smooth.max() / 2)]
+  print(f"peak at {peak_time:.3f} s, latency {latency:.3f} s")
 `} />
 
 <PyCell id="sem_psth" title="PSTH with error bands" tests={String.raw`
-import numpy as np
-def test_sem():
-    "sem is the standard error across trials for each bin, in Hz"
-    c = bin_spikes(spike_trains, 1.0, 0.02)
-    expect = c.std(axis=0, ddof=1) / np.sqrt(c.shape[0]) / 0.02
-    assert np.allclose(sem, expect)
+  import numpy as np
+  def test_sem():
+      "sem is the standard error across trials for each bin, in Hz"
+      c = bin_spikes(spike_trains, 1.0, 0.02)
+      expect = c.std(axis=0, ddof=1) / np.sqrt(c.shape[0]) / 0.02
+      assert np.allclose(sem, expect)
 `} prompt="For 20 ms bins, compute `rate` (the PSTH in Hz) and `sem`, the standard error of the mean across trials in each bin, also in Hz. Plot the PSTH with a shaded band of plus and minus one SEM."
 code={String.raw`
-import matplotlib.pyplot as plt
-c = bin_spikes(spike_trains, 1.0, 0.02)
-centres = np.arange(0.01, 1.0, 0.02)
-rate = ...
-sem = ...
-plt.figure(figsize=(6, 3))
-plt.plot(centres, rate)
-plt.fill_between(centres, rate - sem, rate + sem, alpha=0.3)
-plt.xlabel("time (s)"); plt.ylabel("rate (Hz)"); plt.show()
+  import matplotlib.pyplot as plt
+  c = bin_spikes(spike_trains, 1.0, 0.02)
+  centres = np.arange(0.01, 1.0, 0.02)
+  rate = ...
+  sem = ...
+  plt.figure(figsize=(6, 3))
+  plt.plot(centres, rate)
+  plt.fill_between(centres, rate - sem, rate + sem, alpha=0.3)
+  plt.xlabel("time (s)"); plt.ylabel("rate (Hz)"); plt.show()
 `}
 hint="rate = c.mean(axis=0) / 0.02 and sem = c.std(axis=0, ddof=1) / np.sqrt(c.shape[0]) / 0.02."
 solution={String.raw`
-import matplotlib.pyplot as plt
-c = bin_spikes(spike_trains, 1.0, 0.02)
-centres = np.arange(0.01, 1.0, 0.02)
-rate = c.mean(axis=0) / 0.02
-sem = c.std(axis=0, ddof=1) / np.sqrt(c.shape[0]) / 0.02
-plt.figure(figsize=(6, 3))
-plt.plot(centres, rate)
-plt.fill_between(centres, rate - sem, rate + sem, alpha=0.3)
-plt.xlabel("time (s)"); plt.ylabel("rate (Hz)"); plt.show()
+  import matplotlib.pyplot as plt
+  c = bin_spikes(spike_trains, 1.0, 0.02)
+  centres = np.arange(0.01, 1.0, 0.02)
+  rate = c.mean(axis=0) / 0.02
+  sem = c.std(axis=0, ddof=1) / np.sqrt(c.shape[0]) / 0.02
+  plt.figure(figsize=(6, 3))
+  plt.plot(centres, rate)
+  plt.fill_between(centres, rate - sem, rate + sem, alpha=0.3)
+  plt.xlabel("time (s)"); plt.ylabel("rate (Hz)"); plt.show()
 `} />
 
 <Quiz id="quiz" questions={[

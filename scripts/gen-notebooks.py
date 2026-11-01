@@ -1,6 +1,6 @@
 """Builds a Colab notebook for every lesson from its code cells: public/notebooks/wNNN/dD.ipynb.
 Exercises appear as starter code with the prompt and the checks, so they can be done in Colab too."""
-import json, os, re, sys
+import json, os, re, sys, textwrap
 sys.path.insert(0, os.path.dirname(__file__))
 from validate import cells, all_lessons, ROOT
 
@@ -19,7 +19,7 @@ for lesson in all_lessons():
     nb = [md(f"# Week {w}, Day {d}: {title}\n\nCompanion notebook for the Engram lesson at https://engram-neuroai.vercel.app/learn/{lesson[:4]}/{lesson[4:]}.\nRun the cells in order. Exercises have a checks cell after them: run it to test your answer.")]
     for m in re.finditer(r"<PyCell(.*?)/>", src, re.S):
         attrs = m.group(1)
-        props = dict(re.findall(r'(\w+)=\{String\.raw`(.*?)`\}', attrs, re.S))
+        props = {k: textwrap.dedent(v) for k, v in re.findall(r'(\w+)=\{String\.raw`(.*?)`\}', attrs, re.S)}
         t = re.search(r'title="([^"]+)"', attrs)
         p = re.search(r'prompt="([^"]+)"', attrs)
         if "tests" in props:

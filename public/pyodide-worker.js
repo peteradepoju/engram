@@ -44,10 +44,20 @@ function scope(name) {
   return scopes.get(name);
 }
 
-self.onmessage = async (e) => {
-  const m = e.data;
+// Runs are handled one at a time, in order: output and namespaces must not interleave.
+let queue = Promise.resolve();
+self.onmessage = (e) => { queue = queue.then(() => handle(e.data)); };
+
+async function handle(m) {
   try {
     await boot();
+  } catch (err) {
+    ready = null;
+    postMessage({ type: "boot-error", error: String(err) });
+    if (m.id) postMessage({ id: m.id, type: "done", ok: false, error: "Python could not start: " + String(err), figs: [], results: null });
+    return;
+  }
+  try {
     if (m.type === "boot") return;
     if (m.type === "reset") { scopes.delete(m.scope); postMessage({ id: m.id, type: "done", ok: true }); return; }
 
@@ -78,10 +88,10 @@ def __engram_run_tests():
     import traceback
     _ns = {}
     _ns.update(globals())
-    exec(__engram_tests_src, _ns)
+    exec(compile(__engram_tests_src, "<checks>", "exec"), _ns)
     out = []
     for name, fn in list(_ns.items()):
-        if name.startswith("test_") and callable(fn):
+        if name.startswith("test_") and callable(fn) and getattr(getattr(fn, "__code__", None), "co_filename", "") == "<checks>":
             doc = (fn.__doc__ or name[5:].replace("_", " ")).strip()
             try:
                 fn()
@@ -102,6 +112,8 @@ __engram_run_tests()
       }
     }
 
+    // stdout is block-buffered in Pyodide: flush now so output reaches this cell, not the next one.
+    try { pyodide.runPython("import sys\nsys.stdout.flush()\nsys.stderr.flush()"); } catch (_) {}
     const figsProxy = pyodide.globals.get("__engram_figs")();
     const figs = figsProxy.toJs();
     figsProxy.destroy();
@@ -109,7 +121,7 @@ __engram_run_tests()
   } catch (err) {
     postMessage({ id: m.id, type: "done", ok: false, error: cleanError(String(err)), figs: [], results: null });
   }
-};
+}
 
 function cleanError(s) {
   // Drop Pyodide's internal frames and keep the part that matters to a learner.

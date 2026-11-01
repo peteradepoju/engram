@@ -1,13 +1,13 @@
 """Checks every lesson's Python: plain cells must run, exercise solutions must pass their
 tests, and exercise starters must not pass. Run: python3 scripts/validate.py [w001d1 ...]"""
-import os, re, sys, tempfile, traceback, contextlib, io
+import os, re, sys, tempfile, traceback, contextlib, io, textwrap
 
 ROOT = os.path.join(os.path.dirname(__file__), "..", "content")
 RAW = re.compile(r'(\w+)=\{String\.raw`(.*?)`\}', re.S)
 
 def cells(src):
     for m in re.finditer(r"<PyCell(.*?)/>", src, re.S):
-        props = dict(RAW.findall(m.group(1)))
+        props = {k: textwrap.dedent(v) for k, v in RAW.findall(m.group(1))}
         ident = re.search(r'\bid="([^"]+)"', m.group(1))
         yield ident.group(1) if ident else None, props
 
