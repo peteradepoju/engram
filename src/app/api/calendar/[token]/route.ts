@@ -14,7 +14,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ token: 
 
   const start: string = row.start_date;
   const today = todayIn(row.timezone);
-  const site = process.env.NEXT_PUBLIC_SITE_URL || "https://engram-peteradepoju.vercel.app";
+  const site = process.env.NEXT_PUBLIC_SITE_URL || "https://engram-neuroai.vercel.app";
   const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Engram//NeuroAI course//EN", "CALSCALE:GREGORIAN", "X-WR-CALNAME:Engram study plan", "X-PUBLISHED-TTL:PT6H"];
   const stamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15) + "Z";
   const ymd = (d: string) => d.replace(/-/g, "");

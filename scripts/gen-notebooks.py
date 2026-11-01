@@ -16,7 +16,7 @@ for lesson in all_lessons():
     src = open(os.path.join(ROOT, lesson[:4], lesson[4:] + ".mdx")).read()
     title = re.search(r'title: "([^"]+)"', src).group(1)
     w, d = int(lesson[1:4]), int(lesson[5])
-    nb = [md(f"# Week {w}, Day {d}: {title}\n\nCompanion notebook for the Engram lesson at https://engram-peteradepoju.vercel.app/learn/{lesson[:4]}/{lesson[4:]}.\nRun the cells in order. Exercises have a checks cell after them: run it to test your answer.")]
+    nb = [md(f"# Week {w}, Day {d}: {title}\n\nCompanion notebook for the Engram lesson at https://engram-neuroai.vercel.app/learn/{lesson[:4]}/{lesson[4:]}.\nRun the cells in order. Exercises have a checks cell after them: run it to test your answer.")]
     for m in re.finditer(r"<PyCell(.*?)/>", src, re.S):
         attrs = m.group(1)
         props = dict(re.findall(r'(\w+)=\{String\.raw`(.*?)`\}', attrs, re.S))

@@ -1,6 +1,6 @@
 # Engram
 
-**Learn how brains and machines learn.** A free, 208-week course in NeuroAI (neuroscience, machine learning and deep learning), from mathematics to independent research, at about three hours a day, six days a week.
+**Learn how brains and machines learn.** Live at https://engram-neuroai.vercel.app. A free, 208-week course in NeuroAI (neuroscience, machine learning and deep learning), from mathematics to independent research, at about three hours a day, six days a week.
 
 Each lesson day has interactive figures, step-by-step derivations, curated videos, Python that runs in the browser (Pyodide), auto-marked exercises, a quiz, flashcards for spaced review (FSRS) and a research-journal prompt. Every week has five hand-picked papers with reading guides. The Research Lab turns journal questions into projects, from hypothesis to paper, with drafts and venues tracked.
 
