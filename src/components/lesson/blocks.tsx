@@ -84,9 +84,14 @@ export function Figure({ caption, credit, children }: { caption?: ReactNode; cre
 export function Colab({ path, label = "Open the notebook in Colab" }: { path: string; label?: string }) {
   const href = `https://colab.research.google.com/github/peteradepoju/engram/blob/main/public/notebooks/${path}`;
   return (
-    <a href={href} target="_blank" rel="noreferrer" className="btn !no-underline">
-      <span className="rounded bg-[#f9ab00] px-1 text-[0.7rem] font-bold text-black">CO</span> {label}
-    </a>
+    <span className="inline-flex flex-wrap gap-2">
+      <a href={href} target="_blank" rel="noreferrer" className="btn !no-underline">
+        <span className="rounded bg-[#f9ab00] px-1 text-[0.7rem] font-bold text-black">CO</span> {label}
+      </a>
+      <a href={`/notebooks/${path}`} download className="btn !no-underline" title="Download, then in Colab choose File, Upload notebook (or open it in Jupyter)">
+        Download notebook (.ipynb)
+      </a>
+    </span>
   );
 }
 
