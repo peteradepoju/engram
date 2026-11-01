@@ -1,0 +1,231 @@
+export const meta = {
+  title: "Random numbers and simulation: Poisson spike trains",
+  intro: "Cortical neurons fire irregularly: the same stimulus gives a different spike train every time. The simplest model of this is the Poisson process. Today you learn to use random numbers properly, simulate Poisson neurons two different ways, measure their variability, and see how a refractory period makes real neurons more regular.",
+  goals: [
+    "Use NumPy's random generator with seeds for reproducible simulations",
+    "Simulate Poisson spike trains from bins and from exponential intervals",
+    "Measure variability with the Fano factor and the CV of interspike intervals",
+    "Show how a refractory period changes these measures",
+  ],
+  plan: [
+    { label: "Predict and random numbers", minutes: 20 },
+    { label: "The Poisson process", minutes: 30 },
+    { label: "Measuring variability", minutes: 25 },
+    { label: "Exercises", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "softky-1993",
+};
+
+<Predict question="A neuron fires at 20 Hz like a Poisson process. Across many 1-second trials, what is the variance of its spike count?" />
+
+<Step n={1} title="Random numbers done properly" minutes={20} />
+
+Simulations need randomness, and research needs that randomness to be **reproducible**. NumPy's modern interface is a generator object made with a **seed**. The same seed gives the same numbers every time, on every computer.
+
+<PyCell code={String.raw`
+import numpy as np
+rng = np.random.default_rng(seed=42)
+print(rng.random(3))            # uniform on [0, 1)
+print(rng.normal(0, 1, 3))      # Gaussian with mean 0, SD 1
+print(rng.poisson(4.0, 5))      # Poisson counts with mean 4
+print(rng.exponential(0.05, 3)) # exponential with mean 0.05
+
+rng2 = np.random.default_rng(seed=42)
+print("same seed, same numbers:", rng2.random(3))
+`} />
+
+<Callout kind="research">
+Report seeds in papers and run important simulations with several seeds. If a result appears with one seed and vanishes with another, it was luck. Machine learning papers now routinely report the mean and spread over seeds.
+</Callout>
+
+<Step n={2} title="The Poisson process" minutes={30} />
+
+A **Poisson process** with rate $r$ has two defining properties: in any tiny interval $dt$ the probability of a spike is $r\,dt$, and what happens in one interval is independent of every other. It has no memory. Two equivalent ways to simulate it follow from this.
+
+**Method 1: bins.** Divide time into small bins of width $dt$ and put a spike in each bin with probability $r\,dt$.
+
+**Method 2: intervals.** The waiting time between spikes follows an **exponential distribution** with mean $1/r$. Draw intervals and add them up.
+
+<Derivation title="Why the intervals are exponential">
+  <div>Let $P(\tau)$ be the probability that no spike happens in a stretch of length $\tau$.</div>
+  <div>Split $\tau$ into $n$ tiny bins of width $dt = \tau/n$. Each is empty with probability $1 - r\,dt$, independently, so $P(\tau) = (1 - r\tau/n)^n$.</div>
+  <div>As $n \to \infty$, $(1 - x/n)^n \to e^{-x}$, so $P(\tau) = e^{-r\tau}$.</div>
+  <div>The waiting time $W$ exceeds $\tau$ exactly when no spike happens before $\tau$, so $\Pr(W \gt \tau) = e^{-r\tau}$. Differentiating, its density is $r e^{-r\tau}$: the exponential distribution, with mean $1/r$.</div>
+</Derivation>
+
+The **count** of spikes in a window of length $T$ follows the **Poisson distribution** with mean $\lambda = rT$:
+
+$$
+\Pr(N = k) = \frac{\lambda^k e^{-\lambda}}{k!}, \qquad \mathbb{E}[N] = \lambda, \qquad \operatorname{Var}[N] = \lambda
+$$
+
+Mean equals variance. That is the fingerprint of a Poisson process, and the answer to today's prediction: 20.
+
+<Figure caption="Top: 12 example trials of a Poisson neuron. Bottom: the distribution of spike counts over 200 trials (bars) against the Poisson formula (dots)." credit="Interactive figure by Engram.">
+  <PoissonSpikes />
+</Figure>
+
+<Step n={3} title="Measuring variability" minutes={25} />
+
+Two numbers summarise a neuron's variability:
+
+- The **Fano factor** of spike counts: $F = \operatorname{Var}[N] / \mathbb{E}[N]$. Poisson gives $F = 1$.
+- The **coefficient of variation** of interspike intervals: $\text{CV} = \text{SD}(\text{ISI}) / \text{mean}(\text{ISI})$. For an exponential distribution the SD equals the mean, so Poisson gives $\text{CV} = 1$. A perfectly regular clock gives $\text{CV} = 0$.
+
+Cortical neurons typically have both near 1 (Softky and Koch, 1993, today's paper). But a real neuron cannot fire again for a millisecond or two after a spike: the **refractory period**. That makes very short intervals impossible and the train more regular.
+
+<PyCell code={String.raw`
+def poisson_train(rate, T, rng, refractory=0.0):
+    """Spike times in [0, T) from exponential intervals, plus an optional dead time after each spike."""
+    times, t = [], 0.0
+    while True:
+        t += refractory + rng.exponential(1 / rate)
+        if t >= T:
+            return np.array(times)
+        times.append(t)
+
+rng = np.random.default_rng(0)
+for ref in [0.0, 0.002, 0.01]:
+    isi = np.diff(poisson_train(50, 200, rng, refractory=ref))
+    print(f"refractory {ref*1000:4.0f} ms: mean ISI {isi.mean()*1000:5.1f} ms, CV {isi.std()/isi.mean():.2f}")
+`} />
+
+<Bridge title="Noise: a bug or a feature?"
+  neuro="Neural variability might be noise the brain must average away, or it might carry information: some theories say variability represents uncertainty, so a brain doing probabilistic inference would show exactly this kind of randomness."
+  ai="Deep learning adds noise on purpose: dropout randomly silences units, stochastic gradient descent uses random batches, and diffusion models generate images by learning to remove noise. Randomness can make learning more robust.">
+
+You will return to this in Week 112 (the Bayesian brain) and Week 91 (diffusion models).
+
+</Bridge>
+
+<Step n={4} title="Exercises" minutes={30} />
+
+<PyCell id="bins" title="Poisson spikes from bins" tests={String.raw`
+import numpy as np
+def test_shape():
+    "spikes is a boolean array of shape (trials, bins)"
+    assert spikes.shape == (500, 1000) and spikes.dtype == bool
+
+def test_rate():
+    "the mean rate is close to 20 Hz"
+    r = spikes.sum(axis=1).mean() / 1.0
+    assert 18.5 < r < 21.5, f"Mean rate was {r:.1f} Hz"
+`} prompt="Simulate 500 trials of 1 s at 20 Hz using 1 ms bins (method 1). Store a boolean array `spikes` of shape (500, 1000) where True means a spike in that bin."
+code={String.raw`
+rng = np.random.default_rng(1)
+rate, dt = 20.0, 0.001
+spikes = ...
+print(spikes.shape, "mean rate:", spikes.sum(axis=1).mean(), "Hz")
+`}
+hint="spikes = rng.random((500, 1000)) < rate * dt"
+solution={String.raw`
+rng = np.random.default_rng(1)
+rate, dt = 20.0, 0.001
+spikes = rng.random((500, 1000)) < rate * dt
+print(spikes.shape, "mean rate:", spikes.sum(axis=1).mean(), "Hz")
+`} />
+
+<PyCell id="fano" title="Fano factor" tests={String.raw`
+import numpy as np
+def test_fano_function():
+    "fano computes variance over mean of counts"
+    assert abs(fano(np.array([2, 4, 4, 6])) - np.var([2, 4, 4, 6], ddof=1) / 4) < 1e-12
+
+def test_fano_value():
+    "the Fano factor of the simulated counts is close to 1"
+    assert 0.85 < F < 1.15, f"F was {F:.2f}"
+`} prompt="Write `fano(counts)` (variance with $n-1$ divided by mean). Compute `F` for the spike counts per trial from `spikes`."
+code={String.raw`
+def fano(counts):
+    ...
+
+F = ...
+print("Fano factor:", F)
+`}
+hint="return counts.var(ddof=1) / counts.mean(). The counts per trial are spikes.sum(axis=1)."
+solution={String.raw`
+def fano(counts):
+    return counts.var(ddof=1) / counts.mean()
+
+F = fano(spikes.sum(axis=1))
+print("Fano factor:", F)
+`} />
+
+<PyCell id="refractory" title="Refractoriness and regularity" tests={String.raw`
+import numpy as np
+def test_lengths():
+    "one CV per refractory period"
+    assert len(cvs) == len(refs)
+
+def test_decreasing():
+    "CV falls as the refractory period grows"
+    assert all(b < a for a, b in zip(cvs, cvs[1:])), f"cvs = {np.round(cvs, 3)}"
+    assert abs(cvs[0] - 1) < 0.08, "With no refractory period the CV should be close to 1."
+`} prompt="For a 40 Hz neuron, compute the ISI CV for refractory periods `refs = [0, 0.002, 0.005, 0.01, 0.02]` seconds using `poisson_train` with T = 200 s. Store them in `cvs` and plot CV against refractory period."
+code={String.raw`
+import matplotlib.pyplot as plt
+rng = np.random.default_rng(2)
+refs = [0, 0.002, 0.005, 0.01, 0.02]
+cvs = []
+for ref in refs:
+    ...
+print(np.round(cvs, 3))
+plt.figure(figsize=(4, 3)); plt.plot(np.array(refs) * 1000, cvs, "o-")
+plt.xlabel("refractory period (ms)"); plt.ylabel("ISI CV"); plt.show()
+`}
+hint="isi = np.diff(poisson_train(40, 200, rng, refractory=ref)); cvs.append(isi.std() / isi.mean())"
+solution={String.raw`
+import matplotlib.pyplot as plt
+rng = np.random.default_rng(2)
+refs = [0, 0.002, 0.005, 0.01, 0.02]
+cvs = []
+for ref in refs:
+    isi = np.diff(poisson_train(40, 200, rng, refractory=ref))
+    cvs.append(isi.std() / isi.mean())
+print(np.round(cvs, 3))
+plt.figure(figsize=(4, 3)); plt.plot(np.array(refs) * 1000, cvs, "o-")
+plt.xlabel("refractory period (ms)"); plt.ylabel("ISI CV"); plt.show()
+`} />
+
+<Prove title="CV with a dead time" task="With a refractory period $d$ followed by an exponential wait of mean $1/r$, each ISI is $d + E$ where $E$ is exponential. Show that $\text{CV} = \dfrac{1}{1 + r d}$.">
+
+The mean ISI is $d + 1/r$. The variance is that of $E$ alone (adding a constant does not change variance): $1/r^2$, so the SD is $1/r$.
+
+$$\text{CV} = \frac{1/r}{d + 1/r} = \frac{1}{1 + rd}$$
+
+With $r = 40$ Hz and $d = 0.01$ s, $rd = 0.4$ and CV $= 1/1.4 \approx 0.71$. Check this against your simulation. (Here $r$ is the rate of the exponential part; the neuron's actual firing rate is $1/(d + 1/r)$, which is lower.)
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "A Poisson neuron fires at 20 Hz. Variance of the count in 1 s?", options: ["1", "$\\sqrt{20}$", "20", "400"], answer: 2, explain: "For a Poisson count, variance equals the mean, $rT = 20$." },
+  { q: "Why use a seed?", options: ["To make numbers more random", "So the simulation gives the same numbers every time it runs", "To make it faster", "To avoid zeros"], answer: 1, explain: "Seeds make results reproducible." },
+  { q: "Intervals between Poisson spikes follow which distribution?", options: ["Gaussian", "Uniform", "Exponential", "Poisson"], answer: 2, explain: "$\\Pr(W > \\tau) = e^{-r\\tau}$." },
+  { q: "A perfectly regular neuron has ISI CV of...", options: ["0", "1", "Infinity", "0.5"], answer: 0, explain: "No variation in intervals means SD = 0." },
+  { q: "Adding a refractory period makes the CV...", options: ["Larger than 1", "Smaller than 1", "Exactly 1", "Undefined"], answer: 1, explain: "Short intervals become impossible, so the train is more regular: CV = 1/(1 + rd)." },
+  { q: "To simulate spikes at rate r in bins of dt, each bin has a spike with probability...", options: ["$r$", "$r\\,dt$", "$1/r$", "$dt$"], answer: 1, explain: "Valid when $r\\,dt$ is small, so two spikes in one bin are rare." },
+  { q: "Softky and Koch (1993) argued that irregular cortical firing is a puzzle because...", options: ["Neurons should be silent", "A neuron summing many small random inputs would fire regularly", "Poisson processes are impossible", "Spikes are too fast"], answer: 1, explain: "Averaging many inputs smooths them, which should make output regular. Balanced excitation and inhibition is one resolution." },
+]} />
+
+<Flashcards cards={[
+  { front: "Two defining properties of a Poisson process?", back: "Spike probability $r\\,dt$ in any tiny interval; independence between intervals (no memory)." },
+  { front: "Poisson distribution, mean and variance?", back: "$\\Pr(N=k) = \\lambda^k e^{-\\lambda}/k!$; mean = variance = $\\lambda = rT$." },
+  { front: "ISI distribution of a Poisson process?", back: "Exponential with density $re^{-r\\tau}$ and mean $1/r$." },
+  { front: "Fano factor?", back: "Variance of counts over mean of counts. Poisson gives 1." },
+  { front: "ISI CV with refractory period d?", back: "$1/(1 + rd)$, below 1: refractoriness makes firing more regular." },
+  { front: "Make a simulation reproducible in NumPy?", back: "rng = np.random.default_rng(seed) and draw everything from rng." },
+]} />
+
+<Predict revisit question="What is the variance of a 20 Hz Poisson neuron's count in 1 s?" />
+
+<Key title="Before you go">
+<ul>
+<li>Use a seeded generator for every simulation; report seeds.</li>
+<li>Poisson spikes: probability $r\,dt$ per bin, or exponential intervals with mean $1/r$.</li>
+<li>Poisson counts have mean = variance (Fano factor 1) and intervals with CV 1.</li>
+<li>Refractoriness lowers the CV to $1/(1+rd)$.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="If neural variability carries information about uncertainty rather than being pure noise, what experiment would tell the two apart? Write a first rough design." />

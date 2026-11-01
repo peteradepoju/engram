@@ -1,0 +1,231 @@
+export const meta = {
+  title: "Arrays: the shape of neural data",
+  intro: "A modern recording gives you hundreds of neurons, hundreds of trials and thousands of time points. Python lists cannot handle that well; NumPy arrays can. Today you learn what an array really is, how to think in shapes, and why array code is up to a hundred times faster than loops.",
+  goals: [
+    "Create arrays and read their shape, size and data type",
+    "Describe a recording as an array with named axes",
+    "Use reductions along an axis (mean, sum, max)",
+    "Explain why vectorised code is faster than loops",
+  ],
+  plan: [
+    { label: "Predict and why arrays", minutes: 15 },
+    { label: "Creating arrays", minutes: 25 },
+    { label: "Shapes and axes", minutes: 30 },
+    { label: "Speed: loops against vectors", minutes: 20 },
+    { label: "Exercises", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "harris-2020",
+};
+
+<Predict question="A recording has 100 neurons, 50 trials and 1000 time bins, stored as one array. How many numbers is that, and what shape is left if you average over trials?" />
+
+<Step n={1} title="Why arrays" minutes={15} />
+
+Your Week 1 code used Python lists and loops. That works for a few numbers. But the dataset you will analyse in Part 2 (Steinmetz et al., 2019, this week's deep read) has about 30,000 neurons. A Python list stores each number as a separate object scattered around memory, and a loop handles them one at a time.
+
+A **NumPy array** stores numbers of one type in a single block of memory, and its operations run in compiled C code over the whole block at once. That makes code shorter (no loops) and much faster. Almost every scientific Python library, from SciPy to PyTorch, is built on this idea.
+
+<Video id="fNk_zzaMoSs" title="Vectors | Chapter 1, Essence of linear algebra" by="3Blue1Brown (Grant Sanderson)" note="Optional, 10 minutes. A one-dimensional array is a vector; this video is the best picture of what that means. It also prepares you for Week 4." />
+
+<Step n={2} title="Creating arrays" minutes={25} />
+
+<PyCell code={String.raw`
+import numpy as np
+
+rates = np.array([12.0, 15.5, 9.8, 22.1])     # from a list
+print(rates, rates.dtype, rates.shape)
+
+zeros = np.zeros((3, 4))                       # 3 rows, 4 columns of zeros
+t = np.arange(0, 1, 0.25)                      # 0, 0.25, 0.5, 0.75
+grid = np.linspace(0, 1, 5)                    # 5 evenly spaced points including both ends
+print(zeros.shape, t, grid)
+
+# Arithmetic works element by element, with no loop.
+print(rates * 2)
+print(rates - rates.mean())
+`} />
+
+Three properties describe every array:
+
+- `shape`: the size along each axis, as a tuple. `(4,)` is one axis of length 4; `(3, 4)` is 3 rows and 4 columns.
+- `ndim`: the number of axes, the length of the shape.
+- `dtype`: the type of every element, such as `float64` or `int64`. One array, one type.
+
+<Callout kind="warning">
+`np.arange(0, 1, 0.1)` can give 10 or 11 numbers because of rounding in floating-point arithmetic. When you want a fixed number of points, use `np.linspace`.
+</Callout>
+
+<Step n={3} title="Shapes and axes" minutes={30} />
+
+Most neural data is naturally a 3D array: **neurons by trials by time bins**. Each number is a spike count (or a firing rate) for one neuron, on one trial, in one small window of time. Click through the figure to see what each average leaves.
+
+<Figure caption="A recording as a 3D array of 5 neurons by 4 trials by 8 time bins. Averaging over one axis removes it from the shape." credit="Interactive figure by Engram.">
+  <ArrayShape />
+</Figure>
+
+The key word is `axis`. `data.mean(axis=1)` averages along axis 1 (trials) and returns an array without that axis. This one argument replaces a nested loop.
+
+<PyCell code={String.raw`
+import numpy as np
+rng = np.random.default_rng(0)
+n_neurons, n_trials, n_bins = 5, 4, 8
+data = rng.poisson(3, size=(n_neurons, n_trials, n_bins))   # spike counts
+
+print("shape:", data.shape, " ndim:", data.ndim, " size:", data.size)
+print("trial-averaged response of each neuron:", data.mean(axis=1).shape)
+print("population activity per trial and bin:", data.mean(axis=0).shape)
+print("total spikes per neuron:", data.sum(axis=(1, 2)))
+`} />
+
+A useful habit: **write the shape next to every array** in a comment, with the meaning of each axis. Most bugs in analysis code are shape bugs, and this habit catches them.
+
+<Derivation title="How an array finds an element: strides">
+  <div>The array is one long block of memory. To find element `data[i, j, k]` NumPy needs its position in that block.</div>
+  <div>For shape $(N, K, T)$ stored row by row (C order), moving one step along the last axis moves 1 element; along the middle axis $T$ elements; along the first axis $K T$ elements.</div>
+  <div>So the position is $i \cdot KT + j \cdot T + k$. These step sizes, times the bytes per element, are the array's `strides`.</div>
+  <div>Slicing and transposing only change the shape and strides, not the data. That is why they are instant and why a slice is a **view** of the original, not a copy (more tomorrow).</div>
+</Derivation>
+
+<PyCell code={String.raw`
+x = np.zeros((5, 4, 8))
+print("strides in bytes:", x.strides, " (each float64 is 8 bytes)")
+print("transposed shape:", x.T.shape, " strides:", x.T.strides)
+`} />
+
+<Step n={4} title="Speed: loops against vectors" minutes={20} />
+
+<PyCell code={String.raw`
+import time
+x = np.random.default_rng(1).normal(size=1_000_000)
+
+t0 = time.perf_counter()
+total = 0.0
+for v in x:
+    total += v * v
+loop_time = time.perf_counter() - t0
+
+t0 = time.perf_counter()
+total_np = np.sum(x * x)
+vec_time = time.perf_counter() - t0
+
+print(f"loop: {loop_time*1000:.1f} ms   vectorised: {vec_time*1000:.2f} ms   speed-up: {loop_time/vec_time:.0f}x")
+`} />
+
+The speed-up is usually between 20 and 200 times, depending on the machine. In the browser everything is slower, but the ratio is similar. The lesson: **if you write a loop over the elements of an array, look for an array operation instead.**
+
+<Bridge title="Vectorisation in brains and chips"
+  neuro="The brain is massively parallel: billions of neurons update at the same time, each slowly (a few spikes per second on average), rather than one fast processor doing things in sequence."
+  ai="GPUs are fast because they apply the same operation to thousands of numbers at once. Writing deep learning as array operations (matrix multiplications) is what lets it run on GPUs.">
+
+Array thinking is the first step to thinking like both: describe the operation on the whole population, not on one unit at a time.
+
+</Bridge>
+
+<Step n={5} title="Exercises" minutes={15} />
+
+<PyCell id="shapes" title="Shapes of a session" tests={String.raw`
+import numpy as np
+def test_session():
+    "session has shape (neurons, trials, bins)"
+    assert session.shape == (30, 40, 100)
+
+def test_psth():
+    "psth is the trial-averaged response, shape (30, 100)"
+    assert psth.shape == (30, 100)
+    assert np.allclose(psth, session.mean(axis=1))
+
+def test_rate():
+    "mean_rate is one number per neuron, in spikes per second"
+    assert mean_rate.shape == (30,)
+    assert np.allclose(mean_rate, session.mean(axis=(1, 2)) / 0.01)
+`} prompt="A session has 30 neurons, 40 trials and 100 time bins of 10 ms. Create `session` with `rng.poisson(0.2, size=...)`. Compute `psth`, the trial-averaged counts for each neuron and bin, and `mean_rate`, each neuron's average firing rate in spikes per second (divide the mean count per bin by the bin width in seconds)."
+code={String.raw`
+import numpy as np
+rng = np.random.default_rng(2)
+session = ...
+psth = ...
+mean_rate = ...
+print(session.shape, psth.shape, mean_rate.shape)
+print("mean rates (Hz):", np.round(mean_rate[:5], 1))
+`}
+hint="size=(30, 40, 100). psth = session.mean(axis=1). mean_rate = session.mean(axis=(1, 2)) / 0.01."
+solution={String.raw`
+import numpy as np
+rng = np.random.default_rng(2)
+session = rng.poisson(0.2, size=(30, 40, 100))
+psth = session.mean(axis=1)
+mean_rate = session.mean(axis=(1, 2)) / 0.01
+print(session.shape, psth.shape, mean_rate.shape)
+print("mean rates (Hz):", np.round(mean_rate[:5], 1))
+`} />
+
+<PyCell id="vectorise" title="Remove the loop" tests={String.raw`
+import numpy as np
+def test_same_answer():
+    "zscore gives the same result as the loop version"
+    x = np.random.default_rng(5).normal(3, 2, size=500)
+    m, s = x.mean(), x.std()
+    expected = np.array([(v - m) / s for v in x])
+    assert np.allclose(zscore(x), expected)
+
+def test_no_loop():
+    "zscore has no for loop"
+    import dis
+    ops = {i.opname for i in dis.get_instructions(zscore)}
+    assert "FOR_ITER" not in ops, "Use array operations only, with no loop or comprehension."
+`} prompt="Rewrite `zscore` without a loop. It should subtract the mean and divide by the standard deviation, for the whole array at once."
+code={String.raw`
+import numpy as np
+
+def zscore(x):
+    m, s = x.mean(), x.std()
+    out = np.empty_like(x)
+    for i in range(len(x)):
+        out[i] = (x[i] - m) / s
+    return out
+
+print(zscore(np.array([1.0, 2.0, 3.0])))
+`}
+hint="return (x - x.mean()) / x.std()"
+solution={String.raw`
+import numpy as np
+
+def zscore(x):
+    return (x - x.mean()) / x.std()
+
+print(zscore(np.array([1.0, 2.0, 3.0])))
+`} />
+
+<Step n={6} title="Check, remember, reflect" minutes={15} />
+
+<Quiz id="quiz" questions={[
+  { q: "An array has shape (100, 50, 1000). How many elements does it hold?", options: ["1,150", "5,000,000", "50,000", "100,000"], answer: 1, explain: "100 × 50 × 1000 = 5,000,000." },
+  { q: "data has shape (neurons, trials, bins). What is the shape of data.mean(axis=1)?", options: ["(neurons, trials)", "(neurons, bins)", "(trials, bins)", "(neurons,)"], answer: 1, explain: "Axis 1 (trials) is removed." },
+  { q: "Which gives exactly 11 points from 0 to 1, both included?", options: ["np.arange(0, 1, 0.1)", "np.linspace(0, 1, 11)", "np.zeros(11)", "range(0, 1, 11)"], answer: 1, explain: "linspace takes the number of points; arange takes a step and excludes the end." },
+  { q: "Why are NumPy operations faster than Python loops?", options: ["They use more memory", "They run compiled code over one block of memory", "They skip some elements", "Python loops are broken"], answer: 1, explain: "Contiguous memory and compiled loops avoid Python's per-element overhead." },
+  { q: "What does an array's dtype tell you?", options: ["Its shape", "The type of every element", "Where it is stored", "How many axes it has"], answer: 1, explain: "All elements share one type, such as float64." },
+  { q: "Spike counts in 10 ms bins average 0.3. What is the firing rate?", options: ["0.3 Hz", "3 Hz", "30 Hz", "300 Hz"], answer: 2, explain: "0.3 spikes per 0.01 s = 30 spikes per second." },
+]} />
+
+<Flashcards cards={[
+  { front: "Three properties of every NumPy array?", back: "shape (size along each axis), ndim (number of axes), dtype (type of every element)." },
+  { front: "Typical shape of neural data?", back: "(neurons, trials, time bins)." },
+  { front: "What does `axis=1` do in `data.mean(axis=1)`?", back: "Averages along axis 1 and removes it from the shape." },
+  { front: "linspace or arange for a fixed number of points?", back: "np.linspace(start, stop, n): fixed count, both ends included." },
+  { front: "Strides?", back: "Bytes to step in memory along each axis. Slicing and transposing change strides, not data." },
+  { front: "Count per bin to firing rate?", back: "Divide the mean count by the bin width in seconds." },
+]} />
+
+<Predict revisit question="How many numbers in a 100 by 50 by 1000 recording, and what shape after averaging over trials?" />
+
+<Key title="Before you go">
+<ul>
+<li>Arrays store one type of number in one block of memory; operations run over the whole block.</li>
+<li>Think in shapes: neural data is usually (neurons, trials, time).</li>
+<li>Reductions with `axis` replace nested loops.</li>
+<li>Slices and transposes are views: new shape and strides, same data.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Stevenson and Kording found recordings double in size about every seven years. What kinds of questions become possible when you can record a million neurons at once, and what new problems appear?" />

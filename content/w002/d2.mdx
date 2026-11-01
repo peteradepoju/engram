@@ -1,0 +1,228 @@
+export const meta = {
+  title: "Indexing, slicing and masks: selecting trials and neurons",
+  intro: "Analysis is mostly selection: the correct trials, the neurons in one brain area, the time window after the stimulus. Today you learn NumPy's three ways to select (slices, boolean masks and index arrays) and the one trap that catches everyone: views that silently change your data.",
+  goals: [
+    "Select with slices along several axes at once",
+    "Build boolean masks from conditions and combine them",
+    "Select with integer index arrays",
+    "Tell a view from a copy and avoid changing data by accident",
+  ],
+  plan: [
+    { label: "Predict and slices", minutes: 25 },
+    { label: "Boolean masks", minutes: 30 },
+    { label: "Index arrays", minutes: 15 },
+    { label: "Views and copies", minutes: 20 },
+    { label: "Exercises", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "stevenson-2011",
+};
+
+<Predict question="You set `window = data[:, :, 50:100]` and then `window[:] = 0`. Does `data` change?" />
+
+<Step n={1} title="Slices" minutes={25} />
+
+A slice `start:stop:step` selects a range along one axis; `stop` is not included. With several axes, separate the slices with commas: one per axis.
+
+<PyCell code={String.raw`
+import numpy as np
+rng = np.random.default_rng(0)
+# 20 neurons, 60 trials, 200 bins of 5 ms (1 second per trial)
+data = rng.poisson(0.1, size=(20, 60, 200))
+
+print(data[3].shape)            # one neuron, all trials and bins: (60, 200)
+print(data[:, 0].shape)         # all neurons, first trial: (20, 200)
+print(data[:5, :, 100:].shape)  # first 5 neurons, all trials, second half of each trial
+print(data[..., -1].shape)      # '...' means 'all the other axes': the last bin of everything
+print(data[:, ::2].shape)       # every other trial
+`} />
+
+Time is easier in bins than in milliseconds. With 5 ms bins, the window from 250 to 500 ms is bins `250 // 5 = 50` to `500 // 5 = 100`.
+
+<Step n={2} title="Boolean masks" minutes={30} />
+
+A **mask** is an array of `True` and `False` values. Indexing with a mask keeps the elements where it is `True`. Masks come from comparisons, so selection reads like the question you are asking.
+
+<PyCell code={String.raw`
+# Trial information, one value per trial
+contrast = rng.choice([0.0, 0.25, 0.5, 1.0], size=60)
+correct = rng.random(60) < 0.7
+area = np.array(["V1"] * 8 + ["MOs"] * 7 + ["CA1"] * 5)   # one label per neuron
+
+high = contrast >= 0.5
+print("high-contrast trials:", high.sum())
+print("high and correct:", (high & correct).sum())      # & is 'and', | is 'or', ~ is 'not'
+
+v1 = area == "V1"
+v1_high = data[v1][:, high & correct]                    # V1 neurons, high-contrast correct trials
+print("V1, high, correct:", v1_high.shape)
+`} />
+
+<Callout kind="warning">
+Use `&`, `|` and `~` with masks, not `and`, `or` and `not`, and put brackets around each comparison: `(contrast > 0) & correct`. Without brackets, Python's operator order gives a confusing error.
+</Callout>
+
+Masks also work on values. `rates[rates > 50]` returns only the high rates; `rates[rates > 50] = 50` caps them in place.
+
+<Step n={3} title="Index arrays" minutes={15} />
+
+You can also select with a list or array of integer positions. This is called **fancy indexing**. It is useful for picking specific neurons or reordering them.
+
+<PyCell code={String.raw`
+mean_rate = data.mean(axis=(1, 2)) / 0.005          # Hz, one per neuron
+order = np.argsort(mean_rate)[::-1]                 # neuron indices, fastest first
+print("fastest 3 neurons:", order[:3], np.round(mean_rate[order[:3]], 1))
+sorted_data = data[order]                           # neurons reordered by rate
+print(sorted_data.shape)
+`} />
+
+`np.argsort` returns the positions that would sort an array. It is the tool for "sort the neurons by their preferred stimulus" plots that appear in almost every systems neuroscience paper.
+
+<Step n={4} title="Views and copies" minutes={20} />
+
+A **slice returns a view**: a new shape and strides pointing at the same memory (yesterday's derivation). Changing the view changes the original. **Masks and index arrays return copies.**
+
+<PyCell code={String.raw`
+x = np.arange(10)
+v = x[2:5]          # view
+v[:] = -1
+print("after changing the slice:", x)
+
+y = np.arange(10)
+c = y[y > 6]        # copy (mask)
+c[:] = -1
+print("after changing the masked copy:", y)
+
+w = np.arange(10)[2:5].copy()   # an explicit copy is always safe
+print("np.shares_memory(x, v):", np.shares_memory(x, v))
+`} />
+
+<Bridge title="Selecting neurons in both worlds"
+  neuro="Neuroscientists group neurons by brain area, cell type or tuning, then compare groups. Choosing which neurons and trials to include is a scientific decision that must be reported, because it can change the result."
+  ai="Interpretability researchers select units or directions in a network that respond to a concept, then ablate or study them. The same risks apply: choosing units after looking at the result can create effects that are not there.">
+
+Week 59 covers this danger, called double dipping or circular analysis, properly. For now: decide your selection rule before you look at the result.
+
+</Bridge>
+
+<Step n={5} title="Exercises" minutes={15} />
+
+<PyCell id="window" title="Response in a window" tests={String.raw`
+import numpy as np
+def test_shape():
+    "resp has one value per neuron and trial"
+    assert resp.shape == (20, 60)
+
+def test_values():
+    "resp is the spike count from 250 to 500 ms"
+    assert np.array_equal(resp, data[:, :, 50:100].sum(axis=2))
+`} prompt="Using `data` (5 ms bins), compute `resp`: each neuron's spike count on each trial between 250 ms and 500 ms after trial start."
+code={String.raw`
+resp = ...
+print(resp.shape)
+`}
+hint="Bins 50 to 100 cover 250 to 500 ms. Slice the last axis, then sum along it: data[:, :, 50:100].sum(axis=2)."
+solution={String.raw`
+resp = data[:, :, 50:100].sum(axis=2)
+print(resp.shape)
+`} />
+
+<PyCell id="mask" title="Compare conditions" tests={String.raw`
+import numpy as np
+def test_diff():
+    "diff is the mean difference between high- and zero-contrast trials for MOs neurons"
+    m = area == "MOs"
+    expect = resp[m][:, contrast >= 0.5].mean() - resp[m][:, contrast == 0].mean()
+    assert abs(diff - expect) < 1e-12
+`} prompt="For neurons in `MOs` only, compute `diff`: the mean of `resp` on trials with contrast at least 0.5, minus the mean on trials with zero contrast."
+code={String.raw`
+mos = ...
+diff = ...
+print("difference in spikes:", diff)
+`}
+hint="mos = area == 'MOs'. Then resp[mos] has the MOs rows; index its columns with each trial mask and take the mean."
+solution={String.raw`
+mos = area == "MOs"
+diff = resp[mos][:, contrast >= 0.5].mean() - resp[mos][:, contrast == 0].mean()
+print("difference in spikes:", diff)
+`} />
+
+<PyCell id="viewbug" title="Bug hunt: the vanishing baseline" tests={String.raw`
+import numpy as np
+def test_original_untouched():
+    "raw is not changed by baseline_subtract"
+    raw = np.arange(12.0).reshape(3, 4)
+    before = raw.copy()
+    baseline_subtract(raw)
+    assert np.array_equal(raw, before), "The function changed its input."
+
+def test_result():
+    "each row has its first-two-bin mean subtracted"
+    raw = np.arange(12.0).reshape(3, 4)
+    out = baseline_subtract(raw)
+    assert np.allclose(out, raw - raw[:, :2].mean(axis=1, keepdims=True))
+`} prompt="This function should subtract each row's baseline (the mean of its first two bins) and return a new array, leaving the input alone. It changes the input instead. Fix it."
+code={String.raw`
+import numpy as np
+
+def baseline_subtract(x):
+    out = x
+    base = x[:, :2].mean(axis=1, keepdims=True)
+    out -= base
+    return out
+
+raw = np.arange(12.0).reshape(3, 4)
+print(baseline_subtract(raw)); print(raw)
+`}
+hint="out = x does not copy anything: both names point to the same array, and -= changes it in place. Use out = x - base, or out = x.copy() first."
+solution={String.raw`
+import numpy as np
+
+def baseline_subtract(x):
+    base = x[:, :2].mean(axis=1, keepdims=True)
+    return x - base
+
+raw = np.arange(12.0).reshape(3, 4)
+print(baseline_subtract(raw)); print(raw)
+`} />
+
+<Prove title="How many trials match?" task="Trials have contrast drawn uniformly from four values and are correct with probability 0.7, independently. Out of 60 trials, what is the expected number of high-contrast (0.5 or 1.0) correct trials? What is the variance of that number?">
+
+Each trial is a success with probability $p = \tfrac{2}{4} \times 0.7 = 0.35$, independently, so the count is binomial with $n = 60$, $p = 0.35$.
+
+Mean $np = 21$. Variance $np(1-p) = 60 \times 0.35 \times 0.65 = 13.65$, so the standard deviation is about 3.7 trials.
+
+Your simulated count above should usually fall between about 14 and 28.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "data has shape (20, 60, 200). What is data[:5, 10:20, ::2].shape?", options: ["(5, 10, 100)", "(5, 20, 200)", "(15, 10, 100)", "(5, 10, 200)"], answer: 0, explain: "5 neurons, trials 10 to 19 (10 trials), every other bin (100)." },
+  { q: "Which expression selects trials that are high contrast AND correct?", options: ["high and correct", "high & correct", "high + correct", "high or correct"], answer: 1, explain: "Use & with boolean arrays." },
+  { q: "Which of these returns a view?", options: ["x[x > 0]", "x[[0, 2, 4]]", "x[1:4]", "x.copy()"], answer: 2, explain: "Slices return views; masks and index arrays return copies." },
+  { q: "With 5 ms bins, which bins cover 100 to 300 ms?", options: ["100 to 300", "20 to 60", "10 to 30", "2 to 6"], answer: 1, explain: "100 / 5 = 20 and 300 / 5 = 60." },
+  { q: "What does np.argsort(rates) return?", options: ["The sorted rates", "The positions that would sort rates", "The largest rate", "A mask"], answer: 1, explain: "It returns indices; rates[np.argsort(rates)] is sorted." },
+  { q: "Why is choosing neurons after seeing the result risky?", options: ["It is slow", "It can create effects that are not really there", "NumPy forbids it", "It uses copies"], answer: 1, explain: "Selection based on the outcome biases the outcome: circular analysis." },
+]} />
+
+<Flashcards cards={[
+  { front: "Slice syntax and what it includes?", back: "start:stop:step; stop is excluded. One slice per axis, separated by commas." },
+  { front: "Combine masks for and, or, not?", back: "&, |, ~ with brackets around each comparison." },
+  { front: "Views or copies: slices, masks, index arrays?", back: "Slices give views (shared memory); masks and index arrays give copies." },
+  { front: "Convert a time window to bins?", back: "Divide times by the bin width: 250 to 500 ms with 5 ms bins is bins 50 to 100." },
+  { front: "np.argsort?", back: "Returns the indices that would sort the array, used to reorder neurons or trials." },
+  { front: "Why does `out = x; out -= 1` change x?", back: "Assignment does not copy: both names refer to the same array, and -= works in place." },
+]} />
+
+<Predict revisit question="Does changing a slice change the original array?" />
+
+<Key title="Before you go">
+<ul>
+<li>Slices select ranges; masks select by condition; index arrays select by position.</li>
+<li>Slices are views of the same memory; masks and index arrays are copies.</li>
+<li>Never change inputs in place in analysis functions: return new arrays.</li>
+<li>Decide selection rules before looking at results.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Think of a published result you know that depends on how neurons or trials were selected. How could you check that the selection did not create the effect?" />

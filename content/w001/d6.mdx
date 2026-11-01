@@ -1,0 +1,174 @@
+export const meta = {
+  title: "Forge: Week 1 challenge, quiz and deep read",
+  intro: "Forge days pull the week together. You will make quick predictions, solve a challenge that combines everything from Days 1 to 5, work two derivations on paper, take the weekly quiz, and give this week's deep-read paper its third pass with a written critique.",
+  goals: [
+    "Combine neuron models, perceptrons, error bars and tidy code in one task",
+    "Work derivations without hints",
+    "Score at least 12 out of 15 on the weekly quiz",
+    "Write a one-page critique of a research paper",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 50 },
+    { label: "Derivation set", minutes: 20 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "hassabis-2017",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Answer each in your head, then run the cell to check.
+
+1. A LIF neuron with $R = 10$ M$\Omega$, rest -70 mV and threshold -50 mV. What is the threshold current?
+2. You record 25 trials with SD 10 Hz. What is the SEM?
+3. A perceptron has $\mathbf{w} = (2, -1)$, $b = 0$. Which class does $(1, 3)$ get?
+
+<PyCell code={String.raw`
+print("1. threshold current:", (-50 - -70) / 10, "nA")
+print("2. SEM:", 10 / 25 ** 0.5, "Hz")
+w, b, x = (2, -1), 0, (1, 3)
+print("3. class:", 1 if w[0] * x[0] + w[1] * x[1] + b >= 0 else -1)
+`} />
+
+<Step n={2} title="Weekly challenge: can a perceptron read a neuron?" minutes={50} />
+
+This challenge joins the week together. A LIF neuron receives two inputs. You record whether it fires, then train a perceptron to predict, from the two inputs alone, whether the neuron will fire. Is the neuron's behaviour linearly separable?
+
+**Part A (setup).** Run this cell. It defines `fires(I1, I2)`, which returns 1 if the neuron spikes at least once when it receives currents `I1` and `I2` (each through a synapse, with the total current `0.8*I1 + 1.2*I2`).
+
+<PyCell code={String.raw`
+import numpy as np
+
+def fires(I1, I2, T=200.0, dt=0.1):
+    tau, R, v_rest, v_th, v_reset = 20.0, 10.0, -70.0, -54.0, -75.0
+    I = 0.8 * I1 + 1.2 * I2
+    v = v_rest
+    for _ in range(int(T / dt)):
+        v += dt / tau * (-(v - v_rest) + R * I)
+        if v >= v_th:
+            return 1
+    return 0
+
+rng = np.random.default_rng(3)
+inputs = rng.uniform(0, 2.5, size=(200, 2))
+labels = np.array([fires(a, b) for a, b in inputs])
+print("fraction of trials with a spike:", labels.mean())
+`} />
+
+<PyCell id="challengeB" title="Part B: train and evaluate" tests={String.raw`
+import numpy as np
+def test_accuracy():
+    "the perceptron predicts firing with at least 95% accuracy"
+    assert accuracy >= 0.95, f"Accuracy was {accuracy:.2f}. Convert labels to +1/-1 and train for more epochs."
+
+def test_boundary():
+    "the learned boundary has the right orientation"
+    assert w[0] > 0 and w[1] > 0, "Both inputs excite the neuron, so both weights should be positive."
+    assert w[1] > w[0], "Input 2 has the stronger synapse (1.2 vs 0.8), so its weight should be larger."
+`} prompt="Train a perceptron on `inputs` and `labels` (convert labels to $\pm 1$ first). Write your own training loop or reuse `train` from Day 5 (redefine it here: each page has its own Python). Store the weights in `w`, the bias in `b` and the training accuracy in `accuracy`."
+code={String.raw`
+import numpy as np
+
+y = ...                           # labels as +1 / -1
+def train(X, y, eta=0.05, epochs=200):
+    ...
+
+w, b = train(inputs, y)
+accuracy = ...
+print("w =", w, "b =", b, "accuracy =", accuracy)
+`}
+hint="y = np.where(labels == 1, 1, -1). The training loop is the same as Day 5. accuracy = (np.where(inputs @ w + b >= 0, 1, -1) == y).mean()."
+solution={String.raw`
+import numpy as np
+
+y = np.where(labels == 1, 1, -1)
+def train(X, y, eta=0.05, epochs=200):
+    w, b = np.zeros(X.shape[1]), 0.0
+    for _ in range(epochs):
+        for x_i, y_i in zip(X, y):
+            if y_i * (w @ x_i + b) <= 0:
+                w = w + eta * y_i * x_i
+                b = b + eta * y_i
+    return w, b
+
+w, b = train(inputs, y)
+accuracy = (np.where(inputs @ w + b >= 0, 1, -1) == y).mean()
+print("w =", w, "b =", b, "accuracy =", accuracy)
+`} />
+
+**Part C (think).** The true rule is: the neuron fires when $0.8 I_1 + 1.2 I_2 \gt 1.6$. That is a straight line, so the problem is linearly separable and a perceptron can learn it. Compare your learned line with the true one: the ratio $w_2/w_1$ should be close to $1.2/0.8 = 1.5$, and $-b/w_1$ close to $1.6/0.8 = 2$. Print both. Then explain in your journal: what would have to change in the neuron (for example, two inputs that each fire it alone but cancel each other when both are on) to make it XOR-like and impossible for a perceptron?
+
+<PyCell code={String.raw`
+print("w2/w1 =", w[1] / w[0], " (true 1.5)")
+print("-b/w1 =", -b / w[0], " (true 2.0)")
+`} />
+
+<Step n={3} title="Derivation set" minutes={20} />
+
+<Prove title="1. The LIF firing rate" task="With constant current above threshold, a LIF neuron starts each interval at $V_\text{reset}$, rises towards $V_\infty = V_\text{rest} + RI$, and spikes at $V_\text{th}$. Using the solution $V(t) = V_\infty + (V_\text{reset} - V_\infty)e^{-t/\tau}$, find the interspike interval $T$ and hence the firing rate $1/T$ (ignore any refractory period).">
+
+Set $V(T) = V_\text{th}$: $V_\text{th} - V_\infty = (V_\text{reset} - V_\infty)e^{-T/\tau}$.
+
+So $e^{-T/\tau} = \dfrac{V_\infty - V_\text{th}}{V_\infty - V_\text{reset}}$ and $T = \tau \ln\dfrac{V_\infty - V_\text{reset}}{V_\infty - V_\text{th}}$.
+
+The rate is $f = 1/T$. As $I$ grows, $V_\infty$ grows, the log ratio tends to 0, and the rate grows without limit (a real neuron has a refractory period that caps it). Just above threshold, $V_\infty - V_\text{th}$ is tiny, the log is large and the rate is near zero: the f-I curve starts at zero and rises, like a smoothed ReLU.
+
+</Prove>
+
+<Prove title="2. The perceptron update in one line" task="Show that on a mistake the perceptron update increases $y(\mathbf{w}\cdot\mathbf{x} + b)$ by exactly $\eta(\lVert\mathbf{x}\rVert^2 + 1)$. How large must $\eta$ be to fix the mistake in one step?">
+
+From Day 5: $y a' = y a + \eta(\lVert\mathbf{x}\rVert^2 + 1)$.
+
+To be correct after one step we need $y a' \gt 0$, that is $\eta \gt \dfrac{-y a}{\lVert\mathbf{x}\rVert^2 + 1}$. Since the example was wrong, $-ya \ge 0$, so a large enough learning rate always fixes the current example, but it may break others. That trade-off is why learning rates matter.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 1 quiz (15 questions)" questions={[
+  { q: "The two directions of NeuroAI are...", options: ["Theory and experiment", "Brain to AI and AI to brain", "Hardware and software", "Supervised and unsupervised"], answer: 1, explain: "Neuroscience informs AI, and AI provides models and tools for neuroscience." },
+  { q: "Roughly how many neurons does a human brain have?", options: ["86 million", "86 billion", "86 trillion", "8.6 billion"], answer: 1, explain: "About 86 billion." },
+  { q: "In the LIF equation $\\tau\\,dV/dt = -(V - V_\\text{rest}) + RI$, what does $\\tau$ set?", options: ["The threshold", "How quickly the voltage relaxes", "The input current", "The reset voltage"], answer: 1, explain: "$\\tau$ is the membrane time constant." },
+  { q: "Threshold current with rest -65 mV, threshold -50 mV, $R = 5$ M$\\Omega$?", options: ["1 nA", "3 nA", "5 nA", "15 nA"], answer: 1, explain: "15 / 5 = 3 nA." },
+  { q: "'Neural circuits in the retina compute contrast by subtracting a surround from a centre' is at which Marr level?", options: ["Computational", "Algorithmic", "Implementational"], answer: 1, explain: "It describes the representation and steps (centre minus surround)." },
+  { q: "TD learning moved in which direction?", options: ["Brain to AI", "AI to brain"], answer: 1, explain: "It came from machine learning and explained dopamine signals." },
+  { q: "Temporal summation happens because...", options: ["The threshold falls", "Inputs arrive before the membrane has leaked back to rest", "Synapses get stronger", "The neuron is refractory"], answer: 1, explain: "Overlapping responses add up." },
+  { q: "What does the first pass of a paper answer?", options: ["Whether each proof is correct", "The five Cs", "How to reproduce it", "Who reviewed it"], answer: 1, explain: "Category, context, correctness, contributions, clarity." },
+  { q: "SD 12 Hz, 36 trials. SEM?", options: ["0.33 Hz", "2 Hz", "6 Hz", "12 Hz"], answer: 1, explain: "12 / 6 = 2 Hz." },
+  { q: "Which grows smaller as you collect more trials?", options: ["SD", "SEM", "Both", "Neither"], answer: 1, explain: "SEM shrinks like $1/\\sqrt{n}$; SD does not." },
+  { q: "Rule one of good enough practices for raw data?", options: ["Delete it after analysis", "Keep it unchanged and make every change in code", "Edit outliers by hand", "Store it only on GitHub"], answer: 1, explain: "Raw data is read-only." },
+  { q: "`git push` does what?", options: ["Saves a snapshot locally", "Copies local commits to GitHub", "Stages changes", "Creates a branch"], answer: 1, explain: "Push sends commits to the remote." },
+  { q: "A perceptron with $\\mathbf{w} = (1, 1)$, $b = -1.5$, inputs in $\\{0,1\\}$, computes...", options: ["OR", "AND", "XOR", "NOT"], answer: 1, explain: "Only $(1,1)$ gives $2 - 1.5 \\ge 0$." },
+  { q: "The perceptron convergence theorem requires...", options: ["A small learning rate", "Linearly separable data", "Normalised inputs", "Two layers"], answer: 1, explain: "If a separating line exists, the rule finds one in finitely many mistakes." },
+  { q: "Why could early perceptrons not learn XOR?", options: ["Too little data", "XOR needs a hidden layer, and there was no rule to train hidden layers", "Computers were too slow", "XOR is random"], answer: 1, explain: "Single layers cannot represent XOR, and training hidden layers needs credit assignment, solved later by backpropagation." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Hassabis et al. (2017) its third pass: re-read it, re-create its argument in your own words, and challenge it. Then write a critique in the paper's page (**Papers**, then the paper, then **My critique**) using the five headings:
+
+1. **Claim.** What is the paper's main claim, in one sentence?
+2. **Evidence.** What supports it? (For a review: which examples carry the argument?)
+3. **Method.** How is the argument built? What is left out?
+4. **Weakness.** Where is it weakest or most one-sided?
+5. **Next.** What would you do next, if you were writing the follow-up?
+
+<Callout kind="research">
+A critique is not an attack. The best critiques say clearly what a paper does well, then name its limits precisely. Practising this weekly is what makes peer review, and your own papers, much easier later.
+</Callout>
+
+<Key title="Week 1 review checklist">
+<ul>
+<li>I can explain NeuroAI's two directions with an example of each.</li>
+<li>I can write and simulate the LIF equation and find its threshold current.</li>
+<li>I can place a question at one of Marr's three levels.</li>
+<li>I can read a paper in three passes and a figure in four questions.</li>
+<li>I can compute a mean, SD and SEM and explain the difference.</li>
+<li>I keep raw data untouched and my code in Git.</li>
+<li>I can train a perceptron and explain why XOR needs a hidden layer.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Looking back over the week, which idea changed how you think the most? Star one question from your journal that you would most like to answer." />

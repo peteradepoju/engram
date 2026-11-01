@@ -1,0 +1,48 @@
+import type { Metadata } from "next";
+import Link from "next/link";
+import { PARTS, WEEKS, isWritten, lessonId, weekSlug } from "@/lib/curriculum";
+import { CompletedProvider, WeekDone } from "@/components/progress/completed";
+
+export const metadata: Metadata = { title: "Curriculum" };
+
+const KIND: Record<string, string> = { rest: "Rest", project: "Project", exam: "Exam", research: "Research", career: "Career" };
+
+export default function CurriculumPage() {
+  return (
+    <CompletedProvider>
+      <div className="mx-auto max-w-5xl px-4 pt-8">
+        <div className="eyebrow">208 weeks · 8 parts · 6 days a week</div>
+        <h1 className="mt-1 text-3xl font-semibold" style={{ fontFamily: "var(--font-serif)" }}>Curriculum</h1>
+        <p className="mt-3 max-w-3xl text-ink-2">
+          Every week has five lesson days and a Day 6 Forge (Years 1 and 2) or Research Day (Years 3 and 4). Each part ends with a project and an exam, and a rest week falls every 13th week. Weeks are written in batches and kept at least two weeks ahead of the schedule.
+        </p>
+        <nav className="mt-6 flex flex-wrap gap-2">
+          {PARTS.map((p) => <a key={p.n} href={`#part-${p.n}`} className="chip !py-1.5 hover:!bg-accent-soft">Part {p.n}: {p.short}</a>)}
+        </nav>
+        {PARTS.map((p) => (
+          <section key={p.n} id={`part-${p.n}`} className="mt-10 scroll-mt-20">
+            <div className="flex flex-wrap items-baseline gap-x-3">
+              <h2 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-serif)" }}>Part {p.n}. {p.title}</h2>
+              <span className="text-sm text-ink-3">Weeks {p.weeks[0]} to {p.weeks[1]}</span>
+            </div>
+            <p className="mt-1 text-ink-2">{p.summary}</p>
+            <p className="mt-1 text-sm"><span className="font-semibold">Part project:</span> {p.project}</p>
+            <ol className="mt-4 divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface">
+              {WEEKS.filter((w) => w.n >= p.weeks[0] && w.n <= p.weeks[1]).map((w) => (
+                <li key={w.n}>
+                  <Link href={`/curriculum/${weekSlug(w.n)}`} className={`flex items-center gap-3 px-4 py-2.5 hover:bg-surface-2 ${w.kind === "rest" ? "text-ink-3" : ""}`}>
+                    <span className="w-10 shrink-0 font-mono text-sm text-ink-3">W{w.n}</span>
+                    <span className="min-w-0 flex-1">{w.title}</span>
+                    {KIND[w.kind] ? <span className="chip">{KIND[w.kind]}</span> : null}
+                    {isWritten(w.n) ? <span className="chip !bg-accent-soft !text-accent">Open</span> : null}
+                    <WeekDone ids={Array.from({ length: 6 }, (_, i) => lessonId(w.n, i + 1))} />
+                  </Link>
+                </li>
+              ))}
+            </ol>
+          </section>
+        ))}
+      </div>
+    </CompletedProvider>
+  );
+}

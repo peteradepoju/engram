@@ -1,0 +1,261 @@
+export const meta = {
+  title: "Your toolkit: Python in the browser, Colab, Git and GitHub",
+  intro: "Research code has to run again next month, on someone else's computer, and give the same answer. Today you set up the three tools this course uses (Python in the page, Google Colab, Git with GitHub), refresh the Python you need, and learn the habits that keep a project reproducible.",
+  goals: [
+    "Know when to use the in-page Python, Colab, or your own computer",
+    "Write small, tested Python functions",
+    "Read and write data files from code and keep raw data untouched",
+    "Explain what Git does and make your first repository",
+  ],
+  plan: [
+    { label: "Predict and three places to run code", minutes: 15 },
+    { label: "Python refresher with tests", minutes: 40 },
+    { label: "Files and raw data", minutes: 25 },
+    { label: "Git and GitHub", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "wilson-2017",
+};
+
+<Predict question="You fix a bug in your analysis and the main result changes. Three months later a reviewer asks for the original numbers. What would you need to have done to get them back in one minute?" />
+
+<Step n={1} title="Three places to run code" minutes={15} />
+
+| Where | Best for | Limits |
+| --- | --- | --- |
+| **In the lesson page** (Pyodide) | Exercises, small simulations, trying ideas. Nothing to install, works on your phone. | Slower than native Python; no GPU; large datasets will not fit. |
+| **Google Colab** | Larger notebooks, PyTorch, GPUs, real datasets (from Part 2 on). Every lesson with heavy code has an *Open in Colab* button. | Needs a Google account; sessions time out; files vanish unless saved to Drive or GitHub. |
+| **Your own computer** | Research projects that last months (from Part 3 on). | You manage the installation. The Hub's Tools page has a setup guide using `conda` or `uv`. |
+
+The in-page Python keeps variables between cells on the same page, like a notebook. If something gets into a strange state, the **Reset** button restores a cell's code, and reloading the page restarts Python.
+
+<Colab path="w001/d4.ipynb" label="Open today's notebook in Colab" />
+
+<Step n={2} title="Python refresher with tests" minutes={40} />
+
+You rated your Python at 3 out of 5, so this is a quick check rather than a lesson. If anything here is unfamiliar, the free course [Python Atlas](https://peter-adepoju.github.io/python-atlas/) covers it day by day.
+
+Every exercise in this course is marked by **tests**: small functions that check your answer. Writing your own tests is one of the most useful research habits there is. A test that fails tells you exactly what broke.
+
+<PyCell code={String.raw`
+# Functions, lists, dictionaries and comprehensions: the four things you will use most.
+def mean(xs):
+    return sum(xs) / len(xs)
+
+rates = {"V1": [12.0, 15.5, 9.8], "MT": [30.1, 28.4, 33.0], "LIP": [8.2, 11.0, 10.4]}
+avg = {area: round(mean(r), 2) for area, r in rates.items()}
+print(avg)
+
+fast = [area for area, r in rates.items() if mean(r) > 10]
+print("areas with mean rate above 10 Hz:", fast)
+
+# A test is just a function that asserts what should be true.
+def test_mean():
+    assert mean([1, 2, 3]) == 2
+    assert mean([5]) == 5
+test_mean()
+print("tests passed")
+`} />
+
+<PyCell id="isi" title="Interspike intervals" tests={String.raw`
+def test_basic():
+    "intervals between consecutive spikes"
+    assert intervals([10, 15, 30]) == [5, 15]
+
+def test_short():
+    "fewer than two spikes gives an empty list"
+    assert intervals([]) == [] and intervals([4.0]) == []
+
+def test_cv():
+    "coefficient of variation is SD over mean"
+    import statistics
+    x = [10, 12, 9, 15, 11]
+    assert abs(cv(x) - statistics.pstdev(x) / statistics.mean(x)) < 1e-9
+`} prompt="The time between two consecutive spikes is an **interspike interval** (ISI). Write `intervals(spike_times)` that returns the list of ISIs, and `cv(xs)` that returns the coefficient of variation: the population standard deviation divided by the mean. You will meet the CV again next week: it measures how irregular a neuron is."
+code={String.raw`
+def intervals(spike_times):
+    ...
+
+def cv(xs):
+    ...
+
+print(intervals([10, 15, 30, 31]))
+`}
+hint="intervals: [b - a for a, b in zip(spike_times, spike_times[1:])]. cv: compute the mean m, then sqrt(sum((x - m)**2 for x in xs) / len(xs)) / m."
+solution={String.raw`
+def intervals(spike_times):
+    return [b - a for a, b in zip(spike_times, spike_times[1:])]
+
+def cv(xs):
+    m = sum(xs) / len(xs)
+    sd = (sum((x - m) ** 2 for x in xs) / len(xs)) ** 0.5
+    return sd / m
+
+print(intervals([10, 15, 30, 31]))
+`} />
+
+<PyCell id="bug" title="Bug hunt" tests={String.raw`
+def test_fixed():
+    "normalise scales values to the range 0 to 1"
+    out = normalise([2.0, 4.0, 6.0])
+    assert out == [0.0, 0.5, 1.0], f"Got {out}"
+
+def test_unchanged_input():
+    "the input list is not changed"
+    data = [3.0, 1.0, 2.0]
+    normalise(data)
+    assert data == [3.0, 1.0, 2.0], "normalise changed the list it was given. Never change raw data in place."
+`} prompt="This function should scale values to between 0 and 1 without touching its input. It has two bugs. Find and fix them."
+code={String.raw`
+def normalise(values):
+    lo, hi = min(values), max(values)
+    for i in range(len(values)):
+        values[i] = (values[i] - lo) / hi
+    return values
+
+print(normalise([2.0, 4.0, 6.0]))
+`}
+hint="Bug 1: the denominator should be the range, hi - lo. Bug 2: the loop overwrites the caller's list; build a new list instead."
+solution={String.raw`
+def normalise(values):
+    lo, hi = min(values), max(values)
+    return [(v - lo) / (hi - lo) for v in values]
+
+print(normalise([2.0, 4.0, 6.0]))
+`} />
+
+<Step n={3} title="Files and raw data" minutes={25} />
+
+Rule one of *Good enough practices in scientific computing* (today's paper): **keep raw data exactly as it came, and never edit it by hand.** Every change happens in code, so it can be repeated and checked. The in-page Python has its own small file system, so you can practise.
+
+<PyCell code={String.raw`
+import csv, os
+
+# Pretend this file came from the recording rig. Treat it as read-only.
+os.makedirs("data/raw", exist_ok=True)
+with open("data/raw/session01_spikes.csv", "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["neuron", "time_ms"])
+    for neuron, times in {"n1": [12.5, 40.1, 88.0, 130.2], "n2": [5.0, 77.7], "n3": [60.0, 61.2, 62.9, 64.1, 200.0]}.items():
+        for t in times:
+            w.writerow([neuron, t])
+
+print(open("data/raw/session01_spikes.csv").read())
+`} />
+
+<PyCell id="files" title="Read, process, save to a new file" tests={String.raw`
+import csv, os
+def test_counts():
+    "counts holds the number of spikes per neuron"
+    assert counts == {"n1": 4, "n2": 2, "n3": 5}, f"Got {counts}"
+
+def test_output_file():
+    "results were written to data/processed/spike_counts.csv"
+    assert os.path.exists("data/processed/spike_counts.csv"), "Write the file data/processed/spike_counts.csv"
+    rows = list(csv.reader(open("data/processed/spike_counts.csv")))
+    assert rows[0] == ["neuron", "count"], "First row should be the header neuron,count"
+    assert len(rows) == 4
+
+def test_raw_untouched():
+    "the raw file still has its 11 spikes"
+    assert len(open("data/raw/session01_spikes.csv").read().strip().splitlines()) == 12
+`} prompt="Read `data/raw/session01_spikes.csv`, count the spikes for each neuron into a dictionary `counts`, and write the result to a new file `data/processed/spike_counts.csv` with the header `neuron,count`. Do not change the raw file."
+code={String.raw`
+import csv, os
+
+counts = {}
+with open("data/raw/session01_spikes.csv") as f:
+    for row in csv.DictReader(f):
+        ...
+
+os.makedirs("data/processed", exist_ok=True)
+# write the output file here
+
+print(counts)
+`}
+hint="Inside the loop: counts[row['neuron']] = counts.get(row['neuron'], 0) + 1. To write, open the new file with 'w', make a csv.writer, write the header row, then one row per neuron."
+solution={String.raw`
+import csv, os
+
+counts = {}
+with open("data/raw/session01_spikes.csv") as f:
+    for row in csv.DictReader(f):
+        counts[row["neuron"]] = counts.get(row["neuron"], 0) + 1
+
+os.makedirs("data/processed", exist_ok=True)
+with open("data/processed/spike_counts.csv", "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["neuron", "count"])
+    for neuron, c in counts.items():
+        w.writerow([neuron, c])
+
+print(counts)
+`} />
+
+A layout like this one, used by many labs, keeps every project tidy:
+
+```text
+my-project/
+  README.md          what this is, how to run it
+  data/raw/          never edited
+  data/processed/    made by code
+  src/               reusable functions
+  notebooks/         exploration
+  results/           figures and tables, made by code
+  environment.yml    the exact packages used
+```
+
+<Step n={4} title="Git and GitHub" minutes={25} />
+
+**Git** records snapshots of your project, so you can see what changed, when and why, and return to any earlier state. **GitHub** stores a copy online, so it is backed up, shareable, and openable in Colab. Step through what happens to one change:
+
+<Figure caption="The life of a change in Git." credit="Interactive figure by Engram.">
+  <GitFlow />
+</Figure>
+
+Your tasks for today, outside this page (about 15 minutes):
+
+1. Create a free GitHub account if you do not have one.
+2. Create a repository called `neuroai-journey`, tick **Add a README**, and choose the Python `.gitignore`.
+3. Edit the README on GitHub: write one paragraph on why you are learning NeuroAI. Commit it with a clear message.
+4. Open Colab, choose **File, Save a copy in GitHub**, and save today's notebook into the repository.
+
+Good commit messages say *why*, not just *what*: "Fix SEM to use n minus 1" is better than "update". You will use this repository for every project in the course.
+
+<Bridge title="Reproducibility on both sides"
+  neuro="Neuroscience has faced a reproducibility problem: many published effects were hard to repeat, partly because analyses were not shared and small samples were common. Shared code and data are now required by many journals."
+  ai="Machine learning results can depend on random seeds, data splits and library versions. Strong ML papers release code, fix seeds, report several runs and list exact versions.">
+
+In this course reproducibility is graded: every project needs a README, an environment file and results that a script regenerates.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Where should you train a PyTorch network on a GPU in this course?", options: ["In the lesson page", "Google Colab", "On paper", "In a spreadsheet"], answer: 1, explain: "Colab gives free GPU time; the in-page Python has no GPU." },
+  { q: "Why should raw data never be edited by hand?", options: ["It is illegal", "Hand edits cannot be repeated or checked; every change should be code", "Files get bigger", "Git cannot store it"], answer: 1, explain: "If all changes are in code, anyone can rerun them and see exactly what was done." },
+  { q: "What does `git commit` do?", options: ["Uploads to GitHub", "Saves a snapshot of the staged changes in your local history", "Deletes old files", "Runs your tests"], answer: 1, explain: "Commit saves locally; push sends commits to GitHub." },
+  { q: "Spike times [5, 9, 20]: what are the interspike intervals?", options: ["[4, 11]", "[5, 9, 20]", "[4, 15]", "[14]"], answer: 0, explain: "9 - 5 = 4 and 20 - 9 = 11." },
+  { q: "Which commit message is best?", options: ["update", "stuff", "Fix SEM to use n minus 1", "asdf"], answer: 2, explain: "It says what changed and why, so your future self can find it." },
+  { q: "A function changes the list it is given. Why is that risky in analysis code?", options: ["It is slower", "The caller's data is silently changed, which can corrupt later steps", "Python forbids it", "It uses more memory"], answer: 1, explain: "Silent changes to shared data are a classic source of wrong results." },
+]} />
+
+<Flashcards cards={[
+  { front: "Interspike interval?", back: "The time between two consecutive spikes of a neuron." },
+  { front: "Coefficient of variation (CV)?", back: "Standard deviation divided by mean. For ISIs it measures irregularity; a Poisson neuron has CV = 1." },
+  { front: "Rule one for raw data?", back: "Keep it exactly as it came; never edit it by hand; make every change in code." },
+  { front: "git add, commit, push?", back: "add: stage changes. commit: save a snapshot locally. push: copy commits to GitHub." },
+  { front: "Four files or folders every project needs?", back: "A README, data/raw (untouched), code that makes results, and an environment file listing packages." },
+]} />
+
+<Predict revisit question="What would you need to get your original numbers back in one minute?" />
+
+<Key title="Before you go">
+<ul>
+<li>Use the page for exercises, Colab for heavy work, your computer for long projects.</li>
+<li>Write small functions and test them. A failing test tells you what broke.</li>
+<li>Raw data is read-only. Processed data and figures are made by code.</li>
+<li>Commit small changes often, with messages that say why.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Look at the files from your last project or analysis. Which of today's practices did you follow, and which one would have saved you the most time?" />
