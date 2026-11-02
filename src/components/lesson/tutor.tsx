@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useProfile } from "@/lib/hooks/use-user";
+import { RichText } from "./rich-text";
 
 type Msg = { role: "user" | "assistant"; content: string };
 
@@ -52,7 +53,9 @@ export function Tutor({ lessonId, lessonTitle }: { lessonId: string; lessonTitle
           <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3 text-[0.93rem]">
             {msgs.length === 0 ? <p className="text-ink-3">Try: &ldquo;Explain step 3 of the derivation another way&rdquo; or &ldquo;Why does the perceptron need a bias?&rdquo;</p> : null}
             {msgs.map((m, i) => (
-              <div key={i} className={m.role === "user" ? "ml-8 rounded-xl bg-accent-soft px-3 py-2" : "mr-4 whitespace-pre-wrap"}>{m.content}</div>
+              m.role === "user"
+                ? <div key={i} className="ml-8 whitespace-pre-wrap rounded-xl bg-accent-soft px-3 py-2">{m.content}</div>
+                : <div key={i} className="mr-2 leading-relaxed"><RichText text={m.content} /></div>
             ))}
             {busy ? <div className="text-ink-3">Thinking…</div> : null}
           </div>
