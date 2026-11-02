@@ -25,22 +25,26 @@ export default async function WeekPage({ params }: { params: Promise<Params> }) 
   const papers = papersForWeek(n);
   return (
     <CompletedProvider>
-      <div className="mx-auto max-w-3xl px-4 pt-8">
-        <nav className="text-sm text-ink-3"><Link href="/curriculum" className="hover:text-ink">Curriculum</Link> · <Link href={`/curriculum#part-${part.n}`} className="hover:text-ink">Part {part.n}: {part.short}</Link></nav>
-        <div className="eyebrow mt-6">Week {n}</div>
-        <h1 className="mt-1 text-3xl font-semibold" style={{ fontFamily: "var(--font-serif)" }}>{week.title}</h1>
+      <div className="mx-auto max-w-3xl px-4 pt-6 sm:pt-8">
+        <nav className="hidden text-sm text-ink-3 sm:block"><Link href="/curriculum" className="hover:text-ink">Curriculum</Link> · <Link href={`/curriculum#part-${part.n}`} className="hover:text-ink">Part {part.n}: {part.short}</Link></nav>
+        <div className="eyebrow sm:mt-6">Week {n} · Part {part.n}: {part.short}</div>
+        <h1 className="mt-1 text-[1.75rem] font-semibold leading-tight sm:text-3xl" style={{ fontFamily: "var(--font-serif)" }}>{week.title}</h1>
         {week.kind === "rest" ? (
           <p className="mt-4 text-ink-2">A rest week: no lessons and no streak pressure. Optional: one long-form talk from the Hub, one book chapter, and a tidy of your journal and question bank.</p>
         ) : (
           <>
             {!isWritten(n) ? <p className="mt-4 rounded-lg bg-warn-soft p-3 text-sm">This week is being written. The day plan below will appear when it is published.</p> : null}
-            <ol className="mt-6 space-y-2">
+            <ol className="card mt-6 divide-y divide-line overflow-hidden">
               {Array.from({ length: DAYS_PER_WEEK }, (_, i) => i + 1).map((d) => (
                 <li key={d}>
-                  <Link href={`/learn/${weekSlug(n)}/d${d}`} className="card flex items-center gap-3 p-4 hover:border-ink-3">
-                    <span className="w-14 shrink-0 text-sm text-ink-3">Day {d}</span>
-                    <span className="flex-1">{isWritten(n) ? dayTitle(n, d) : d === 6 ? (n >= 105 ? "Research Day" : "Forge") : "In preparation"}</span>
+                  <Link href={`/learn/${weekSlug(n)}/d${d}`} className="tap flex items-center gap-3 px-4 py-3.5 hover:bg-surface-2 active:bg-surface-2">
+                    <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold ${d === 6 ? "bg-warn-soft text-warn" : "bg-accent-soft text-accent"}`}>{d === 6 ? "F" : d}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-xs text-ink-3">Day {d}{d === 6 ? (n >= 105 ? " · Research Day" : " · Forge") : ""}</span>
+                      <span className="block leading-snug">{isWritten(n) ? dayTitle(n, d) : d === 6 ? (n >= 105 ? "Research Day" : "Forge") : "In preparation"}</span>
+                    </span>
                     <DoneMark id={lessonId(n, d)} />
+                    <span className="text-ink-3" aria-hidden>›</span>
                   </Link>
                 </li>
               ))}
@@ -48,9 +52,9 @@ export default async function WeekPage({ params }: { params: Promise<Params> }) 
             {papers.length ? (
               <section className="mt-8">
                 <h2 className="text-xl font-semibold">Papers this week</h2>
-                <ul className="mt-3 space-y-2">
+                <ul className="card mt-3 divide-y divide-line overflow-hidden">
                   {papers.map((p) => (
-                    <li key={p.id}><Link href={`/papers/${p.id}`} className="card flex gap-3 p-3 hover:border-ink-3">
+                    <li key={p.id}><Link href={`/papers/${p.id}`} className="tap flex gap-3 px-4 py-3 hover:bg-surface-2 active:bg-surface-2">
                       <span className="chip shrink-0">{PAPER_KIND_LABEL[p.kind]}</span>
                       <span className="min-w-0 flex-1">{p.title} <span className="text-ink-3">({p.year})</span></span>
                     </Link></li>

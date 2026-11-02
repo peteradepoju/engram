@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useProfile } from "@/lib/hooks/use-user";
 import { RichText } from "./rich-text";
 
@@ -13,6 +13,12 @@ export function Tutor({ lessonId, lessonTitle }: { lessonId: string; lessonTitle
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const toggle = () => setOpen((o) => !o);
+    window.addEventListener("engram:tutor", toggle);
+    return () => window.removeEventListener("engram:tutor", toggle);
+  }, []);
 
   async function send() {
     const q = text.trim();
@@ -40,14 +46,16 @@ export function Tutor({ lessonId, lessonTitle }: { lessonId: string; lessonTitle
   return (
     <>
       <button onClick={() => setOpen((o) => !o)}
-        className="fixed bottom-20 right-4 z-40 rounded-full bg-accent px-4 py-3 text-sm font-semibold text-white shadow-lg md:bottom-6"
+        className="fixed bottom-6 right-4 z-40 hidden rounded-full bg-accent px-4 py-3 text-sm font-semibold text-white shadow-lg md:block"
         aria-expanded={open}>
         {open ? "Close tutor" : "Ask the tutor"}
       </button>
+      {open ? <button className="sheet-backdrop fixed inset-0 z-40 bg-black/45 md:hidden" onClick={() => setOpen(false)} aria-label="Close tutor" /> : null}
       {open ? (
-        <div className="fixed bottom-36 right-4 z-40 flex max-h-[70dvh] w-[min(26rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl md:bottom-20">
+        <div className="sheet fixed inset-x-0 bottom-0 z-50 flex max-h-[85dvh] flex-col overflow-hidden rounded-t-3xl border border-line bg-surface pb-[env(safe-area-inset-bottom)] shadow-2xl md:inset-x-auto md:bottom-20 md:right-4 md:max-h-[70dvh] md:w-[26rem] md:rounded-2xl md:pb-0">
           <div className="border-b border-line px-4 py-3">
-            <div className="font-semibold">Tutor</div>
+            <div className="mx-auto mb-2 h-1.5 w-10 rounded-full bg-line md:hidden" />
+            <div className="flex items-center justify-between"><div className="font-semibold">Tutor</div><button onClick={() => setOpen(false)} className="tap -mr-1 rounded-full px-2 py-1 text-sm text-ink-3 md:hidden">Close</button></div>
             <div className="text-xs text-ink-3">Ask about this lesson. Select text on the page first to ask about it. It gives hints before answers on exercises.</div>
           </div>
           <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3 text-[0.93rem]">
@@ -61,7 +69,7 @@ export function Tutor({ lessonId, lessonTitle }: { lessonId: string; lessonTitle
           </div>
           {user ? (
             <div className="flex gap-2 border-t border-line p-3">
-              <textarea className="input !py-2" rows={2} value={text} onChange={(e) => setText(e.target.value)}
+              <textarea className="input !py-2 text-base md:text-[0.95rem]" rows={2} value={text} onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }} placeholder="Ask a question" />
               <button className="btn btn-primary" onClick={send} disabled={busy || !text.trim()}>Send</button>
             </div>

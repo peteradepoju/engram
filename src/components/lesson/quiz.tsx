@@ -27,7 +27,7 @@ export function Quiz({ id = "quiz", title = "Quiz", questions }: { id?: string; 
       </div>
       <ol className="!list-none divide-y divide-line !pl-0">
         {questions.map((item, qi) => (
-          <li key={qi} className="px-5 py-4">
+          <li key={qi} className="px-4 py-4 sm:px-5">
             <div className="font-medium"><span className="mr-2 text-ink-3">{qi + 1}.</span><Tex>{item.q}</Tex></div>
             <div className="mt-3 grid gap-2">
               {item.options.map((opt, oi) => {
@@ -40,7 +40,7 @@ export function Quiz({ id = "quiz", title = "Quiz", questions }: { id?: string; 
                 return (
                   <button key={oi} disabled={submitted}
                     onClick={() => setPicked((p) => p.map((v, i) => (i === qi ? oi : v)))}
-                    className={`rounded-lg border px-3 py-2 text-left text-[0.95rem] transition ${cls}`}>
+                    className={`tap rounded-xl border px-3.5 py-3 text-left text-[0.95rem] transition sm:rounded-lg sm:px-3 sm:py-2 ${cls}`}>
                     <Tex>{opt}</Tex>
                   </button>
                 );
@@ -55,7 +55,7 @@ export function Quiz({ id = "quiz", title = "Quiz", questions }: { id?: string; 
       </ol>
       <div className="flex gap-2 border-t border-line px-5 py-3">
         {!submitted ? (
-          <button className="btn btn-primary" disabled={!allAnswered} onClick={submit}>{allAnswered ? "Check answers" : "Answer every question to check"}</button>
+          <button className="btn btn-primary tap flex-1 justify-center sm:flex-none" disabled={!allAnswered} onClick={submit}>{allAnswered ? "Check answers" : "Answer every question to check"}</button>
         ) : (
           <button className="btn" onClick={() => { setSubmitted(false); setPicked(questions.map(() => null)); }}>Try again</button>
         )}

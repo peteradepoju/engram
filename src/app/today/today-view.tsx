@@ -8,6 +8,7 @@ import {
   dayTitle, isWritten, lessonId, partOf, publishedLessons, scheduleFor, streak, todayIn, weekOf, longestStreak, addDays, isStudyDay,
 } from "@/lib/curriculum";
 import { papersForWeek } from "@/data/papers";
+import { InstallApp } from "@/components/install-app";
 
 const href = (w: number, d: number) => `/learn/w${String(w).padStart(3, "0")}/d${d}`;
 
@@ -41,7 +42,7 @@ export function TodayView() {
   const name = profile.display_name?.split(" ")[0];
 
   return (
-    <div className="mx-auto max-w-5xl px-4 pt-8">
+    <div className="mx-auto max-w-5xl px-4 pt-6 sm:pt-8">
       <div className="eyebrow">{new Date(info.today + "T12:00:00Z").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" })}</div>
       <h1 className="mt-1 text-3xl font-semibold" style={{ fontFamily: "var(--font-serif)" }}>{name ? `Good to see you, ${name}.` : "Your day"}</h1>
 
@@ -75,7 +76,7 @@ export function TodayView() {
                 {sched.kind === "lesson" && (info.next.w - 1) * 6 + info.next.d < (sched.week - 1) * 6 + sched.day ? (
                   <div className="text-sm text-ink-2">You are a little behind the calendar. That is fine: keep the daily habit and you will catch up.</div>
                 ) : null}
-                <Link href={href(info.next.w, info.next.d)} className="btn btn-primary mt-3">Start the lesson →</Link>
+                <Link href={href(info.next.w, info.next.d)} className="btn btn-primary tap mt-3 w-full justify-center !py-3 sm:w-auto sm:!py-2">Start the lesson →</Link>
               </>
             ) : (
               <p className="mt-1 text-sm">You have finished every published lesson. New weeks appear soon; meanwhile, review and read.</p>
@@ -92,6 +93,7 @@ export function TodayView() {
         </section>
 
         <aside className="space-y-4">
+          <div className="md:hidden"><InstallApp compact /></div>
           <section className="card p-5">
             <div className="flex items-end justify-between">
               <div><div className="eyebrow">Streak</div><div className="text-4xl font-semibold">{info.current}<span className="ml-1 text-base font-normal text-ink-3">days</span></div></div>

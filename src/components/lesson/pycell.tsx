@@ -59,7 +59,7 @@ export function PyCell({ code: rawCode = "", tests: rawTests, id, title, prompt,
   const passed = res?.results && res.results.length > 0 && res.results.every((t) => t.ok);
 
   return (
-    <div className={`overflow-hidden rounded-xl border ${isExercise ? (passed ? "border-good" : "border-accent/40") : "border-line"} bg-surface not-prose`}>
+    <div className={`bleed overflow-hidden rounded-xl border ${isExercise ? (passed ? "border-good" : "border-accent/40") : "border-line"} bg-surface not-prose`}>
       {(title || isExercise) && (
         <div className="flex items-center gap-2 border-b border-line px-4 py-2.5">
           <span className="eyebrow">{isExercise ? "Exercise" : "Code"}</span>
@@ -71,7 +71,7 @@ export function PyCell({ code: rawCode = "", tests: rawTests, id, title, prompt,
       <div onFocus={() => void warmUp()}>
         <CodeEditor value={src} onChange={setSrc} onRun={() => { if (!running) void run(); }} readOnly={readOnly} />
       </div>
-      <div className="flex flex-wrap items-center gap-2 border-t border-line px-3 py-2">
+      <div className="cell-bar flex flex-wrap items-center gap-1.5 border-t border-line px-3 py-2 sm:gap-2">
         <button className="btn btn-primary !py-1.5" onClick={run} disabled={running}>
           {running ? "Running…" : isExercise ? "Run and check" : "Run"}
         </button>
@@ -79,7 +79,7 @@ export function PyCell({ code: rawCode = "", tests: rawTests, id, title, prompt,
         <button className="btn !py-1.5" onClick={() => { setSrc(code); setOut([]); setRes(null); }}>Reset</button>
         {hint ? <button className="btn !py-1.5" onClick={() => setShowHint((v) => !v)}>Hint</button> : null}
         {solution ? <button className="btn !py-1.5" onClick={() => setShowSol((v) => !v)}>{showSol ? "Hide solution" : "Solution"}</button> : null}
-        <span className="ml-auto text-xs text-ink-3">
+        <span className="w-full text-xs text-ink-3 sm:ml-auto sm:w-auto">
           {status === "loading" ? "Downloading Python (about 10 MB, first time only)…" : status === "ready" ? "Python ready · Shift+Enter runs" : status === "error" ? "Python failed to start: reload the page" : "Python starts when you run"}
         </span>
       </div>

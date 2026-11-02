@@ -11,7 +11,7 @@ export function Video({ id, title, by, start, note }: { id: string; title: strin
   const src = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0${start ? `&start=${start}` : ""}`;
   const find = `https://www.youtube.com/results?search_query=${encodeURIComponent(`${title} ${by}`)}`;
   return (
-    <figure className="card not-prose overflow-hidden">
+    <figure className="card bleed not-prose overflow-hidden">
       <div className="relative aspect-video bg-black">
         {missing ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center text-white">

@@ -6,7 +6,7 @@ const rich = (x: ReactNode) => (typeof x === "string" ? <p><Tex>{x}</Tex></p> : 
 /** A step of the lesson, with its time budget. */
 export function Step({ n, title, minutes, children }: { n: number; title: string; minutes?: number; children?: ReactNode }) {
   return (
-    <div className="mt-12 flex items-baseline gap-3 border-t border-line pt-6 first:mt-0">
+    <div id={`step-${n}`} data-step={n} data-step-title={title} data-step-minutes={minutes} className="mt-12 flex scroll-mt-16 items-baseline gap-3 border-t border-line pt-6 first:mt-0">
       <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-sm font-bold text-accent">{n}</span>
       <div className="min-w-0">
         <div className="text-[1.35rem] font-semibold leading-tight" style={{ fontFamily: "var(--font-serif)" }}>{title}</div>
@@ -69,7 +69,7 @@ export function Bridge({ title, neuro, ai, children }: { title?: string; neuro: 
 
 export function Figure({ caption, credit, children }: { caption?: ReactNode; credit?: ReactNode; children: ReactNode }) {
   return (
-    <figure className="card overflow-hidden">
+    <figure className="card bleed overflow-hidden">
       <div className="p-4">{children}</div>
       {caption || credit ? (
         <figcaption className="border-t border-line px-4 py-3 text-sm text-ink-2">

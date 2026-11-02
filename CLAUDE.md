@@ -25,3 +25,7 @@ No em dashes anywhere. British spelling. Credit every adapted source. Nothing th
 ## Security
 
 Never ask for or handle secret keys. The Supabase publishable key and URL are public. `GEMINI_API_KEY` is set by Peter in Vercel.
+
+## Mobile app
+
+The site is an installable app (`src/app/manifest.ts`, icons in `public/icons/`, service worker `public/sw.js`). On phones: `SiteHeader` shows a back button on inner pages (`mobileContext` in `src/components/nav.tsx`), `BottomTabs` is hidden on lessons, and `LessonBar` (`src/components/lesson/lesson-bar.tsx`) gives previous/next day, a step sheet built from `<Step>` anchors (`data-step`), the tutor and reading progress. Wide lesson blocks use the `bleed` class to run edge to edge. Bump `VERSION` in `public/sw.js` if caching rules change.
