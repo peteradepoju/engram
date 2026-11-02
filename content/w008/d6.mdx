@@ -1,0 +1,338 @@
+export const meta = {
+  title: "Forge: Week 8 challenge, quiz and deep read",
+  intro: "This week derivatives went from slopes of tuning curves to the gradients that train networks. Today's challenge has three parts. Derive and check the gradient of a logistic decoder that reads a fine orientation judgement from a neural population. Measure how gradients vanish through deep stacks of sigmoid, tanh and ReLU layers. Then try one of the most surprising results in the backpropagation-and-the-brain debate: a network that learns even when its error signals travel back through random weights.",
+  goals: [
+    "Derive, check and use the gradient of a logistic regression decoder",
+    "Measure vanishing gradients layer by layer and explain the differences between nonlinearities",
+    "Implement feedback alignment and compare it with backpropagation",
+    "Critique the case for backpropagation-like learning in the brain",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "lillicrap-2020",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. The derivative of $x^3 e^x$ at $x = 1$?
+2. The slope of $\tanh$ at 0?
+3. The gradient of $f(w_1, w_2) = w_1^2 w_2$ at $(1, 3)$?
+
+<PyCell code={String.raw`
+  import numpy as np
+  f = lambda x: x ** 3 * np.exp(x)
+  print("1.", (f(1 + 1e-6) - f(1 - 1e-6)) / 2e-6, " exact 4e =", 4 * np.e)
+  print("2.", 1 - np.tanh(0.0) ** 2)
+  print("3.", (2 * 1 * 3, 1 ** 2))
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**The experiment.** 50 orientation-tuned neurons respond to gratings within 4° of 45°, and a monkey must report whether each is clockwise or anticlockwise of 45° (Week 4's discrimination idea, now as a binary choice). You will decode the choice with **logistic regression**: $p = \sigma(\mathbf{w} \cdot \mathbf{z})$ is the predicted probability of "clockwise", where $\mathbf{z}$ is the z-scored population response with a 1 appended for the bias. The loss is the cross-entropy
+
+$$
+L(\mathbf{w}) = -\frac{1}{T}\sum_t\left[y_t\ln p_t + (1 - y_t)\ln(1 - p_t)\right]
+$$
+
+<PyCell code={String.raw`
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2020)
+  N, T = 50, 800
+  prefs = np.linspace(0, 180, N, endpoint=False)
+  def wrap(d): return (d + 90) % 180 - 90
+  def tune(theta): return 5 + 40 * np.exp(-wrap(theta[:, None] - prefs[None]) ** 2 / (2 * 25 ** 2))
+  delta = rng.uniform(-4, 4, T)                                     # offset from 45 degrees
+  labels = (delta > 0).astype(float)                                # 1 = clockwise
+  counts = rng.poisson(tune(45 + delta) * 0.5)                      # 0.5 s spike counts, (800, 50)
+  train, test = np.arange(600), np.arange(600, 800)
+  mu, sd = counts[train].mean(axis=0), counts[train].std(axis=0) + 1e-9
+  Zb = np.column_stack([(counts - mu) / sd, np.ones(T)])           # z-scored responses plus a bias column
+  def sigmoid(u): return 1 / (1 + np.exp(-u))
+  print(Zb.shape)
+`} />
+
+<PyCell id="partA" title="Part A: derive, check and train a logistic decoder" tests={String.raw`
+  import numpy as np
+  def test_loss():
+      "xent computes the mean cross-entropy"
+      w = np.zeros(N + 1)
+      assert np.isclose(xent(w, Zb[train], labels[train]), np.log(2))
+
+  def test_grad():
+      "grad_xent matches a numerical gradient"
+      w = np.random.default_rng(0).normal(size=N + 1) * 0.1
+      num = np.zeros(N + 1)
+      for i in range(N + 1):
+          e = np.zeros(N + 1); e[i] = 1e-6
+          num[i] = (xent(w + e, Zb[train], labels[train]) - xent(w - e, Zb[train], labels[train])) / 2e-6
+      assert np.allclose(grad_xent(w, Zb[train], labels[train]), num, atol=1e-6)
+
+  def test_accuracy():
+      "after training, test accuracy is above 75%"
+      assert acc_test > 0.75
+`} prompt="Write `xent(w, Z, y)` and `grad_xent(w, Z, y)`. The gradient has a famously simple form, $\nabla L = \frac{1}{T}Z^\top(\mathbf{p} - \mathbf{y})$, which you prove in the derivation set. Check it numerically (the test does this too), then train for 1000 steps with learning rate 0.5 on the training trials and report the accuracy on the test trials, `acc_test`."
+code={String.raw`
+  def xent(w, Z, y):
+      p = sigmoid(Z @ w)
+      return ...
+
+  def grad_xent(w, Z, y):
+      return ...
+
+  w = np.zeros(N + 1)
+  for step in range(1000):
+      ...
+  acc_test = np.mean((sigmoid(Zb[test] @ w) > 0.5) == labels[test])
+
+  order = np.argsort(prefs)
+  plt.figure(figsize=(5, 3)); plt.plot(prefs[order], w[:N][order], "o-", ms=3); plt.axvline(45, ls="--", color="0.5")
+  plt.xlabel("neuron's preferred orientation (deg)"); plt.ylabel("decoder weight"); plt.show()
+  print("test accuracy", round(acc_test, 3))
+`}
+hint="xent: return -np.mean(y * np.log(p) + (1 - y) * np.log(1 - p)). grad_xent: return Z.T @ (sigmoid(Z @ w) - y) / len(y). In the loop: w = w - 0.5 * grad_xent(w, Zb[train], labels[train])."
+solution={String.raw`
+  def xent(w, Z, y):
+      p = sigmoid(Z @ w)
+      return -np.mean(y * np.log(p) + (1 - y) * np.log(1 - p))
+
+  def grad_xent(w, Z, y):
+      return Z.T @ (sigmoid(Z @ w) - y) / len(y)
+
+  w = np.zeros(N + 1)
+  for step in range(1000):
+      w = w - 0.5 * grad_xent(w, Zb[train], labels[train])
+  acc_test = np.mean((sigmoid(Zb[test] @ w) > 0.5) == labels[test])
+
+  order = np.argsort(prefs)
+  plt.figure(figsize=(5, 3)); plt.plot(prefs[order], w[:N][order], "o-", ms=3); plt.axvline(45, ls="--", color="0.5")
+  plt.xlabel("neuron's preferred orientation (deg)"); plt.ylabel("decoder weight"); plt.show()
+  print("test accuracy", round(acc_test, 3))
+`} />
+
+Look at the weights. The largest belong to neurons preferring roughly 20° and 80°, one to one and a half tuning widths either side of 45°, with opposite signs: neurons whose tuning curves are steep at 45° (Day 1), so their rates change most across the judgement. Neurons preferring 45° itself, which fire most, get much smaller weights. (The weights are noisy, because neighbouring neurons carry overlapping information and the decoder can share weight between them in many ways.)
+
+<PyCell id="partB" title="Part B: gradients through deep stacks" tests={String.raw`
+  import numpy as np
+  def test_norms():
+      "layer_grad_norms returns one norm per layer"
+      out = layer_grad_norms(np.tanh, lambda z: 1 - np.tanh(z) ** 2, 1.0, L=6)
+      assert out.shape == (6,)
+
+  def test_ratios():
+      "sigmoid gradients collapse, tanh shrink moderately, ReLU with He scaling stay roughly constant"
+      assert ratios["sigmoid"] < 1e-4
+      assert 0.01 < ratios["tanh"] < 1
+      assert 0.3 < ratios["relu"] < 3
+`} prompt="A 10-layer network of width 50 has random weights with standard deviation scale/√50. Complete `layer_grad_norms`, which sends a random error back from the top and records the norm of the gradient with respect to each layer's pre-activations, from layer 1 to 10. Compute the ratio of layer 1's norm to layer 10's for sigmoid and tanh (scale 1) and ReLU (scale √2, 'He initialisation')."
+code={String.raw`
+  def layer_grad_norms(act, dact, scale, L=10, n=50):
+      r = np.random.default_rng(1)
+      W = [r.normal(size=(n, n)) * scale / np.sqrt(n) for _ in range(L)]
+      h = r.normal(size=(64, n)); zs = []
+      for l in range(L):                       # forward pass, keeping pre-activations
+          z = h @ W[l]; zs.append(z); h = act(z)
+      g = r.normal(size=h.shape)               # an error arriving at the top layer's output
+      norms = []
+      for l in reversed(range(L)):
+          gz = ...                             # through the nonlinearity of layer l
+          norms.append(np.linalg.norm(gz))
+          g = ...                              # back through layer l's weights to its input
+      return np.array(norms[::-1])
+
+  acts = {"sigmoid": (sigmoid, lambda z: sigmoid(z) * (1 - sigmoid(z)), 1.0),
+          "tanh": (np.tanh, lambda z: 1 - np.tanh(z) ** 2, 1.0),
+          "relu": (lambda z: np.maximum(z, 0), lambda z: (z > 0) * 1.0, np.sqrt(2))}
+  ratios = {}
+  plt.figure(figsize=(5, 3.2))
+  for name, (a, da, sc) in acts.items():
+      nr = layer_grad_norms(a, da, sc)
+      ratios[name] = nr[0] / nr[-1]
+      plt.semilogy(range(1, 11), nr, "o-", label=name)
+  plt.xlabel("layer"); plt.ylabel("gradient norm"); plt.legend(frameon=False); plt.show()
+  print({k: f"{v:.2e}" for k, v in ratios.items()})
+`}
+hint="gz = g * dact(zs[l]) multiplies by the local slope element by element; then g = gz @ W[l].T sends it back through the weights (the transpose, as in yesterday's backward pass)."
+solution={String.raw`
+  def layer_grad_norms(act, dact, scale, L=10, n=50):
+      r = np.random.default_rng(1)
+      W = [r.normal(size=(n, n)) * scale / np.sqrt(n) for _ in range(L)]
+      h = r.normal(size=(64, n)); zs = []
+      for l in range(L):                       # forward pass, keeping pre-activations
+          z = h @ W[l]; zs.append(z); h = act(z)
+      g = r.normal(size=h.shape)               # an error arriving at the top layer's output
+      norms = []
+      for l in reversed(range(L)):
+          gz = g * dact(zs[l])                 # through the nonlinearity of layer l
+          norms.append(np.linalg.norm(gz))
+          g = gz @ W[l].T                      # back through layer l's weights to its input
+      return np.array(norms[::-1])
+
+  acts = {"sigmoid": (sigmoid, lambda z: sigmoid(z) * (1 - sigmoid(z)), 1.0),
+          "tanh": (np.tanh, lambda z: 1 - np.tanh(z) ** 2, 1.0),
+          "relu": (lambda z: np.maximum(z, 0), lambda z: (z > 0) * 1.0, np.sqrt(2))}
+  ratios = {}
+  plt.figure(figsize=(5, 3.2))
+  for name, (a, da, sc) in acts.items():
+      nr = layer_grad_norms(a, da, sc)
+      ratios[name] = nr[0] / nr[-1]
+      plt.semilogy(range(1, 11), nr, "o-", label=name)
+  plt.xlabel("layer"); plt.ylabel("gradient norm"); plt.legend(frameon=False); plt.show()
+  print({k: f"{v:.2e}" for k, v in ratios.items()})
+`} />
+
+Through ten sigmoid layers the gradient reaching layer 1 is about a millionth of what layer 10 receives, so the first layers barely learn. Tanh loses a factor of a few; ReLU with weights scaled by $\sqrt{2/n}$ keeps the gradient roughly constant, because on average half the units are active, each passing the gradient with slope 1, and the factor of 2 makes up for the other half. This scaling, from He and colleagues (2015), is now the default initialisation for ReLU networks (Week 82).
+
+**Part C: feedback alignment.** Backpropagation sends errors back to the hidden layer through $\mathbf{w}_2$, the transpose of the forward output weights. The brain would need a separate pathway with exactly matching weights, the "weight transport problem". Lillicrap and colleagues (2016) tried sending errors back through a **fixed random** vector $\mathbf{B}$ instead. Run the next cell to set up Day 5's tuning-curve task.
+
+<PyCell code={String.raw`
+  rng2 = np.random.default_rng(1986)
+  theta = rng2.uniform(-np.pi, np.pi, 200)
+  X = np.column_stack([np.cos(theta), np.sin(theta)])
+  y = 10 + 30 * np.exp(2 * (np.cos(theta - 0.8) - 1)) + 2 * rng2.normal(size=200)
+  init = {"W1": rng2.normal(size=(2, 16)) * 0.8, "b1": np.zeros(16), "w2": rng2.normal(size=16) * 0.5, "b2": 0.0}
+  B = rng2.normal(size=16) * 0.5                     # fixed random feedback weights
+  def forward(p, X):
+      H = np.tanh(X @ p["W1"] + p["b1"])
+      return H, H @ p["w2"] + p["b2"]
+  def mse(p): return 0.5 * np.mean((forward(p, X)[1] - y) ** 2)
+`} />
+
+<PyCell id="partC" title="Part C: learning with random feedback" tests={String.raw`
+  import numpy as np
+  def test_curves():
+      "both training runs record 3000 losses"
+      assert len(loss_bp) == 3000 and len(loss_fa) == 3000
+
+  def test_learns():
+      "feedback alignment reduces the loss by more than a factor of 10, as backpropagation does"
+      assert loss_bp[-1] < loss_bp[0] / 10
+      assert loss_fa[-1] < loss_fa[0] / 10
+
+  def test_alignment():
+      "after training, the forward weights w2 have come to align with B (positive cosine)"
+      assert align_after > 0.3
+`} prompt="Complete `train(feedback)`: it is Day 5's gradient descent, except that the error sent to the hidden layer is `np.outer(d_yhat, fb)`, where `fb` is `p['w2']` for backpropagation and the fixed `B` for feedback alignment. Train both for 3000 steps and compare the loss curves. Finally measure the cosine between the learned `w2` and `B`."
+code={String.raw`
+  def train(feedback, steps=3000, lr=0.05):
+      p = {k: np.array(v, dtype=float, copy=True) for k, v in init.items()}
+      losses = []
+      for _ in range(steps):
+          H, yhat = forward(p, X)
+          d_yhat = (yhat - y) / len(y)
+          fb = p["w2"] if feedback == "bp" else B
+          dZ = ...
+          p["W1"] -= lr * X.T @ dZ
+          p["b1"] -= lr * dZ.sum(axis=0)
+          p["w2"] -= lr * H.T @ d_yhat
+          p["b2"] -= lr * d_yhat.sum()
+          losses.append(mse(p))
+      return p, losses
+
+  p_bp, loss_bp = train("bp")
+  p_fa, loss_fa = train("fa")
+  align_after = ...
+
+  plt.figure(figsize=(5, 3.2)); plt.semilogy(loss_bp, label="backpropagation"); plt.semilogy(loss_fa, label="feedback alignment")
+  plt.xlabel("step"); plt.ylabel("loss"); plt.legend(frameon=False); plt.show()
+  print(f"final loss: BP {loss_bp[-1]:.2f}, FA {loss_fa[-1]:.2f};  cosine(w2, B) after FA training = {align_after:.2f}")
+`}
+hint="dZ = np.outer(d_yhat, fb) * (1 - H ** 2). For the alignment, use the trained feedback-alignment weights: align_after = p_fa['w2'] @ B / (np.linalg.norm(p_fa['w2']) * np.linalg.norm(B))."
+solution={String.raw`
+  def train(feedback, steps=3000, lr=0.05):
+      p = {k: np.array(v, dtype=float, copy=True) for k, v in init.items()}
+      losses = []
+      for _ in range(steps):
+          H, yhat = forward(p, X)
+          d_yhat = (yhat - y) / len(y)
+          fb = p["w2"] if feedback == "bp" else B
+          dZ = np.outer(d_yhat, fb) * (1 - H ** 2)
+          p["W1"] -= lr * X.T @ dZ
+          p["b1"] -= lr * dZ.sum(axis=0)
+          p["w2"] -= lr * H.T @ d_yhat
+          p["b2"] -= lr * d_yhat.sum()
+          losses.append(mse(p))
+      return p, losses
+
+  p_bp, loss_bp = train("bp")
+  p_fa, loss_fa = train("fa")
+  align_after = p_fa["w2"] @ B / (np.linalg.norm(p_fa["w2"]) * np.linalg.norm(B))
+
+  plt.figure(figsize=(5, 3.2)); plt.semilogy(loss_bp, label="backpropagation"); plt.semilogy(loss_fa, label="feedback alignment")
+  plt.xlabel("step"); plt.ylabel("loss"); plt.legend(frameon=False); plt.show()
+  print(f"final loss: BP {loss_bp[-1]:.2f}, FA {loss_fa[-1]:.2f};  cosine(w2, B) after FA training = {align_after:.2f}")
+`} />
+
+The network learns with random feedback. The trick is that the forward weights adapt so that the random feedback becomes useful: the learned $\mathbf{w}_2$ ends up pointing partly along $\mathbf{B}$, and the hidden layer's updates then roughly follow the true gradient. Exact symmetric feedback turns out not to be necessary, which removed one of the strongest arguments that the brain could not do anything like backpropagation.
+
+**Part D (in your journal).** Feedback alignment works well in small networks but scales poorly to very deep ones. List what a brain-like learning rule would still need to explain besides weight transport, using the deep read.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The gradient of the cross-entropy" task="For one example with $p = \sigma(u)$, $u = \mathbf{w} \cdot \mathbf{z}$, and $\ell = -[y\ln p + (1 - y)\ln(1 - p)]$, show that $\partial\ell/\partial\mathbf{w} = (p - y)\,\mathbf{z}$.">
+
+By the chain rule, $\dfrac{\partial\ell}{\partial\mathbf{w}} = \dfrac{d\ell}{dp}\cdot\dfrac{dp}{du}\cdot\dfrac{\partial u}{\partial\mathbf{w}}$.
+
+$\dfrac{d\ell}{dp} = -\dfrac{y}{p} + \dfrac{1 - y}{1 - p} = \dfrac{p - y}{p(1 - p)}$. From Day 2, $\dfrac{dp}{du} = p(1 - p)$. And $\dfrac{\partial u}{\partial\mathbf{w}} = \mathbf{z}$.
+
+The $p(1 - p)$ factors cancel, leaving $(p - y)\,\mathbf{z}$. Averaging over examples gives $\frac{1}{T}Z^\top(\mathbf{p} - \mathbf{y})$. The cancellation is why the cross-entropy pairs so well with a sigmoid: the saturating slope that made squared error learn slowly disappears from the gradient.
+
+</Prove>
+
+<Prove title="2. He initialisation" task="Suppose a ReLU layer's pre-activations $z_j = \sum_i W_{ij}h_i$ have independent weights with mean 0 and variance $v$, and the inputs $h_i$ are independent of them. Assume each input's pre-activation is symmetric about zero. Show that keeping the mean square of activity the same from layer to layer requires $v = 2/n$.">
+
+$\operatorname{Var}(z_j) = \sum_i\operatorname{Var}(W_{ij})\,\mathbb{E}[h_i^2] = n\,v\,\mathbb{E}[h^2]$, since the weights have mean zero and are independent of the inputs.
+
+The next layer's input is $h' = \max(0, z)$. For $z$ symmetric about zero, half its probability is below zero, so $\mathbb{E}[h'^2] = \frac{1}{2}\mathbb{E}[z^2] = \frac{1}{2}n\,v\,\mathbb{E}[h^2]$.
+
+For this to equal $\mathbb{E}[h^2]$ we need $\frac{1}{2}nv = 1$, so $v = 2/n$, a standard deviation of $\sqrt{2/n}$. The same argument run backwards keeps gradient sizes constant, which is what you saw in Part B.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 8 quiz (15 questions)" questions={[
+  { q: "The derivative is the limit of...", options: ["The function value", "The secant slope as the gap shrinks", "The area", "The average"], answer: 1, explain: "$\\lim_{h\\to 0}(f(x+h) - f(x))/h$." },
+  { q: "The central difference's error scales like...", options: ["h", "$h^2$", "$h^3$", "$1/h$"], answer: 1, explain: "Much more accurate than forward differences." },
+  { q: "A Gaussian tuning curve is steepest at...", options: ["Its peak", "About one width from the peak", "Its baseline", "Everywhere"], answer: 1, explain: "$\\mu \\pm \\sigma$." },
+  { q: "A neuron's Fisher information is zero...", options: ["On its flanks", "At its peak", "Never", "At its baseline only"], answer: 1, explain: "The slope is zero there." },
+  { q: "The derivative of $\\ln x$ is...", options: ["$x$", "$1/x$", "$e^x$", "$\\ln x/x$"], answer: 1, explain: "A basic rule." },
+  { q: "$\\sigma'(x)$ is at most...", options: ["1", "0.5", "0.25", "Unbounded"], answer: 2, explain: "$\\sigma(1-\\sigma)$ at σ = 1/2." },
+  { q: "$\\frac{d}{dx}e^{\\sin x}$ is...", options: ["$e^{\\sin x}$", "$\\cos x\\,e^{\\sin x}$", "$e^{\\cos x}$", "$\\sin x\\,e^{\\sin x}$"], answer: 1, explain: "Chain rule." },
+  { q: "For $r = \\sigma(wx + b)$, $\\partial r/\\partial w$ is proportional to...", options: ["w", "x", "b", "r only"], answer: 1, explain: "$\\sigma'(u)x$." },
+  { q: "Gradients through many sigmoid layers tend to...", options: ["Explode", "Vanish", "Stay constant", "Oscillate"], answer: 1, explain: "A product of factors at most 0.25." },
+  { q: "The gradient of f points...", options: ["Along contours", "In the direction of steepest increase", "Downhill", "At the origin"], answer: 1, explain: "Its negative points downhill." },
+  { q: "The gradient of $\\frac{1}{2T}\\lVert X\\mathbf{w} - \\mathbf{y}\\rVert^2$ is...", options: ["$X^\\top\\mathbf{y}$", "$\\frac{1}{T}X^\\top(X\\mathbf{w} - \\mathbf{y})$", "$X\\mathbf{w}$", "$\\mathbf{w}$"], answer: 1, explain: "Zero at the normal equations." },
+  { q: "Fisher information of independent neurons...", options: ["Averages", "Adds", "Multiplies", "Saturates at one neuron"], answer: 1, explain: "Thresholds fall like $1/\\sqrt{N}$." },
+  { q: "Backpropagation computes gradients at a cost of about...", options: ["One forward pass per weight", "A few forward passes in total", "The square of the number of weights", "It cannot be estimated"], answer: 1, explain: "Reverse mode reuses intermediate results." },
+  { q: "With logistic regression and cross-entropy, the gradient for one example is...", options: ["$(p - y)\\mathbf{z}$", "$p(1-p)\\mathbf{z}$", "$y\\mathbf{z}$", "$(p - y)^2$"], answer: 0, explain: "The sigmoid slope cancels." },
+  { q: "Feedback alignment sends errors back through...", options: ["The transpose of the forward weights", "Fixed random weights", "No weights", "The input"], answer: 1, explain: "And the network still learns." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Lillicrap, Santoro, Marris, Akerman and Hinton (2020) its third pass and write your critique under the five headings. Focus on one question: **what observation in a real brain would convince you that it computes something like a gradient?** Consider what the paper's activity-difference proposal predicts for dendrites, for the timing of plasticity and for the effects of silencing feedback pathways, and whether those predictions could also be explained without gradients.
+
+<Callout kind="research">
+Credit assignment in the brain is one of the most active questions in NeuroAI (Week 136). Write down one experiment, in any species, whose result would separate a gradient-following learning rule from a purely local Hebbian one.
+</Callout>
+
+<Key title="Week 8 review checklist">
+<ul>
+<li>I can define the derivative, estimate it numerically and explain the error of finite differences.</li>
+<li>I can use tuning-curve slopes and Fisher information to reason about discrimination.</li>
+<li>I can apply the derivative rules, including to the sigmoid, tanh, softplus and ReLU.</li>
+<li>I can use the chain rule on compositions and explain vanishing and exploding gradients.</li>
+<li>I can compute partial derivatives and gradients, and prove the gradient is the steepest direction.</li>
+<li>I can derive, implement and gradient-check backpropagation for a small network.</li>
+<li>I can explain the weight transport problem and what feedback alignment shows.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part D: besides symmetric feedback weights, what else would a brain-like learning rule have to explain? Then write the experiment you proposed for separating gradient-following from local Hebbian learning." />

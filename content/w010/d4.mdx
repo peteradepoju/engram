@@ -1,0 +1,262 @@
+export const meta = {
+  title: "Linear filters and the linear-nonlinear-Poisson model",
+  intro: "How does a retinal ganglion cell turn light into spikes? The simplest serious answer has three stages: filter the recent stimulus with a linear kernel (a convolution), pass the result through a static nonlinearity to get a firing rate, and fire spikes at that rate. This linear-nonlinear-Poisson model is the workhorse description of sensory neurons. Today you simulate one, recover its filter from white-noise data with the spike-triggered average, measure its nonlinearity, and predict its responses to stimuli it has never seen.",
+  goals: [
+    "Simulate a linear-nonlinear-Poisson neuron with a causal temporal filter",
+    "Estimate the filter by spike-triggered averaging and explain why white noise makes this work",
+    "Measure the static nonlinearity from data",
+    "Predict held-out responses and judge the model",
+  ],
+  plan: [
+    { label: "Predict and the LNP model", minutes: 20 },
+    { label: "Simulating the model", minutes: 25 },
+    { label: "Recovering the filter", minutes: 30 },
+    { label: "Measuring the nonlinearity and predicting", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "chichilnisky-2001",
+};
+
+<Predict question="A neuron's firing rate is an exponential function of a filtered white-noise stimulus, a strongly nonlinear relationship. If you average the stimulus segments that came just before each spike (the spike-triggered average), will you recover the shape of the linear filter, or a distorted version bent by the nonlinearity?" />
+
+<Step n={1} title="The LNP model" minutes={20} />
+
+With stimulus $s(t)$, the three stages are
+
+$$
+g(t) = \sum_{k=0}^{L-1} h[k]\,s(t - k), \qquad \lambda(t) = f(g(t)), \qquad y(t) \sim \text{Poisson}(\lambda(t)\Delta t)
+$$
+
+- **L**: the generator signal $g$ is a causal convolution of the stimulus with the filter $h$ (Day 3), which says how much the stimulus $k$ bins ago matters now. A retinal ganglion cell's temporal filter is typically **biphasic**: a positive lobe a few tens of milliseconds back and a negative lobe further back, so the cell responds to changes in light rather than to steady light.
+- **N**: a static nonlinearity $f$ (exponential, softplus, or rectified power) turns the generator signal into a non-negative rate, with a threshold below which the cell rarely fires.
+- **P**: spikes are drawn at that rate, independently in each bin.
+
+With $f = \exp$, this is exactly the Poisson GLM you fitted in Week 9: the L stage is the linear predictor $\mathbf{x}_t\cdot\mathbf{w}$, with the recent stimulus history as features.
+
+<Figure caption="A linear-nonlinear-Poisson neuron. Change the filter and the nonlinearity and watch the generator signal, the rate and the spikes." credit="Interactive figure by Engram.">
+  <LnpModel />
+</Figure>
+
+<Step n={2} title="Simulating the model" minutes={25} />
+
+<PyCell id="lnp" title="Simulate an LNP neuron" tests={String.raw`
+  import numpy as np
+  def test_drive():
+      "generator matches the causal convolution sum at a few times"
+      g = generator(stim, filt)
+      for tt in [30, 500, 4321]:
+          assert np.isclose(g[tt], sum(filt[k] * stim[tt - k] for k in range(L)))
+
+  def test_counts():
+      "spikes is a Poisson draw at the model's rate: its mean is close to the mean rate"
+      assert spikes.shape == (T,)
+      assert abs(spikes.mean() - rate.mean()) / rate.mean() < 0.05
+`} prompt="Write `generator(stim, filt)`, the causal convolution (the first T samples of `np.convolve`). Then compute the rate with an exponential nonlinearity, `0.1 * exp(1.2 g)` spikes per bin, and draw Poisson spike counts in `spikes`. Plot a stretch of stimulus, generator, rate and spikes."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2001)
+  T, L = 20000, 20                         # 20,000 bins of 10 ms; filter spans 200 ms
+  lag = np.arange(L)
+  filt = np.exp(-(lag - 4) ** 2 / 4) - 0.5 * np.exp(-(lag - 9) ** 2 / 9)    # biphasic
+  filt /= np.linalg.norm(filt)
+  stim = rng.normal(size=T)                # Gaussian white noise (flicker intensity)
+
+  def generator(stim, filt):
+      return ...
+
+  g = generator(stim, filt)
+  rate = ...
+  spikes = ...
+
+  seg = slice(1000, 1150)
+  fig, ax = plt.subplots(3, 1, figsize=(7, 4.5), sharex=True)
+  ax[0].plot(stim[seg], color="0.5"); ax[0].set_ylabel("stimulus")
+  ax[1].plot(g[seg]); ax[1].set_ylabel("generator")
+  ax[2].plot(rate[seg], color="C1"); ax[2].vlines(np.nonzero(spikes[seg])[0], 0, -0.3, color="C3"); ax[2].set_ylabel("rate, spikes")
+  ax[2].set_xlabel("bin (10 ms)"); plt.tight_layout(); plt.show()
+  print("total spikes", spikes.sum(), " mean rate", round(rate.mean() / 0.01, 1), "Hz")
+`}
+hint="generator returns np.convolve(stim, filt)[:len(stim)]. rate = 0.1 * np.exp(1.2 * g); spikes = rng.poisson(rate)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2001)
+  T, L = 20000, 20                         # 20,000 bins of 10 ms; filter spans 200 ms
+  lag = np.arange(L)
+  filt = np.exp(-(lag - 4) ** 2 / 4) - 0.5 * np.exp(-(lag - 9) ** 2 / 9)    # biphasic
+  filt /= np.linalg.norm(filt)
+  stim = rng.normal(size=T)                # Gaussian white noise (flicker intensity)
+
+  def generator(stim, filt):
+      return np.convolve(stim, filt)[:len(stim)]
+
+  g = generator(stim, filt)
+  rate = 0.1 * np.exp(1.2 * g)
+  spikes = rng.poisson(rate)
+
+  seg = slice(1000, 1150)
+  fig, ax = plt.subplots(3, 1, figsize=(7, 4.5), sharex=True)
+  ax[0].plot(stim[seg], color="0.5"); ax[0].set_ylabel("stimulus")
+  ax[1].plot(g[seg]); ax[1].set_ylabel("generator")
+  ax[2].plot(rate[seg], color="C1"); ax[2].vlines(np.nonzero(spikes[seg])[0], 0, -0.3, color="C3"); ax[2].set_ylabel("rate, spikes")
+  ax[2].set_xlabel("bin (10 ms)"); plt.tight_layout(); plt.show()
+  print("total spikes", spikes.sum(), " mean rate", round(rate.mean() / 0.01, 1), "Hz")
+`} />
+
+<Video id="wRbvwdze4uE" title="Generalized linear model" by="Neuromatch Academy" note="Neuromatch's introduction to encoding models of spiking neurons as generalised linear models, the statistical form of today's LNP model." />
+
+<Step n={3} title="Recovering the filter" minutes={30} />
+
+The **spike-triggered average** (STA) averages the stimulus history before every spike:
+
+$$
+\text{STA}[k] = \frac{\sum_t y(t)\,s(t - k)}{\sum_t y(t)}
+$$
+
+In Week 5 you saw that for a linear neuron with correlated stimuli the STA is distorted by the stimulus covariance. For **Gaussian white noise** something remarkable holds: whatever the nonlinearity (as long as it is not symmetric), the STA is proportional to the true filter. Chichilnisky (2001), this week's deep read, showed how to use this to characterise primate retinal ganglion cells.
+
+<Prove title="Why the STA recovers the filter (Stein's lemma)" task="In one dimension, let $s$ be a standard Gaussian with density $\phi(s) = e^{-s^2/2}/\sqrt{2\pi}$, and let the rate be $f(hs)$. Use integration by parts and $\phi'(s) = -s\phi(s)$ to show that $\mathbb{E}[s\,f(hs)] = h\,\mathbb{E}[f'(hs)]$. Explain why this makes the STA proportional to $h$.">
+
+$\mathbb{E}[s\,f(hs)] = \int s\,\phi(s)\,f(hs)\,ds = -\int\phi'(s)\,f(hs)\,ds$, using $s\phi(s) = -\phi'(s)$.
+
+Integrate by parts: $-[\phi f]_{-\infty}^{\infty} + \int\phi(s)\,\frac{d}{ds}f(hs)\,ds$. The boundary term vanishes because $\phi$ decays to zero. By the chain rule, $\frac{d}{ds}f(hs) = h\,f'(hs)$, so the result is $h\int\phi(s)f'(hs)\,ds = h\,\mathbb{E}[f'(hs)]$.
+
+With many stimulus dimensions the same argument, one coordinate at a time, gives $\mathbb{E}[\mathbf{s}\,f(\mathbf{h}\cdot\mathbf{s})] = \mathbf{h}\,\mathbb{E}[f'(\mathbf{h}\cdot\mathbf{s})]$. The STA is this expectation divided by the mean rate, a scalar, so it points along $\mathbf{h}$. The nonlinearity only changes its length. (If $\mathbb{E}[f']$ is zero, as for a symmetric nonlinearity like $f(g) = g^2$, the STA vanishes and you need the spike-triggered covariance instead.)
+
+</Prove>
+
+<PyCell id="sta" title="The spike-triggered average" tests={String.raw`
+  import numpy as np
+  def test_sta():
+      "sta has one value per lag and matches the definition"
+      assert sta.shape == (L,)
+      k = 3
+      assert np.isclose(sta[k], np.sum(spikes[L:] * stim[L - k:T - k]) / spikes[L:].sum())
+
+  def test_shape():
+      "the STA points along the true filter: cosine similarity above 0.98"
+      assert sta @ filt / (np.linalg.norm(sta) * np.linalg.norm(filt)) > 0.98
+`} prompt="Compute the STA for lags 0 to L − 1, skipping the first L bins so every window is complete. Compare its shape with the true filter (cosine similarity, and a plot of both normalised to unit length)."
+code={String.raw`
+  sta = np.zeros(L)
+  for k in range(L):
+      sta[k] = ...
+
+  cos = sta @ filt / (np.linalg.norm(sta) * np.linalg.norm(filt))
+  plt.figure(figsize=(5, 3)); plt.plot(lag * 10, filt, "o-", label="true filter"); plt.plot(lag * 10, sta / np.linalg.norm(sta), "s--", label="STA (normalised)")
+  plt.xlabel("time before spike (ms)"); plt.legend(frameon=False); plt.show()
+  print("cosine similarity:", round(cos, 4))
+`}
+hint="Align spikes at time t with the stimulus at t - k: sta[k] = np.sum(spikes[L:] * stim[L - k:T - k]) / spikes[L:].sum()."
+solution={String.raw`
+  sta = np.zeros(L)
+  for k in range(L):
+      sta[k] = np.sum(spikes[L:] * stim[L - k:T - k]) / spikes[L:].sum()
+
+  cos = sta @ filt / (np.linalg.norm(sta) * np.linalg.norm(filt))
+  plt.figure(figsize=(5, 3)); plt.plot(lag * 10, filt, "o-", label="true filter"); plt.plot(lag * 10, sta / np.linalg.norm(sta), "s--", label="STA (normalised)")
+  plt.xlabel("time before spike (ms)"); plt.legend(frameon=False); plt.show()
+  print("cosine similarity:", round(cos, 4))
+`} />
+
+The STA has the true filter's shape almost exactly, despite the exponential nonlinearity. That answers the prediction, and it is the reason white noise became the standard stimulus for characterising sensory neurons. The price is that natural stimuli are not white, and for them the STA is biased (Week 5), which is why the GLM of Week 9, fitted by maximum likelihood, is used in practice.
+
+<Step n={4} title="Measuring the nonlinearity and predicting" minutes={30} />
+
+With the filter estimated, compute each bin's generator signal using the STA, and ask: in bins where the generator signal was about $x$, how many spikes were there on average? Plotting that against $x$ reveals $f$ directly, with no assumption about its form.
+
+<PyCell id="nonlin" title="Measure the nonlinearity, then predict new data" tests={String.raw`
+  import numpy as np
+  def test_bins():
+      "nl_hat has one mean spike count per bin, rising with the generator signal"
+      assert nl_hat.shape == (15,)
+      assert nl_hat[-1] > 5 * nl_hat[0]
+
+  def test_predict():
+      "predicted rates on the held-out 20% correlate with the true rate above 0.8"
+      assert np.corrcoef(pred, rate[train_end:])[0, 1] > 0.8
+`} prompt="Using only the first 80% of bins (training), compute the generator with the unit-length STA, split its values into 15 bins with equal numbers of samples (quantile edges), and store the mean spike count in each bin in `nl_hat`. Then predict the rate in every held-out bin from its generator value's bin (`pred`), and compare with the true rate."
+code={String.raw`
+  train_end = int(0.8 * T)
+  sta_unit = sta / np.linalg.norm(sta)
+  g_hat = generator(stim, sta_unit)
+  edges = np.quantile(g_hat[:train_end], np.linspace(0, 1, 16))
+  which = np.clip(np.digitize(g_hat, edges) - 1, 0, 14)          # bin index of every time step
+  nl_hat = ...
+  centres = np.array([g_hat[:train_end][which[:train_end] == b].mean() for b in range(15)])
+  pred = ...
+
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(centres, nl_hat, "o", label="measured"); ax[0].plot(centres, 0.1 * np.exp(1.2 * centres * (sta_unit @ filt)), label="true (rescaled)")
+  ax[0].set_xlabel("generator signal"); ax[0].set_ylabel("spikes per bin"); ax[0].legend(frameon=False)
+  ax[1].plot(rate[train_end:train_end + 200], label="true rate"); ax[1].plot(pred[:200], label="predicted"); ax[1].set_xlabel("held-out bin"); ax[1].legend(frameon=False)
+  plt.tight_layout(); plt.show()
+  print("held-out correlation with the true rate:", np.corrcoef(pred, rate[train_end:])[0, 1].round(3))
+`}
+hint="nl_hat = np.array([spikes[:train_end][which[:train_end] == b].mean() for b in range(15)]). For prediction, look up each held-out bin's index: pred = nl_hat[which[train_end:]]."
+solution={String.raw`
+  train_end = int(0.8 * T)
+  sta_unit = sta / np.linalg.norm(sta)
+  g_hat = generator(stim, sta_unit)
+  edges = np.quantile(g_hat[:train_end], np.linspace(0, 1, 16))
+  which = np.clip(np.digitize(g_hat, edges) - 1, 0, 14)          # bin index of every time step
+  nl_hat = np.array([spikes[:train_end][which[:train_end] == b].mean() for b in range(15)])
+  centres = np.array([g_hat[:train_end][which[:train_end] == b].mean() for b in range(15)])
+  pred = nl_hat[which[train_end:]]
+
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(centres, nl_hat, "o", label="measured"); ax[0].plot(centres, 0.1 * np.exp(1.2 * centres * (sta_unit @ filt)), label="true (rescaled)")
+  ax[0].set_xlabel("generator signal"); ax[0].set_ylabel("spikes per bin"); ax[0].legend(frameon=False)
+  ax[1].plot(rate[train_end:train_end + 200], label="true rate"); ax[1].plot(pred[:200], label="predicted"); ax[1].set_xlabel("held-out bin"); ax[1].legend(frameon=False)
+  plt.tight_layout(); plt.show()
+  print("held-out correlation with the true rate:", np.corrcoef(pred, rate[train_end:])[0, 1].round(3))
+`} />
+
+The measured nonlinearity follows the true exponential, and the fitted model predicts the rate on held-out data with a correlation near 0.86, limited mostly by the coarse 15-bin description of the nonlinearity. In real neurons the model's success is a measured quantity, not a given: it misses adaptation, refractoriness and the effects of spike history, which the GLM adds back with a feedback filter (Week 35).
+
+<Bridge title="Encoding models from the retina up"
+  neuro="LNP and GLM models describe retinal ganglion cells, thalamic and cortical neurons with surprising accuracy for simple stimuli, and fitting them to whole populations revealed how correlated activity in the retina carries information (Pillow and colleagues, 2008, Week 35). Their failures on natural stimuli are as informative as their successes."
+  ai="A one-layer convolutional network with an exponential output and a Poisson loss is an LNP model. Stacking several such stages, as in convolutional networks trained to predict retinal responses, captures the adaptation and nonlinear pooling that a single LNP stage misses (Week 133).">
+
+Filter, nonlinearity, noise: a three-stage description, each stage measurable from data, and the template for every encoding model to come.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The L stage of an LNP model computes...", options: ["A firing rate", "A causal convolution of the stimulus with a filter", "Spike times", "A threshold"], answer: 1, explain: "The generator signal." },
+  { q: "A biphasic temporal filter makes a neuron respond most to...", options: ["Steady light", "Changes in light", "Darkness only", "Nothing"], answer: 1, explain: "Positive and negative lobes cancel for steady input." },
+  { q: "With $f = \\exp$, the LNP model is the same as...", options: ["Linear regression", "A Poisson GLM", "PCA", "A Hopfield network"], answer: 1, explain: "Week 9's model." },
+  { q: "For Gaussian white noise, the STA is...", options: ["Distorted by the nonlinearity", "Proportional to the true filter", "Always zero", "Equal to the nonlinearity"], answer: 1, explain: "Stein's lemma." },
+  { q: "The STA fails (is zero) when the nonlinearity is...", options: ["Exponential", "Symmetric, such as $g^2$", "Rectified", "Linear"], answer: 1, explain: "$\\mathbb{E}[f'] = 0$." },
+  { q: "The nonlinearity is measured by...", options: ["Averaging the stimulus", "Plotting mean spike count against the generator signal", "Fourier analysis", "PCA of the spikes"], answer: 1, explain: "Binning the filtered stimulus." },
+  { q: "The LNP model does not capture...", options: ["Filtering", "Thresholding", "Refractoriness and adaptation", "Poisson variability"], answer: 2, explain: "No spike-history terms." },
+]} />
+
+<Flashcards cards={[
+  { front: "LNP model?", back: "$g = h * s$ (causal), $\\lambda = f(g)$, spikes ~ Poisson(λΔt)." },
+  { front: "Spike-triggered average?", back: "$\\text{STA}[k] = \\sum_t y(t)s(t - k)/\\sum_t y(t)$; proportional to h for Gaussian white noise." },
+  { front: "Stein's lemma?", back: "For standard Gaussian s, $\\mathbb{E}[s\\,f(hs)] = h\\,\\mathbb{E}[f'(hs)]$ (integration by parts)." },
+  { front: "Measuring the nonlinearity?", back: "Bin the generator signal (computed with the estimated filter) and average spike counts in each bin." },
+  { front: "Limits of LNP?", back: "No spike history (refractoriness, bursting), no adaptation; STA biased for non-white stimuli. GLMs address these." },
+]} />
+
+<Predict revisit question="With an exponential nonlinearity and white noise, does the STA recover the filter's shape?" />
+
+<Key title="Before you go">
+<ul>
+<li>The LNP model filters the stimulus, applies a static nonlinearity, and fires Poisson spikes.</li>
+<li>For Gaussian white noise the STA recovers the filter's shape, whatever the (non-symmetric) nonlinearity.</li>
+<li>The nonlinearity can be read off by binning the filtered stimulus.</li>
+<li>Judge the model by its predictions on held-out data.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>This week's deep read: Chichilnisky (2001), <em>A simple white noise analysis of neuronal light responses</em>. First pass today.</li>
+<li>Simoncelli, Paninski, Pillow and Schwartz (2004), <em>Characterization of neural responses with stochastic stimuli</em>, in The Cognitive Neurosciences III: a careful review of STA, STC and their assumptions.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Name one property of real sensory neurons that the LNP model cannot capture. Describe an experiment with white noise that would reveal the failure, and what you would add to the model to fix it." />

@@ -1,0 +1,315 @@
+export const meta = {
+  title: "Differential equations and the leaky integrator",
+  intro: "The neuron's membrane is a capacitor that charges through a leaky resistor. Written down, that is a differential equation: the rate of change of the voltage depends on the voltage itself and on the input current. Today you solve it three ways: by hand for a constant input, by Euler steps on the computer, and in general as an integral of past input weighted by an exponential, which shows that a membrane is a filter. Add a threshold and a reset and you get Lapicque's integrate-and-fire neuron, whose firing rate you will derive and check.",
+  goals: [
+    "Solve the membrane equation exactly for constant input",
+    "Simulate it with Euler's method and measure how the error depends on the time step",
+    "Write the general solution as an integral of the input against an exponential kernel",
+    "Derive and verify the firing-rate curve of the leaky integrate-and-fire neuron",
+  ],
+  plan: [
+    { label: "Predict and the membrane equation", minutes: 20 },
+    { label: "Exact and Euler solutions", minutes: 30 },
+    { label: "The membrane as a filter", minutes: 30 },
+    { label: "The integrate-and-fire neuron", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "abbott-1999",
+};
+
+<Predict question="A neuron with a 20 ms membrane time constant and a threshold 15 mV above rest receives a constant input that would, on its own, hold the membrane 30 mV above rest. Roughly how often will it fire: about every 2 ms, every 14 ms, or every 50 ms?" />
+
+<Step n={1} title="The membrane equation" minutes={20} />
+
+Model the patch of membrane as a capacitor $C$ (the lipid bilayer stores charge) in parallel with a resistor $R$ (ion channels that are always open let charge leak out). Writing $V$ for the voltage relative to rest and $I(t)$ for the injected current, conservation of charge gives $C\,dV/dt = -V/R + I$. Multiplying by $R$ and writing $\tau = RC$:
+
+$$
+\tau\frac{dV}{dt} = -V + RI(t)
+$$
+
+The membrane **time constant** $\tau$ is typically 10 to 30 ms in cortical neurons. This is the equation Lapicque used in 1907 (today's paper is Abbott's short history of it), and the first-order linear differential equation of Week 6, now with an input.
+
+<Figure caption="A leaky integrator driven by a step, by pulses or by noise. Change τ and add a threshold to make it fire." credit="Interactive figure by Engram.">
+  <LeakyIntegrator />
+</Figure>
+
+<Step n={2} title="Exact and Euler solutions" minutes={30} />
+
+<Derivation title="Solving for a constant input">
+  <div>
+
+With $I$ constant, let $V_\infty = RI$, the voltage at which the leak exactly balances the input. Then $\tau\frac{dV}{dt} = -(V - V_\infty)$.
+
+  </div>
+  <div>
+
+Write $u = V - V_\infty$. Since $V_\infty$ is constant, $\tau\dot{u} = -u$, whose solution (Week 6) is $u(t) = u(0)e^{-t/\tau}$.
+
+  </div>
+  <div>
+
+So the voltage relaxes exponentially from wherever it starts towards $V_\infty$:
+
+$$
+V(t) = V_\infty + (V(0) - V_\infty)\,e^{-t/\tau}
+$$
+
+After one time constant it has covered 63% of the way; after three, 95%.
+
+  </div>
+</Derivation>
+
+<Video id="rSExvwCVRYg" title="Reduced neuron models" by="Neuromatch Academy" note="Neuromatch's introduction to the leaky integrate-and-fire neuron: the membrane equation, threshold and reset." />
+
+<PyCell id="euler" title="Exact solution against Euler steps" tests={String.raw`
+  import numpy as np
+  def test_exact():
+      "V_exact follows the exponential approach to V_inf"
+      assert np.isclose(V_exact(0.0), 0) and np.isclose(V_exact(tau), V_inf * (1 - np.exp(-1)))
+
+  def test_euler():
+      "euler returns n_steps + 1 values starting at 0"
+      v = euler(0.001, 50)
+      assert len(v) == 51 and v[0] == 0
+
+  def test_order():
+      "Euler's error at 50 ms shrinks about tenfold when dt shrinks tenfold"
+      assert 8 < err[0] / err[1] < 12
+`} prompt="Write `V_exact(t)` for a step input from rest, and `euler(dt, n_steps)` that applies $V \leftarrow V + \frac{\Delta t}{\tau}(-V + RI)$. Compare the voltage at 50 ms for time steps of 1 ms and 0.1 ms, storing the two absolute errors in `err`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  tau, RI = 0.020, 30.0                 # 20 ms; input worth 30 mV
+  V_inf = RI
+
+  def V_exact(t):
+      return ...
+
+  def euler(dt, n_steps):
+      V = np.zeros(n_steps + 1)
+      for k in range(n_steps):
+          V[k + 1] = ...
+      return V
+
+  err = [abs(euler(dt, int(round(0.05 / dt)))[-1] - V_exact(0.05)) for dt in [0.001, 0.0001]]
+  t = np.linspace(0, 0.1, 200)
+  plt.figure(figsize=(5, 3)); plt.plot(t * 1000, V_exact(t), label="exact"); plt.plot(np.arange(101) * 1, euler(0.001, 100), ".", ms=3, label="Euler, 1 ms")
+  plt.xlabel("time (ms)"); plt.ylabel("V (mV)"); plt.legend(frameon=False); plt.show()
+  print("errors at 50 ms:", np.round(err, 5))
+`}
+hint="V_exact returns V_inf * (1 - np.exp(-t / tau)) (from rest, V(0) = 0). The Euler step is V[k + 1] = V[k] + dt / tau * (-V[k] + RI)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  tau, RI = 0.020, 30.0                 # 20 ms; input worth 30 mV
+  V_inf = RI
+
+  def V_exact(t):
+      return V_inf * (1 - np.exp(-t / tau))
+
+  def euler(dt, n_steps):
+      V = np.zeros(n_steps + 1)
+      for k in range(n_steps):
+          V[k + 1] = V[k] + dt / tau * (-V[k] + RI)
+      return V
+
+  err = [abs(euler(dt, int(round(0.05 / dt)))[-1] - V_exact(0.05)) for dt in [0.001, 0.0001]]
+  t = np.linspace(0, 0.1, 200)
+  plt.figure(figsize=(5, 3)); plt.plot(t * 1000, V_exact(t), label="exact"); plt.plot(np.arange(101) * 1, euler(0.001, 100), ".", ms=3, label="Euler, 1 ms")
+  plt.xlabel("time (ms)"); plt.ylabel("V (mV)"); plt.legend(frameon=False); plt.show()
+  print("errors at 50 ms:", np.round(err, 5))
+`} />
+
+Euler's method is first-order accurate: its error is proportional to $\Delta t$, like the left-edge Riemann sum of yesterday (it is one, applied to the rate of change). A time step of a twentieth of $\tau$ is usually good enough for rate models; spiking models need smaller steps near threshold. Week 21 covers better solvers.
+
+<Step n={3} title="The membrane as a filter" minutes={30} />
+
+For an input that varies in time, multiply both sides by $e^{t/\tau}$ (an **integrating factor**): the left side becomes $\tau\frac{d}{dt}(e^{t/\tau}V)$, which can be integrated directly. Starting from rest at $t = -\infty$, the result is
+
+$$
+V(t) = \int_{-\infty}^{t}\frac{1}{\tau}e^{-(t - s)/\tau}\,RI(s)\,ds
+$$
+
+The voltage now is a weighted sum of all past input, each moment $s$ weighted by $\frac{1}{\tau}e^{-(t - s)/\tau}$: recent input counts most and input from many time constants ago is forgotten. This is a **convolution** of the input with an exponential kernel, tomorrow's topic. The membrane is a **low-pass filter**: it smooths fast fluctuations and passes slow ones.
+
+<PyCell id="filter" title="Convolution reproduces the simulation" tests={String.raw`
+  import numpy as np
+  def test_kernel():
+      "kernel is (1 / tau) exp(-t / tau) sampled every dt, and integrates to about 1"
+      assert np.isclose(kernel[0], 1 / tau) and abs(np.sum(kernel) * dt - 1) < 0.01
+
+  def test_match():
+      "the convolution matches the Euler simulation to within 1 mV"
+      assert np.max(np.abs(V_conv - V_sim)) < 1.0
+`} prompt="Drive the membrane with a noisy current (the cell sets it up). Simulate it with Euler steps (`V_sim`), then compute the same response by convolving the input with the exponential kernel: `V_conv = np.convolve(RI_t, kernel)[:n] * dt`. Plot both. Which features of the input survive the filtering?"
+code={String.raw`
+  dt, n = 0.0001, 3000                     # 0.1 ms steps, 300 ms
+  rng = np.random.default_rng(1907)
+  RI_t = 15 + 40 * rng.normal(size=n) * np.sqrt(0.001 / dt) * 0.3 + 10 * np.sin(2 * np.pi * 8 * np.arange(n) * dt)
+
+  V_sim = np.zeros(n)
+  for k in range(n - 1):
+      V_sim[k + 1] = ...
+
+  kernel = ...                             # (1 / tau) exp(-t / tau) for t = 0, dt, 2 dt, ... up to 10 tau
+  V_conv = np.convolve(RI_t, kernel)[:n] * dt
+
+  t = np.arange(n) * dt * 1000
+  plt.figure(figsize=(6, 3)); plt.plot(t, RI_t, color="0.8", lw=0.5, label="input"); plt.plot(t, V_sim, label="Euler"); plt.plot(t, V_conv, "--", label="convolution")
+  plt.ylim(-40, 80); plt.xlabel("time (ms)"); plt.ylabel("mV"); plt.legend(frameon=False, ncol=3); plt.show()
+  print("largest difference:", np.max(np.abs(V_conv - V_sim)).round(3), "mV")
+`}
+hint="Euler: V_sim[k + 1] = V_sim[k] + dt / tau * (-V_sim[k] + RI_t[k]). Kernel: kernel = np.exp(-np.arange(0, 10 * tau, dt) / tau) / tau."
+solution={String.raw`
+  dt, n = 0.0001, 3000                     # 0.1 ms steps, 300 ms
+  rng = np.random.default_rng(1907)
+  RI_t = 15 + 40 * rng.normal(size=n) * np.sqrt(0.001 / dt) * 0.3 + 10 * np.sin(2 * np.pi * 8 * np.arange(n) * dt)
+
+  V_sim = np.zeros(n)
+  for k in range(n - 1):
+      V_sim[k + 1] = V_sim[k] + dt / tau * (-V_sim[k] + RI_t[k])
+
+  kernel = np.exp(-np.arange(0, 10 * tau, dt) / tau) / tau
+  V_conv = np.convolve(RI_t, kernel)[:n] * dt
+
+  t = np.arange(n) * dt * 1000
+  plt.figure(figsize=(6, 3)); plt.plot(t, RI_t, color="0.8", lw=0.5, label="input"); plt.plot(t, V_sim, label="Euler"); plt.plot(t, V_conv, "--", label="convolution")
+  plt.ylim(-40, 80); plt.xlabel("time (ms)"); plt.ylabel("mV"); plt.legend(frameon=False, ncol=3); plt.show()
+  print("largest difference:", np.max(np.abs(V_conv - V_sim)).round(3), "mV")
+`} />
+
+The two agree to within about a millivolt; the small differences come from the one-step lag of Euler's method, which matters only because this input jumps by tens of millivolts from one step to the next. The fast noise is almost gone from the voltage while the slow 8 Hz oscillation survives, shrunk and delayed. You will make "which frequencies survive" precise with Fourier analysis next week (Week 11).
+
+<Step n={4} title="The integrate-and-fire neuron" minutes={25} />
+
+Lapicque's model adds one rule: when $V$ reaches a threshold $\theta$, the neuron fires a spike and $V$ is reset to 0, then held there for a short **refractory period** $t_{\text{ref}}$. Between spikes it obeys the membrane equation. For constant input with $RI \gt \theta$, the voltage climbs from 0 towards $RI$ and crosses $\theta$ after a time $T$ that you can find from the exact solution.
+
+<Prove title="The firing rate of the integrate-and-fire neuron" task="Starting from $V = 0$ with constant input $RI \gt \theta$, show that the time to reach threshold is $T = \tau\ln\dfrac{RI}{RI - \theta}$, so the firing rate is $f = 1/(t_{\text{ref}} + T)$. What happens when $RI \leq \theta$?">
+
+From the exact solution, $V(t) = RI(1 - e^{-t/\tau})$. Setting $V(T) = \theta$: $1 - e^{-T/\tau} = \theta/RI$, so $e^{-T/\tau} = (RI - \theta)/RI$.
+
+Taking logarithms, $T = -\tau\ln\frac{RI - \theta}{RI} = \tau\ln\frac{RI}{RI - \theta}$. Each cycle lasts $t_{\text{ref}} + T$, so $f = 1/(t_{\text{ref}} + T)$.
+
+If $RI \leq \theta$, the voltage approaches $RI$ without ever reaching threshold: the neuron is silent. The input current at which firing begins, $I = \theta/R$, is the **rheobase**. Just above it $T$ is very long, so the rate rises steeply from zero; for large inputs $T \approx \tau\theta/RI$ and the rate is limited by the refractory period.
+
+</Prove>
+
+<PyCell id="lif" title="Simulate and check the f-I curve" tests={String.raw`
+  import numpy as np
+  def test_rates():
+      "rates_sim has one simulated firing rate per input"
+      assert len(rates_sim) == len(inputs)
+
+  def test_silent():
+      "inputs below threshold produce no spikes"
+      assert rates_sim[0] == 0 and f_theory(10.0) == 0
+
+  def test_match():
+      "simulated rates match the formula within 3% above threshold"
+      for RIv, r in zip(inputs, rates_sim):
+          if RIv > 16:
+              assert abs(r - f_theory(RIv)) / f_theory(RIv) < 0.03, (RIv, r, f_theory(RIv))
+`} prompt="Write `f_theory(RI)` from the proof (0 at or below threshold). Then simulate the integrate-and-fire neuron for 2 s with each constant input in `inputs`, using exact updates between spikes, a threshold of 15 mV, reset to 0 and a 2 ms refractory period, and store the firing rates in `rates_sim`. Plot both curves."
+code={String.raw`
+  theta, t_ref = 15.0, 0.002
+  def f_theory(RIv):
+      if RIv <= theta:
+          return 0.0
+      return ...
+
+  def simulate_lif(RIv, T=2.0, dt=0.00005):
+      V, spikes, refractory = 0.0, 0, 0.0
+      decay = np.exp(-dt / tau)
+      for _ in range(int(T / dt)):
+          if refractory > 0:
+              refractory -= dt
+              continue
+          V = RIv + (V - RIv) * decay          # exact update for a constant input over one step
+          if V >= theta:
+              ...
+      return spikes / T
+
+  inputs = [10.0, 18.0, 22.0, 30.0, 45.0, 70.0]
+  rates_sim = [simulate_lif(v) for v in inputs]
+  grid = np.linspace(5, 75, 300)
+  plt.figure(figsize=(5, 3)); plt.plot(grid, [f_theory(v) for v in grid], label="formula"); plt.plot(inputs, rates_sim, "o", label="simulation")
+  plt.xlabel("input RI (mV)"); plt.ylabel("firing rate (Hz)"); plt.legend(frameon=False); plt.show()
+  print([round(r, 1) for r in rates_sim], " formula at 30 mV:", round(f_theory(30.0), 1), "Hz")
+`}
+hint="f_theory returns 1 / (t_ref + tau * np.log(RIv / (RIv - theta))). In the simulation, when V crosses threshold: spikes += 1; V = 0.0; refractory = t_ref."
+solution={String.raw`
+  theta, t_ref = 15.0, 0.002
+  def f_theory(RIv):
+      if RIv <= theta:
+          return 0.0
+      return 1 / (t_ref + tau * np.log(RIv / (RIv - theta)))
+
+  def simulate_lif(RIv, T=2.0, dt=0.00005):
+      V, spikes, refractory = 0.0, 0, 0.0
+      decay = np.exp(-dt / tau)
+      for _ in range(int(T / dt)):
+          if refractory > 0:
+              refractory -= dt
+              continue
+          V = RIv + (V - RIv) * decay          # exact update for a constant input over one step
+          if V >= theta:
+              spikes += 1
+              V = 0.0
+              refractory = t_ref
+      return spikes / T
+
+  inputs = [10.0, 18.0, 22.0, 30.0, 45.0, 70.0]
+  rates_sim = [simulate_lif(v) for v in inputs]
+  grid = np.linspace(5, 75, 300)
+  plt.figure(figsize=(5, 3)); plt.plot(grid, [f_theory(v) for v in grid], label="formula"); plt.plot(inputs, rates_sim, "o", label="simulation")
+  plt.xlabel("input RI (mV)"); plt.ylabel("firing rate (Hz)"); plt.legend(frameon=False); plt.show()
+  print([round(r, 1) for r in rates_sim], " formula at 30 mV:", round(f_theory(30.0), 1), "Hz")
+`} />
+
+With an input worth 30 mV and a 15 mV threshold, $T = 20\ln 2 \approx 13.9$ ms, plus 2 ms refractory, so the neuron fires about every 16 ms, at roughly 63 Hz. That answers the prediction (closest to every 14 ms). The curve also shows the integrate-and-fire neuron's characteristic shape: silent below rheobase, a steep rise just above it, and a slow approach to the refractory limit.
+
+<Bridge title="The simplest model that works"
+  neuro="Integrate-and-fire neurons are the workhorse of large network models of cortex, from balanced networks to models of working memory (Weeks 31 and 107), because they capture spike timing and firing rates at a tiny computational cost. Their f-I curve, derived today, is the starting point for rate models of populations."
+  ai="Spiking neural networks for neuromorphic hardware use integrate-and-fire units, and the spike threshold's zero derivative is the obstacle to training them by backpropagation, handled with smooth 'surrogate gradients' (Week 138). Continuous-time recurrent networks and state-space models share the leaky-integrator form τẋ = −x + input.">
+
+A capacitor, a resistor and a threshold explain more about neurons than their simplicity suggests.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The membrane time constant is...", options: ["R + C", "RC", "R/C", "1/RC"], answer: 1, explain: "$\\tau = RC$." },
+  { q: "With constant input, V approaches...", options: ["0", "RI", "θ", "Infinity"], answer: 1, explain: "Leak balances input at $V_\\infty = RI$." },
+  { q: "After one time constant, V has covered what fraction of the way to $V_\\infty$?", options: ["37%", "50%", "63%", "95%"], answer: 2, explain: "$1 - e^{-1}$." },
+  { q: "Euler's method has error proportional to...", options: ["$\\Delta t^2$", "$\\Delta t$", "$\\sqrt{\\Delta t}$", "It is exact"], answer: 1, explain: "First order." },
+  { q: "The general solution writes V(t) as...", options: ["The input now", "A convolution of past input with an exponential kernel", "The derivative of the input", "A constant"], answer: 1, explain: "Integrating factor." },
+  { q: "The membrane acts as a...", options: ["High-pass filter", "Low-pass filter", "Amplifier of fast signals", "Delay line only"], answer: 1, explain: "It smooths fast fluctuations." },
+  { q: "An integrate-and-fire neuron with $RI \\leq \\theta$...", options: ["Fires at the maximum rate", "Never fires", "Fires once", "Oscillates"], answer: 1, explain: "Below rheobase." },
+]} />
+
+<Flashcards cards={[
+  { front: "Membrane equation?", back: "$\\tau\\dot{V} = -V + RI(t)$, with $\\tau = RC$." },
+  { front: "Solution for constant input?", back: "$V(t) = V_\\infty + (V(0) - V_\\infty)e^{-t/\\tau}$, $V_\\infty = RI$." },
+  { front: "Membrane as a filter?", back: "$V(t) = \\int_{-\\infty}^{t}\\frac{1}{\\tau}e^{-(t-s)/\\tau}RI(s)ds$: convolution with an exponential, a low-pass filter." },
+  { front: "Integrate-and-fire rate?", back: "$f = 1/(t_{\\text{ref}} + \\tau\\ln\\frac{RI}{RI - \\theta})$ for $RI \\gt \\theta$, else 0." },
+  { front: "Rheobase?", back: "The smallest constant current that makes the neuron fire: $\\theta/R$ for the LIF neuron." },
+]} />
+
+<Predict revisit question="With a 30 mV input and a 15 mV threshold, how often does the neuron fire?" />
+
+<Key title="Before you go">
+<ul>
+<li>The membrane is a leaky integrator: $\tau\dot{V} = -V + RI$.</li>
+<li>For constant input it relaxes exponentially to RI; Euler steps approximate this with error proportional to Δt.</li>
+<li>In general the voltage is the input convolved with an exponential: the membrane is a low-pass filter.</li>
+<li>Threshold and reset give the integrate-and-fire neuron and its logarithmic f-I curve.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Abbott (1999), <em>Lapicque's introduction of the integrate-and-fire model neuron (1907)</em>. Two pages.</li>
+<li>Gerstner, Kistler, Naud and Paninski, <em>Neuronal Dynamics</em> (free online), Chapter 1.3: the leaky integrate-and-fire model.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A neuron with a short membrane time constant forgets its inputs quickly; one with a long time constant integrates them. Describe one computation that needs each, and say which neurons in the brain you would expect to have each." />

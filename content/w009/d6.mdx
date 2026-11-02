@@ -1,0 +1,305 @@
+export const meta = {
+  title: "Forge: Week 9 challenge, quiz and deep read",
+  intro: "This week you learned to approximate nonlinear things locally: Taylor series for functions, Jacobians for maps, Hessians for curvature. Today's challenge uses all three. Track a circuit's fixed point as its input changes and find the exact drive at which it starts to oscillate. Fit a neuron's tuning curve by Newton's method and get honest error bars from the curvature of the likelihood. Then watch gradient descent stall near a saddle point and measure how long it takes to escape.",
+  goals: [
+    "Track a fixed point through a parameter sweep and locate a Hopf bifurcation",
+    "Fit a Poisson tuning model by Newton's method and compute error bars from the Hessian",
+    "Check that the error bars have the coverage they claim",
+    "Measure and explain how long gradient descent lingers near a saddle",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "mante-2013",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. The second-order Taylor polynomial of $\cos x$ around 0?
+2. The Jacobian of $(x^2y, x + y)$ at $(1, 2)$?
+3. The Hessian of $x^2 + 3xy + 5y^2$, and is the origin a minimum?
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  print("1. cos x is about 1 - x^2/2; at x = 0.3:", round(1 - 0.3 ** 2 / 2, 5), "vs", round(np.cos(0.3), 5))
+  print("2.", np.array([[2 * 1 * 2, 1 ** 2], [1, 1]]))
+  H = np.array([[2.0, 3.0], [3.0, 10.0]])
+  print("3.", H.tolist(), "eigenvalues", np.linalg.eigvalsh(H).round(3), "-> minimum")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+<PyCell code={String.raw`
+  def S(x): return 1 / (1 + np.exp(-(x - 4)))
+  def F(z, hE, wEE=12.0):
+      E, I = z
+      return np.array([-E + S(wEE * E - 10 * I + hE), (-I + S(10 * E - 2 * I)) / 2])
+  def jac(z, hE, h=1e-6):
+      J = np.zeros((2, 2))
+      for j in range(2):
+          e = np.zeros(2); e[j] = h
+          J[:, j] = (F(z + e, hE) - F(z - e, hE)) / (2 * h)
+      return J
+  def newton(z, hE, steps=50):
+      for _ in range(steps):
+          z = z - np.linalg.solve(jac(z, hE), F(z, hE))
+      return z
+  print(newton(np.array([0.02, 0.02]), 0.0))
+`} />
+
+<PyCell id="partA" title="Part A: where does the circuit start to oscillate?" tests={String.raw`
+  import numpy as np
+  def test_track():
+      "fps holds a fixed point for every drive in hs, and max_re the largest real part of its Jacobian's eigenvalues"
+      assert fps.shape == (len(hs), 2) and max_re.shape == (len(hs),)
+      for k in [0, 40, 100]:
+          assert np.linalg.norm(F(fps[k], hs[k])) < 1e-9
+          assert np.isclose(max_re[k], np.linalg.eigvals(jac(fps[k], hs[k])).real.max())
+
+  def test_hopf():
+      "h_hopf is the first drive at which the fixed point is unstable, between 1 and 1.5"
+      assert 1.0 < h_hopf < 1.5
+      assert h_hopf == hs[np.argmax(max_re > 0)]
+
+  def test_complex():
+      "at the crossing the eigenvalues are a complex pair: a Hopf bifurcation"
+      lam = np.linalg.eigvals(jac(fps[np.argmax(max_re > 0)], h_hopf))
+      assert np.abs(lam.imag).max() > 0.1
+`} prompt="Sweep the drive `hE` over `hs`. At each value, find the fixed point with Newton's method, starting from the previous value's answer (this is called continuation), and store it in `fps`. Store the largest real part of the Jacobian's eigenvalues in `max_re`, and the first drive at which it is positive in `h_hopf`. Then simulate the circuit just above `h_hopf` to see the oscillation."
+code={String.raw`
+  hs = np.linspace(-2, 4, 121)
+  fps, max_re = [], []
+  z = np.array([0.02, 0.02])
+  for h in hs:
+      z = ...
+      fps.append(z)
+      max_re.append(...)
+  fps, max_re = np.array(fps), np.array(max_re)
+  h_hopf = ...
+
+  zt = fps[np.argmax(max_re > 0)] + 0.01; tr = []
+  for _ in range(4000):
+      zt = zt + 0.02 * F(zt, h_hopf + 0.5); tr.append(zt.copy())
+  tr = np.array(tr)
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(hs, fps[:, 0], color="0.6"); ax[0].scatter(hs, fps[:, 0], c=np.where(max_re < 0, "C2", "C3"), s=8)
+  ax[0].axvline(h_hopf, ls="--", color="0.5"); ax[0].set_xlabel("drive to E"); ax[0].set_ylabel("E at the fixed point")
+  ax[1].plot(np.arange(4000) * 0.02, tr[:, 0]); ax[1].set_xlabel("time (units of the E time constant)"); ax[1].set_ylabel("E")
+  plt.tight_layout(); plt.show()
+  print("Hopf bifurcation near drive", round(h_hopf, 3))
+`}
+hint="z = newton(z, h) continues from the previous answer; max_re.append(np.linalg.eigvals(jac(z, h)).real.max()). h_hopf = hs[np.argmax(max_re > 0)] (argmax returns the first True)."
+solution={String.raw`
+  hs = np.linspace(-2, 4, 121)
+  fps, max_re = [], []
+  z = np.array([0.02, 0.02])
+  for h in hs:
+      z = newton(z, h)
+      fps.append(z)
+      max_re.append(np.linalg.eigvals(jac(z, h)).real.max())
+  fps, max_re = np.array(fps), np.array(max_re)
+  h_hopf = hs[np.argmax(max_re > 0)]
+
+  zt = fps[np.argmax(max_re > 0)] + 0.01; tr = []
+  for _ in range(4000):
+      zt = zt + 0.02 * F(zt, h_hopf + 0.5); tr.append(zt.copy())
+  tr = np.array(tr)
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(hs, fps[:, 0], color="0.6"); ax[0].scatter(hs, fps[:, 0], c=np.where(max_re < 0, "C2", "C3"), s=8)
+  ax[0].axvline(h_hopf, ls="--", color="0.5"); ax[0].set_xlabel("drive to E"); ax[0].set_ylabel("E at the fixed point")
+  ax[1].plot(np.arange(4000) * 0.02, tr[:, 0]); ax[1].set_xlabel("time (units of the E time constant)"); ax[1].set_ylabel("E")
+  plt.tight_layout(); plt.show()
+  print("Hopf bifurcation near drive", round(h_hopf, 3))
+`} />
+
+Below a drive of about 1.1 the circuit sits quietly at its fixed point; above it, the same fixed point still exists but has become an unstable spiral, and activity settles onto a rhythm instead. A gradual change in input produced a qualitative change in behaviour, the signature of a bifurcation, found without ever simulating the oscillation itself: just a Jacobian and its eigenvalues.
+
+**Part B: error bars from curvature.** A neuron's spike counts to 24 motion directions, 5 repeats each, follow a Poisson GLM with $\lambda = \exp(w_0 + w_1\cos\theta + w_2\sin\theta)$, a smooth direction tuning curve. The **inverse of the negative Hessian** of the log-likelihood at its maximum estimates the covariance of the fitted weights, so the square roots of its diagonal are their standard errors. A 95% interval is the estimate plus or minus 1.96 standard errors.
+
+<PyCell id="partB" title="Part B: fit, error bars and coverage" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "fit_glm returns the maximum-likelihood weights and standard errors"
+      r = np.random.default_rng(1)
+      yv = r.poisson(np.exp(Xd @ w_true))
+      w, se = fit_glm(yv)
+      lam = np.exp(Xd @ w)
+      assert np.allclose(Xd.T @ (yv - lam), 0, atol=1e-6)
+      assert np.allclose(se, np.sqrt(np.diag(np.linalg.inv(Xd.T @ (Xd * lam[:, None])))))
+
+  def test_coverage():
+      "the 95% intervals for w1 contain the true value in 88% to 99% of 200 simulated experiments"
+      assert 0.88 <= coverage <= 0.99
+`} prompt="Write `fit_glm(y)`: run 25 Newton steps on the Poisson log-likelihood (gradient $X^\top(\mathbf{y} - \boldsymbol\lambda)$, Hessian $-X^\top\operatorname{diag}(\boldsymbol\lambda)X$) from zero, and return the weights and their standard errors. Then simulate 200 experiments and record the fraction in which the 95% interval for $w_1$ contains the true value, `coverage`."
+code={String.raw`
+  theta = np.repeat(np.linspace(0, 2 * np.pi, 24, endpoint=False), 5)
+  Xd = np.column_stack([np.ones_like(theta), np.cos(theta), np.sin(theta)])
+  w_true = np.array([1.5, 0.8, -0.4])
+
+  def fit_glm(y):
+      w = np.zeros(3)
+      for _ in range(25):
+          lam = np.exp(Xd @ w)
+          g = ...
+          H = ...
+          w = ...
+      lam = np.exp(Xd @ w)
+      se = ...
+      return w, se
+
+  rng = np.random.default_rng(0)
+  hits = 0
+  for _ in range(200):
+      y = rng.poisson(np.exp(Xd @ w_true))
+      w, se = fit_glm(y)
+      hits += abs(w[1] - w_true[1]) < 1.96 * se[1]
+  coverage = hits / 200
+
+  w, se = fit_glm(rng.poisson(np.exp(Xd @ w_true)))
+  print("one fit:", w.round(3), "+/-", (1.96 * se).round(3), "  preferred direction", round(np.degrees(np.arctan2(w[2], w[1])) % 360, 1), "deg")
+  print("coverage of the 95% intervals:", coverage)
+`}
+hint="g = Xd.T @ (y - lam); H = -Xd.T @ (Xd * lam[:, None]); w = w - np.linalg.solve(H, g). The standard errors are se = np.sqrt(np.diag(np.linalg.inv(Xd.T @ (Xd * lam[:, None])))), the inverse of the negative Hessian at the fit."
+solution={String.raw`
+  theta = np.repeat(np.linspace(0, 2 * np.pi, 24, endpoint=False), 5)
+  Xd = np.column_stack([np.ones_like(theta), np.cos(theta), np.sin(theta)])
+  w_true = np.array([1.5, 0.8, -0.4])
+
+  def fit_glm(y):
+      w = np.zeros(3)
+      for _ in range(25):
+          lam = np.exp(Xd @ w)
+          g = Xd.T @ (y - lam)
+          H = -Xd.T @ (Xd * lam[:, None])
+          w = w - np.linalg.solve(H, g)
+      lam = np.exp(Xd @ w)
+      se = np.sqrt(np.diag(np.linalg.inv(Xd.T @ (Xd * lam[:, None]))))
+      return w, se
+
+  rng = np.random.default_rng(0)
+  hits = 0
+  for _ in range(200):
+      y = rng.poisson(np.exp(Xd @ w_true))
+      w, se = fit_glm(y)
+      hits += abs(w[1] - w_true[1]) < 1.96 * se[1]
+  coverage = hits / 200
+
+  w, se = fit_glm(rng.poisson(np.exp(Xd @ w_true)))
+  print("one fit:", w.round(3), "+/-", (1.96 * se).round(3), "  preferred direction", round(np.degrees(np.arctan2(w[2], w[1])) % 360, 1), "deg")
+  print("coverage of the 95% intervals:", coverage)
+`} />
+
+The intervals contain the truth about 95% of the time, as advertised. The curvature of the likelihood at its peak is the observed Fisher information: a sharply curved peak means the data determine the weights well, and a flat one means they do not. Checking coverage by simulation, as you just did, is the honest way to test any error bar before trusting it (Week 59).
+
+<PyCell id="partC" title="Part C: escaping a saddle" tests={String.raw`
+  import numpy as np
+  def test_counts():
+      "escape_steps has one count per starting offset, and the counts increase as the offset shrinks"
+      assert len(escape_steps) == len(offsets)
+      assert np.all(np.diff(escape_steps) > 0)
+
+  def test_log():
+      "each thousandfold smaller offset adds roughly the same number of steps, about ln(1000) / ln(1.1)"
+      d = np.diff(escape_steps)
+      assert np.all(np.abs(d[1:] - np.log(1000) / np.log(1.1)) < 5)
+`} prompt="On $f(x, y) = \frac{1}{2}(x^2 - y^2) + \frac{1}{4}y^4$, the origin is a saddle and $(0, \pm 1)$ are minima. Run gradient descent with learning rate 0.1 from $(1, \epsilon)$ for each offset in `offsets`, and count the steps until $|y|$ exceeds 0.5. Store the counts in `escape_steps`. Why does each thousandfold smaller offset add the same number of steps?"
+code={String.raw`
+  offsets = [1e-1, 1e-3, 1e-6, 1e-9]
+  escape_steps = []
+  for eps in offsets:
+      x, y = 1.0, eps
+      k = 0
+      while abs(y) <= 0.5:
+          gx, gy = ..., ...
+          x, y = x - 0.1 * gx, y - 0.1 * gy
+          k += 1
+      escape_steps.append(k)
+  print("offsets", offsets, "-> steps to escape", escape_steps)
+`}
+hint="The gradient is (x, -y + y ** 3), so gx, gy = x, -y + y ** 3."
+solution={String.raw`
+  offsets = [1e-1, 1e-3, 1e-6, 1e-9]
+  escape_steps = []
+  for eps in offsets:
+      x, y = 1.0, eps
+      k = 0
+      while abs(y) <= 0.5:
+          gx, gy = x, -y + y ** 3
+          x, y = x - 0.1 * gx, y - 0.1 * gy
+          k += 1
+      escape_steps.append(k)
+  print("offsets", offsets, "-> steps to escape", escape_steps)
+`} />
+
+Near the saddle the Hessian has eigenvalues 1 and −1. Along the downhill direction each step multiplies $y$ by $1 + 0.1 = 1.1$, so climbing from $\epsilon$ to 0.5 takes about $\ln(0.5/\epsilon)/\ln 1.1$ steps: each factor of 1000 in $\epsilon$ adds $\ln 1000/\ln 1.1 \approx 72$ steps. Gradient descent always escapes eventually, but it can linger for a long time on a plateau with a tiny gradient, which is what Dauphin and colleagues argued slows training in high dimensions. Noise, as in stochastic gradient descent (Week 12), kicks the system off the saddle faster.
+
+**Part D (in your journal).** In Part A you located the bifurcation from the Jacobian alone. Mante and colleagues used the same idea in a 100-dimensional trained network. What could go wrong with linearisation-based explanations in very high dimensions, and how would you check one?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The Hessian of the Poisson log-likelihood" task="With $\ell(\mathbf{w}) = \sum_t[y_t\,\mathbf{x}_t\cdot\mathbf{w} - \exp(\mathbf{x}_t\cdot\mathbf{w})]$, show that $H = -\sum_t\lambda_t\mathbf{x}_t\mathbf{x}_t^\top$ and that it is negative semidefinite.">
+
+The gradient is $\sum_t(y_t - \lambda_t)\mathbf{x}_t$ with $\lambda_t = \exp(\mathbf{x}_t\cdot\mathbf{w})$. Differentiating component $i$ with respect to $w_j$, only $\lambda_t$ depends on $\mathbf{w}$, and $\partial\lambda_t/\partial w_j = \lambda_t x_{tj}$ by the chain rule. So $H_{ij} = -\sum_t\lambda_t x_{ti}x_{tj}$, that is $H = -\sum_t\lambda_t\mathbf{x}_t\mathbf{x}_t^\top = -X^\top\operatorname{diag}(\boldsymbol\lambda)X$.
+
+For any $\mathbf{v}$, $\mathbf{v}^\top H\mathbf{v} = -\sum_t\lambda_t(\mathbf{x}_t\cdot\mathbf{v})^2 \leq 0$, since every $\lambda_t \gt 0$. So $H$ is negative semidefinite and $\ell$ is concave: any point where the gradient vanishes is the global maximum.
+
+</Prove>
+
+<Prove title="2. Oja's rule from a Taylor expansion" task="Starting from $\mathbf{w}' = (\mathbf{w} + \eta y\mathbf{x})/\lVert\mathbf{w} + \eta y\mathbf{x}\rVert$ with $\lVert\mathbf{w}\rVert = 1$ and $y = \mathbf{w}\cdot\mathbf{x}$, expand to first order in $\eta$ and show that $\mathbf{w}' \approx \mathbf{w} + \eta y(\mathbf{x} - y\mathbf{w})$.">
+
+The squared length is $\lVert\mathbf{w} + \eta y\mathbf{x}\rVert^2 = 1 + 2\eta y\,\mathbf{w}\cdot\mathbf{x} + O(\eta^2) = 1 + 2\eta y^2 + O(\eta^2)$.
+
+Using the Taylor expansion $(1 + u)^{-1/2} \approx 1 - u/2$, the reciprocal of the length is $1 - \eta y^2 + O(\eta^2)$.
+
+Multiplying, $\mathbf{w}' \approx (\mathbf{w} + \eta y\mathbf{x})(1 - \eta y^2) = \mathbf{w} + \eta y\mathbf{x} - \eta y^2\mathbf{w} + O(\eta^2) = \mathbf{w} + \eta y(\mathbf{x} - y\mathbf{w})$. The non-local normalisation, which needs every weight at once, has become a local decay term $-\eta y^2 w_i$ at each synapse.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 9 quiz (15 questions)" questions={[
+  { q: "The coefficient of $(x - a)^3$ in a Taylor series is...", options: ["$f'''(a)$", "$f'''(a)/6$", "$f'''(a)/3$", "$3f'''(a)$"], answer: 1, explain: "$f^{(k)}(a)/k!$ with 3! = 6." },
+  { q: "$\\ln(1 + x) \\approx$ for small x...", options: ["$x - x^2/2$", "$1 + x$", "$x + x^2$", "$1 - x$"], answer: 0, explain: "Derivatives 1 and −1 at 0." },
+  { q: "The quadratic integrate-and-fire neuron is...", options: ["An exact model", "A second-order Taylor expansion of spike initiation near threshold", "A linear model", "A Poisson model"], answer: 1, explain: "From the exponential IF." },
+  { q: "The Jacobian of a map from $\\mathbb{R}^n$ to $\\mathbb{R}^m$ has shape...", options: ["n by m", "m by n", "n by n", "m by m"], answer: 1, explain: "Rows are outputs." },
+  { q: "The Jacobian of a composition is...", options: ["A sum of Jacobians", "A product of Jacobians", "The inner Jacobian", "Always the identity"], answer: 1, explain: "Chain rule." },
+  { q: "The Jacobian of $\\tanh(W\\mathbf{h} + \\mathbf{b})$ with respect to h is...", options: ["W", "$\\operatorname{diag}(1 - \\tanh^2(\\cdot))W$", "$W^\\top$", "$\\tanh(W)$"], answer: 1, explain: "Rows scaled by slopes." },
+  { q: "A fixed point is stable if the Jacobian's eigenvalues have...", options: ["Negative real parts", "Positive real parts", "Zero imaginary parts", "Magnitude 1"], answer: 0, explain: "Perturbations decay." },
+  { q: "Newton's method solves F(x) = 0 by...", options: ["Following the gradient", "Repeatedly solving the linearised equation", "Random search", "Bisection only"], answer: 1, explain: "$\\mathbf{x} - J^{-1}F$." },
+  { q: "In an inhibition-stabilised network, driving the inhibitory cells...", options: ["Raises their rate", "Lowers their steady rate", "Silences the network", "Has no effect"], answer: 1, explain: "The paradoxical effect." },
+  { q: "A Hessian with eigenvalues 2 and −1 at a critical point means...", options: ["Minimum", "Maximum", "Saddle", "Flat"], answer: 2, explain: "Mixed signs." },
+  { q: "Gradient descent on a quadratic diverges if...", options: ["$\\eta \\gt 2/\\lambda_{\\max}$", "$\\eta \\lt \\lambda_{\\min}$", "The Hessian is diagonal", "Never"], answer: 0, explain: "The sharpest direction overshoots." },
+  { q: "Newton's method on a quadratic converges in...", options: ["One step", "κ steps", "Never", "n steps"], answer: 0, explain: "It minimises the exact quadratic model." },
+  { q: "$\\nabla_{\\mathbf{w}}(\\mathbf{w}^\\top A\\mathbf{w})$ is...", options: ["$A\\mathbf{w}$", "$(A + A^\\top)\\mathbf{w}$", "$A^\\top$", "$\\mathbf{w}^\\top A$"], answer: 1, explain: "Both factors contain w." },
+  { q: "The gradient of the Poisson GLM log-likelihood is...", options: ["$X^\\top\\mathbf{y}$", "$X^\\top(\\mathbf{y} - \\boldsymbol\\lambda)$", "$\\boldsymbol\\lambda$", "$X\\mathbf{w}$"], answer: 1, explain: "Observed minus predicted, times inputs." },
+  { q: "Standard errors of fitted weights come from...", options: ["The gradient", "The inverse of the negative Hessian of the log-likelihood", "The learning rate", "The number of steps"], answer: 1, explain: "Observed Fisher information." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Mante, Sussillo, Shenoy and Newsome (2013) its third pass and write your critique under the five headings. Focus on one question: **the trained network reproduced the data and its linearisation explained how it worked; does that tell us how prefrontal cortex works?** Consider what other networks could have produced the same population activity, which aspects of the explanation depend on the training method, and what experiment (perturbation, recording or behaviour) could test the selection mechanism directly in the brain.
+
+<Callout kind="research">
+Reverse-engineering trained networks to generate hypotheses about the brain is now a major research programme (Week 135). Write down one task you know well, and the kind of fixed-point structure you would expect a network trained on it to discover.
+</Callout>
+
+<Key title="Week 9 review checklist">
+<ul>
+<li>I can write Taylor polynomials, use the error term, and explain the accuracy of central differences.</li>
+<li>I can derive the quadratic integrate-and-fire model by expanding the exponential one.</li>
+<li>I can compute Jacobians, multiply them for compositions, and linearise a network at a fixed point.</li>
+<li>I can find fixed points with Newton's method, classify them and read a phase plane.</li>
+<li>I can explain the paradoxical effect in inhibition-stabilised networks.</li>
+<li>I can use the Hessian to classify critical points, explain conditioning and run Newton's method.</li>
+<li>I can derive gradients of vector and matrix expressions, fit a Poisson GLM and derive Oja's rule.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part D: what could go wrong with linearisation-based explanations of high-dimensional networks, and how would you check one? Then describe the task and fixed-point structure you proposed." />

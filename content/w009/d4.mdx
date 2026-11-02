@@ -1,0 +1,310 @@
+export const meta = {
+  title: "The Hessian: curvature, minima and saddle points",
+  intro: "The gradient says which way is downhill. The Hessian, the matrix of second derivatives, says how the slope itself changes: whether you are at the bottom of a bowl, the top of a hill or the middle of a saddle, and whether the ground curves sharply or gently in each direction. It decides how fast gradient descent can go, why Newton's method can be so much faster, and, as the curvature of a log-likelihood, how much your data pin down the parameters of a model.",
+  goals: [
+    "Compute the Hessian and write the second-order Taylor expansion of a function of many variables",
+    "Classify critical points as minima, maxima or saddles from the Hessian's eigenvalues",
+    "Explain how curvature limits the learning rate and slows gradient descent",
+    "Use Newton's method with the Hessian to fit a logistic model in a few steps",
+  ],
+  plan: [
+    { label: "Predict and second derivatives", minutes: 20 },
+    { label: "Classifying critical points", minutes: 25 },
+    { label: "Curvature and gradient descent", minutes: 30 },
+    { label: "Newton's method", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "dauphin-2014",
+};
+
+<Predict question="Gradient descent on a bowl-shaped loss. The bowl curves 100 times more steeply in one direction than in another. Compared with a perfectly round bowl, will gradient descent need about the same number of steps, about 10 times as many, or about 100 times as many?" />
+
+<Step n={1} title="Second derivatives and the Hessian" minutes={20} />
+
+The **Hessian** of $f(\mathbf{w})$ is the matrix of second partial derivatives,
+
+$$
+H_{ij} = \frac{\partial^2 f}{\partial w_i\,\partial w_j}
+$$
+
+For smooth functions the order of differentiation does not matter, so $H$ is **symmetric** (Week 6's spectral theorem applies: real eigenvalues, perpendicular eigenvectors). The Hessian is the Jacobian of the gradient. The second-order Taylor expansion is
+
+$$
+f(\mathbf{w} + \mathbf{h}) \approx f(\mathbf{w}) + \nabla f(\mathbf{w})\cdot\mathbf{h} + \tfrac{1}{2}\mathbf{h}^\top H(\mathbf{w})\,\mathbf{h}
+$$
+
+The last term is a quadratic form (Week 6, Day 5). Along a unit direction $\mathbf{u}$, the curvature is $\mathbf{u}^\top H\mathbf{u}$, which lies between the smallest and largest eigenvalues of $H$.
+
+<Figure caption="A quadratic surface set by its Hessian's eigenvalues and orientation. Pink dots are gradient descent from a fixed start." credit="Interactive figure by Engram.">
+  <HessianSurface />
+</Figure>
+
+<Step n={2} title="Classifying critical points" minutes={25} />
+
+At a **critical point** the gradient is zero, so the expansion becomes $f(\mathbf{w} + \mathbf{h}) \approx f(\mathbf{w}) + \frac{1}{2}\mathbf{h}^\top H\mathbf{h}$, and the eigenvalues of $H$ decide what kind of point it is:
+
+- all positive: a **minimum** (the function curves up in every direction);
+- all negative: a **maximum**;
+- some of each sign: a **saddle point**, up in some directions and down in others;
+- some zero: the test is inconclusive, and higher-order terms decide.
+
+Dauphin and colleagues (2014), today's paper, argued that in the very high-dimensional losses of neural networks almost all critical points with high loss are saddles: for a point to be a minimum, every one of millions of eigenvalues must be positive, which is very unlikely by chance.
+
+<Video id="BLkz5LGWihw" title="Higher order derivatives | Chapter 10, Essence of calculus" by="3Blue1Brown (Grant Sanderson)" note="What second derivatives measure, seen through the example of position, velocity and acceleration." />
+
+<PyCell id="hessian" title="Numerical Hessians and critical points" tests={String.raw`
+  import numpy as np
+  def test_hess():
+      "numerical_hessian matches the analytic Hessian of f"
+      for w in [np.array([1.0, 0.0]), np.array([0.3, -0.7])]:
+          Ha = np.array([[6 * w[0], 0.0], [0.0, 2.0]])
+          assert np.allclose(numerical_hessian(f, w), Ha, atol=1e-4)
+
+  def test_kinds():
+      "kinds labels (1, 0) a minimum and (-1, 0) a saddle"
+      assert kinds["(1, 0)"] == "minimum" and kinds["(-1, 0)"] == "saddle"
+`} prompt="For $f(x, y) = x^3 - 3x + y^2$, write `numerical_hessian(f, w, h=1e-4)` from central differences of the gradient (use `grad_f`). Both (1, 0) and (−1, 0) are critical points; classify each from the eigenvalues of the Hessian, storing 'minimum', 'maximum' or 'saddle' in the dictionary `kinds`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  def f(w): return w[0] ** 3 - 3 * w[0] + w[1] ** 2
+  def grad_f(w): return np.array([3 * w[0] ** 2 - 3, 2 * w[1]])
+
+  def numerical_hessian(f, w, h=1e-4):
+      n = len(w)
+      H = np.zeros((n, n))
+      for j in range(n):
+          e = np.zeros(n); e[j] = h
+          H[:, j] = ...
+      return 0.5 * (H + H.T)               # symmetrise to remove rounding asymmetry
+
+  def kind(H):
+      ev = np.linalg.eigvalsh(H)
+      ...
+
+  kinds = {name: kind(numerical_hessian(f, np.array(p, dtype=float))) for name, p in [("(1, 0)", (1, 0)), ("(-1, 0)", (-1, 0))]}
+  print(kinds)
+`}
+hint="Column j is the central difference of the gradient: H[:, j] = (grad_f(w + e) - grad_f(w - e)) / (2 * h). kind returns 'minimum' if np.all(ev > 0), 'maximum' if np.all(ev < 0), else 'saddle'."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  def f(w): return w[0] ** 3 - 3 * w[0] + w[1] ** 2
+  def grad_f(w): return np.array([3 * w[0] ** 2 - 3, 2 * w[1]])
+
+  def numerical_hessian(f, w, h=1e-4):
+      n = len(w)
+      H = np.zeros((n, n))
+      for j in range(n):
+          e = np.zeros(n); e[j] = h
+          H[:, j] = (grad_f(w + e) - grad_f(w - e)) / (2 * h)
+      return 0.5 * (H + H.T)               # symmetrise to remove rounding asymmetry
+
+  def kind(H):
+      ev = np.linalg.eigvalsh(H)
+      if np.all(ev > 0):
+          return "minimum"
+      if np.all(ev < 0):
+          return "maximum"
+      return "saddle"
+
+  kinds = {name: kind(numerical_hessian(f, np.array(p, dtype=float))) for name, p in [("(1, 0)", (1, 0)), ("(-1, 0)", (-1, 0))]}
+  print(kinds)
+`} />
+
+<Prove title="A positive definite Hessian means a strict minimum" task="Suppose $\nabla f(\mathbf{w}^*) = \mathbf{0}$ and every eigenvalue of $H(\mathbf{w}^*)$ is at least $\lambda_{\min} \gt 0$. Use the second-order expansion to show that $f(\mathbf{w}^* + \mathbf{h}) \gt f(\mathbf{w}^*)$ for every small nonzero $\mathbf{h}$.">
+
+The expansion gives $f(\mathbf{w}^* + \mathbf{h}) - f(\mathbf{w}^*) = \frac{1}{2}\mathbf{h}^\top H\mathbf{h} + R(\mathbf{h})$, where the remainder $R$ is of order $\lVert\mathbf{h}\rVert^3$.
+
+By the Rayleigh quotient (Week 6 Forge), $\mathbf{h}^\top H\mathbf{h} \geq \lambda_{\min}\lVert\mathbf{h}\rVert^2$. So the difference is at least $\frac{1}{2}\lambda_{\min}\lVert\mathbf{h}\rVert^2 - C\lVert\mathbf{h}\rVert^3$ for some constant $C$, which is positive once $\lVert\mathbf{h}\rVert \lt \lambda_{\min}/(2C)$.
+
+So every nearby point is higher: $\mathbf{w}^*$ is a strict local minimum. The smallest eigenvalue sets how sharply the bowl rises in its flattest direction.
+
+</Prove>
+
+<Step n={3} title="Curvature and gradient descent" minutes={30} />
+
+Near a minimum, a loss is approximately the quadratic $\frac{1}{2}\mathbf{w}^\top H\mathbf{w}$ (taking the minimum at the origin), whose gradient is $H\mathbf{w}$. Gradient descent with learning rate $\eta$ then reads $\mathbf{w} \leftarrow (I - \eta H)\mathbf{w}$, a linear map. In the eigenvector basis of $H$, each component is multiplied by $1 - \eta\lambda_i$ every step (Week 6, Day 3).
+
+- For stability every $|1 - \eta\lambda_i|$ must be below 1, so $\eta \lt 2/\lambda_{\max}$: the **sharpest** direction limits the learning rate.
+- The **flattest** direction then shrinks by $1 - \eta\lambda_{\min} \geq 1 - 2\lambda_{\min}/\lambda_{\max}$ per step, so the number of steps needed grows in proportion to the **condition number** $\kappa = \lambda_{\max}/\lambda_{\min}$.
+
+<PyCell id="gd" title="How condition number slows descent" tests={String.raw`
+  import numpy as np
+  def test_steps():
+      "steps_needed counts steps until the distance to the minimum falls below 1e-3"
+      assert steps_needed(np.diag([1.0, 1.0]), 0.9) < 10
+
+  def test_scaling():
+      "with the best stable learning rate, steps grow roughly in proportion to the condition number"
+      assert steps[0] <= 2 and steps[1] > 30
+      assert 5 < steps[2] / steps[1] < 20
+`} prompt="Write `steps_needed(H, lr)`: start at (1, 1), run gradient descent on $\frac{1}{2}\mathbf{w}^\top H\mathbf{w}$ and count the steps until the length of $\mathbf{w}$ falls below 1e-3 (stop at 100,000). For Hessians with eigenvalues (1, 1), (10, 1) and (100, 1), use a learning rate of $1/\lambda_{\max}$ and store the counts in `steps`."
+code={String.raw`
+  def steps_needed(H, lr, tol=1e-3, max_steps=100000):
+      w = np.array([1.0, 1.0])
+      for k in range(max_steps):
+          if np.linalg.norm(w) < tol:
+              return k
+          w = ...
+      return max_steps
+
+  steps = []
+  for big in [1.0, 10.0, 100.0]:
+      H = np.diag([big, 1.0])
+      steps.append(steps_needed(H, ...))
+  print("condition numbers 1, 10, 100 -> steps", steps)
+`}
+hint="The gradient of ½ wᵀHw is H @ w, so w = w - lr * (H @ w). Use lr = 1 / big."
+solution={String.raw`
+  def steps_needed(H, lr, tol=1e-3, max_steps=100000):
+      w = np.array([1.0, 1.0])
+      for k in range(max_steps):
+          if np.linalg.norm(w) < tol:
+              return k
+          w = w - lr * (H @ w)
+      return max_steps
+
+  steps = []
+  for big in [1.0, 10.0, 100.0]:
+      H = np.diag([big, 1.0])
+      steps.append(steps_needed(H, 1 / big))
+  print("condition numbers 1, 10, 100 -> steps", steps)
+`} />
+
+A round bowl takes a single step; condition number 10 takes about 70 steps and condition number 100 about 700. Steps grow in proportion to the condition number, so the answer to the prediction is about 100 times as many. This is why correlated inputs slow learning (tomorrow's figure), and why optimisers such as Adam and batch normalisation, which effectively rescale directions, help so much (Weeks 13 and 82).
+
+<Step n={4} title="Newton's method" minutes={30} />
+
+Instead of a fixed small step, jump straight to the minimum of the second-order expansion. Setting the gradient of $f + \nabla f\cdot\mathbf{h} + \frac{1}{2}\mathbf{h}^\top H\mathbf{h}$ to zero gives $H\mathbf{h} = -\nabla f$, so
+
+$$
+\mathbf{w} \leftarrow \mathbf{w} - H^{-1}\nabla f
+$$
+
+This is yesterday's Newton's method applied to the equation $\nabla f = \mathbf{0}$. On an exact quadratic it lands on the minimum in one step, whatever the condition number, because $H^{-1}$ undoes the stretching. On other functions it converges very fast near a minimum. Its costs are forming and solving with an $n \times n$ Hessian, prohibitive for millions of parameters, and that near a saddle it heads straight for the saddle, since it seeks any point where the gradient is zero (the problem Dauphin and colleagues addressed). For models with a few hundred parameters, such as the statistical models of neurons in Week 35, it is the method of choice.
+
+<PyCell id="newtonlr" title="Newton's method for logistic regression" tests={String.raw`
+  import numpy as np
+  def test_hessian():
+      "hess_xent matches the numerical Hessian of the cross-entropy"
+      w = np.random.default_rng(0).normal(size=3) * 0.3
+      g = lambda v: grad_xent(v)
+      Hn = np.zeros((3, 3))
+      for j in range(3):
+          e = np.zeros(3); e[j] = 1e-5
+          Hn[:, j] = (g(w + e) - g(w - e)) / 2e-5
+      assert np.allclose(hess_xent(w), Hn, atol=1e-6)
+
+  def test_fast():
+      "Newton gets within 1e-8 of the best loss in at most 10 steps, while gradient descent is still far off after 100"
+      assert newton_losses[9] - best < 1e-8
+      assert gd_losses[99] - best > 1e-4
+`} prompt="For the logistic model of last Saturday ($p = \sigma(Z\mathbf{w})$, cross-entropy loss), the Hessian is $H = \frac{1}{T}Z^\top\operatorname{diag}(\mathbf{p}(1 - \mathbf{p}))Z$. Write `hess_xent(w)`, then run 10 Newton steps and 100 gradient-descent steps (learning rate 1) from zero, recording the loss after each step in `newton_losses` and `gd_losses`."
+code={String.raw`
+  rng = np.random.default_rng(14)
+  T = 400
+  Z = np.column_stack([rng.normal(size=(T, 2)) @ np.array([[1.0, 0.9], [0.0, 0.45]]), np.ones(T)])   # correlated inputs plus bias
+  w_true = np.array([2.0, -1.5, 0.3])
+  y = (rng.random(T) < 1 / (1 + np.exp(-Z @ w_true))).astype(float)
+  def sigmoid(u): return 1 / (1 + np.exp(-u))
+  def xent(w):
+      p = sigmoid(Z @ w); return -np.mean(y * np.log(p) + (1 - y) * np.log(1 - p))
+  def grad_xent(w): return Z.T @ (sigmoid(Z @ w) - y) / T
+
+  def hess_xent(w):
+      p = sigmoid(Z @ w)
+      return ...
+
+  w = np.zeros(3); newton_losses = []
+  for _ in range(10):
+      w = ...
+      newton_losses.append(xent(w))
+  v = np.zeros(3); gd_losses = []
+  for _ in range(100):
+      v = v - 1.0 * grad_xent(v)
+      gd_losses.append(xent(v))
+  best = newton_losses[-1]
+
+  plt.figure(figsize=(5, 3)); plt.semilogy(np.array(newton_losses) - best + 1e-16, "o-", label="Newton"); plt.semilogy(np.array(gd_losses) - best + 1e-16, label="gradient descent")
+  plt.xlabel("step"); plt.ylabel("loss above the best"); plt.legend(frameon=False); plt.show()
+  print("Newton:", np.round(newton_losses[:5], 6), " GD after 100 steps:", round(gd_losses[-1], 6))
+`}
+hint="hess_xent returns Z.T @ (Z * (p * (1 - p))[:, None]) / T. The Newton step is w = w - np.linalg.solve(hess_xent(w), grad_xent(w))."
+solution={String.raw`
+  rng = np.random.default_rng(14)
+  T = 400
+  Z = np.column_stack([rng.normal(size=(T, 2)) @ np.array([[1.0, 0.9], [0.0, 0.45]]), np.ones(T)])   # correlated inputs plus bias
+  w_true = np.array([2.0, -1.5, 0.3])
+  y = (rng.random(T) < 1 / (1 + np.exp(-Z @ w_true))).astype(float)
+  def sigmoid(u): return 1 / (1 + np.exp(-u))
+  def xent(w):
+      p = sigmoid(Z @ w); return -np.mean(y * np.log(p) + (1 - y) * np.log(1 - p))
+  def grad_xent(w): return Z.T @ (sigmoid(Z @ w) - y) / T
+
+  def hess_xent(w):
+      p = sigmoid(Z @ w)
+      return Z.T @ (Z * (p * (1 - p))[:, None]) / T
+
+  w = np.zeros(3); newton_losses = []
+  for _ in range(10):
+      w = w - np.linalg.solve(hess_xent(w), grad_xent(w))
+      newton_losses.append(xent(w))
+  v = np.zeros(3); gd_losses = []
+  for _ in range(100):
+      v = v - 1.0 * grad_xent(v)
+      gd_losses.append(xent(v))
+  best = newton_losses[-1]
+
+  plt.figure(figsize=(5, 3)); plt.semilogy(np.array(newton_losses) - best + 1e-16, "o-", label="Newton"); plt.semilogy(np.array(gd_losses) - best + 1e-16, label="gradient descent")
+  plt.xlabel("step"); plt.ylabel("loss above the best"); plt.legend(frameon=False); plt.show()
+  print("Newton:", np.round(newton_losses[:5], 6), " GD after 100 steps:", round(gd_losses[-1], 6))
+`} />
+
+Newton's method settles to the best loss within three or four steps; gradient descent, slowed by the correlated inputs, is still visibly short after a hundred. The Hessian of the cross-entropy, $Z^\top\operatorname{diag}(p(1 - p))Z/T$, is positive semidefinite for every $\mathbf{w}$ (it is a sum of $p(1-p)\mathbf{z}\mathbf{z}^\top$ terms), so the loss is **convex**: it has no saddles or spurious minima, only one bowl. Logistic regression and the Poisson models of Week 35 share this property, which is a large part of why they are so widely used.
+
+<Bridge title="Curvature in brains and machines"
+  neuro="The curvature of a log-likelihood at its maximum is the observed Fisher information: the sharper the peak, the better the data determine the parameters, and the inverse Hessian gives error bars on fitted quantities such as a neuron's preferred orientation (Forge). Fisher information about a stimulus (Week 8) is the same idea with the stimulus as the parameter."
+  ai="The Hessian's eigenvalues govern the speed and stability of training. Large-scale studies have found that during training the top Hessian eigenvalue rises until it hovers near 2/η, the 'edge of stability', and that flat minima (small eigenvalues) tend to generalise better (Week 83).">
+
+The gradient tells you where to go. The Hessian tells you how far you can trust it.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The Hessian is...", options: ["The vector of first derivatives", "The matrix of second derivatives", "The Jacobian of the function", "Always diagonal"], answer: 1, explain: "$H_{ij} = \\partial^2 f/\\partial w_i\\partial w_j$." },
+  { q: "For smooth functions the Hessian is...", options: ["Antisymmetric", "Symmetric", "Orthogonal", "Singular"], answer: 1, explain: "Mixed partials are equal." },
+  { q: "A critical point whose Hessian has eigenvalues 3 and −2 is...", options: ["A minimum", "A maximum", "A saddle", "Undetermined"], answer: 2, explain: "Curves up one way and down the other." },
+  { q: "Gradient descent on a quadratic is stable only if...", options: ["$\\eta \\lt 2/\\lambda_{\\max}$", "$\\eta \\gt \\lambda_{\\max}$", "$\\eta = 1$", "$\\eta \\lt \\lambda_{\\min}$"], answer: 0, explain: "The sharpest direction limits the step." },
+  { q: "The number of gradient steps grows with...", options: ["The number of parameters only", "The condition number $\\lambda_{\\max}/\\lambda_{\\min}$", "The learning rate", "The loss value"], answer: 1, explain: "The flattest direction crawls." },
+  { q: "Newton's step is...", options: ["$-\\eta\\nabla f$", "$-H^{-1}\\nabla f$", "$-H\\nabla f$", "$-\\nabla f/\\lVert\\nabla f\\rVert$"], answer: 1, explain: "Minimise the second-order expansion." },
+  { q: "The logistic regression loss is convex because...", options: ["Its gradient is zero", "Its Hessian is positive semidefinite everywhere", "It uses a sigmoid", "It has one parameter"], answer: 1, explain: "A sum of $p(1-p)\\mathbf{z}\\mathbf{z}^\\top$ terms." },
+]} />
+
+<Flashcards cards={[
+  { front: "Second-order expansion?", back: "$f(\\mathbf{w} + \\mathbf{h}) \\approx f + \\nabla f\\cdot\\mathbf{h} + \\frac{1}{2}\\mathbf{h}^\\top H\\mathbf{h}$." },
+  { front: "Classifying a critical point?", back: "Hessian eigenvalues all positive: minimum; all negative: maximum; mixed: saddle; zero: inconclusive." },
+  { front: "Learning-rate limit and speed?", back: "$\\eta \\lt 2/\\lambda_{\\max}$; steps needed grow like $\\kappa = \\lambda_{\\max}/\\lambda_{\\min}$." },
+  { front: "Newton's method for minimisation?", back: "$\\mathbf{w} \\leftarrow \\mathbf{w} - H^{-1}\\nabla f$; one step on a quadratic; attracted to saddles too." },
+  { front: "Hessian of logistic cross-entropy?", back: "$\\frac{1}{T}Z^\\top\\operatorname{diag}(\\mathbf{p}(1 - \\mathbf{p}))Z$, positive semidefinite, so the loss is convex." },
+]} />
+
+<Predict revisit question="With a 100-to-1 curvature ratio, how many more steps does gradient descent need?" />
+
+<Key title="Before you go">
+<ul>
+<li>The Hessian is the symmetric matrix of second derivatives; it gives the local curvature.</li>
+<li>Its eigenvalues classify critical points; in high dimensions most bad critical points are saddles.</li>
+<li>The sharpest curvature caps the learning rate; the condition number sets how slow descent is.</li>
+<li>Newton's method uses the Hessian to jump to the minimum of the local quadratic.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Dauphin, Pascanu, Gulcehre, Cho, Ganguli and Bengio (2014), <em>Identifying and attacking the saddle point problem in high-dimensional non-convex optimization</em>.</li>
+<li>Boyd and Vandenberghe, <em>Convex Optimization</em> (free online), Chapter 9.5: Newton's method.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If the brain's synapses learned by something like gradient descent, what would the condition number of its learning problem depend on? Suggest one biological mechanism that might act like a preconditioner, rescaling directions to speed learning." />

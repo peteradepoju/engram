@@ -1,0 +1,306 @@
+export const meta = {
+  title: "Linearisation and the Jacobian: local linear maps",
+  intro: "A layer of neurons maps many inputs to many outputs, nonlinearly. Zoom in on any point and the map looks linear, and the matrix of that local linear map is the Jacobian: every output's partial derivative with respect to every input. It combines last week's gradients with Week 5's matrices. With it you can linearise a recurrent network around a fixed point, predict how fast it recovers from a small push, and see how the chain rule becomes matrix multiplication, the form in which backpropagation actually runs.",
+  goals: [
+    "Define the Jacobian of a vector-valued function and compute it numerically",
+    "Write the chain rule for compositions as a product of Jacobians",
+    "Derive the Jacobian of a recurrent network step",
+    "Linearise a nonlinear network around a fixed point and predict its recovery",
+  ],
+  plan: [
+    { label: "Predict and the Jacobian", minutes: 25 },
+    { label: "The chain rule as matrix multiplication", minutes: 20 },
+    { label: "The Jacobian of a network", minutes: 30 },
+    { label: "Linearising around a fixed point", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "mante-2013",
+};
+
+<Predict question="A nonlinear two-neuron network sits at rest. You give it a small kick. Can you predict the time it takes to recover, without simulating the network, from one small matrix of derivatives computed at the resting point?" />
+
+<Step n={1} title="The Jacobian" minutes={25} />
+
+For a function $F$ from $\mathbb{R}^n$ to $\mathbb{R}^m$, with outputs $F_1, \dots, F_m$, the **Jacobian** at $\mathbf{x}$ is the $m \times n$ matrix of partial derivatives
+
+$$
+J_{ij} = \frac{\partial F_i}{\partial x_j}
+$$
+
+Row $i$ is the gradient of output $i$; column $j$ says how all the outputs move when input $j$ is nudged. The tangent-plane approximation of Week 8 becomes
+
+$$
+F(\mathbf{x} + \mathbf{h}) \approx F(\mathbf{x}) + J(\mathbf{x})\,\mathbf{h}
+$$
+
+so near $\mathbf{x}$ the nonlinear map acts like the matrix $J$ (Week 5), shifted. Its determinant is the local factor by which $F$ scales area or volume.
+
+<Figure caption="A nonlinear map bends the grid. Drag the point: the pink patch is the true image of a small square; the blue dashed parallelogram is the Jacobian's prediction." credit="Interactive figure by Engram.">
+  <JacobianWarp />
+</Figure>
+
+<Video id="CfW845LNObM" title="The other way to visualize derivatives" by="3Blue1Brown (Grant Sanderson)" note="The derivative as how much a function locally stretches or squishes space, which is exactly what the Jacobian generalises to many dimensions." />
+
+<PyCell id="numjac" title="A numerical Jacobian" tests={String.raw`
+  import numpy as np
+  def test_linear():
+      "the Jacobian of x -> A x is A"
+      A = np.array([[1.0, 2.0, 0.0], [0.0, -1.0, 3.0]])
+      assert np.allclose(numerical_jacobian(lambda x: A @ x, np.ones(3)), A, atol=1e-6)
+
+  def test_polar():
+      "the Jacobian of (r cos t, r sin t) matches the analytic one"
+      F = lambda z: np.array([z[0] * np.cos(z[1]), z[0] * np.sin(z[1])])
+      r, t = 2.0, 0.7
+      J = np.array([[np.cos(t), -r * np.sin(t)], [np.sin(t), r * np.cos(t)]])
+      assert np.allclose(numerical_jacobian(F, np.array([r, t])), J, atol=1e-6)
+`} prompt="Write `numerical_jacobian(F, x, h=1e-6)`. Build it column by column: column j is the central difference of the whole output vector when input j is nudged. Test it on the polar-to-Cartesian map, whose Jacobian determinant is r."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def numerical_jacobian(F, x, h=1e-6):
+      m = len(F(x))
+      J = np.zeros((m, len(x)))
+      for j in range(len(x)):
+          e = np.zeros(len(x)); e[j] = h
+          J[:, j] = ...
+      return J
+
+  F = lambda z: np.array([z[0] * np.cos(z[1]), z[0] * np.sin(z[1])])
+  Jp = numerical_jacobian(F, np.array([2.0, 0.7]))
+  print(Jp.round(4), " det =", round(np.linalg.det(Jp), 4))
+`}
+hint="J[:, j] = (F(x + e) - F(x - e)) / (2 * h)"
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def numerical_jacobian(F, x, h=1e-6):
+      m = len(F(x))
+      J = np.zeros((m, len(x)))
+      for j in range(len(x)):
+          e = np.zeros(len(x)); e[j] = h
+          J[:, j] = (F(x + e) - F(x - e)) / (2 * h)
+      return J
+
+  F = lambda z: np.array([z[0] * np.cos(z[1]), z[0] * np.sin(z[1])])
+  Jp = numerical_jacobian(F, np.array([2.0, 0.7]))
+  print(Jp.round(4), " det =", round(np.linalg.det(Jp), 4))
+`} />
+
+<Step n={2} title="The chain rule as matrix multiplication" minutes={20} />
+
+If $\mathbf{y} = G(\mathbf{x})$ and $\mathbf{z} = F(\mathbf{y})$, then a small change $\mathbf{h}$ in $\mathbf{x}$ becomes $J_G\mathbf{h}$ in $\mathbf{y}$, which becomes $J_F J_G\mathbf{h}$ in $\mathbf{z}$. So
+
+$$
+J_{F \circ G}(\mathbf{x}) = J_F(G(\mathbf{x}))\;J_G(\mathbf{x})
+$$
+
+Week 8's chain rule, multiplying derivatives, has become multiplying matrices: Week 5's composition of linear maps, applied to the local linear maps. A deep network's input-output Jacobian is the product of every layer's Jacobian, and **backpropagation** multiplies the transposes of these Jacobians from the output backwards, $\bar{\mathbf{x}} = J_G^\top J_F^\top\,\bar{\mathbf{z}}$, which is exactly what your hand-written backward pass did last Friday.
+
+<Step n={3} title="The Jacobian of a network" minutes={30} />
+
+One step of a recurrent network computes $\mathbf{h}' = \tanh(W\mathbf{h} + \mathbf{b})$. With $\mathbf{u} = W\mathbf{h} + \mathbf{b}$, the chain rule gives entry by entry
+
+$$
+\frac{\partial h'_i}{\partial h_j} = (1 - \tanh^2 u_i)\,W_{ij}, \qquad J = D\,W, \quad D = \operatorname{diag}(1 - \mathbf{h}'^2)
+$$
+
+The Jacobian is the weight matrix with each row scaled by the slope of that neuron's nonlinearity. Saturated neurons (slopes near 0) wipe out their rows; neurons in their linear range pass $W$ through.
+
+<PyCell id="rnnjac" title="Jacobians through time" tests={String.raw`
+  import numpy as np
+  def test_step():
+      "step_jacobian matches the numerical Jacobian of one step"
+      h = np.random.default_rng(3).normal(size=n) * 0.5
+      assert np.allclose(step_jacobian(h), numerical_jacobian(step, h), atol=1e-6)
+
+  def test_product():
+      "J_total, the product of step Jacobians along the trajectory, matches the numerical Jacobian of 10 steps"
+      def ten(h):
+          for _ in range(10):
+              h = step(h)
+          return h
+      assert np.allclose(J_total, numerical_jacobian(ten, h0), atol=1e-5)
+`} prompt="Write `step_jacobian(h)` for the network below. Then run 10 steps from `h0`, multiplying the step Jacobians in the right order (each new one on the left) to get `J_total`, the Jacobian of the whole 10-step map. Compare its largest singular value with that of a single step."
+code={String.raw`
+  rng = np.random.default_rng(9)
+  n = 6
+  W = rng.normal(size=(n, n)) * 1.5 / np.sqrt(n)
+  b = rng.normal(size=n) * 0.3
+  def step(h):
+      return np.tanh(W @ h + b)
+
+  def step_jacobian(h):
+      hp = step(h)
+      return ...
+
+  h0 = rng.normal(size=n) * 0.5
+  h, J_total = h0.copy(), np.eye(n)
+  for _ in range(10):
+      J_total = ...
+      h = step(h)
+
+  print("largest singular value: one step", np.linalg.svd(step_jacobian(h0), compute_uv=False)[0].round(3),
+        "  ten steps", np.linalg.svd(J_total, compute_uv=False)[0].round(4))
+`}
+hint="step_jacobian returns np.diag(1 - hp ** 2) @ W (or (1 - hp ** 2)[:, None] * W). In the loop, J_total = step_jacobian(h) @ J_total, computed before h moves on."
+solution={String.raw`
+  rng = np.random.default_rng(9)
+  n = 6
+  W = rng.normal(size=(n, n)) * 1.5 / np.sqrt(n)
+  b = rng.normal(size=n) * 0.3
+  def step(h):
+      return np.tanh(W @ h + b)
+
+  def step_jacobian(h):
+      hp = step(h)
+      return (1 - hp ** 2)[:, None] * W
+
+  h0 = rng.normal(size=n) * 0.5
+  h, J_total = h0.copy(), np.eye(n)
+  for _ in range(10):
+      J_total = step_jacobian(h) @ J_total
+      h = step(h)
+
+  print("largest singular value: one step", np.linalg.svd(step_jacobian(h0), compute_uv=False)[0].round(3),
+        "  ten steps", np.linalg.svd(J_total, compute_uv=False)[0].round(4))
+`} />
+
+The singular values of the product of Jacobians (Week 7) measure how much the network amplifies or forgets a perturbation over many steps. Last week's vanishing gradients were the scalar version of this; in a real recurrent network, the gradient of the loss with respect to the state ten steps back is $J_{\text{total}}^\top$ times the gradient now.
+
+<Step n={4} title="Linearising around a fixed point" minutes={30} />
+
+For continuous-time rate dynamics $\tau\dot{\mathbf{x}} = -\mathbf{x} + \tanh(W\mathbf{x} + \mathbf{b})$, a **fixed point** $\mathbf{x}^*$ is where the right-hand side vanishes. Near it, write $\mathbf{x} = \mathbf{x}^* + \boldsymbol\delta$. The tangent-plane approximation gives
+
+$$
+\tau\dot{\boldsymbol\delta} \approx A\,\boldsymbol\delta, \qquad A = -I + D^*W, \quad D^* = \operatorname{diag}(1 - \tanh^2(W\mathbf{x}^* + \mathbf{b}))
+$$
+
+a linear system exactly like Week 6's. Its eigenvalues predict whether small perturbations die away and how fast: a mode with eigenvalue $\lambda$ of $A$ decays with time constant $\tau/|\mathrm{Re}\,\lambda|$. This is the method of Sussillo and Barak (Week 6) and of this week's deep read, in which Mante, Sussillo, Shenoy and Newsome linearised a trained network around its fixed points to explain how prefrontal cortex selects which information to integrate.
+
+<PyCell id="linearise" title="Predict recovery from the Jacobian" tests={String.raw`
+  import numpy as np
+  def test_fixed():
+      "x_star is a fixed point"
+      assert np.allclose(-x_star + np.tanh(W2 @ x_star + b2), 0, atol=1e-8)
+
+  def test_A():
+      "A is the Jacobian of the right-hand side at the fixed point"
+      rhs = lambda x: -x + np.tanh(W2 @ x + b2)
+      assert np.allclose(A, numerical_jacobian(rhs, x_star), atol=1e-6)
+
+  def test_prediction():
+      "the measured decay time constant matches tau / |Re lambda| of the slowest mode within 5%"
+      assert abs(tau_measured - tau_pred) / tau_pred < 0.05
+`} prompt="Find the fixed point `x_star` by simulating the network for a long time. Compute `A` with the formula above, and the predicted time constant `tau_pred` of its slowest mode. Then kick the network slightly, simulate its recovery, and measure the time constant `tau_measured` from the slope of the log distance to the fixed point between 50 and 150 ms."
+code={String.raw`
+  W2 = np.array([[0.9, -0.6], [0.5, 0.4]])
+  b2 = np.array([0.3, -0.1])
+  tau, dt = 0.01, 0.0001                      # 10 ms, 0.1 ms steps
+  def simulate(x, n_steps):
+      xs = [x.copy()]
+      for _ in range(n_steps):
+          x = x + dt / tau * (-x + np.tanh(W2 @ x + b2))
+          xs.append(x.copy())
+      return np.array(xs)
+
+  x_star = simulate(np.zeros(2), 20000)[-1]
+  A = ...
+  lam = np.linalg.eigvals(A)
+  tau_pred = ...                              # for the slowest mode
+
+  xs = simulate(x_star + np.array([0.05, -0.03]), 2000)
+  t = np.arange(2001) * dt
+  dist = np.linalg.norm(xs - x_star, axis=1)
+  k = (t >= 0.05) & (t <= 0.15)
+  tau_measured = ...
+
+  plt.figure(figsize=(5, 3)); plt.semilogy(t * 1000, dist); plt.xlabel("time (ms)"); plt.ylabel("distance from fixed point"); plt.show()
+  print("eigenvalues of A:", lam.round(3), f"  predicted {1000 * tau_pred:.2f} ms, measured {1000 * tau_measured:.2f} ms")
+`}
+hint="A = -np.eye(2) + np.diag(1 - np.tanh(W2 @ x_star + b2) ** 2) @ W2. The slowest mode has the real part closest to zero: tau_pred = tau / np.min(np.abs(lam.real)). tau_measured = -1 / np.polyfit(t[k], np.log(dist[k]), 1)[0]."
+solution={String.raw`
+  W2 = np.array([[0.9, -0.6], [0.5, 0.4]])
+  b2 = np.array([0.3, -0.1])
+  tau, dt = 0.01, 0.0001                      # 10 ms, 0.1 ms steps
+  def simulate(x, n_steps):
+      xs = [x.copy()]
+      for _ in range(n_steps):
+          x = x + dt / tau * (-x + np.tanh(W2 @ x + b2))
+          xs.append(x.copy())
+      return np.array(xs)
+
+  x_star = simulate(np.zeros(2), 20000)[-1]
+  A = -np.eye(2) + np.diag(1 - np.tanh(W2 @ x_star + b2) ** 2) @ W2
+  lam = np.linalg.eigvals(A)
+  tau_pred = tau / np.min(np.abs(lam.real))   # for the slowest mode
+
+  xs = simulate(x_star + np.array([0.05, -0.03]), 2000)
+  t = np.arange(2001) * dt
+  dist = np.linalg.norm(xs - x_star, axis=1)
+  k = (t >= 0.05) & (t <= 0.15)
+  tau_measured = -1 / np.polyfit(t[k], np.log(dist[k]), 1)[0]
+
+  plt.figure(figsize=(5, 3)); plt.semilogy(t * 1000, dist); plt.xlabel("time (ms)"); plt.ylabel("distance from fixed point"); plt.show()
+  print("eigenvalues of A:", lam.round(3), f"  predicted {1000 * tau_pred:.2f} ms, measured {1000 * tau_measured:.2f} ms")
+`} />
+
+A 2 by 2 matrix of derivatives, computed at one point, predicts the recovery time of the nonlinear network. That answers the prediction. The linearisation is only valid near the fixed point; a big kick can carry the network into regions where other fixed points or nonlinear effects take over. Tomorrow you will find fixed points directly and classify them.
+
+<Bridge title="Linearisation as an explanation"
+  neuro="Mante and colleagues (this week's deep read) showed that a trained recurrent network solved a context-dependent task through a line of fixed points, and that the left and right eigenvectors of the Jacobian along it explained how context selects which input is integrated. The same tools are now standard for interpreting models of cortex (Week 135)."
+  ai="The input-output Jacobian of a network is what saliency maps and attribution methods visualise (Week 100). Keeping the singular values of a deep network's Jacobian close to 1 ('dynamical isometry') is a principled way to initialise very deep networks so that they train.">
+
+Nonlinear systems are understood one neighbourhood at a time: find the interesting points, linearise there, and read the eigenvalues.
+
+</Bridge>
+
+<Prove title="The Jacobian of a layer with a bias" task="For $F(\mathbf{x}) = \phi(W\mathbf{x} + \mathbf{b})$, with $\phi$ applied entry by entry, show that $J = \operatorname{diag}(\phi'(W\mathbf{x} + \mathbf{b}))\,W$. What is the Jacobian with respect to $\mathbf{b}$, and with respect to the entry $W_{kl}$?">
+
+Output $i$ is $\phi(u_i)$ with $u_i = \sum_j W_{ij}x_j + b_i$. By the chain rule, $\partial F_i/\partial x_j = \phi'(u_i)\,\partial u_i/\partial x_j = \phi'(u_i)W_{ij}$: row $i$ of $W$ scaled by $\phi'(u_i)$, which is $\operatorname{diag}(\phi'(\mathbf{u}))W$.
+
+With respect to the bias, $\partial F_i/\partial b_k = \phi'(u_i)$ if $i = k$ and 0 otherwise, so the Jacobian is $\operatorname{diag}(\phi'(\mathbf{u}))$.
+
+With respect to one weight, $\partial F_i/\partial W_{kl} = \phi'(u_i)x_l$ if $i = k$ and 0 otherwise: only output $k$ changes, in proportion to the input $x_l$ on that synapse. This is why weight gradients are outer products of error signals and inputs, as you will see with matrix calculus on Day 5.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "For F from $\\mathbb{R}^3$ to $\\mathbb{R}^2$, the Jacobian is...", options: ["3 by 2", "2 by 3", "3 by 3", "A scalar"], answer: 1, explain: "One row per output, one column per input." },
+  { q: "Row i of the Jacobian is...", options: ["The gradient of output i", "Column i of the input", "The determinant", "All ones"], answer: 0, explain: "Partial derivatives of one output." },
+  { q: "The Jacobian of $\\mathbf{x} \\mapsto A\\mathbf{x}$ is...", options: ["I", "A", "$A^\\top$", "0"], answer: 1, explain: "A linear map is its own linearisation." },
+  { q: "The Jacobian of $F \\circ G$ is...", options: ["$J_G J_F$", "$J_F(G(\\mathbf{x}))J_G(\\mathbf{x})$", "$J_F + J_G$", "$J_F J_F$"], answer: 1, explain: "Chain rule as matrix multiplication." },
+  { q: "For $\\mathbf{h}' = \\tanh(W\\mathbf{h} + \\mathbf{b})$, a saturated neuron's row of the Jacobian is...", options: ["Large", "Near zero", "Equal to W", "Undefined"], answer: 1, explain: "$1 - \\tanh^2 \\approx 0$." },
+  { q: "Near a fixed point, $\\tau\\dot{\\boldsymbol\\delta} \\approx$...", options: ["$\\boldsymbol\\delta$", "$A\\boldsymbol\\delta$ with A the Jacobian there", "0", "$W\\boldsymbol\\delta$"], answer: 1, explain: "Linearisation." },
+  { q: "|det J| measures...", options: ["The largest eigenvalue", "Local scaling of area or volume", "The rank", "The trace"], answer: 1, explain: "As for a matrix in Week 5." },
+]} />
+
+<Flashcards cards={[
+  { front: "Jacobian?", back: "$J_{ij} = \\partial F_i/\\partial x_j$; $F(\\mathbf{x} + \\mathbf{h}) \\approx F(\\mathbf{x}) + J\\mathbf{h}$." },
+  { front: "Chain rule for Jacobians?", back: "$J_{F\\circ G} = J_F(G(\\mathbf{x}))\\,J_G(\\mathbf{x})$; backprop multiplies the transposes." },
+  { front: "Jacobian of a tanh layer?", back: "$\\operatorname{diag}(1 - \\mathbf{h}'^2)\\,W$." },
+  { front: "Linearised rate dynamics at a fixed point?", back: "$A = -I + \\operatorname{diag}(\\phi'(W\\mathbf{x}^* + \\mathbf{b}))W$; eigenvalues give stability and time constants." },
+  { front: "Recovery time constant of the slowest mode?", back: "$\\tau/|\\mathrm{Re}\\,\\lambda|$ for the eigenvalue of A closest to zero." },
+]} />
+
+<Predict revisit question="Can one small matrix of derivatives predict the network's recovery time?" />
+
+<Key title="Before you go">
+<ul>
+<li>The Jacobian is the matrix of a nonlinear map's local linear approximation.</li>
+<li>The chain rule becomes a product of Jacobians; backpropagation multiplies their transposes.</li>
+<li>A network layer's Jacobian is its weight matrix scaled row by row by the nonlinearity's slopes.</li>
+<li>Linearising around a fixed point predicts stability and recovery times.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>This week's deep read: Mante, Sussillo, Shenoy and Newsome (2013), <em>Context-dependent computation by recurrent dynamics in prefrontal cortex</em>. First pass today.</li>
+<li>Steven Strogatz, <em>Nonlinear Dynamics and Chaos</em>, Chapter 6: linearisation and phase portraits of nonlinear systems.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Mante and colleagues explained a trained network by linearising it. When is a network's computation well explained by its linearisations, and when would this approach fail? Give an example of each." />

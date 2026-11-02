@@ -1,0 +1,300 @@
+export const meta = {
+  title: "The chain rule: composing functions and layers",
+  intro: "A neuron computes a weighted sum and then a nonlinearity. A network stacks such stages, and a recurrent network repeats them through time. To ask how the output changes when the input or a weight changes, you need the derivative of a composition, and the chain rule gives it: multiply the derivatives of the stages. That one rule is the engine of backpropagation, and it also explains why gradients through many stages tend to vanish or explode.",
+  goals: [
+    "State and justify the chain rule for compositions of functions",
+    "Differentiate a model neuron's output with respect to its input and its weight",
+    "Show how a product of many derivatives vanishes or explodes",
+    "Compute the derivative of a multi-stage chain by multiplying local derivatives backwards",
+  ],
+  plan: [
+    { label: "Predict and the chain rule", minutes: 25 },
+    { label: "Model neurons", minutes: 25 },
+    { label: "Long chains: vanishing and exploding", minutes: 30 },
+    { label: "Working backwards", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "bengio-1994",
+};
+
+<Predict question="A signal passes through 20 stages in a row. At each stage it is multiplied by the slope of a sigmoid at that point (never more than 0.25). By roughly what factor, at most, is a small change at the start multiplied by the time it reaches the end: 0.25, 10^(−3) or 10^(−12)?" />
+
+<Step n={1} title="The chain rule" minutes={25} />
+
+If $y = f(u)$ and $u = g(x)$, then $y = f(g(x))$ and
+
+$$
+\frac{dy}{dx} = \frac{dy}{du}\cdot\frac{du}{dx} = f'(g(x))\,g'(x)
+$$
+
+<Derivation title="Why it works: follow a nudge">
+  <div>
+
+Nudge the input by a small $h$. By the tangent-line approximation (Day 1), $u$ changes by about $g'(x)\,h$:
+
+$$
+g(x + h) \approx g(x) + g'(x)\,h
+$$
+
+  </div>
+  <div>
+
+That change in $u$ is itself a small nudge to $f$, so $y$ changes by about $f'(u)$ times it:
+
+$$
+f(g(x + h)) \approx f(g(x)) + f'(g(x))\,g'(x)\,h
+$$
+
+  </div>
+  <div>
+
+Comparing with $f(g(x + h)) \approx f(g(x)) + \frac{dy}{dx}h$ gives $\frac{dy}{dx} = f'(g(x))\,g'(x)$. Each stage scales a nudge by its own derivative, and the scale factors multiply.
+
+  </div>
+</Derivation>
+
+<Figure caption="A nudge to the input of a model neuron becomes a nudge to its drive, then to its rate, multiplied at each stage by that stage's derivative." credit="Interactive figure by Engram.">
+  <ChainNudge />
+</Figure>
+
+You have already used the chain rule: the derivative of $e^{ax}$ is $ae^{ax}$ (outer function $e^u$, inner $u = ax$), and yesterday's gain factor in the activation figure came from it too. The derivative of the Gaussian tuning curve on Day 1 had outer function $e^u$ and inner function $u = -(\theta - \mu)^2/2\sigma^2$, whose derivative is $-(\theta - \mu)/\sigma^2$.
+
+<Video id="YG15m2VwSjA" title="Visualizing the chain rule and product rule | Chapter 4, Essence of calculus" by="3Blue1Brown (Grant Sanderson)" note="The chain rule as nudges passing through a sequence of number lines, exactly the picture in today's figure." />
+
+<Step n={2} title="Model neurons" minutes={25} />
+
+A sigmoid model neuron with one input computes $r = \sigma(wx + b)$. There are three quantities you might nudge: the input $x$, the weight $w$ and the bias $b$. With $u = wx + b$:
+
+$$
+\frac{\partial r}{\partial x} = \sigma'(u)\,w, \qquad \frac{\partial r}{\partial w} = \sigma'(u)\,x, \qquad \frac{\partial r}{\partial b} = \sigma'(u)
+$$
+
+(The curly $\partial$ means we vary one quantity and hold the others fixed: a partial derivative, Day 4.) The first says how sensitive the neuron is to its input. The second is what learning needs: how the output would change if the synapse changed. Notice that it is proportional to the input $x$, so a synapse whose input is silent gets no learning signal, much like Hebbian plasticity (Week 42).
+
+<PyCell id="neuron" title="Derivatives of a model neuron" tests={String.raw`
+  import numpy as np
+  def num(f, a, h=1e-6):
+      return (f(a + h) - f(a - h)) / (2 * h)
+
+  def test_dx():
+      "dr_dx matches a numerical derivative"
+      for x, w, b in [(0.5, 2.0, -1.0), (-1.0, 0.7, 0.3), (2.0, -1.5, 0.0)]:
+          assert np.isclose(dr_dx(x, w, b), num(lambda t: neuron(t, w, b), x))
+
+  def test_dw_db():
+      "dr_dw and dr_db match numerical derivatives"
+      for x, w, b in [(0.5, 2.0, -1.0), (-1.0, 0.7, 0.3)]:
+          assert np.isclose(dr_dw(x, w, b), num(lambda t: neuron(x, t, b), w))
+          assert np.isclose(dr_db(x, w, b), num(lambda t: neuron(x, w, t), b))
+`} prompt="For $r = \sigma(wx + b)$, write `dr_dx`, `dr_dw` and `dr_db` using the chain rule, and check each against a central difference. Then print all three at x = 0.5, w = 2, b = −1."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  def sigmoid(u): return 1 / (1 + np.exp(-u))
+  def dsigmoid(u): return sigmoid(u) * (1 - sigmoid(u))
+  def neuron(x, w, b): return sigmoid(w * x + b)
+
+  def dr_dx(x, w, b):
+      return ...
+  def dr_dw(x, w, b):
+      return ...
+  def dr_db(x, w, b):
+      return ...
+
+  print(dr_dx(0.5, 2.0, -1.0), dr_dw(0.5, 2.0, -1.0), dr_db(0.5, 2.0, -1.0))
+`}
+hint="All three share the outer derivative dsigmoid(w * x + b). Multiply it by w, by x and by 1 respectively."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  def sigmoid(u): return 1 / (1 + np.exp(-u))
+  def dsigmoid(u): return sigmoid(u) * (1 - sigmoid(u))
+  def neuron(x, w, b): return sigmoid(w * x + b)
+
+  def dr_dx(x, w, b):
+      return dsigmoid(w * x + b) * w
+  def dr_dw(x, w, b):
+      return dsigmoid(w * x + b) * x
+  def dr_db(x, w, b):
+      return dsigmoid(w * x + b)
+
+  print(dr_dx(0.5, 2.0, -1.0), dr_dw(0.5, 2.0, -1.0), dr_db(0.5, 2.0, -1.0))
+`} />
+
+<Step n={3} title="Long chains: vanishing and exploding" minutes={30} />
+
+For a chain of $L$ stages, $h_L = f_L(\cdots f_2(f_1(h_0)))$, the chain rule applied repeatedly gives
+
+$$
+\frac{dh_L}{dh_0} = f_L'(h_{L-1})\cdots f_2'(h_1)\,f_1'(h_0) = \prod_{l=1}^{L} f_l'(h_{l-1})
+$$
+
+A product of many numbers is dangerous. If the factors are typically less than 1, the product shrinks exponentially; if greater than 1, it grows exponentially. In a deep network the stages are layers; in a recurrent network they are time steps. Bengio, Simard and Frasconi (1994), today's paper, showed that this makes it very hard for a recurrent network to learn that something which happened many steps ago matters now.
+
+<PyCell id="chain" title="Products of many derivatives" tests={String.raw`
+  import numpy as np
+  def test_fn():
+      "chain_derivative returns the product of local derivatives over n stages"
+      d = chain_derivative(lambda h: 2 * h, lambda h: 2.0, 0.3, 5)
+      assert np.isclose(d, 32)
+
+  def test_vanish():
+      "through 20 sigmoid stages the derivative is below 1e-12; through 20 ReLU stages (positive start) it is exactly 1"
+      assert d_sig[19] < 1e-12
+      assert np.isclose(d_relu[19], 1)
+
+  def test_linear():
+      "linear stages with weight 1.2 explode and with weight 0.8 vanish"
+      assert d_up[19] > 30 and d_down[19] < 0.02
+`} prompt="Write `chain_derivative(f, df, h0, n)` that applies `f` n times starting from `h0` and returns the product of the local derivatives `df(h)` evaluated at each stage's input. Use it for 1 to 30 stages of a sigmoid, a ReLU, and linear stages with weight 1.2 and 0.8. Plot the magnitudes on a log scale."
+code={String.raw`
+  def chain_derivative(f, df, h0, n):
+      h, total = h0, 1.0
+      for _ in range(n):
+          ...
+      return total
+
+  ns = range(1, 31)
+  d_sig = [chain_derivative(sigmoid, dsigmoid, 0.5, n) for n in ns]
+  d_relu = [chain_derivative(lambda h: np.maximum(0, h), lambda h: float(h > 0), 0.5, n) for n in ns]
+  d_up = [chain_derivative(lambda h: 1.2 * h, lambda h: 1.2, 0.5, n) for n in ns]
+  d_down = [chain_derivative(lambda h: 0.8 * h, lambda h: 0.8, 0.5, n) for n in ns]
+
+  plt.figure(figsize=(5.5, 3.3))
+  for d, lab in [(d_sig, "sigmoid"), (d_relu, "ReLU"), (d_up, "linear, w = 1.2"), (d_down, "linear, w = 0.8")]:
+      plt.semilogy(list(ns), d, label=lab)
+  plt.xlabel("number of stages"); plt.ylabel("|dh_L / dh_0|"); plt.legend(frameon=False); plt.show()
+  print("after 20 sigmoid stages:", d_sig[19])
+`}
+hint="Inside the loop, multiply in the local derivative before moving on: total = total * df(h), then h = f(h)."
+solution={String.raw`
+  def chain_derivative(f, df, h0, n):
+      h, total = h0, 1.0
+      for _ in range(n):
+          total = total * df(h)
+          h = f(h)
+      return total
+
+  ns = range(1, 31)
+  d_sig = [chain_derivative(sigmoid, dsigmoid, 0.5, n) for n in ns]
+  d_relu = [chain_derivative(lambda h: np.maximum(0, h), lambda h: float(h > 0), 0.5, n) for n in ns]
+  d_up = [chain_derivative(lambda h: 1.2 * h, lambda h: 1.2, 0.5, n) for n in ns]
+  d_down = [chain_derivative(lambda h: 0.8 * h, lambda h: 0.8, 0.5, n) for n in ns]
+
+  plt.figure(figsize=(5.5, 3.3))
+  for d, lab in [(d_sig, "sigmoid"), (d_relu, "ReLU"), (d_up, "linear, w = 1.2"), (d_down, "linear, w = 0.8")]:
+      plt.semilogy(list(ns), d, label=lab)
+  plt.xlabel("number of stages"); plt.ylabel("|dh_L / dh_0|"); plt.legend(frameon=False); plt.show()
+  print("after 20 sigmoid stages:", d_sig[19])
+`} />
+
+Through 20 sigmoid stages a nudge at the start is multiplied by less than $10^{-12}$, well beyond the $0.25^{20} \approx 10^{-12}$ bound because the sigmoid's slope is below its maximum away from zero. That answers the prediction. Linear stages with weight 1.2 multiply it by about 38 after 20 steps and 0.8 shrinks it to about 0.01: the eigenvalue story of Week 6, now for learning signals. ReLU passes it through exactly, as long as the units stay active.
+
+<Step n={4} title="Working backwards" minutes={25} />
+
+In a long chain you can multiply the local derivatives in either order. For learning, the useful order is **backwards**, from the output to the input: start with 1 at the output, and at each stage multiply by the local derivative. Every intermediate product is then the derivative of the output with respect to that stage, which you will need on Day 5 to update every weight in a network at once.
+
+Take a chain that ends in a squared error: $u = wx$, $r = \sigma(u)$, $L = \frac{1}{2}(r - y)^2$, with a target $y$.
+
+<PyCell id="backward" title="A forward and a backward pass" tests={String.raw`
+  import numpy as np
+  def test_forward():
+      "u, r and L hold the forward values"
+      assert np.isclose(u, w * x) and np.isclose(r, sigmoid(u)) and np.isclose(L, 0.5 * (r - y) ** 2)
+
+  def test_backward():
+      "dL_dr, dL_du and dL_dw are the backward products"
+      assert np.isclose(dL_dr, r - y)
+      assert np.isclose(dL_du, dL_dr * dsigmoid(u))
+      assert np.isclose(dL_dw, dL_du * x)
+
+  def test_numeric():
+      "dL_dw agrees with a central difference"
+      Lw = lambda ww: 0.5 * (sigmoid(ww * x) - y) ** 2
+      assert np.isclose(dL_dw, (Lw(w + 1e-6) - Lw(w - 1e-6)) / 2e-6)
+`} prompt="With x = 1.5, w = 0.4 and target y = 0.9, compute the forward values `u`, `r`, `L`. Then go backwards: `dL_dr` (the derivative of the squared error), `dL_du` (multiply by the sigmoid's slope) and `dL_dw` (multiply by the derivative of u with respect to w). Check against a numerical derivative and take one gradient step."
+code={String.raw`
+  x, w, y = 1.5, 0.4, 0.9
+  u = ...
+  r = ...
+  L = ...
+  dL_dr = ...
+  dL_du = ...
+  dL_dw = ...
+
+  w_new = w - 1.0 * dL_dw                      # one gradient-descent step with learning rate 1
+  L_new = 0.5 * (sigmoid(w_new * x) - y) ** 2
+  print(f"loss {L:.4f} -> {L_new:.4f};  dL/dw = {dL_dw:.4f}")
+`}
+hint="Forward: u = w * x; r = sigmoid(u); L = 0.5 * (r - y) ** 2. Backward: dL_dr = r - y; dL_du = dL_dr * dsigmoid(u); dL_dw = dL_du * x."
+solution={String.raw`
+  x, w, y = 1.5, 0.4, 0.9
+  u = w * x
+  r = sigmoid(u)
+  L = 0.5 * (r - y) ** 2
+  dL_dr = r - y
+  dL_du = dL_dr * dsigmoid(u)
+  dL_dw = dL_du * x
+
+  w_new = w - 1.0 * dL_dw                      # one gradient-descent step with learning rate 1
+  L_new = 0.5 * (sigmoid(w_new * x) - y) ** 2
+  print(f"loss {L:.4f} -> {L_new:.4f};  dL/dw = {dL_dw:.4f}")
+`} />
+
+The gradient is negative, so increasing the weight lowers the error, and one step in the direction opposite to the gradient does exactly that. This is gradient descent (Week 12) on a single synapse. On Day 5 the same backwards walk runs through a whole network.
+
+<Bridge title="Long chains in brains and machines"
+  neuro="Signals in the brain also pass through long chains, across synapses and through time. If the brain learns from errors, it faces the same problem of assigning credit to events far back in the chain; eligibility traces and neuromodulators that arrive later are one proposed solution (Week 136)."
+  ai="Vanishing gradients made deep and recurrent networks hard to train for two decades. The fixes are all ways of keeping the product of derivatives near 1: ReLU activations, careful initialisation (Week 82), gated LSTM units (Week 86) and residual connections, which add an identity path whose derivative is exactly 1 (Week 85).">
+
+Whenever a learning signal must pass through many stages, ask what the product of their derivatives will be.
+
+</Bridge>
+
+<Prove title="The derivative of a Gaussian by the chain rule" task="Use the chain rule to differentiate $g(\theta) = \exp\left(-\dfrac{(\theta - \mu)^2}{2\sigma^2}\right)$, and check that it gives the tuning-curve slope from Day 1.">
+
+Let $u = -\dfrac{(\theta - \mu)^2}{2\sigma^2}$, so $g = e^u$. The outer derivative is $\dfrac{dg}{du} = e^u$.
+
+For the inner one, apply the chain rule again: $(\theta - \mu)^2$ has outer function $v^2$ and inner $v = \theta - \mu$, so its derivative is $2(\theta - \mu)\cdot 1$. Hence $\dfrac{du}{d\theta} = -\dfrac{2(\theta - \mu)}{2\sigma^2} = -\dfrac{\theta - \mu}{\sigma^2}$.
+
+Multiplying: $g'(\theta) = -\dfrac{\theta - \mu}{\sigma^2}\exp\left(-\dfrac{(\theta - \mu)^2}{2\sigma^2}\right)$. With the amplitude $A$ in front, this is the Day 1 formula.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "The chain rule says $\\frac{d}{dx}f(g(x))$ equals...", options: ["$f'(x)g'(x)$", "$f'(g(x))\\,g'(x)$", "$f(g'(x))$", "$f'(g'(x))$"], answer: 1, explain: "Outer derivative at the inner value, times the inner derivative." },
+  { q: "The derivative of $\\sin(3x)$ is...", options: ["$\\cos(3x)$", "$3\\cos(3x)$", "$3\\sin(3x)$", "$\\cos(x)$"], answer: 1, explain: "Inner derivative 3." },
+  { q: "For $r = \\sigma(wx + b)$, $\\partial r/\\partial w$ is...", options: ["$\\sigma'(wx + b)$", "$\\sigma'(wx + b)\\,x$", "$\\sigma'(wx + b)\\,w$", "$x$"], answer: 1, explain: "The inner derivative with respect to w is x." },
+  { q: "If the input to a synapse is zero, its weight's gradient is...", options: ["Largest", "Zero", "Negative", "Undefined"], answer: 1, explain: "It is proportional to x." },
+  { q: "The derivative through L stages is...", options: ["A sum of local derivatives", "A product of local derivatives", "The last derivative", "Always 1"], answer: 1, explain: "Repeated chain rule." },
+  { q: "Twenty linear stages with weight 0.8 multiply a nudge by about...", options: ["0.8", "0.01", "16", "1"], answer: 1, explain: "$0.8^{20} \\approx 0.012$." },
+  { q: "Residual connections help because...", options: ["They remove nonlinearities", "They add a path whose derivative is 1", "They make weights larger", "They add noise"], answer: 1, explain: "The product of derivatives does not vanish along it." },
+]} />
+
+<Flashcards cards={[
+  { front: "Chain rule?", back: "$\\frac{d}{dx}f(g(x)) = f'(g(x))\\,g'(x)$: nudges are scaled by each stage in turn." },
+  { front: "Derivatives of a sigmoid neuron?", back: "With $u = wx + b$: $\\partial r/\\partial x = \\sigma'(u)w$, $\\partial r/\\partial w = \\sigma'(u)x$, $\\partial r/\\partial b = \\sigma'(u)$." },
+  { front: "Derivative through a chain of L stages?", back: "$\\prod_l f_l'(h_{l-1})$: vanishes or explodes exponentially unless factors stay near 1." },
+  { front: "Vanishing gradient problem?", back: "Gradients through many sigmoid layers or time steps shrink towards zero, so early stages stop learning (Bengio et al. 1994)." },
+  { front: "Backward order?", back: "Start at the output with 1 and multiply by local derivatives towards the input; each partial product is the gradient for that stage." },
+]} />
+
+<Predict revisit question="By what factor, at most, is a change multiplied after 20 sigmoid stages?" />
+
+<Key title="Before you go">
+<ul>
+<li>The chain rule multiplies the derivatives of the stages of a composition.</li>
+<li>A neuron's weight gradient is the slope of its nonlinearity times its input.</li>
+<li>Through many stages the product of derivatives vanishes or explodes exponentially.</li>
+<li>Multiplying local derivatives from the output backwards gives the gradient at every stage.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Bengio, Simard and Frasconi (1994), <em>Learning long-term dependencies with gradient descent is difficult</em>.</li>
+<li>Hochreiter and Schmidhuber (1997), <em>Long short-term memory</em>, Neural Computation: the architecture designed to solve it.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="The brain can learn that an action led to a reward seconds later, across many synaptic stages and time steps. Given today's result about long chains, what does the brain need that a plain gradient would not give it? Write down one candidate mechanism." />

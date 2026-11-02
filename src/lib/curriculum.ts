@@ -103,6 +103,30 @@ export const DAY_TITLES: Record<number, string[]> = {
     "How many dimensions? Spectra, noise and cross-validation",
     "Forge: Week 7 challenge, quiz and deep read",
   ],
+  8: [
+    "Derivatives: rates of change and the slope of a tuning curve",
+    "Derivative rules and the nonlinearities of neurons and networks",
+    "The chain rule: composing functions and layers",
+    "Partial derivatives and gradients: many inputs at once",
+    "Backpropagation: the chain rule through a network",
+    "Forge: Week 8 challenge, quiz and deep read",
+  ],
+  9: [
+    "Taylor series: approximating nonlinear functions",
+    "Linearisation and the Jacobian: local linear maps",
+    "Fixed points and stability of nonlinear circuits",
+    "The Hessian: curvature, minima and saddle points",
+    "Matrix calculus: gradients of vector and matrix expressions",
+    "Forge: Week 9 challenge, quiz and deep read",
+  ],
+  10: [
+    "Integrals: accumulating change, from rates to spike counts",
+    "Differential equations and the leaky integrator",
+    "Convolution: smoothing spike trains",
+    "Linear filters and the linear-nonlinear-Poisson model",
+    "Two-dimensional convolution: receptive fields and convolutional networks",
+    "Forge: Week 10 challenge, quiz and deep read",
+  ],
 };
 
 export const DAYS_PER_WEEK = 6;
@@ -131,7 +155,7 @@ export function dayTitle(w: number, d: number): string {
 }
 
 /** Weeks whose lesson files exist. Kept in sync by hand as content is written. */
-export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7];
+export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 export const isWritten = (w: number) => WRITTEN_WEEKS.includes(w);
 
 /** Every lesson that is published, in order. */

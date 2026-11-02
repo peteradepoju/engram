@@ -1,0 +1,255 @@
+export const meta = {
+  title: "Derivative rules and the nonlinearities of neurons and networks",
+  intro: "You rarely need the limit definition again. A handful of rules (sums, powers, exponentials, logarithms, products and quotients) let you differentiate almost anything by pattern. Today you learn them, prove the most important one for neural networks, the derivative of the sigmoid, and apply them to the nonlinearities that turn a weighted sum into a firing rate: the sigmoid, the rectifier, the exponential and the contrast response function of visual neurons.",
+  goals: [
+    "Apply the sum, power, exponential, logarithm, product and quotient rules",
+    "Derive the derivatives of the sigmoid, tanh, softplus and ReLU",
+    "Explain saturation and why it slows learning",
+    "Find where a Naka-Rushton contrast response is most sensitive",
+  ],
+  plan: [
+    { label: "Predict and the basic rules", minutes: 25 },
+    { label: "Products and quotients", minutes: 20 },
+    { label: "Nonlinearities and their derivatives", minutes: 35 },
+    { label: "Contrast response functions", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "glorot-2011",
+};
+
+<Predict question="A model neuron's output is a sigmoid of its input. What is the largest possible slope of the sigmoid σ(x) = 1/(1 + e^(−x)): about 0.25, about 1, or unlimited?" />
+
+<Step n={1} title="The basic rules" minutes={25} />
+
+Each rule follows from the limit definition (try proving one or two). With $c$ a constant:
+
+| Function | Derivative |
+|---|---|
+| $c$ | $0$ |
+| $c\,f(x)$ | $c\,f'(x)$ |
+| $f(x) + g(x)$ | $f'(x) + g'(x)$ |
+| $x^n$ | $nx^{n-1}$ |
+| $e^x$ | $e^x$ |
+| $e^{ax}$ | $ae^{ax}$ |
+| $\ln x$ | $1/x$ |
+| $\sin x$, $\cos x$ | $\cos x$, $-\sin x$ |
+
+The exponential is the function that equals its own derivative: its rate of growth is proportional to its size. That is why it describes populations, radioactive decay, the charging of a membrane (Week 10) and the exponential nonlinearity of the LNP model (Week 35).
+
+<Video id="S0_qX4VJhMQ" title="Derivative formulas through geometry | Chapter 3, Essence of calculus" by="3Blue1Brown (Grant Sanderson)" note="Why the power rule and the derivatives of sine and cosine are what they are, seen with pictures rather than algebra." />
+
+<Step n={2} title="Products and quotients" minutes={20} />
+
+For a product of two functions,
+
+$$
+(fg)' = f'g + fg'
+$$
+
+Picture a rectangle with sides $f$ and $g$: nudging both sides grows the area by a strip along each side, $f'g$ and $fg'$ (the tiny corner piece vanishes in the limit). For a quotient,
+
+$$
+\left(\frac{f}{g}\right)' = \frac{f'g - fg'}{g^2}
+$$
+
+<Prove title="The derivative of the sigmoid" task="Using the quotient rule on $\sigma(x) = \dfrac{1}{1 + e^{-x}}$, show that $\sigma'(x) = \sigma(x)\,(1 - \sigma(x))$. What is its largest value?">
+
+Here $f = 1$ and $g = 1 + e^{-x}$, so $f' = 0$ and $g' = -e^{-x}$ (the rule for $e^{ax}$ with $a = -1$). The quotient rule gives
+
+$$
+\sigma'(x) = \frac{0 - 1\cdot(-e^{-x})}{(1 + e^{-x})^2} = \frac{e^{-x}}{(1 + e^{-x})^2} = \frac{1}{1 + e^{-x}}\cdot\frac{e^{-x}}{1 + e^{-x}}
+$$
+
+The first factor is $\sigma(x)$. The second is $\frac{(1 + e^{-x}) - 1}{1 + e^{-x}} = 1 - \sigma(x)$. So $\sigma' = \sigma(1 - \sigma)$.
+
+The product $s(1 - s)$ of a number between 0 and 1 with its complement is largest when $s = \frac{1}{2}$, giving $\frac{1}{4}$. So the sigmoid's slope never exceeds 0.25, reached at $x = 0$. This neat form also makes it cheap to compute: once you have $\sigma(x)$, the derivative is one multiplication away.
+
+</Prove>
+
+<Step n={3} title="Nonlinearities and their derivatives" minutes={35} />
+
+<Figure caption="Choose a nonlinearity and change its gain and threshold. Solid: the function; dashed: its derivative." credit="Interactive figure by Engram.">
+  <ActivationPlot />
+</Figure>
+
+Every model neuron, real or artificial, passes a weighted sum through a nonlinearity. Its derivative matters because, as you will see on Day 5, every learning signal that passes back through a unit is multiplied by it.
+
+- **Sigmoid** and **tanh** saturate: for large positive or negative inputs their output barely changes, so their derivative falls to nearly zero. A saturated unit stops learning.
+- The **rectified linear unit** (ReLU), $\max(0, x)$, has derivative 0 below threshold and exactly 1 above. It does not saturate for positive inputs, which Glorot, Bordes and Bengio (2011), today's paper, argued made deep networks easier to train. At $x = 0$ the derivative is undefined; in practice it is set to 0.
+- **Softplus**, $\ln(1 + e^x)$, is a smooth ReLU. Its derivative is the sigmoid.
+- The **exponential** is used for firing rates in statistical models of neurons because it is always positive and makes the maths of Poisson likelihoods simple.
+
+<PyCell id="derivs" title="Code the derivatives" tests={String.raw`
+  import numpy as np
+  xs = np.linspace(-4, 4, 17) + 0.013   # avoid the ReLU kink at exactly 0
+  def num(f, x, h=1e-5):
+      return (f(x + h) - f(x - h)) / (2 * h)
+
+  def test_sigmoid():
+      "dsigmoid matches a numerical derivative"
+      assert np.allclose(dsigmoid(xs), num(sigmoid, xs), atol=1e-7)
+
+  def test_tanh():
+      "dtanh matches a numerical derivative"
+      assert np.allclose(dtanh(xs), num(np.tanh, xs), atol=1e-7)
+
+  def test_softplus():
+      "dsoftplus matches a numerical derivative"
+      assert np.allclose(dsoftplus(xs), num(softplus, xs), atol=1e-7)
+
+  def test_relu():
+      "drelu is 1 for positive inputs and 0 for negative ones"
+      assert np.array_equal(drelu(xs), (xs > 0).astype(float))
+`} prompt="Write `dsigmoid`, `dtanh`, `dsoftplus` and `drelu`, each working on whole arrays. Use $\sigma' = \sigma(1 - \sigma)$, $\tanh' = 1 - \tanh^2$ and softplus$' = \sigma$. Check them all against central differences, then print each derivative's largest value over the grid."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  def sigmoid(x): return 1 / (1 + np.exp(-x))
+  def softplus(x): return np.log1p(np.exp(x))
+  def relu(x): return np.maximum(0, x)
+
+  def dsigmoid(x):
+      return ...
+  def dtanh(x):
+      return ...
+  def dsoftplus(x):
+      return ...
+  def drelu(x):
+      return ...
+
+  x = np.linspace(-6, 6, 1201)
+  for name, d in [("sigmoid", dsigmoid), ("tanh", dtanh), ("softplus", dsoftplus), ("relu", drelu)]:
+      print(f"{name:9s} largest slope {d(x).max():.3f}")
+`}
+hint="dsigmoid: s = sigmoid(x); return s * (1 - s). dtanh: return 1 - np.tanh(x) ** 2. dsoftplus: return sigmoid(x). drelu: return (x > 0).astype(float)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  def sigmoid(x): return 1 / (1 + np.exp(-x))
+  def softplus(x): return np.log1p(np.exp(x))
+  def relu(x): return np.maximum(0, x)
+
+  def dsigmoid(x):
+      s = sigmoid(x)
+      return s * (1 - s)
+  def dtanh(x):
+      return 1 - np.tanh(x) ** 2
+  def dsoftplus(x):
+      return sigmoid(x)
+  def drelu(x):
+      return (x > 0).astype(float)
+
+  x = np.linspace(-6, 6, 1201)
+  for name, d in [("sigmoid", dsigmoid), ("tanh", dtanh), ("softplus", dsoftplus), ("relu", drelu)]:
+      print(f"{name:9s} largest slope {d(x).max():.3f}")
+`} />
+
+The sigmoid's slope peaks at 0.25, as you proved. That answers the prediction, and it has a consequence you will see tomorrow: a learning signal passed back through ten sigmoid units is multiplied by at most $0.25^{10}$, less than one in a million. Tanh does better, with a peak slope of 1, and ReLU passes the signal through unchanged wherever units are active.
+
+<Step n={4} title="Contrast response functions" minutes={25} />
+
+Neurons in visual cortex respond to the contrast $c$ of a grating (from 0, blank, to 1, full black and white) following the **Naka-Rushton function**, first used for responses in the fish retina:
+
+$$
+r(c) = R_{\max}\frac{c^n}{c^n + c_{50}^n}
+$$
+
+$R_{\max}$ is the maximum response, $c_{50}$ the contrast giving half of it, and $n$ (often 2 to 3) sets the steepness. It is a sigmoid on a logarithmic contrast axis, and a building block of divisive normalisation, the operation many cortical circuits appear to share (Week 143).
+
+<PyCell id="naka" title="Where is a neuron most sensitive to contrast?" tests={String.raw`
+  import numpy as np
+  def test_deriv():
+      "dnaka matches a numerical derivative"
+      for c in [0.05, 0.15, 0.3, 0.7]:
+          assert np.isclose(dnaka(c), (naka(c + 1e-6) - naka(c - 1e-6)) / 2e-6, rtol=1e-5)
+
+  def test_peak():
+      "c_best is where the slope peaks, below c50 for n = 2.5"
+      assert np.isclose(c_best, cs[np.argmax(dnaka(cs))])
+      assert 0.1 < c_best < c50
+`} prompt="Differentiate the Naka-Rushton function with the quotient rule (numerator $f = R_{\max}c^n$, denominator $g = c^n + c_{50}^n$) and write `dnaka(c)`. Then find `c_best`, the contrast where the slope is largest, on the grid `cs`. Is the neuron most sensitive at $c_{50}$?"
+code={String.raw`
+  Rmax, c50, n = 50.0, 0.2, 2.5
+  def naka(c):
+      return Rmax * c ** n / (c ** n + c50 ** n)
+
+  def dnaka(c):
+      f, g = Rmax * c ** n, c ** n + c50 ** n
+      df, dg = ..., ...
+      return ...
+
+  cs = np.linspace(0.001, 1, 100000)
+  c_best = ...
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(cs, naka(cs)); ax[0].axvline(c50, ls="--", color="0.5"); ax[0].set_xlabel("contrast"); ax[0].set_ylabel("rate (Hz)")
+  ax[1].plot(cs, dnaka(cs)); ax[1].axvline(c_best, ls="--", color="C1"); ax[1].set_xlabel("contrast"); ax[1].set_ylabel("slope (Hz per unit contrast)")
+  plt.tight_layout(); plt.show()
+  print("most sensitive at contrast", round(c_best, 4), " c50 =", c50)
+`}
+hint="df = Rmax * n * c ** (n - 1) and dg = n * c ** (n - 1). Then return (df * g - f * dg) / g ** 2. c_best = cs[np.argmax(dnaka(cs))]."
+solution={String.raw`
+  Rmax, c50, n = 50.0, 0.2, 2.5
+  def naka(c):
+      return Rmax * c ** n / (c ** n + c50 ** n)
+
+  def dnaka(c):
+      f, g = Rmax * c ** n, c ** n + c50 ** n
+      df, dg = Rmax * n * c ** (n - 1), n * c ** (n - 1)
+      return (df * g - f * dg) / g ** 2
+
+  cs = np.linspace(0.001, 1, 100000)
+  c_best = cs[np.argmax(dnaka(cs))]
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(cs, naka(cs)); ax[0].axvline(c50, ls="--", color="0.5"); ax[0].set_xlabel("contrast"); ax[0].set_ylabel("rate (Hz)")
+  ax[1].plot(cs, dnaka(cs)); ax[1].axvline(c_best, ls="--", color="C1"); ax[1].set_xlabel("contrast"); ax[1].set_ylabel("slope (Hz per unit contrast)")
+  plt.tight_layout(); plt.show()
+  print("most sensitive at contrast", round(c_best, 4), " c50 =", c50)
+`} />
+
+On a linear contrast axis the slope peaks somewhat below $c_{50}$. (On a logarithmic axis, where psychophysicists usually plot contrast, the peak is exactly at $c_{50}$.) Either way, the neuron is most useful for discriminating contrasts in a band around its half-saturation point and nearly useless near full contrast, where it saturates. Contrast adaptation shifts $c_{50}$ towards the contrasts an animal has recently seen, keeping neurons in their sensitive range.
+
+<Bridge title="Nonlinearities and their slopes"
+  neuro="Real neurons have threshold-like, saturating input-output curves. Neuromodulators and attention can change their gain, the steepness of the curve, which changes the derivative and so the neuron's sensitivity to its inputs (Week 47)."
+  ai="Choosing an activation function is largely choosing a derivative. Saturating sigmoids made deep networks hard to train; ReLU and its smooth relatives (softplus, GELU, SiLU) keep gradients alive. Glorot and colleagues (today's paper) made the case for ReLU partly on biological grounds.">
+
+The shape of a nonlinearity decides both what a neuron computes and how easily it can learn.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The derivative of $3x^4$ is...", options: ["$12x^3$", "$3x^3$", "$4x^3$", "$12x^4$"], answer: 0, explain: "Constant multiple and power rule." },
+  { q: "The derivative of $e^{-2x}$ is...", options: ["$e^{-2x}$", "$-2e^{-2x}$", "$-2x e^{-2x}$", "$e^{-2}$"], answer: 1, explain: "$\\frac{d}{dx}e^{ax} = ae^{ax}$." },
+  { q: "The product rule says $(fg)'$ equals...", options: ["$f'g'$", "$f'g + fg'$", "$f'g - fg'$", "$(f + g)'$"], answer: 1, explain: "One strip along each side of the rectangle." },
+  { q: "$\\sigma'(x)$ equals...", options: ["$\\sigma(x)^2$", "$\\sigma(x)(1 - \\sigma(x))$", "$1 - \\sigma(x)$", "$e^{-x}$"], answer: 1, explain: "Quotient rule." },
+  { q: "The largest slope of the sigmoid is...", options: ["0.25", "0.5", "1", "Unbounded"], answer: 0, explain: "At x = 0, σ = 1/2." },
+  { q: "Saturation means...", options: ["The derivative is near zero for large inputs", "The output is zero", "The unit fires constantly", "The derivative is 1"], answer: 0, explain: "The output barely changes, so learning signals vanish." },
+  { q: "The derivative of ReLU for positive inputs is...", options: ["0", "x", "1", "0.25"], answer: 2, explain: "It passes gradients unchanged." },
+]} />
+
+<Flashcards cards={[
+  { front: "Product and quotient rules?", back: "$(fg)' = f'g + fg'$; $(f/g)' = (f'g - fg')/g^2$." },
+  { front: "Derivatives of $e^{ax}$ and $\\ln x$?", back: "$ae^{ax}$ and $1/x$." },
+  { front: "Sigmoid derivative?", back: "$\\sigma' = \\sigma(1 - \\sigma)$, at most 1/4." },
+  { front: "tanh and softplus derivatives?", back: "$1 - \\tanh^2 x$; softplus$' = \\sigma(x)$." },
+  { front: "Naka-Rushton function?", back: "$R_{\\max}c^n/(c^n + c_{50}^n)$: contrast response with half-saturation $c_{50}$." },
+]} />
+
+<Predict revisit question="What is the largest slope of the sigmoid?" />
+
+<Key title="Before you go">
+<ul>
+<li>A few rules (sum, power, exponential, log, product, quotient) differentiate most functions.</li>
+<li>$\sigma' = \sigma(1 - \sigma)$, which never exceeds 0.25.</li>
+<li>Saturating nonlinearities have vanishing derivatives; ReLU's is 1 wherever it is active.</li>
+<li>A contrast response is most sensitive near its half-saturation contrast.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Glorot, Bordes and Bengio (2011), <em>Deep sparse rectifier neural networks</em>.</li>
+<li>Albrecht and Hamilton (1982), <em>Striate cortex of monkey and cat: contrast response function</em>, Journal of Neurophysiology: contrast response functions measured in V1.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="ReLU units are silent below threshold and linear above, like many real neurons. List two properties of real neurons that ReLU misses, and say whether each would make learning easier or harder." />

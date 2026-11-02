@@ -1,0 +1,332 @@
+export const meta = {
+  title: "Matrix calculus: gradients of vector and matrix expressions",
+  intro: "Most models in this course are written with vectors and matrices, so their gradients are too. A few identities, such as the gradient of a linear function, of a quadratic form and of a squared error, let you differentiate whole expressions at once instead of entry by entry. Today you derive them, use them to fit a Poisson model of a spiking neuron by following the gradient of its log-likelihood, and follow Oja's derivation of a Hebbian learning rule that, through a first-order Taylor expansion, makes a single neuron compute the first principal component of its inputs.",
+  goals: [
+    "Derive the gradients of linear functions, quadratic forms and squared errors",
+    "Compute gradients with respect to a weight matrix as outer products",
+    "Fit a Poisson generalised linear model of a neuron by gradient ascent",
+    "Derive Oja's rule from normalised Hebbian learning and show it finds the top principal component",
+  ],
+  plan: [
+    { label: "Predict and the basic identities", minutes: 25 },
+    { label: "Gradients with respect to matrices", minutes: 20 },
+    { label: "Fitting a Poisson neuron", minutes: 35 },
+    { label: "Oja's rule", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "oja-1982",
+};
+
+<Predict question="A single model neuron receives 10 correlated inputs and changes its weights by a Hebbian rule (strengthen a synapse when its input and the neuron's output are active together), with a small correction that stops the weights growing for ever. After many inputs, what will its weight vector point along: the input with the largest mean, the direction of greatest variance of the inputs, or a random direction?" />
+
+<Step n={1} title="The basic identities" minutes={25} />
+
+We write $\nabla_{\mathbf{w}}f$ for the gradient of a scalar $f$ with respect to the vector $\mathbf{w}$, a vector of the same shape as $\mathbf{w}$. Three identities cover most of what you need. Each can be checked entry by entry.
+
+$$
+\nabla_{\mathbf{w}}(\mathbf{a}^\top\mathbf{w}) = \mathbf{a}, \qquad \nabla_{\mathbf{w}}(\mathbf{w}^\top A\mathbf{w}) = (A + A^\top)\mathbf{w}, \qquad \nabla_{\mathbf{w}}\tfrac{1}{2}\lVert X\mathbf{w} - \mathbf{y}\rVert^2 = X^\top(X\mathbf{w} - \mathbf{y})
+$$
+
+For symmetric $A$ the middle one is $2A\mathbf{w}$, the vector version of $\frac{d}{dw}aw^2 = 2aw$. The third follows from the first two by expanding $\lVert X\mathbf{w} - \mathbf{y}\rVert^2 = \mathbf{w}^\top X^\top X\mathbf{w} - 2\mathbf{y}^\top X\mathbf{w} + \mathbf{y}^\top\mathbf{y}$. Adding a ridge penalty $\frac{\lambda}{2}\lVert\mathbf{w}\rVert^2$ adds $\lambda\mathbf{w}$, and setting the total to zero gives $(X^\top X + \lambda I)\mathbf{w} = X^\top\mathbf{y}$: Week 5's ridge solution in one line.
+
+<Prove title="The gradient of a quadratic form" task="Show that $\dfrac{\partial}{\partial w_k}\left(\mathbf{w}^\top A\mathbf{w}\right) = \left((A + A^\top)\mathbf{w}\right)_k$.">
+
+Write the quadratic form out: $\mathbf{w}^\top A\mathbf{w} = \sum_i\sum_j w_iA_{ij}w_j$.
+
+Differentiating with respect to $w_k$, the terms with $i = k$ give $\sum_j A_{kj}w_j$ and the terms with $j = k$ give $\sum_i w_iA_{ik}$ (the single term with $i = j = k$, $A_{kk}w_k^2$, contributes $2A_{kk}w_k$, split between the two sums).
+
+So the derivative is $\sum_j A_{kj}w_j + \sum_i A_{ik}w_i = (A\mathbf{w})_k + (A^\top\mathbf{w})_k$. Stacking over $k$ gives $(A + A^\top)\mathbf{w}$.
+
+</Prove>
+
+<PyCell id="identities" title="Check the identities numerically" tests={String.raw`
+  import numpy as np
+  def test_quad():
+      "grad_quad matches the numerical gradient of w^T A w for a non-symmetric A"
+      assert np.allclose(grad_quad(w0), numerical_gradient(lambda v: v @ A @ v, w0), atol=1e-5)
+
+  def test_ls():
+      "grad_ls matches the numerical gradient of the squared error"
+      assert np.allclose(grad_ls(w0), numerical_gradient(lambda v: 0.5 * np.sum((X @ v - y) ** 2), w0), atol=1e-5)
+`} prompt="Write `grad_quad(w)`, the gradient of $\mathbf{w}^\top A\mathbf{w}$ for the non-symmetric matrix `A`, and `grad_ls(w)`, the gradient of $\frac{1}{2}\lVert X\mathbf{w} - \mathbf{y}\rVert^2$. Check both against `numerical_gradient`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1982)
+  A = rng.normal(size=(4, 4))               # not symmetric
+  X = rng.normal(size=(30, 4)); y = rng.normal(size=30)
+  w0 = rng.normal(size=4)
+
+  def numerical_gradient(f, w, h=1e-6):
+      g = np.zeros_like(w)
+      for i in range(len(w)):
+          e = np.zeros_like(w); e[i] = h
+          g[i] = (f(w + e) - f(w - e)) / (2 * h)
+      return g
+
+  def grad_quad(w):
+      return ...
+
+  def grad_ls(w):
+      return ...
+
+  print(grad_quad(w0).round(4)); print(numerical_gradient(lambda v: v @ A @ v, w0).round(4))
+`}
+hint="grad_quad returns (A + A.T) @ w; grad_ls returns X.T @ (X @ w - y)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1982)
+  A = rng.normal(size=(4, 4))               # not symmetric
+  X = rng.normal(size=(30, 4)); y = rng.normal(size=30)
+  w0 = rng.normal(size=4)
+
+  def numerical_gradient(f, w, h=1e-6):
+      g = np.zeros_like(w)
+      for i in range(len(w)):
+          e = np.zeros_like(w); e[i] = h
+          g[i] = (f(w + e) - f(w - e)) / (2 * h)
+      return g
+
+  def grad_quad(w):
+      return (A + A.T) @ w
+
+  def grad_ls(w):
+      return X.T @ (X @ w - y)
+
+  print(grad_quad(w0).round(4)); print(numerical_gradient(lambda v: v @ A @ v, w0).round(4))
+`} />
+
+<Figure caption="The squared-error surface of a two-weight linear neuron. Its Hessian is XᵀX/T + λI; correlated inputs stretch the bowl and slow gradient descent." credit="Interactive figure by Engram.">
+  <LossSurface />
+</Figure>
+
+<Step n={2} title="Gradients with respect to matrices" minutes={20} />
+
+For a layer with weight matrix $W$, the loss gradient with respect to $W$ is a matrix of the same shape, with entry $(i, j)$ equal to $\partial L/\partial W_{ij}$. For $\hat{\mathbf{y}} = W\mathbf{x}$ and $L = \frac{1}{2}\lVert W\mathbf{x} - \mathbf{y}\rVert^2$, output $i$ depends on $W_{ij}$ through $\hat{y}_i = \sum_j W_{ij}x_j$, so $\partial L/\partial W_{ij} = (\hat{y}_i - y_i)\,x_j$. All together:
+
+$$
+\nabla_W L = (W\mathbf{x} - \mathbf{y})\,\mathbf{x}^\top
+$$
+
+an **outer product** of the error at the output with the input. Each synapse changes in proportion to (error at its postsynaptic neuron) × (activity of its presynaptic neuron). With the error replaced by the output itself, this is Hebb's rule; with the error as written, it is the delta rule. Summed over a batch, it is the $X^\top\bar{Z}$ you wrote in last week's backward pass.
+
+<Video id="tIeHLnjs5U8" title="Backpropagation calculus | Chapter 4, Deep learning" by="3Blue1Brown (Grant Sanderson)" note="The chain rule written out for one weight of a network, the scalar version of today's matrix identities." />
+
+<Step n={3} title="Fitting a Poisson neuron" minutes={35} />
+
+The **Poisson generalised linear model** (GLM) describes a neuron's spike count in each time bin as Poisson with rate $\lambda_t = \exp(\mathbf{x}_t\cdot\mathbf{w})$, where $\mathbf{x}_t$ holds the stimulus features at time $t$ (plus a 1 for the baseline). It is the statistical form of the linear-nonlinear-Poisson model you will build next week and study in depth in Week 35. Its log-likelihood, up to a constant, is
+
+$$
+\ell(\mathbf{w}) = \sum_t\left[y_t\,\mathbf{x}_t\cdot\mathbf{w} - \exp(\mathbf{x}_t\cdot\mathbf{w})\right]
+$$
+
+<Derivation title="The gradient and Hessian of the Poisson log-likelihood">
+  <div>
+
+The first term is linear in $\mathbf{w}$, with gradient $\sum_t y_t\mathbf{x}_t = X^\top\mathbf{y}$.
+
+  </div>
+  <div>
+
+The second term, by the chain rule, has gradient $\sum_t\exp(\mathbf{x}_t\cdot\mathbf{w})\,\mathbf{x}_t = X^\top\boldsymbol\lambda$. So
+
+$$
+\nabla\ell = X^\top(\mathbf{y} - \boldsymbol\lambda)
+$$
+
+the same "input times error" form as squared error and logistic regression.
+
+  </div>
+  <div>
+
+Differentiating again, $H = -X^\top\operatorname{diag}(\boldsymbol\lambda)X$, which is negative semidefinite: the log-likelihood is concave, with a single peak and no false maxima, so gradient ascent or Newton's method always finds the best fit.
+
+  </div>
+</Derivation>
+
+<PyCell id="glm" title="Fit a Poisson GLM by gradient ascent" tests={String.raw`
+  import numpy as np
+  def test_grad():
+      "grad_ll matches a numerical gradient of the log-likelihood"
+      w = np.random.default_rng(0).normal(size=Xg.shape[1]) * 0.1
+      assert np.allclose(grad_ll(w), numerical_gradient(loglik, w), rtol=1e-4, atol=1e-4)
+
+  def test_rise():
+      "the log-likelihood increases over training"
+      assert lls[-1] > lls[0]
+
+  def test_recover():
+      "the fitted filter correlates with the true one above 0.95"
+      assert np.corrcoef(w_fit[:-1], w_true[:-1])[0, 1] > 0.95
+`} prompt="Write `loglik(w)` and `grad_ll(w)` for the Poisson GLM. Fit it by gradient ascent (w goes up the gradient, step 0.5 times the gradient divided by the number of bins) for 1000 steps from zero, recording the log-likelihood in `lls`, and compare the fitted temporal filter `w_fit` with the true one."
+code={String.raw`
+  T, d = 3000, 12
+  lags = np.arange(d)
+  filt = np.exp(-lags / 2.5) * np.sin(lags / 1.5)                    # the neuron's true temporal filter
+  stim = rng.normal(size=T + d)
+  Xg = np.column_stack([np.array([stim[t:t + d][::-1] for t in range(T)]), np.ones(T)])   # recent stimulus history plus a bias
+  w_true = np.append(0.6 * filt, np.log(0.3))
+  counts = rng.poisson(np.exp(Xg @ w_true))
+
+  def loglik(w):
+      return ...
+
+  def grad_ll(w):
+      return ...
+
+  w_fit = np.zeros(d + 1); lls = []
+  for _ in range(1000):
+      w_fit = ...
+      lls.append(loglik(w_fit))
+
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(lls); ax[0].set_xlabel("step"); ax[0].set_ylabel("log-likelihood")
+  ax[1].plot(lags, w_true[:-1], "o-", label="true filter"); ax[1].plot(lags, w_fit[:-1], "s--", label="fitted")
+  ax[1].set_xlabel("lag (bins)"); ax[1].legend(frameon=False); plt.tight_layout(); plt.show()
+  print("correlation of filters:", np.corrcoef(w_fit[:-1], w_true[:-1])[0, 1].round(4), " baseline rate:", np.exp(w_fit[-1]).round(3), "spikes per bin")
+`}
+hint="loglik returns np.sum(counts * (Xg @ w) - np.exp(Xg @ w)). grad_ll returns Xg.T @ (counts - np.exp(Xg @ w)). Ascent: w_fit = w_fit + 0.5 * grad_ll(w_fit) / T."
+solution={String.raw`
+  T, d = 3000, 12
+  lags = np.arange(d)
+  filt = np.exp(-lags / 2.5) * np.sin(lags / 1.5)                    # the neuron's true temporal filter
+  stim = rng.normal(size=T + d)
+  Xg = np.column_stack([np.array([stim[t:t + d][::-1] for t in range(T)]), np.ones(T)])   # recent stimulus history plus a bias
+  w_true = np.append(0.6 * filt, np.log(0.3))
+  counts = rng.poisson(np.exp(Xg @ w_true))
+
+  def loglik(w):
+      return np.sum(counts * (Xg @ w) - np.exp(Xg @ w))
+
+  def grad_ll(w):
+      return Xg.T @ (counts - np.exp(Xg @ w))
+
+  w_fit = np.zeros(d + 1); lls = []
+  for _ in range(1000):
+      w_fit = w_fit + 0.5 * grad_ll(w_fit) / T
+      lls.append(loglik(w_fit))
+
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(lls); ax[0].set_xlabel("step"); ax[0].set_ylabel("log-likelihood")
+  ax[1].plot(lags, w_true[:-1], "o-", label="true filter"); ax[1].plot(lags, w_fit[:-1], "s--", label="fitted")
+  ax[1].set_xlabel("lag (bins)"); ax[1].legend(frameon=False); plt.tight_layout(); plt.show()
+  print("correlation of filters:", np.corrcoef(w_fit[:-1], w_true[:-1])[0, 1].round(4), " baseline rate:", np.exp(w_fit[-1]).round(3), "spikes per bin")
+`} />
+
+From spike counts alone, gradient ascent recovers the neuron's temporal filter and baseline. The concavity you derived is what guarantees there was only one answer to find.
+
+<Step n={4} title="Oja's rule" minutes={25} />
+
+A linear neuron $y = \mathbf{w}\cdot\mathbf{x}$ learning by Hebb's rule, $\Delta\mathbf{w} = \eta\,y\,\mathbf{x}$, strengthens its weights without limit. Oja (1982), today's paper, normalised the weights after each update, $\mathbf{w} \leftarrow (\mathbf{w} + \eta y\mathbf{x})/\lVert\mathbf{w} + \eta y\mathbf{x}\rVert$, and expanded this to first order in the small learning rate $\eta$ (a Taylor expansion, Day 1). With $\lVert\mathbf{w}\rVert = 1$ the result is
+
+$$
+\Delta\mathbf{w} = \eta\,y\,(\mathbf{x} - y\,\mathbf{w})
+$$
+
+a Hebbian term $y\mathbf{x}$ and a decay $-y^2\mathbf{w}$, both computable at the synapse from its own input, the neuron's output and its own weight. Averaged over inputs with covariance $C$ (and mean zero), the expected update is $\eta(C\mathbf{w} - (\mathbf{w}^\top C\mathbf{w})\mathbf{w})$, which is zero exactly when $C\mathbf{w}$ is parallel to $\mathbf{w}$: when $\mathbf{w}$ is an eigenvector of $C$. Only the top eigenvector is stable.
+
+<PyCell id="oja" title="A neuron that does PCA" tests={String.raw`
+  import numpy as np
+  def test_update():
+      "oja_step applies w + eta y (x - y w)"
+      w = np.array([0.6, 0.8]); x = np.array([1.0, 2.0])
+      yv = w @ x
+      assert np.allclose(oja_step(w, x, 0.1), w + 0.1 * yv * (x - yv * w))
+
+  def test_converge():
+      "after learning, w has unit length and lines up with the top eigenvector of the input covariance"
+      assert abs(np.linalg.norm(w) - 1) < 0.05
+      assert abs(w @ top_pc) > 0.99
+`} prompt="Write `oja_step(w, x, eta)`. Present 5000 inputs drawn from the correlated 10-dimensional distribution below, one at a time, starting from a random unit vector with learning rate 0.005. Compare the final `w` with `top_pc`, the top eigenvector of the input covariance."
+code={String.raw`
+  dim = 10
+  Q = np.linalg.qr(rng.normal(size=(dim, dim)))[0]                   # random orthogonal axes
+  sd = np.array([2.0, 1.2, 1.0, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2])  # spread of the inputs along each axis
+  inputs = (rng.normal(size=(5000, dim)) * sd) @ Q.T                # correlated inputs
+  C = np.cov(inputs, rowvar=False)
+  top_pc = np.linalg.eigh(C)[1][:, -1]
+
+  def oja_step(w, x, eta):
+      y_out = w @ x
+      return ...
+
+  w = rng.normal(size=dim); w /= np.linalg.norm(w)
+  align = []
+  for x in inputs:
+      w = oja_step(w, x, 0.005)
+      align.append(abs(w @ top_pc) / np.linalg.norm(w))
+
+  plt.figure(figsize=(5, 3)); plt.plot(align); plt.xlabel("input number"); plt.ylabel("|cos(w, top PC)|"); plt.show()
+  print("length of w:", np.linalg.norm(w).round(3), "  alignment with the top PC:", round(abs(w @ top_pc) / np.linalg.norm(w), 4))
+`}
+hint="return w + eta * y_out * (x - y_out * w)"
+solution={String.raw`
+  dim = 10
+  Q = np.linalg.qr(rng.normal(size=(dim, dim)))[0]                   # random orthogonal axes
+  sd = np.array([2.0, 1.2, 1.0, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2])  # spread of the inputs along each axis
+  inputs = (rng.normal(size=(5000, dim)) * sd) @ Q.T                # correlated inputs
+  C = np.cov(inputs, rowvar=False)
+  top_pc = np.linalg.eigh(C)[1][:, -1]
+
+  def oja_step(w, x, eta):
+      y_out = w @ x
+      return w + eta * y_out * (x - y_out * w)
+
+  w = rng.normal(size=dim); w /= np.linalg.norm(w)
+  align = []
+  for x in inputs:
+      w = oja_step(w, x, 0.005)
+      align.append(abs(w @ top_pc) / np.linalg.norm(w))
+
+  plt.figure(figsize=(5, 3)); plt.plot(align); plt.xlabel("input number"); plt.ylabel("|cos(w, top PC)|"); plt.show()
+  print("length of w:", np.linalg.norm(w).round(3), "  alignment with the top PC:", round(abs(w @ top_pc) / np.linalg.norm(w), 4))
+`} />
+
+The weight vector settles at unit length along the input's first principal component, the direction of greatest variance. That answers the prediction. A single neuron with a local learning rule has computed last week's PCA, which is one reason PCA-like processing is thought to be within reach of biological circuits (Week 42).
+
+<Bridge title="One identity, many learning rules"
+  neuro="Hebb's rule, Oja's rule and the delta rule all change a synapse by the product of a presynaptic term and a postsynaptic term: the outer-product form of a gradient with respect to a weight matrix. Which postsynaptic term the brain uses, activity or error, is a central question in plasticity research (Weeks 42 and 136)."
+  ai="Every gradient in deep learning reduces to these identities applied through the chain rule. The Poisson GLM, fitted exactly as you did today, is still the standard first model for spike trains in systems neuroscience, and is a single-layer network with an exponential output and a Poisson loss.">
+
+Learn the three identities and the outer-product rule, and most gradients in this course can be written down in one line.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "$\\nabla_{\\mathbf{w}}(\\mathbf{a}^\\top\\mathbf{w})$ is...", options: ["$\\mathbf{w}$", "$\\mathbf{a}$", "$\\mathbf{a}^\\top\\mathbf{w}$", "$A$"], answer: 1, explain: "Each partial is $a_i$." },
+  { q: "$\\nabla_{\\mathbf{w}}(\\mathbf{w}^\\top A\\mathbf{w})$ for symmetric A is...", options: ["$A\\mathbf{w}$", "$2A\\mathbf{w}$", "$\\mathbf{w}^\\top A$", "$A^2\\mathbf{w}$"], answer: 1, explain: "$(A + A^\\top)\\mathbf{w}$." },
+  { q: "The gradient of $\\frac{1}{2}\\lVert W\\mathbf{x} - \\mathbf{y}\\rVert^2$ with respect to W is...", options: ["$W^\\top\\mathbf{x}$", "$(W\\mathbf{x} - \\mathbf{y})\\mathbf{x}^\\top$", "$\\mathbf{x}(W\\mathbf{x} - \\mathbf{y})^\\top$", "$\\mathbf{x}\\mathbf{x}^\\top$"], answer: 1, explain: "Error times input, as an outer product." },
+  { q: "The Poisson GLM log-likelihood gradient is...", options: ["$X^\\top\\mathbf{y}$", "$X^\\top(\\mathbf{y} - \\boldsymbol\\lambda)$", "$X^\\top\\boldsymbol\\lambda$", "$\\mathbf{y} - \\boldsymbol\\lambda$"], answer: 1, explain: "Input times (observed minus predicted)." },
+  { q: "The Poisson GLM log-likelihood is...", options: ["Concave", "Convex", "Neither", "Linear"], answer: 0, explain: "Its Hessian is $-X^\\top\\operatorname{diag}(\\boldsymbol\\lambda)X$." },
+  { q: "Oja's rule is...", options: ["$\\Delta\\mathbf{w} = \\eta y\\mathbf{x}$", "$\\Delta\\mathbf{w} = \\eta y(\\mathbf{x} - y\\mathbf{w})$", "$\\Delta\\mathbf{w} = -\\eta\\mathbf{w}$", "$\\Delta\\mathbf{w} = \\eta\\mathbf{x}$"], answer: 1, explain: "Hebbian growth with a local decay." },
+  { q: "Oja's neuron converges to...", options: ["The mean input", "The top eigenvector of the input covariance", "Zero", "A random vector"], answer: 1, explain: "The first principal component." },
+]} />
+
+<Flashcards cards={[
+  { front: "Three gradient identities?", back: "$\\nabla(\\mathbf{a}^\\top\\mathbf{w}) = \\mathbf{a}$; $\\nabla(\\mathbf{w}^\\top A\\mathbf{w}) = (A + A^\\top)\\mathbf{w}$; $\\nabla\\frac{1}{2}\\lVert X\\mathbf{w} - \\mathbf{y}\\rVert^2 = X^\\top(X\\mathbf{w} - \\mathbf{y})$." },
+  { front: "Gradient with respect to a weight matrix?", back: "$\\nabla_W\\frac{1}{2}\\lVert W\\mathbf{x} - \\mathbf{y}\\rVert^2 = (W\\mathbf{x} - \\mathbf{y})\\mathbf{x}^\\top$: postsynaptic error times presynaptic input." },
+  { front: "Poisson GLM?", back: "$y_t \\sim \\text{Poisson}(\\exp(\\mathbf{x}_t\\cdot\\mathbf{w}))$; $\\nabla\\ell = X^\\top(\\mathbf{y} - \\boldsymbol\\lambda)$; concave." },
+  { front: "Oja's rule?", back: "$\\Delta\\mathbf{w} = \\eta y(\\mathbf{x} - y\\mathbf{w})$: first-order expansion of normalised Hebbian learning; converges to the top PC." },
+  { front: "Ridge from matrix calculus?", back: "$\\nabla[\\frac{1}{2}\\lVert X\\mathbf{w} - \\mathbf{y}\\rVert^2 + \\frac{\\lambda}{2}\\lVert\\mathbf{w}\\rVert^2] = 0$ gives $(X^\\top X + \\lambda I)\\mathbf{w} = X^\\top\\mathbf{y}$." },
+]} />
+
+<Predict revisit question="Where does the Hebbian neuron's weight vector end up pointing?" />
+
+<Key title="Before you go">
+<ul>
+<li>A few identities give gradients of linear functions, quadratic forms and squared errors at a glance.</li>
+<li>Gradients with respect to weight matrices are outer products of output errors and inputs.</li>
+<li>The Poisson GLM has gradient $X^\top(\mathbf{y} - \boldsymbol\lambda)$ and a concave log-likelihood.</li>
+<li>Oja's local Hebbian rule makes a neuron learn the first principal component of its inputs.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Oja (1982), <em>Simplified neuron model as a principal component analyzer</em>.</li>
+<li>Petersen and Pedersen, <em>The Matrix Cookbook</em> (free online): a reference list of matrix identities, including today's.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Oja's rule extracts only the first principal component. How might a group of neurons learn several components, each a different one? Think about what each neuron would need to know about the others." />

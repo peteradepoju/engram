@@ -1,0 +1,261 @@
+export const meta = {
+  title: "Convolution: smoothing spike trains",
+  intro: "A spike train is a list of instants; a firing rate is a smooth curve. To get from one to the other you replace every spike with a small bump and add the bumps up. That operation, convolution, is everywhere: yesterday's membrane convolved its input with an exponential, every linear filter in signal processing is a convolution, and every layer of a convolutional neural network performs one. Today you implement it, use it to estimate firing rates, and choose the width of the smoothing kernel honestly with cross-validation.",
+  goals: [
+    "Define discrete convolution and implement it from scratch",
+    "Estimate a firing rate by convolving spike trains with box, Gaussian and causal kernels",
+    "Explain the bias-variance trade-off in choosing a kernel width",
+    "Choose the kernel width by cross-validation over trials",
+  ],
+  plan: [
+    { label: "Predict and what convolution does", minutes: 20 },
+    { label: "Implementing convolution", minutes: 25 },
+    { label: "Estimating firing rates", minutes: 30 },
+    { label: "Choosing the width honestly", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "shimazaki-2010",
+};
+
+<Predict question="You smooth 20 trials of spikes with a Gaussian kernel to estimate a firing rate that has a sharp 40 ms peak. You try widths of 2, 20 and 80 ms. Which gives the estimate closest to the true rate?" />
+
+<Step n={1} title="What convolution does" minutes={20} />
+
+The **convolution** of two sequences $f$ and $g$ is
+
+$$
+(f * g)[n] = \sum_m f[m]\,g[n - m]
+$$
+
+and for functions of continuous time, $(f * g)(t) = \int f(s)\,g(t - s)\,ds$. Two equivalent pictures:
+
+- **Spread every input.** Each sample $f[m]$ places a copy of $g$, scaled by $f[m]$ and shifted to start at $m$; the output is the sum of all copies. For a spike train, every spike drops a copy of the kernel.
+- **Slide and weight.** Each output $(f * g)[n]$ is a weighted sum of the inputs near $n$, with weights given by $g$ flipped and shifted. This is the moving average picture.
+
+Convolution is linear and shift-invariant: delay the input and the output is delayed by the same amount, and the response to a sum of inputs is the sum of the responses. Every linear, shift-invariant system is a convolution with its response to a single impulse, its **impulse response**. Yesterday's membrane is one, with impulse response $\frac{1}{\tau}e^{-t/\tau}$.
+
+<Figure caption="Spike trains from 10 trials, smoothed by convolving with a kernel. Change the kernel's shape and width and compare the estimate with the true rate (dashed)." credit="Interactive figure by Engram.">
+  <ConvolveSpikes />
+</Figure>
+
+<Video id="KuXjwB4LzSA" title="But what is a convolution?" by="3Blue1Brown (Grant Sanderson)" note="Convolution as sliding, multiplying and adding, from moving averages to image blurs to the probability of sums." />
+
+<Step n={2} title="Implementing convolution" minutes={25} />
+
+<PyCell id="myconv" title="Convolution from scratch" tests={String.raw`
+  import numpy as np
+  def test_small():
+      "my_convolve matches np.convolve on a small example"
+      assert np.allclose(my_convolve([1.0, 2.0, 3.0], [0.0, 1.0, 0.5]), np.convolve([1.0, 2.0, 3.0], [0.0, 1.0, 0.5]))
+
+  def test_random():
+      "my_convolve matches np.convolve on random sequences of different lengths"
+      r = np.random.default_rng(0)
+      a, b = r.normal(size=17), r.normal(size=5)
+      assert np.allclose(my_convolve(a, b), np.convolve(a, b))
+
+  def test_commutes():
+      "convolution commutes"
+      a, b = np.array([1.0, -2.0, 0.5, 3.0]), np.array([2.0, 1.0])
+      assert np.allclose(my_convolve(a, b), my_convolve(b, a))
+`} prompt="Write `my_convolve(f, g)` using the 'spread every input' picture: the output has length len(f) + len(g) − 1, and each `f[m]` adds `f[m] * g` into the output starting at position m. Check it against `np.convolve`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def my_convolve(f, g):
+      f, g = np.asarray(f, dtype=float), np.asarray(g, dtype=float)
+      out = np.zeros(len(f) + len(g) - 1)
+      for m in range(len(f)):
+          ...
+      return out
+
+  print(my_convolve([1, 2, 3], [0, 1, 0.5]), np.convolve([1, 2, 3], [0, 1, 0.5]))
+`}
+hint="out[m:m + len(g)] += f[m] * g"
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def my_convolve(f, g):
+      f, g = np.asarray(f, dtype=float), np.asarray(g, dtype=float)
+      out = np.zeros(len(f) + len(g) - 1)
+      for m in range(len(f)):
+          out[m:m + len(g)] += f[m] * g
+      return out
+
+  print(my_convolve([1, 2, 3], [0, 1, 0.5]), np.convolve([1, 2, 3], [0, 1, 0.5]))
+`} />
+
+`np.convolve` has three modes. `'full'` (the default) returns every position where the sequences overlap at all, length $N + M - 1$. `'same'` returns the central part with the length of the first input, which for a symmetric kernel keeps the output aligned with the input. `'valid'` returns only positions of complete overlap. For a causal kernel, one that is zero for negative times, take the first $N$ samples of `'full'` instead, as you did yesterday.
+
+<Prove title="Smoothing preserves the spike count" task="Show that if the kernel g has area 1 ($\sum_n g[n]\,\Delta t = 1$), then the convolution of a spike train (spikes of height $1/\Delta t$) with g has the same total area as the spike train: the number of spikes. Why must smoothing kernels be normalised?">
+
+Sum the convolution over all $n$ and swap the order of summation:
+
+$\sum_n (f * g)[n] = \sum_n\sum_m f[m]\,g[n - m] = \sum_m f[m]\sum_n g[n - m] = \left(\sum_m f[m]\right)\left(\sum_k g[k]\right)$, with $k = n - m$.
+
+The area of a sequence sampled every $\Delta t$ is its sum times $\Delta t$. A spike train with height $1/\Delta t$ per spike has area equal to the number of spikes. Convolving with an extra factor of $\Delta t$ (to approximate the integral), the result has area $(\text{spike count}) \times (\text{area of } g) = $ spike count when the kernel's area is 1.
+
+An unnormalised kernel would multiply every estimated rate by its area, so a wider box (with height 1) would report proportionally higher rates. Normalising makes the estimate an average rate in spikes per second whatever the width.
+
+</Prove>
+
+<Step n={3} title="Estimating firing rates" minutes={30} />
+
+<PyCell code={String.raw`
+  rng = np.random.default_rng(2010)
+  dt, n = 0.001, 1000                      # 1 ms bins, 1 s
+  t = np.arange(n) * dt
+  true_rate = 10 + 40 * np.exp(-(t - 0.35) ** 2 / (2 * 0.04 ** 2)) + 25 * np.exp(-(t - 0.7) ** 2 / (2 * 0.1 ** 2))
+  counts = (rng.random((20, n)) < true_rate * dt).astype(float)     # 20 trials of spikes in 1 ms bins
+  psth_raw = counts.mean(axis=0) / dt                                # the raw PSTH, in Hz
+  print("mean spikes per trial:", counts.sum(axis=1).mean(), "  expected:", round(true_rate.sum() * dt, 1), " (the mean of 20 Poisson counts varies by about 1)")
+`} />
+
+<PyCell id="smooth" title="Smooth with Gaussians of different widths" tests={String.raw`
+  import numpy as np
+  def test_kernel():
+      "gaussian_kernel has area 1 and is symmetric"
+      k = gaussian_kernel(0.01)
+      assert abs(k.sum() * dt - 1) < 1e-9 and np.allclose(k, k[::-1])
+
+  def test_mse():
+      "mse holds the error against the true rate for each width"
+      assert len(mse) == len(widths)
+      est = np.convolve(psth_raw, gaussian_kernel(0.02) * dt, mode="same")
+      assert np.isclose(mse[widths.index(0.02)], np.mean((est - true_rate) ** 2))
+
+  def test_best():
+      "the best width is intermediate, neither the narrowest nor the widest"
+      assert 0 < int(np.argmin(mse)) < len(widths) - 1
+`} prompt="Write `gaussian_kernel(w)`, a Gaussian with standard deviation w seconds sampled every dt out to ±4w and normalised to area 1. Smooth `psth_raw` with each width in `widths` (use `np.convolve` with `mode='same'` and multiply the kernel by dt), and record the mean squared error against `true_rate` in `mse`."
+code={String.raw`
+  def gaussian_kernel(w):
+      s = np.arange(-4 * w, 4 * w + dt / 2, dt)
+      k = np.exp(-s ** 2 / (2 * w ** 2))
+      return ...
+
+  widths = [0.002, 0.005, 0.01, 0.02, 0.04, 0.08]
+  mse = []
+  fig, ax = plt.subplots(figsize=(6, 3))
+  ax.plot(t, true_rate, "k--", lw=1, label="true")
+  for w in widths:
+      est = ...
+      mse.append(np.mean((est - true_rate) ** 2))
+      if w in (0.002, 0.02, 0.08):
+          ax.plot(t, est, lw=1.2, label=f"{int(w * 1000)} ms")
+  ax.set_xlabel("time (s)"); ax.set_ylabel("rate (Hz)"); ax.legend(frameon=False, ncol=4); plt.show()
+  print("MSE by width:", dict(zip([int(w * 1000) for w in widths], np.round(mse, 1).tolist())))
+`}
+hint="Normalise so the sum times dt is 1: return k / (k.sum() * dt). The estimate is est = np.convolve(psth_raw, gaussian_kernel(w) * dt, mode='same')."
+solution={String.raw`
+  def gaussian_kernel(w):
+      s = np.arange(-4 * w, 4 * w + dt / 2, dt)
+      k = np.exp(-s ** 2 / (2 * w ** 2))
+      return k / (k.sum() * dt)
+
+  widths = [0.002, 0.005, 0.01, 0.02, 0.04, 0.08]
+  mse = []
+  fig, ax = plt.subplots(figsize=(6, 3))
+  ax.plot(t, true_rate, "k--", lw=1, label="true")
+  for w in widths:
+      est = np.convolve(psth_raw, gaussian_kernel(w) * dt, mode="same")
+      mse.append(np.mean((est - true_rate) ** 2))
+      if w in (0.002, 0.02, 0.08):
+          ax.plot(t, est, lw=1.2, label=f"{int(w * 1000)} ms")
+  ax.set_xlabel("time (s)"); ax.set_ylabel("rate (Hz)"); ax.legend(frameon=False, ncol=4); plt.show()
+  print("MSE by width:", dict(zip([int(w * 1000) for w in widths], np.round(mse, 1).tolist())))
+`} />
+
+A 2 ms kernel follows every chance spike (its error is mostly **variance**); an 80 ms kernel flattens the 40 ms peak (mostly **bias**). The 20 ms kernel is best here. That answers the prediction, but the best width depends on how many trials you have and how fast the rate changes, which in real data you do not know.
+
+<Step n={4} title="Choosing the width honestly" minutes={30} />
+
+You cannot compare with the true rate in a real experiment. But you can split the trials: smooth the average of half of them, and see how well it predicts the raw PSTH of the other half. Because the two halves have independent noise, the expected squared difference is the error against the true rate plus a constant (the noise variance of the held-out half), so the width that minimises it estimates the best width. Shimazaki and Shinomoto (2010), today's paper, derived a way to do this from a single set of trials; splitting is the simplest version of the same idea, and the cross-validation of Week 5 applied to smoothing.
+
+<PyCell id="cv" title="Cross-validate the kernel width" tests={String.raw`
+  import numpy as np
+  def test_cv():
+      "cv_err compares the smoothed even-trial PSTH with the raw odd-trial PSTH"
+      A, B = counts[::2].mean(axis=0) / dt, counts[1::2].mean(axis=0) / dt
+      est = np.convolve(A, gaussian_kernel(0.01) * dt, mode="same")
+      assert np.isclose(cv_err[widths.index(0.01)], np.mean((est - B) ** 2))
+
+  def test_choice():
+      "the cross-validated width is within a factor of 2 of the truly best width"
+      best = widths[int(np.argmin(mse))]
+      assert best / 2 <= width_cv <= best * 2
+`} prompt="Using even trials (`counts[::2]`) to build the estimate and odd trials (`counts[1::2]`) as the test, compute the cross-validated error for each width in `cv_err`, and store the width that minimises it in `width_cv`. Compare it with the truly best width from the previous exercise."
+code={String.raw`
+  psth_A = counts[::2].mean(axis=0) / dt
+  psth_B = counts[1::2].mean(axis=0) / dt
+  cv_err = []
+  for w in widths:
+      ...
+  width_cv = ...
+
+  plt.figure(figsize=(5, 3)); plt.semilogx(np.array(widths) * 1000, cv_err, "o-"); plt.xlabel("kernel width (ms)"); plt.ylabel("cross-validated error"); plt.show()
+  print("cross-validated choice:", int(width_cv * 1000), "ms;  truly best:", int(widths[int(np.argmin(mse))] * 1000), "ms")
+`}
+hint="Inside the loop: est = np.convolve(psth_A, gaussian_kernel(w) * dt, mode='same'); cv_err.append(np.mean((est - psth_B) ** 2)). Then width_cv = widths[int(np.argmin(cv_err))]."
+solution={String.raw`
+  psth_A = counts[::2].mean(axis=0) / dt
+  psth_B = counts[1::2].mean(axis=0) / dt
+  cv_err = []
+  for w in widths:
+      est = np.convolve(psth_A, gaussian_kernel(w) * dt, mode="same")
+      cv_err.append(np.mean((est - psth_B) ** 2))
+  width_cv = widths[int(np.argmin(cv_err))]
+
+  plt.figure(figsize=(5, 3)); plt.semilogx(np.array(widths) * 1000, cv_err, "o-"); plt.xlabel("kernel width (ms)"); plt.ylabel("cross-validated error"); plt.show()
+  print("cross-validated choice:", int(width_cv * 1000), "ms;  truly best:", int(widths[int(np.argmin(mse))] * 1000), "ms")
+`} />
+
+Cross-validation picks 40 ms, a little wider than the true best of 20 ms. That is expected: the estimate was built from only half the trials, and noisier data deserve more smoothing. With the full set you would use a slightly narrower kernel than cross-validation suggests. The method needed nothing but the data, which is the point.
+
+<Bridge title="Convolution everywhere"
+  neuro="Synapses convolve presynaptic spike trains with a postsynaptic current kernel, and membranes convolve that current with an exponential (yesterday), so every neuron is, to first order, a filter of its input spikes. Estimating rates by kernel smoothing is the standard first step in analysing any spiking data."
+  ai="Convolutional networks are built from convolutions with learned kernels (Day 5), and temporal convolutions process audio and other sequences. Smoothing kernels and their bandwidth are also central in kernel density estimation and Gaussian processes (Week 64), with the same bias-variance trade-off.">
+
+Every linear, shift-invariant operation is a convolution, and every smoothing kernel has a width to be chosen from the data.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "$(f * g)[n]$ is...", options: ["$f[n]g[n]$", "$\\sum_m f[m]g[n - m]$", "$f[n] + g[n]$", "$\\sum_m f[m]g[m]$"], answer: 1, explain: "Spread, shift and add." },
+  { q: "The full convolution of lengths N and M has length...", options: ["N", "N + M − 1", "NM", "max(N, M)"], answer: 1, explain: "Every position of partial overlap." },
+  { q: "A linear, shift-invariant system is fully described by...", options: ["Its mean", "Its impulse response", "Its peak", "Its derivative"], answer: 1, explain: "The output is the input convolved with it." },
+  { q: "A smoothing kernel should have area...", options: ["0", "1", "Equal to its width", "Unlimited"], answer: 1, explain: "Then the estimate is in spikes per second." },
+  { q: "A very narrow kernel gives a rate estimate with...", options: ["High bias", "High variance", "No error", "Zero mean"], answer: 1, explain: "It follows chance spikes." },
+  { q: "A causal kernel uses...", options: ["Future spikes only", "Past spikes only", "Both", "Neither"], answer: 1, explain: "As a downstream neuron must." },
+  { q: "Cross-validating the width compares a smoothed estimate from some trials with...", options: ["The same trials", "Held-out trials", "The true rate", "Zero"], answer: 1, explain: "Independent noise makes the comparison honest." },
+]} />
+
+<Flashcards cards={[
+  { front: "Discrete convolution?", back: "$(f * g)[n] = \\sum_m f[m]g[n - m]$; continuous: $\\int f(s)g(t - s)ds$." },
+  { front: "Impulse response?", back: "A linear, shift-invariant system's output to a single impulse; the output for any input is the input convolved with it." },
+  { front: "np.convolve modes?", back: "'full' (length N + M − 1), 'same' (length N, centred), 'valid' (complete overlap only)." },
+  { front: "Bias-variance in kernel width?", back: "Narrow: noisy (variance). Wide: blurred (bias). Best in between; depends on trials and on how fast the rate changes." },
+  { front: "Choosing the width?", back: "Cross-validate: smooth half the trials, compare with the raw PSTH of the other half, pick the smallest error." },
+]} />
+
+<Predict revisit question="Which kernel width gives the estimate closest to the true rate?" />
+
+<Key title="Before you go">
+<ul>
+<li>Convolution spreads a copy of the kernel at every input sample and adds them up.</li>
+<li>Linear, shift-invariant systems are convolutions with their impulse response.</li>
+<li>Smoothing spike trains with a normalised kernel estimates the firing rate; the width trades bias against variance.</li>
+<li>Choose the width by cross-validation over trials, not by eye.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Shimazaki and Shinomoto (2010), <em>Kernel bandwidth optimization in spike rate estimation</em>.</li>
+<li>Dayan and Abbott, <em>Theoretical Neuroscience</em>, Chapter 1.2: spike trains and firing rates, including window functions.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="The brain does not have repeated trials to average over: a downstream neuron must estimate its inputs' rates from one spike train, using only the past. What kernel would you give it, and what would it get wrong?" />

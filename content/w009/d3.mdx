@@ -1,0 +1,257 @@
+export const meta = {
+  title: "Fixed points and stability of nonlinear circuits",
+  intro: "A nonlinear circuit can have several resting states, or none, and can switch between steady firing and rhythmic oscillation as its input changes. To understand it you find its fixed points, where every rate stops changing, and linearise there with yesterday's Jacobian. Today you find fixed points with Newton's method, classify them, read a phase plane through its nullclines, and meet one of the most striking predictions in circuit neuroscience: in a strongly coupled excitatory-inhibitory network, exciting the inhibitory cells makes them fire less.",
+  goals: [
+    "Find the fixed points of a nonlinear system with Newton's method",
+    "Classify fixed points by the eigenvalues of the Jacobian",
+    "Read nullclines and fixed points in a phase plane, and recognise bistability",
+    "Derive the paradoxical response of an inhibition-stabilised network",
+  ],
+  plan: [
+    { label: "Predict and fixed points", minutes: 20 },
+    { label: "Newton's method", minutes: 30 },
+    { label: "Phase planes and bistability", minutes: 30 },
+    { label: "The paradoxical effect", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "tsodyks-1997",
+};
+
+<Predict question="In a cortical circuit, you use optogenetics to give the inhibitory interneurons extra excitatory drive. Once the circuit settles, will the interneurons fire more, fire less, or could it go either way depending on the circuit?" />
+
+<Step n={1} title="Fixed points" minutes={20} />
+
+For a system $\dot{\mathbf{x}} = F(\mathbf{x})$, a **fixed point** $\mathbf{x}^*$ satisfies $F(\mathbf{x}^*) = \mathbf{0}$: if the system starts there, it stays. Whether it returns after a small push depends on the Jacobian $J = \partial F/\partial\mathbf{x}$ at $\mathbf{x}^*$ (Day 2). If every eigenvalue of $J$ has negative real part, small perturbations decay and the fixed point is **stable**; if any has positive real part it is **unstable**. A theorem (Hartman-Grobman) makes this precise: unless an eigenvalue has zero real part, the nonlinear system near $\mathbf{x}^*$ behaves like its linearisation. Everything from Week 6 now applies locally: nodes, spirals and saddles.
+
+The Wilson-Cowan circuit of Week 6, with its sigmoids put back in, is
+
+$$
+\tau_E\dot{E} = -E + S(w_{EE}E - w_{EI}I + h_E), \qquad \tau_I\dot{I} = -I + S(w_{IE}E - w_{II}I + h_I)
+$$
+
+where $S$ is a sigmoid and $h_E$, $h_I$ are external drives.
+
+<Step n={2} title="Newton's method" minutes={30} />
+
+To solve $F(\mathbf{x}) = \mathbf{0}$, start with a guess and replace $F$ by its linearisation: $F(\mathbf{x} + \boldsymbol\delta) \approx F(\mathbf{x}) + J\boldsymbol\delta = \mathbf{0}$. Solving for the step gives **Newton's method**:
+
+$$
+\mathbf{x} \leftarrow \mathbf{x} - J(\mathbf{x})^{-1}F(\mathbf{x})
+$$
+
+(computed with `np.linalg.solve`, never by inverting). Near a solution, Newton's method roughly doubles the number of correct digits each step. Far from one it can wander, so for finding all fixed points the usual approach is to start it from a grid of guesses and keep the distinct answers.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  def S(x): return 1 / (1 + np.exp(-(x - 4)))
+  wEE, wEI, wIE, wII, hE, hI, tauI = 18.0, 10.0, 10.0, 2.0, 0.0, 0.0, 2.0
+  def F(z):
+      E, I = z
+      return np.array([-E + S(wEE * E - wEI * I + hE), (-I + S(wIE * E - wII * I + hI)) / tauI])
+  def jacobian(z, h=1e-6):
+      J = np.zeros((2, 2))
+      for j in range(2):
+          e = np.zeros(2); e[j] = h
+          J[:, j] = (F(z + e) - F(z - e)) / (2 * h)
+      return J
+  print(F(np.array([0.5, 0.5])))
+`} />
+
+<PyCell id="newton" title="Find and classify every fixed point" tests={String.raw`
+  import numpy as np
+  def test_newton():
+      "newton converges to a point where F is zero"
+      z = newton(np.array([0.9, 0.9]))
+      assert np.linalg.norm(F(z)) < 1e-10
+
+  def test_count():
+      "there are five distinct fixed points in the unit square"
+      assert len(fixed_points) == 5
+      for z in fixed_points:
+          assert np.linalg.norm(F(z)) < 1e-9
+
+  def test_classes():
+      "two are stable, two are saddles, and one is an unstable node"
+      kinds = sorted(classify(z) for z in fixed_points)
+      assert kinds.count("stable") == 2 and kinds.count("saddle") == 2 and kinds.count("unstable") == 1
+`} prompt="Write `newton(z, steps=50)`, which repeats the Newton step using `jacobian`. Run it from a 6 by 6 grid of starts in the unit square, keeping each distinct answer (within 1e-6 of none found so far) where F is below 1e-10, in `fixed_points`. Then write `classify(z)` that returns 'stable', 'saddle' or 'unstable' from the eigenvalues of the Jacobian."
+code={String.raw`
+  def newton(z, steps=50):
+      z = z.astype(float).copy()
+      for _ in range(steps):
+          ...
+      return z
+
+  fixed_points = []
+  for E0 in np.linspace(0, 1, 6):
+      for I0 in np.linspace(0, 1, 6):
+          z = newton(np.array([E0, I0]))
+          ...
+
+  def classify(z):
+      re = np.linalg.eigvals(jacobian(z)).real
+      ...
+
+  for z in sorted(fixed_points, key=lambda q: q[0]):
+      print(z.round(4), classify(z), np.linalg.eigvals(jacobian(z)).round(3))
+`}
+hint="Newton step: z = z - np.linalg.solve(jacobian(z), F(z)). Keep z if np.linalg.norm(F(z)) < 1e-10 and all(np.linalg.norm(z - q) > 1e-6 for q in fixed_points). classify: return 'stable' if np.all(re < 0), 'saddle' if re.min() < 0 < re.max(), else 'unstable'."
+solution={String.raw`
+  def newton(z, steps=50):
+      z = z.astype(float).copy()
+      for _ in range(steps):
+          z = z - np.linalg.solve(jacobian(z), F(z))
+      return z
+
+  fixed_points = []
+  for E0 in np.linspace(0, 1, 6):
+      for I0 in np.linspace(0, 1, 6):
+          z = newton(np.array([E0, I0]))
+          if np.linalg.norm(F(z)) < 1e-10 and all(np.linalg.norm(z - q) > 1e-6 for q in fixed_points):
+              fixed_points.append(z)
+
+  def classify(z):
+      re = np.linalg.eigvals(jacobian(z)).real
+      if np.all(re < 0):
+          return "stable"
+      if re.min() < 0 < re.max():
+          return "saddle"
+      return "unstable"
+
+  for z in sorted(fixed_points, key=lambda q: q[0]):
+      print(z.round(4), classify(z), np.linalg.eigvals(jacobian(z)).round(3))
+`} />
+
+There are two stable states, one with almost no activity and one with high activity, separated by saddles and an unstable point. The circuit is **bistable**: a brief input can flip it from the low state to the high one, and it stays there after the input ends. That is a memory, and bistable circuits like this are one proposed basis of persistent activity in working memory (Week 46).
+
+<Step n={3} title="Phase planes and bistability" minutes={30} />
+
+In two dimensions you can see everything. The **nullclines** are the curves where one variable stops changing: $\dot{E} = 0$ and $\dot{I} = 0$. Fixed points are where they cross. Away from the nullclines the flow is fixed in sign, so the nullclines divide the plane into regions where E and I each rise or fall.
+
+<Figure caption="Phase plane of the nonlinear E-I circuit. Change recurrent excitation and the drive to E, and watch fixed points appear, merge and change stability." credit="Interactive figure by Engram.">
+  <NullclinePlane />
+</Figure>
+
+Try two experiments in the figure. First set $w_{EE}$ near 18 and the drive near 0: five crossings, the bistable circuit you just found. Then lower $w_{EE}$ to 12 and raise the drive from 0 to 3: a single fixed point that is a stable spiral at low drive becomes an unstable spiral, and trajectories settle onto a closed loop instead, a sustained **oscillation**. The first change, in which fixed points collide and vanish in pairs, is a saddle-node bifurcation; the second, in which a complex pair of eigenvalues crosses the imaginary axis, is a Hopf bifurcation, Week 6's E-I story in its full nonlinear form.
+
+<Video id="GCpQmh45crM" title="Phase analysis of the Wilson-Cowan E-I model" by="Neuromatch Academy" note="Neuromatch's tutorial video on nullclines, fixed points and their stability in exactly this circuit." />
+
+<Step n={4} title="The paradoxical effect" minutes={25} />
+
+Consider a simpler circuit with threshold-linear neurons, both firing, so their steady rates satisfy $\mathbf{r} = W\mathbf{r} + \mathbf{h}$ with
+
+$$
+W = \begin{pmatrix} w_{EE} & -w_{EI} \\ w_{IE} & -w_{II} \end{pmatrix}, \qquad \mathbf{r} = (I - W)^{-1}\mathbf{h}
+$$
+
+If $w_{EE} \gt 1$, the excitatory population on its own would be unstable: its recurrent excitation alone exceeds its leak. The circuit can still be stable overall if inhibition is strong enough. Such a circuit is called **inhibition stabilised**. Tsodyks, Skaggs, Sejnowski and McNaughton (1997), today's paper, showed that it responds to extra drive onto its inhibitory cells in a surprising way.
+
+<PyCell id="isn" title="Drive the inhibitory cells" tests={String.raw`
+  import numpy as np
+  def test_rates():
+      "steady_rates solves r = W r + h"
+      W = J_lin(1.0)
+      r = steady_rates(W, np.array([3.0, 1.0]))
+      assert np.allclose(r, W @ r + np.array([3.0, 1.0]))
+
+  def test_stable():
+      "both circuits are stable: every eigenvalue of W - I has negative real part"
+      for w in [0.5, 2.0]:
+          assert np.all(np.linalg.eigvals(J_lin(w) - np.eye(2)).real < 0)
+
+  def test_paradox():
+      "extra drive to I raises I's rate in the weak circuit and lowers it in the inhibition-stabilised one"
+      assert dI_weak > 0 and dI_isn < 0
+`} prompt="Write `steady_rates(W, h)`. For a weakly coupled circuit ($w_{EE}$ = 0.5) and an inhibition-stabilised one ($w_{EE}$ = 2), compute the change in the inhibitory rate when the drive to the inhibitory cells rises by 0.5, storing the changes in `dI_weak` and `dI_isn`. Check the rates stay positive, so the threshold-linear neurons really are in their linear range."
+code={String.raw`
+  def J_lin(wEE, wEI=2.0, wIE=2.0, wII=0.5):
+      return np.array([[wEE, -wEI], [wIE, -wII]])
+
+  def steady_rates(W, h):
+      return ...
+
+  h0 = np.array([3.0, 1.0])
+  extra = np.array([0.0, 0.5])
+  dI_weak = ...
+  dI_isn = ...
+  for w in [0.5, 2.0]:
+      print(f"w_EE = {w}: rates before {steady_rates(J_lin(w), h0).round(3)}, after {steady_rates(J_lin(w), h0 + extra).round(3)}")
+  print("change in inhibitory rate: weak", round(dI_weak, 3), " inhibition stabilised", round(dI_isn, 3))
+`}
+hint="steady_rates returns np.linalg.solve(np.eye(2) - W, h). Each change is steady_rates(J_lin(w), h0 + extra)[1] - steady_rates(J_lin(w), h0)[1]."
+solution={String.raw`
+  def J_lin(wEE, wEI=2.0, wIE=2.0, wII=0.5):
+      return np.array([[wEE, -wEI], [wIE, -wII]])
+
+  def steady_rates(W, h):
+      return np.linalg.solve(np.eye(2) - W, h)
+
+  h0 = np.array([3.0, 1.0])
+  extra = np.array([0.0, 0.5])
+  dI_weak = steady_rates(J_lin(0.5), h0 + extra)[1] - steady_rates(J_lin(0.5), h0)[1]
+  dI_isn = steady_rates(J_lin(2.0), h0 + extra)[1] - steady_rates(J_lin(2.0), h0)[1]
+  for w in [0.5, 2.0]:
+      print(f"w_EE = {w}: rates before {steady_rates(J_lin(w), h0).round(3)}, after {steady_rates(J_lin(w), h0 + extra).round(3)}")
+  print("change in inhibitory rate: weak", round(dI_weak, 3), " inhibition stabilised", round(dI_isn, 3))
+`} />
+
+In the weak circuit, extra drive to the inhibitory cells makes them fire more, as you would expect. In the inhibition-stabilised circuit they fire *less*. That answers the prediction: it depends on the circuit, and the direction tells you which kind of circuit you have.
+
+<Prove title="Why the response is paradoxical" task="Using $\mathbf{r} = (I - W)^{-1}\mathbf{h}$, show that $\partial r_I/\partial h_I = (1 - w_{EE})/\Delta$, where $\Delta = \det(I - W)$, and explain why it is negative exactly when $w_{EE} \gt 1$ in a stable circuit.">
+
+$I - W = \begin{pmatrix} 1 - w_{EE} & w_{EI} \\ -w_{IE} & 1 + w_{II} \end{pmatrix}$, with determinant $\Delta = (1 - w_{EE})(1 + w_{II}) + w_{EI}w_{IE}$.
+
+The 2 by 2 inverse (Week 5) is $\frac{1}{\Delta}\begin{pmatrix} 1 + w_{II} & -w_{EI} \\ w_{IE} & 1 - w_{EE} \end{pmatrix}$, so $r_I = \frac{1}{\Delta}(w_{IE}h_E + (1 - w_{EE})h_I)$ and $\partial r_I/\partial h_I = (1 - w_{EE})/\Delta$.
+
+The circuit's dynamics are governed by $W - I$, whose determinant equals $\det(I - W) = \Delta$ for a 2 by 2 matrix. Stability needs a positive determinant (Week 6, Day 2), so $\Delta \gt 0$. The sign of the response is then the sign of $1 - w_{EE}$: negative exactly when the excitatory subnetwork alone would be unstable.
+
+The intuition: the extra drive raises inhibition, which lowers excitation, which removes so much of the excitatory input to the inhibitory cells that their rate falls below where it started. Experiments using optogenetics have found this signature in mouse visual cortex, suggesting that cortex operates as an inhibition-stabilised network (Week 107).
+
+</Prove>
+
+<Bridge title="Multiple states and paradoxes"
+  neuro="Bistable and multistable circuits are candidate substrates for working memory and decisions (Weeks 46 and 114). The paradoxical response to driving inhibition is now a standard experimental test of whether a circuit is inhibition stabilised, and it has been reported in several cortical areas."
+  ai="Fixed points of recurrent networks are how they store information: a trained network performing a memory task often has one stable state per memory, with saddles between them (Sussillo and Barak, Week 6). Newton's method, and its approximations, are also the basis of second-order optimisers (tomorrow).">
+
+To understand a nonlinear circuit, find its fixed points, linearise at each, and track how they change as you turn the inputs.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A fixed point of $\\dot{\\mathbf{x}} = F(\\mathbf{x})$ satisfies...", options: ["$F(\\mathbf{x}) = \\mathbf{x}$", "$F(\\mathbf{x}) = \\mathbf{0}$", "$J = 0$", "$\\mathbf{x} = \\mathbf{0}$"], answer: 1, explain: "Nothing changes there." },
+  { q: "A fixed point is stable when the Jacobian's eigenvalues all have...", options: ["Positive real part", "Negative real part", "Zero imaginary part", "Magnitude 1"], answer: 1, explain: "Perturbations decay." },
+  { q: "Newton's step for $F(\\mathbf{x}) = \\mathbf{0}$ is...", options: ["$\\mathbf{x} - F(\\mathbf{x})$", "$\\mathbf{x} - J^{-1}F(\\mathbf{x})$", "$\\mathbf{x} - J F(\\mathbf{x})$", "$\\mathbf{x} + J^{-1}$"], answer: 1, explain: "Solve the linearised equation." },
+  { q: "Nullclines are curves where...", options: ["Every variable is zero", "One variable's rate of change is zero", "The Jacobian is singular", "Trajectories end"], answer: 1, explain: "Fixed points lie where they cross." },
+  { q: "A bistable circuit has...", options: ["No fixed points", "Two stable fixed points", "Only saddles", "One unstable point"], answer: 1, explain: "It can hold one of two states." },
+  { q: "A Hopf bifurcation happens when...", options: ["Two fixed points collide", "A complex pair of eigenvalues crosses the imaginary axis", "The determinant becomes negative", "Inputs are removed"], answer: 1, explain: "A stable spiral becomes an oscillation." },
+  { q: "In an inhibition-stabilised network, extra drive to inhibitory cells...", options: ["Raises their rate", "Lowers their rate at steady state", "Has no effect", "Silences excitation only"], answer: 1, explain: "The paradoxical effect." },
+]} />
+
+<Flashcards cards={[
+  { front: "Stability of a nonlinear fixed point?", back: "Eigenvalues of the Jacobian there: all negative real parts means stable (Hartman-Grobman, if none is zero)." },
+  { front: "Newton's method?", back: "$\\mathbf{x} \\leftarrow \\mathbf{x} - J(\\mathbf{x})^{-1}F(\\mathbf{x})$; quadratic convergence near a root." },
+  { front: "Nullclines?", back: "Curves where one variable stops changing; fixed points are their crossings." },
+  { front: "Saddle-node and Hopf bifurcations?", back: "Saddle-node: fixed points appear or vanish in pairs. Hopf: a complex eigenvalue pair crosses the imaginary axis and an oscillation begins." },
+  { front: "Inhibition-stabilised network?", back: "$w_{EE} \\gt 1$ but stable thanks to inhibition; $\\partial r_I/\\partial h_I = (1 - w_{EE})/\\Delta \\lt 0$: the paradoxical effect." },
+]} />
+
+<Predict revisit question="Extra drive to inhibitory cells: do they fire more, less, or does it depend?" />
+
+<Key title="Before you go">
+<ul>
+<li>Fixed points are where the dynamics stop; their stability comes from the Jacobian's eigenvalues.</li>
+<li>Newton's method finds fixed points by repeatedly solving the linearisation.</li>
+<li>Nullclines organise a phase plane; their crossings can show bistability, and bifurcations change it.</li>
+<li>In inhibition-stabilised circuits, driving inhibition lowers inhibitory firing.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Tsodyks, Skaggs, Sejnowski and McNaughton (1997), <em>Paradoxical effects of external modulation of inhibitory interneurons</em>.</li>
+<li>Ozeki, Finn, Schaffer, Miller and Ferster (2009), <em>Inhibitory stabilization of the cortical network underlies visual surround suppression</em>, Neuron: evidence for the regime in cat V1.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Design an experiment to test whether a cortical circuit is inhibition stabilised. What would you manipulate, what would you measure, and what result would count against it?" />

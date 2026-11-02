@@ -1,0 +1,279 @@
+export const meta = {
+  title: "Two-dimensional convolution: receptive fields and convolutional networks",
+  intro: "Slide a small template over an image and, at every position, take its dot product with the patch beneath: the result is a map of how strongly each location matches. That is two-dimensional convolution, and it is also a model of a whole sheet of neurons with the same receptive field placed at every point in visual space. Centre-surround kernels model the retina, oriented Gabor kernels model V1 simple cells, and pooling over position models complex cells. Fukushima stacked these operations in 1980, and modern convolutional networks are their direct descendants.",
+  goals: [
+    "Implement two-dimensional convolution (cross-correlation) and explain output size, padding and stride",
+    "Build centre-surround and Gabor kernels and relate them to retinal and V1 receptive fields",
+    "Use a bank of oriented filters to measure the orientation of image features",
+    "Show that convolution is translation equivariant and pooling gives approximate invariance",
+  ],
+  plan: [
+    { label: "Predict and convolution in two dimensions", minutes: 25 },
+    { label: "Implementing it", minutes: 25 },
+    { label: "Receptive fields as kernels", minutes: 30 },
+    { label: "Equivariance, pooling and convolutional networks", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "fukushima-1980",
+};
+
+<Predict question="A model V1 simple cell responds to a bar at its preferred orientation inside its receptive field. You move the bar three pixels to the side. Will the cell's response stay about the same, or can it change completely, even reversing sign?" />
+
+<Step n={1} title="Convolution in two dimensions" minutes={25} />
+
+For an image $X$ and a small kernel $K$ of size $h \times w$, the operation used in image processing and in neural networks is
+
+$$
+Y[i, j] = \sum_{a=0}^{h-1}\sum_{b=0}^{w-1} K[a, b]\,X[i + a, j + b]
+$$
+
+Strictly this is **cross-correlation**: true convolution flips the kernel first, $K[-a, -b]$, as in yesterday's one-dimensional formula. For symmetric kernels the two agree, and since networks learn their kernels the flip makes no difference, so deep learning calls this convolution anyway.
+
+Each output $Y[i, j]$ is the dot product (Week 4) of the kernel with one patch of the image: exactly a linear model neuron whose receptive field is $K$, placed at position $(i, j)$. The output map is the response of a whole sheet of identical neurons tiling visual space.
+
+<Figure caption="An image convolved with three receptive-field kernels. Pick a kernel and, for oriented ones, rotate it." credit="Interactive figure by Engram.">
+  <Conv2d />
+</Figure>
+
+<Video id="8rrHTtUzyZA" title="Convolutions in image processing" by="3Blue1Brown (Grant Sanderson), for MIT 18.S191" note="Blurring, sharpening and edge detection as kernels slid over an image, with clear animations of what each output pixel computes." />
+
+<Step n={2} title="Implementing it" minutes={25} />
+
+With no padding (**valid** mode), an $H \times W$ image and an $h \times w$ kernel give an output of size $(H - h + 1) \times (W - w + 1)$. Padding the image with zeros around its border keeps the output the same size as the input (**same** mode). A **stride** of $s$ evaluates only every $s$th position, shrinking the output by a factor of $s$ in each direction, a common way to reduce resolution in deep networks.
+
+<PyCell id="conv2d" title="Two-dimensional cross-correlation" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "valid output has size (H - h + 1, W - w + 1)"
+      assert corr2d(np.zeros((10, 12)), np.zeros((3, 5))).shape == (8, 8)
+
+  def test_values():
+      "each output is the sum of kernel times patch"
+      r = np.random.default_rng(0)
+      X, K = r.normal(size=(7, 6)), r.normal(size=(3, 2))
+      Y = corr2d(X, K)
+      assert np.isclose(Y[2, 3], np.sum(K * X[2:5, 3:5]))
+
+  def test_identity():
+      "a kernel with a single 1 at its centre copies the image (shrunk by the border)"
+      X = np.arange(25.0).reshape(5, 5)
+      K = np.zeros((3, 3)); K[1, 1] = 1
+      assert np.allclose(corr2d(X, K), X[1:4, 1:4])
+`} prompt="Write `corr2d(img, k)` for valid mode with two loops over output positions, each computing the sum of the kernel times the patch beneath it. Test it with a small edge detector on an image of a bright square."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def corr2d(img, k):
+      H, W = img.shape
+      h, w = k.shape
+      out = np.zeros((H - h + 1, W - w + 1))
+      for i in range(out.shape[0]):
+          for j in range(out.shape[1]):
+              out[i, j] = ...
+      return out
+
+  square = np.zeros((20, 20)); square[6:14, 6:14] = 1.0
+  edge = np.array([[-1.0, 0.0, 1.0]] * 3)           # responds to left-to-right brightness increases
+  fig, ax = plt.subplots(1, 2, figsize=(6, 3))
+  ax[0].imshow(square, cmap="gray"); ax[0].set_title("image")
+  ax[1].imshow(corr2d(square, edge), cmap="RdBu_r"); ax[1].set_title("vertical-edge response")
+  plt.tight_layout(); plt.show()
+`}
+hint="out[i, j] = np.sum(img[i:i + h, j:j + w] * k)"
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def corr2d(img, k):
+      H, W = img.shape
+      h, w = k.shape
+      out = np.zeros((H - h + 1, W - w + 1))
+      for i in range(out.shape[0]):
+          for j in range(out.shape[1]):
+              out[i, j] = np.sum(img[i:i + h, j:j + w] * k)
+      return out
+
+  square = np.zeros((20, 20)); square[6:14, 6:14] = 1.0
+  edge = np.array([[-1.0, 0.0, 1.0]] * 3)           # responds to left-to-right brightness increases
+  fig, ax = plt.subplots(1, 2, figsize=(6, 3))
+  ax[0].imshow(square, cmap="gray"); ax[0].set_title("image")
+  ax[1].imshow(corr2d(square, edge), cmap="RdBu_r"); ax[1].set_title("vertical-edge response")
+  plt.tight_layout(); plt.show()
+`} />
+
+The edge detector responds positively at the square's left edge, negatively at its right edge, and not at all inside or outside it, because its weights sum to zero. Kernels with zero mean ignore uniform brightness, just as retinal and cortical neurons largely ignore the overall light level.
+
+<Step n={3} title="Receptive fields as kernels" minutes={30} />
+
+Two kernels model the early visual system remarkably well.
+
+- **Difference of Gaussians** (centre-surround): a narrow positive Gaussian minus a broad negative one. Like retinal ganglion cells and LGN neurons, it responds to spots and edges but not to uniform fields.
+- **Gabor**: a sinusoidal grating under a Gaussian window, $G(x, y) = \exp\left(-\frac{x'^2 + y'^2}{2\sigma^2}\right)\cos\left(\frac{2\pi y'}{\ell}\right)$ in coordinates $(x', y')$ rotated to the preferred orientation. It matches the receptive fields of V1 simple cells, which Hubel and Wiesel found respond to bars and edges at particular orientations (Week 4).
+
+<PyCell id="gabor" title="An orientation-tuned filter bank" tests={String.raw`
+  import numpy as np
+  def test_kernel():
+      "gabor returns a zero-mean 15 by 15 kernel"
+      g = gabor(30)
+      assert g.shape == (15, 15) and abs(g.mean()) < 1e-12
+
+  def test_energy():
+      "energy[b][o] is the summed squared response of filter o to bar b"
+      assert np.isclose(energy[1][2], np.sum(corr2d(bar(oris[1]), gabor(oris[2])) ** 2))
+
+  def test_choice():
+      "every bar is matched best by the filter of its own orientation"
+      assert best == oris
+`} prompt="Using the Gabor and bar functions provided, compute for each bar orientation in `oris` the response energy (sum of squared outputs of `corr2d`) of each filter orientation, storing a 4 by 4 list in `energy`. Store the best-matching filter orientation for each bar in `best`, and plot one row as an orientation tuning curve."
+code={String.raw`
+  def gabor(theta_deg, size=15, sigma=3.0, wavelength=6.0):
+      th = np.radians(theta_deg); r = size // 2
+      y, x = np.mgrid[-r:r + 1, -r:r + 1]; y = -y
+      across = -x * np.sin(th) + y * np.cos(th)          # distance across the preferred orientation
+      along = x * np.cos(th) + y * np.sin(th)
+      g = np.exp(-(across ** 2 + along ** 2) / (2 * sigma ** 2)) * np.cos(2 * np.pi * across / wavelength)
+      return g - g.mean()
+
+  def bar(theta_deg, N=40, width=1.5):
+      th = np.radians(theta_deg); y, x = np.mgrid[0:N, 0:N]; x = x - N / 2; y = -(y - N / 2)
+      across = -x * np.sin(th) + y * np.cos(th); along = x * np.cos(th) + y * np.sin(th)
+      return ((np.abs(across) < width) & (np.abs(along) < 14)).astype(float)
+
+  oris = [0, 45, 90, 135]
+  energy = ...
+  best = ...
+
+  fig, ax = plt.subplots(1, 5, figsize=(10, 2.2))
+  for a, o in zip(ax[:4], oris):
+      a.imshow(gabor(o), cmap="RdBu_r"); a.set_title(f"{o}°"); a.axis("off")
+  ax[4].plot(oris, energy[1], "o-"); ax[4].set_title("response to a 45° bar"); ax[4].set_xticks(oris)
+  plt.tight_layout(); plt.show()
+  print("best filter for each bar:", best)
+`}
+hint="energy = [[np.sum(corr2d(bar(b), gabor(o)) ** 2) for o in oris] for b in oris]. best = [oris[int(np.argmax(row))] for row in energy]."
+solution={String.raw`
+  def gabor(theta_deg, size=15, sigma=3.0, wavelength=6.0):
+      th = np.radians(theta_deg); r = size // 2
+      y, x = np.mgrid[-r:r + 1, -r:r + 1]; y = -y
+      across = -x * np.sin(th) + y * np.cos(th)          # distance across the preferred orientation
+      along = x * np.cos(th) + y * np.sin(th)
+      g = np.exp(-(across ** 2 + along ** 2) / (2 * sigma ** 2)) * np.cos(2 * np.pi * across / wavelength)
+      return g - g.mean()
+
+  def bar(theta_deg, N=40, width=1.5):
+      th = np.radians(theta_deg); y, x = np.mgrid[0:N, 0:N]; x = x - N / 2; y = -(y - N / 2)
+      across = -x * np.sin(th) + y * np.cos(th); along = x * np.cos(th) + y * np.sin(th)
+      return ((np.abs(across) < width) & (np.abs(along) < 14)).astype(float)
+
+  oris = [0, 45, 90, 135]
+  energy = [[np.sum(corr2d(bar(b), gabor(o)) ** 2) for o in oris] for b in oris]
+  best = [oris[int(np.argmax(row))] for row in energy]
+
+  fig, ax = plt.subplots(1, 5, figsize=(10, 2.2))
+  for a, o in zip(ax[:4], oris):
+      a.imshow(gabor(o), cmap="RdBu_r"); a.set_title(f"{o}°"); a.axis("off")
+  ax[4].plot(oris, energy[1], "o-"); ax[4].set_title("response to a 45° bar"); ax[4].set_xticks(oris)
+  plt.tight_layout(); plt.show()
+  print("best filter for each bar:", best)
+`} />
+
+Each bar drives its own orientation's filter 20 to 35 times more strongly than the filters 45° away, and nearly 100 times more than the perpendicular one: a population of four model simple cells encodes orientation, and their energies across orientations form a tuning curve like those of Week 4.
+
+<Step n={4} title="Equivariance, pooling and convolutional networks" minutes={25} />
+
+Because the same kernel is applied at every position, shifting the image shifts the output map by the same amount: convolution is **translation equivariant**. A single output unit at a fixed position, though, sees a different part of the image after the shift, and its response can change completely. Taking the **maximum** over a small neighbourhood of positions (max pooling) gives a response that barely changes for small shifts: approximate **invariance**. Hubel and Wiesel's complex cells, which respond to an oriented bar anywhere within their receptive field, behave this way.
+
+<PyCell id="pool" title="Equivariance and pooling" tests={String.raw`
+  import numpy as np
+  def test_equivariant():
+      "the response map of the shifted image is the original map shifted by 3 columns"
+      assert np.allclose(R_orig[:, :20], R_shift[:, 3:23])
+
+  def test_single_unit():
+      "a single unit at a fixed position changes by more than 5 when the bar moves"
+      assert abs(R_orig[12, 12] - R_shift[12, 12]) > 5
+
+  def test_pooled():
+      "the max-pooled response over the central 8 by 8 window is unchanged by the shift"
+      assert np.isclose(pooled_orig, pooled_shift, rtol=0.05)
+`} prompt="Shift a 45° bar image three pixels to the right with `np.roll` and convolve both with the 45° Gabor, giving `R_orig` and `R_shift`. Compare a single unit at position (12, 12) before and after, and the maximum over the window of rows and columns 8 to 15 (`pooled_orig`, `pooled_shift`)."
+code={String.raw`
+  img = bar(45)
+  shifted = np.roll(img, 3, axis=1)
+  R_orig = ...
+  R_shift = ...
+  pooled_orig = ...
+  pooled_shift = ...
+  print("single unit:", R_orig[12, 12].round(2), "->", R_shift[12, 12].round(2), "   pooled:", pooled_orig.round(2), "->", pooled_shift.round(2))
+`}
+hint="R_orig = corr2d(img, gabor(45)) and R_shift = corr2d(shifted, gabor(45)). pooled_orig = R_orig[8:16, 8:16].max(), and the same for R_shift."
+solution={String.raw`
+  img = bar(45)
+  shifted = np.roll(img, 3, axis=1)
+  R_orig = corr2d(img, gabor(45))
+  R_shift = corr2d(shifted, gabor(45))
+  pooled_orig = R_orig[8:16, 8:16].max()
+  pooled_shift = R_shift[8:16, 8:16].max()
+  print("single unit:", R_orig[12, 12].round(2), "->", R_shift[12, 12].round(2), "   pooled:", pooled_orig.round(2), "->", pooled_shift.round(2))
+`} />
+
+The simple-cell unit at a fixed position flips from positive to strongly negative when the bar moves three pixels, because the bar now falls on an inhibitory stripe of its receptive field. That answers the prediction. The pooled, complex-cell-like response does not change at all.
+
+This is the architecture Fukushima proposed in 1980 (today's paper): layers of **S-cells** that convolve with shared kernels, alternating with layers of **C-cells** that pool over position, repeated so that each stage combines the features of the last over a larger region with more tolerance to position. A modern convolutional network has the same structure, convolution, then a nonlinearity such as ReLU, then pooling, with one difference that changed everything: its kernels are learned by backpropagation (Week 8) rather than designed or learned locally. Trained on object recognition, such networks turn out to develop Gabor-like kernels in their first layer and to predict neural responses along the ventral visual stream (Weeks 84 and 133).
+
+<Bridge title="From receptive fields to convolutional networks"
+  neuro="Retinal ganglion cells tile the visual field with centre-surround receptive fields, and V1 contains simple cells with Gabor-like fields at every orientation and position, followed by complex cells that pool them. Weight sharing is only an approximation in the brain: neighbouring neurons have similar but not identical receptive fields, and the brain has no mechanism for copying weights across space."
+  ai="Convolutional networks build in translation equivariance by weight sharing, which reduces the number of parameters enormously and is a large part of why they learn from limited data. Vision transformers drop this assumption and learn it from much larger datasets (Week 85), a modern version of the debate over how much structure should be built in.">
+
+A kernel slid over an image is a sheet of identical neurons; stacking such sheets with pooling gives the visual system's hierarchy and the convolutional network.
+
+</Bridge>
+
+<Prove title="Convolution is translation equivariant" task="Let $X'[i, j] = X[i, j - d]$ be the image shifted right by d columns (ignoring the border). Show that $(X' \star K)[i, j] = (X \star K)[i, j - d]$, where $\star$ is today's cross-correlation.">
+
+By definition, $(X' \star K)[i, j] = \sum_{a, b}K[a, b]\,X'[i + a, j + b] = \sum_{a, b}K[a, b]\,X[i + a, j + b - d]$.
+
+The right-hand side is the definition of $(X \star K)$ evaluated at position $(i, j - d)$, since replacing $j$ with $j - d$ in $\sum_{a, b}K[a, b]X[i + a, j + b]$ gives exactly that sum.
+
+So shifting the input shifts the output by the same amount: the operation commutes with translation. The proof uses only the fact that the same $K$ is used at every position, which is why weight sharing is what makes convolutional layers equivariant.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "Each output of a 2D convolution is...", options: ["The image's mean", "The dot product of the kernel with one image patch", "A pixel of the kernel", "The maximum pixel"], answer: 1, explain: "A linear neuron at that position." },
+  { q: "A 32 by 32 image and a 5 by 5 kernel in valid mode give an output of...", options: ["32 by 32", "28 by 28", "27 by 27", "5 by 5"], answer: 1, explain: "32 − 5 + 1." },
+  { q: "What deep learning calls convolution is, strictly...", options: ["Convolution", "Cross-correlation (no kernel flip)", "Fourier transform", "Pooling"], answer: 1, explain: "The flip does not matter for learned kernels." },
+  { q: "A zero-mean kernel's response to a uniform image is...", options: ["Large", "Zero", "Negative", "Equal to the image"], answer: 1, explain: "Positive and negative weights cancel." },
+  { q: "V1 simple cell receptive fields are well modelled by...", options: ["Gaussians", "Gabor functions", "Step functions", "Exponentials"], answer: 1, explain: "Oriented gratings under a Gaussian window." },
+  { q: "Translation equivariance means...", options: ["The output never changes", "Shifting the input shifts the output", "The kernel is symmetric", "The image is rotated"], answer: 1, explain: "Because the kernel is shared." },
+  { q: "Max pooling over positions gives...", options: ["Exact equivariance", "Approximate invariance to small shifts", "Orientation selectivity", "A larger image"], answer: 1, explain: "Like a complex cell." },
+]} />
+
+<Flashcards cards={[
+  { front: "2D cross-correlation?", back: "$Y[i, j] = \\sum_{a,b}K[a, b]X[i + a, j + b]$: the kernel's dot product with each patch." },
+  { front: "Output size, padding, stride?", back: "Valid: (H − h + 1) × (W − w + 1). Same: pad to keep H × W. Stride s: every sth position." },
+  { front: "Centre-surround and Gabor kernels?", back: "Difference of Gaussians (retina, LGN); Gaussian-windowed grating (V1 simple cells)." },
+  { front: "Equivariance versus invariance?", back: "Equivariant: output shifts with the input (convolution). Invariant: output unchanged (pooling, approximately)." },
+  { front: "Neocognitron?", back: "Fukushima 1980: alternating S-cell (shared-kernel convolution) and C-cell (pooling) layers; the forerunner of CNNs." },
+]} />
+
+<Predict revisit question="When the bar moves three pixels, does the simple cell's response stay the same or can it reverse?" />
+
+<Key title="Before you go">
+<ul>
+<li>A 2D convolution is a sheet of identical linear neurons, one at every position.</li>
+<li>Centre-surround and Gabor kernels model retinal and V1 receptive fields.</li>
+<li>A bank of oriented filters encodes orientation through their relative responses.</li>
+<li>Convolution is translation equivariant; pooling adds approximate invariance, as in complex cells and CNNs.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Fukushima (1980), <em>Neocognitron</em>.</li>
+<li>Jones and Palmer (1987), <em>An evaluation of the two-dimensional Gabor filter model of simple receptive fields in cat striate cortex</em>, Journal of Neurophysiology.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="The brain cannot copy one set of synaptic weights to every position in visual space, yet V1 looks roughly convolutional. Suggest how neurons at different positions could end up with similar receptive fields without weight sharing." />

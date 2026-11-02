@@ -1,0 +1,272 @@
+export const meta = {
+  title: "Integrals: accumulating change, from rates to spike counts",
+  intro: "Derivatives take a quantity and ask how fast it changes. Integrals go the other way: given a rate, how much has accumulated? A firing rate integrated over a time window is an expected spike count; a current integrated over time is charge on a membrane; a probability density integrated over a range is a probability. Today you build the integral from sums of thin rectangles, compute it numerically with methods of increasing accuracy, and meet the fundamental theorem that makes integration and differentiation inverses.",
+  goals: [
+    "Interpret an integral as an accumulated total and an area",
+    "Approximate integrals with left, midpoint and trapezoid sums, and compare their errors",
+    "Compute the expected spike count of a time-varying rate and check it by simulation",
+    "State the fundamental theorem of calculus and use cumulative sums to illustrate it",
+  ],
+  plan: [
+    { label: "Predict and accumulation", minutes: 20 },
+    { label: "Riemann sums and numerical integration", minutes: 30 },
+    { label: "Expected spike counts", minutes: 30 },
+    { label: "The fundamental theorem", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "adrian-1926",
+};
+
+<Predict question="A stretch receptor's rate jumps from 5 to 65 spikes per second when a stimulus starts, then adapts back towards 25 spikes per second with a time constant of 150 ms. Over a one-second recording in which the stimulus starts at 0.2 s, will it fire about 15 spikes, about 30, or about 65?" />
+
+<Step n={1} title="Accumulation" minutes={20} />
+
+If a neuron fires at a constant 20 spikes per second for 0.5 s, it fires on average $20 \times 0.5 = 10$ spikes: rate times time. When the rate changes, chop time into short pieces of width $\Delta t$ in which the rate is nearly constant, and add up rate × duration over the pieces. In the limit of very thin pieces the sum becomes the **definite integral**
+
+$$
+\int_a^b r(t)\,dt = \lim_{\Delta t \to 0}\sum_k r(t_k)\,\Delta t
+$$
+
+Geometrically it is the area between the curve and the time axis (counting area below the axis as negative). The $dt$ reminds you of the thin widths, and the units multiply: Hz times seconds gives a pure number of spikes. Adrian and Zotterman (1926), today's paper, were the first to record a single sensory neuron and show that the stimulus is encoded in this rate, which a downstream neuron effectively integrates.
+
+<Figure caption="The expected spike count of a stretch receptor as the area under its rate, approximated with rectangles. Add rectangles, and compare left-edge and midpoint sampling." credit="Interactive figure by Engram, after the experiments of Adrian and Zotterman (1926).">
+  <RiemannSum />
+</Figure>
+
+<Step n={2} title="Riemann sums and numerical integration" minutes={30} />
+
+The sum in the definition is a **Riemann sum**. How you choose the height of each rectangle matters for accuracy:
+
+- **left edge**: $r(t_k)$ at the start of each piece; error proportional to $\Delta t$;
+- **midpoint**: $r$ at the centre of each piece; error proportional to $\Delta t^2$, because errors on the two halves of each piece nearly cancel (the same symmetry as Week 8's central difference);
+- **trapezoid**: the average of the two ends, $\frac{1}{2}(r(t_k) + r(t_{k+1}))\Delta t$; also error proportional to $\Delta t^2$.
+
+<PyCell id="riemann" title="Three ways to integrate" tests={String.raw`
+  import numpy as np
+  def test_exact():
+      "each rule integrates a straight line from 0 to 1 correctly enough"
+      f = lambda t: 2 * t + 1
+      assert np.isclose(midpoint(f, 0, 1, 10), 2.0) and np.isclose(trapezoid(f, 0, 1, 10), 2.0)
+      assert np.isclose(left(f, 0, 1, 1000), 2.0, atol=2e-3)
+
+  def test_orders():
+      "multiplying n by 10 cuts the left error about 10 times and the midpoint and trapezoid errors about 100 times"
+      assert 8 < errs["left"][1] / errs["left"][2] < 12
+      assert 80 < errs["midpoint"][1] / errs["midpoint"][2] < 120
+      assert 80 < errs["trapezoid"][1] / errs["trapezoid"][2] < 120
+`} prompt="Write `left(f, a, b, n)`, `midpoint(f, a, b, n)` and `trapezoid(f, a, b, n)`, each using n pieces. For $\int_0^1 e^t\,dt = e - 1$, store each rule's absolute errors for n = 1, 10 and 100 in the dictionary `errs`, and read off how fast each falls."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def left(f, a, b, n):
+      t = np.linspace(a, b, n + 1)[:-1]
+      return ...
+
+  def midpoint(f, a, b, n):
+      dt = (b - a) / n
+      t = a + dt * (np.arange(n) + 0.5)
+      return ...
+
+  def trapezoid(f, a, b, n):
+      t = np.linspace(a, b, n + 1)
+      y = f(t)
+      return ...
+
+  exact = np.e - 1
+  errs = {name: [abs(rule(np.exp, 0, 1, n) - exact) for n in [1, 10, 100]] for name, rule in [("left", left), ("midpoint", midpoint), ("trapezoid", trapezoid)]}
+  for k, v in errs.items():
+      print(f"{k:9s}", np.array(v))
+`}
+hint="With dt = (b - a) / n: left returns np.sum(f(t)) * dt; midpoint returns np.sum(f(t)) * dt; trapezoid returns (np.sum(y) - 0.5 * (y[0] + y[-1])) * (b - a) / n."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def left(f, a, b, n):
+      t = np.linspace(a, b, n + 1)[:-1]
+      return np.sum(f(t)) * (b - a) / n
+
+  def midpoint(f, a, b, n):
+      dt = (b - a) / n
+      t = a + dt * (np.arange(n) + 0.5)
+      return np.sum(f(t)) * dt
+
+  def trapezoid(f, a, b, n):
+      t = np.linspace(a, b, n + 1)
+      y = f(t)
+      return (np.sum(y) - 0.5 * (y[0] + y[-1])) * (b - a) / n
+
+  exact = np.e - 1
+  errs = {name: [abs(rule(np.exp, 0, 1, n) - exact) for n in [1, 10, 100]] for name, rule in [("left", left), ("midpoint", midpoint), ("trapezoid", trapezoid)]}
+  for k, v in errs.items():
+      print(f"{k:9s}", np.array(v))
+`} />
+
+The midpoint rule is about twice as accurate as the trapezoid rule, and both are far better than left edges. Libraries offer still better methods (Simpson's rule, adaptive quadrature in `scipy.integrate`), but for evenly sampled data such as binned spike rates the trapezoid rule is the usual choice.
+
+<Video id="rfG8ce4nNh0" title="Integration and the fundamental theorem of calculus | Chapter 8, Essence of calculus" by="3Blue1Brown (Grant Sanderson)" note="Integrals as accumulated area, built from thin rectangles, and why the area function's slope is the original function." />
+
+<Step n={3} title="Expected spike counts" minutes={30} />
+
+A Poisson neuron (Week 15) with rate $r(t)$ fires, on average, $\int_a^b r(t)\,dt$ spikes between $a$ and $b$. You can check this by simulating: in each short bin of width $\Delta t$, fire with probability $r(t)\Delta t$.
+
+<PyCell id="count" title="Integrate, then simulate" tests={String.raw`
+  import numpy as np
+  def test_integral():
+      "expected_count is the integral of the rate over one second"
+      assert np.isclose(expected_count, trapezoid(receptor_rate, 0, 1, 100000), rtol=1e-6)
+
+  def test_closed():
+      "the closed-form answer agrees with the numerical integral"
+      assert np.isclose(closed_form, expected_count, rtol=1e-4)
+
+  def test_sim():
+      "the simulated mean count is within 3% of the integral"
+      assert abs(mean_simulated - expected_count) / expected_count < 0.03
+`} prompt="The receptor's rate is 5 Hz before the stimulus at 0.2 s, then $5 + 60e^{-(t - 0.2)/0.15} + 20(1 - e^{-(t - 0.2)/0.05})$. Compute `expected_count` over 0 to 1 s with the trapezoid rule, a `closed_form` answer using $\int_0^T e^{-s/\tau}ds = \tau(1 - e^{-T/\tau})$, and the mean count over 2000 simulated trials in 1 ms bins (`mean_simulated`)."
+code={String.raw`
+  def receptor_rate(t):
+      t = np.asarray(t, dtype=float)
+      s = np.clip(t - 0.2, 0, None)
+      return np.where(t < 0.2, 5.0, 5 + 60 * np.exp(-s / 0.15) + 20 * (1 - np.exp(-s / 0.05)))
+
+  expected_count = ...
+
+  T = 0.8                                     # the stimulus lasts from 0.2 s to 1 s
+  closed_form = 5 * 1.0 + ... + ...           # baseline for the whole second, plus the two stimulus terms
+
+  rng = np.random.default_rng(1926)
+  dt = 0.001
+  t = np.arange(0, 1, dt)
+  spikes = rng.random((2000, len(t))) < receptor_rate(t) * dt
+  mean_simulated = ...
+  print(f"integral {expected_count:.3f}, closed form {closed_form:.3f}, simulated {mean_simulated:.3f} spikes")
+`}
+hint="expected_count = trapezoid(receptor_rate, 0, 1, 100000). The adapting term integrates to 60 * 0.15 * (1 - np.exp(-T / 0.15)); the rising term to 20 * (T - 0.05 * (1 - np.exp(-T / 0.05))). mean_simulated = spikes.sum(axis=1).mean()."
+solution={String.raw`
+  def receptor_rate(t):
+      t = np.asarray(t, dtype=float)
+      s = np.clip(t - 0.2, 0, None)
+      return np.where(t < 0.2, 5.0, 5 + 60 * np.exp(-s / 0.15) + 20 * (1 - np.exp(-s / 0.05)))
+
+  expected_count = trapezoid(receptor_rate, 0, 1, 100000)
+
+  T = 0.8                                     # the stimulus lasts from 0.2 s to 1 s
+  closed_form = 5 * 1.0 + 60 * 0.15 * (1 - np.exp(-T / 0.15)) + 20 * (T - 0.05 * (1 - np.exp(-T / 0.05)))
+
+  rng = np.random.default_rng(1926)
+  dt = 0.001
+  t = np.arange(0, 1, dt)
+  spikes = rng.random((2000, len(t))) < receptor_rate(t) * dt
+  mean_simulated = spikes.sum(axis=1).mean()
+  print(f"integral {expected_count:.3f}, closed form {closed_form:.3f}, simulated {mean_simulated:.3f} spikes")
+`} />
+
+The receptor fires about 29 spikes in the second, 28 of them after the stimulus starts. That answers the prediction. Its peak rate of 65 Hz would suggest far more, but the peak lasts only a moment; its adapted rate of 25 Hz, applied to the 0.8 s of stimulus, would suggest 20, missing the transient. Only the integral gets it right. Integrals of exponentials appear everywhere in neuroscience, and $\int_0^\infty Ae^{-s/\tau}ds = A\tau$ is worth memorising: an exponentially decaying response contributes its height times its time constant.
+
+<Step n={4} title="The fundamental theorem" minutes={25} />
+
+Define the **cumulative** count $N(t) = \int_0^t r(s)\,ds$, the expected number of spikes up to time $t$. The **fundamental theorem of calculus** says
+
+$$
+\frac{dN}{dt} = r(t), \qquad \int_a^b r(t)\,dt = N(b) - N(a)
+$$
+
+The rate of growth of the accumulated total is the rate itself: integration and differentiation undo each other. Any function whose derivative is $r$ is an **antiderivative** of $r$, and the second equation says that to evaluate an integral you need only an antiderivative evaluated at the two ends. That is how the closed form above was found: $-\tau e^{-s/\tau}$ is an antiderivative of $e^{-s/\tau}$.
+
+<PyCell id="ftc" title="Cumulative sums and differences" tests={String.raw`
+  import numpy as np
+  def test_cum():
+      "N_cum[k] approximates the integral of the rate from 0 to t[k] + dt"
+      assert np.isclose(N_cum[-1], np.sum(receptor_rate(t)) * dt)
+
+  def test_back():
+      "differencing N_cum recovers the rate"
+      assert np.allclose(rate_back, receptor_rate(t)[1:], rtol=1e-6)
+
+  def test_window():
+      "count_window is N(0.5) - N(0.3)"
+      assert np.isclose(count_window, N_cum[int(round(0.5 / dt)) - 1] - N_cum[int(round(0.3 / dt)) - 1])
+`} prompt="With 1 ms bins, build `N_cum`, the running total of rate × dt (use `np.cumsum`). Recover the rate from it by differencing (`np.diff` divided by dt) into `rate_back`. Then use `N_cum` to get the expected count between 0.3 and 0.5 s without integrating again (`count_window`)."
+code={String.raw`
+  N_cum = ...
+  rate_back = ...
+  count_window = N_cum[int(round(0.5 / dt)) - 1] - N_cum[int(round(0.3 / dt)) - 1]
+
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(t, receptor_rate(t)); ax[0].set_xlabel("time (s)"); ax[0].set_ylabel("rate (Hz)")
+  ax[1].plot(t, N_cum); ax[1].set_xlabel("time (s)"); ax[1].set_ylabel("expected spikes so far")
+  plt.tight_layout(); plt.show()
+  print("expected spikes between 0.3 and 0.5 s:", round(count_window, 3))
+`}
+hint="N_cum = np.cumsum(receptor_rate(t) * dt); rate_back = np.diff(N_cum) / dt."
+solution={String.raw`
+  N_cum = np.cumsum(receptor_rate(t) * dt)
+  rate_back = np.diff(N_cum) / dt
+  count_window = N_cum[int(round(0.5 / dt)) - 1] - N_cum[int(round(0.3 / dt)) - 1]
+
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(t, receptor_rate(t)); ax[0].set_xlabel("time (s)"); ax[0].set_ylabel("rate (Hz)")
+  ax[1].plot(t, N_cum); ax[1].set_xlabel("time (s)"); ax[1].set_ylabel("expected spikes so far")
+  plt.tight_layout(); plt.show()
+  print("expected spikes between 0.3 and 0.5 s:", round(count_window, 3))
+`} />
+
+`np.cumsum` and `np.diff` are the discrete versions of integrating and differentiating, and they undo each other exactly. The cumulative curve is steepest just after the stimulus starts, where the rate is highest: its slope is the rate.
+
+<Bridge title="Accumulation in brains and machines"
+  neuro="Downstream neurons and decision circuits integrate evidence over time: the drift-diffusion model of decisions accumulates a noisy signal until it reaches a bound (Week 24), and neurons in parietal cortex have been reported to ramp in a way consistent with integration. Peristimulus time histograms, the most common plot in neurophysiology, are numerical estimates of a rate whose integral is a spike count."
+  ai="Expected values in probabilistic models are integrals, which is why sampling and variational methods exist (Week 63). Diffusion models generate images by integrating a learned rate of change over time, a numerical solution of a differential equation (Week 91).">
+
+Whenever a rate is given and a total is wanted, an integral is involved, and a sum of thin rectangles is how you compute it.
+
+</Bridge>
+
+<Prove title="The area under an exponential" task="Show that $\int_0^T Ae^{-t/\tau}\,dt = A\tau(1 - e^{-T/\tau})$, and that it tends to $A\tau$ as $T \to \infty$. Then explain why a synaptic current of peak $A$ and decay time constant $\tau$ delivers a charge of about $A\tau$.">
+
+The derivative of $-\tau e^{-t/\tau}$ is $-\tau\cdot(-\frac{1}{\tau})e^{-t/\tau} = e^{-t/\tau}$ (chain rule), so $-A\tau e^{-t/\tau}$ is an antiderivative of the integrand.
+
+By the fundamental theorem, $\int_0^T Ae^{-t/\tau}\,dt = [-A\tau e^{-t/\tau}]_0^T = -A\tau e^{-T/\tau} + A\tau = A\tau(1 - e^{-T/\tau})$. As $T$ grows, $e^{-T/\tau} \to 0$, leaving $A\tau$.
+
+Charge is the integral of current over time. An exponentially decaying current therefore delivers peak × time constant in total: doubling either the peak or the decay time doubles the charge, a quick calculation used constantly when comparing synapses.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "$\\int_a^b r(t)\\,dt$ for a firing rate r is...", options: ["The peak rate", "The expected number of spikes between a and b", "The rate at b", "The average rate"], answer: 1, explain: "Rate times time, accumulated." },
+  { q: "The midpoint rule's error scales like...", options: ["$\\Delta t$", "$\\Delta t^2$", "$\\Delta t^3$", "It has no error"], answer: 1, explain: "Errors on each half nearly cancel." },
+  { q: "$\\int_0^\\infty 3e^{-t/0.2}\\,dt$ equals...", options: ["3", "0.6", "15", "0.2"], answer: 1, explain: "Height times time constant." },
+  { q: "The fundamental theorem says $\\frac{d}{dt}\\int_0^t r(s)ds$ equals...", options: ["0", "r(t)", "r(0)", "$\\int r$"], answer: 1, explain: "The accumulation grows at the current rate." },
+  { q: "An antiderivative of $e^{-t/\\tau}$ is...", options: ["$e^{-t/\\tau}$", "$-\\tau e^{-t/\\tau}$", "$\\tau e^{t/\\tau}$", "$-e^{-t/\\tau}/\\tau$"], answer: 1, explain: "Differentiate to check." },
+  { q: "`np.cumsum(r * dt)` approximates...", options: ["The derivative of r", "The running integral of r", "The mean of r", "The peak of r"], answer: 1, explain: "A cumulative Riemann sum." },
+  { q: "To get the expected count between 0.3 and 0.5 s from N(t)...", options: ["N(0.5) + N(0.3)", "N(0.5) − N(0.3)", "N(0.4)", "N(0.5)/N(0.3)"], answer: 1, explain: "Fundamental theorem." },
+]} />
+
+<Flashcards cards={[
+  { front: "Definite integral?", back: "$\\int_a^b r(t)dt = \\lim\\sum_k r(t_k)\\Delta t$: the accumulated total, the signed area." },
+  { front: "Left, midpoint and trapezoid errors?", back: "Left: proportional to Δt. Midpoint and trapezoid: proportional to Δt²." },
+  { front: "Expected spike count?", back: "$\\int_a^b r(t)\\,dt$ for a Poisson neuron with rate r(t)." },
+  { front: "Fundamental theorem of calculus?", back: "$\\frac{d}{dt}\\int_0^t r = r(t)$, and $\\int_a^b r = N(b) - N(a)$ for any antiderivative N." },
+  { front: "Area under $Ae^{-t/\\tau}$ from 0 to ∞?", back: "$A\\tau$." },
+]} />
+
+<Predict revisit question="About how many spikes does the adapting receptor fire in the one-second recording?" />
+
+<Key title="Before you go">
+<ul>
+<li>An integral accumulates a rate into a total: rate × time, summed over thin slices.</li>
+<li>Midpoint and trapezoid sums are much more accurate than left-edge sums.</li>
+<li>A neuron's expected spike count is the integral of its rate; a peak or an average alone can mislead.</li>
+<li>Integration and differentiation are inverses, as cumsum and diff are.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Adrian and Zotterman (1926), <em>The impulses produced by sensory nerve endings, Part 2</em>.</li>
+<li>Gilbert Strang, <em>Calculus</em> (MIT OpenCourseWare, free online), Chapter 5: integrals.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Adaptation means a receptor fires most when a stimulus changes. If a downstream neuron integrates the receptor's spikes over a short window, what does it end up signalling? What if the window is long?" />

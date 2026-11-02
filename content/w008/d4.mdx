@@ -1,0 +1,313 @@
+export const meta = {
+  title: "Partial derivatives and gradients: many inputs at once",
+  intro: "A neuron has thousands of synapses; a network has millions of weights; a stimulus has many pixels. To ask how an output changes when inputs change, you vary one at a time to get partial derivatives, and stack them into a vector, the gradient. The gradient points in the direction of steepest increase, it is perpendicular to the contour lines, and for a model neuron it turns out to be the neuron's receptive field. It also lets a population's sensitivity add up neuron by neuron.",
+  goals: [
+    "Compute partial derivatives and assemble them into a gradient",
+    "Write a numerical gradient for any function of a vector",
+    "Prove that the gradient is the direction of steepest increase",
+    "Find the stimulus direction a model neuron is most sensitive to, and a population's Fisher information",
+  ],
+  plan: [
+    { label: "Predict and partial derivatives", minutes: 25 },
+    { label: "The gradient", minutes: 25 },
+    { label: "A neuron's most sensitive direction", minutes: 30 },
+    { label: "Populations add up", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "seung-1993",
+};
+
+<Predict question="A model neuron fires σ(w · x), where x is a 100-pixel image and w its receptive field. Of all images with a given small change in brightness pattern (a fixed length of change), which change raises its firing the most: changing every pixel equally, changing the pixel with the largest weight, or changing pixels in proportion to w?" />
+
+<Step n={1} title="Partial derivatives" minutes={25} />
+
+For a function of several variables, $f(w_1, w_2, \dots, w_n)$, the **partial derivative** with respect to $w_i$ is the ordinary derivative in $w_i$ with every other variable held fixed:
+
+$$
+\frac{\partial f}{\partial w_i} = \lim_{h \to 0}\frac{f(\dots, w_i + h, \dots) - f(\dots, w_i, \dots)}{h}
+$$
+
+For example, with $f(w_1, w_2) = w_1^2 + 3w_1w_2$: treating $w_2$ as a constant gives $\partial f/\partial w_1 = 2w_1 + 3w_2$, and treating $w_1$ as a constant gives $\partial f/\partial w_2 = 3w_1$.
+
+The squared error of a linear neuron with two weights, fitted to data $(x_{t1}, x_{t2}, y_t)$, is a function of the weights:
+
+$$
+L(w_1, w_2) = \frac{1}{2T}\sum_t (w_1x_{t1} + w_2x_{t2} - y_t)^2
+$$
+
+By the chain rule, $\partial L/\partial w_1 = \frac{1}{T}\sum_t (w_1x_{t1} + w_2x_{t2} - y_t)\,x_{t1}$: the average error times the input on that synapse.
+
+<Step n={2} title="The gradient" minutes={25} />
+
+The **gradient** stacks the partial derivatives into a vector:
+
+$$
+\nabla f = \left(\frac{\partial f}{\partial w_1}, \dots, \frac{\partial f}{\partial w_n}\right)
+$$
+
+The tangent-line approximation of Day 1 becomes a tangent-plane approximation: for a small step $\mathbf{h}$,
+
+$$
+f(\mathbf{w} + \mathbf{h}) \approx f(\mathbf{w}) + \nabla f(\mathbf{w}) \cdot \mathbf{h}
+$$
+
+So the rate of change in a direction given by a unit vector $\mathbf{u}$, the **directional derivative**, is $\nabla f \cdot \mathbf{u}$.
+
+<Figure caption="A function of two variables shown as a heat map (deeper colour is lower). Drag the point: the pink arrow is the gradient, the blue arrow points downhill." credit="Interactive figure by Engram.">
+  <GradientField />
+</Figure>
+
+<Prove title="The gradient is the direction of steepest increase" task="Show that, among all unit vectors $\mathbf{u}$, the directional derivative $\nabla f \cdot \mathbf{u}$ is largest when $\mathbf{u}$ points along $\nabla f$, and that moving perpendicular to $\nabla f$ leaves f unchanged to first order.">
+
+By the geometry of the dot product (Week 4), $\nabla f \cdot \mathbf{u} = \lVert\nabla f\rVert\,\lVert\mathbf{u}\rVert\cos\theta = \lVert\nabla f\rVert\cos\theta$, where $\theta$ is the angle between them.
+
+This is largest when $\cos\theta = 1$, that is when $\mathbf{u} = \nabla f / \lVert\nabla f\rVert$, and then the rate of increase is $\lVert\nabla f\rVert$. It is most negative, the steepest descent, when $\mathbf{u}$ points along $-\nabla f$.
+
+When $\mathbf{u}$ is perpendicular to $\nabla f$, $\cos\theta = 0$, so $f$ does not change to first order. Directions of no change trace out the contour lines, so the gradient is perpendicular to the contours.
+
+</Prove>
+
+<Video id="IHZwWFHWa-w" title="Gradient descent, how neural networks learn | Chapter 2, Deep learning" by="3Blue1Brown (Grant Sanderson)" note="The gradient as the direction of steepest ascent of a network's cost, and why stepping against it makes the network learn." />
+
+<PyCell id="numgrad" title="A numerical gradient for anything" tests={String.raw`
+  import numpy as np
+  def test_quadratic():
+      "numerical_gradient of w1^2 + 3 w1 w2 matches (2 w1 + 3 w2, 3 w1)"
+      f = lambda w: w[0] ** 2 + 3 * w[0] * w[1]
+      assert np.allclose(numerical_gradient(f, np.array([1.0, 2.0])), [8.0, 3.0], atol=1e-6)
+
+  def test_loss():
+      "grad_L matches the numerical gradient of the loss at several points"
+      for w in [np.array([0.0, 0.0]), np.array([1.5, -0.5]), np.array([-2.0, 3.0])]:
+          assert np.allclose(grad_L(w), numerical_gradient(L, w), atol=1e-6)
+`} prompt="Write `numerical_gradient(f, w, h=1e-5)` that returns the vector of central differences, nudging one entry of `w` at a time. Then write `grad_L(w)`, the analytic gradient of the two-weight squared error above (the average error times each input), and check it against the numerical one."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(8)
+  X = rng.normal(size=(100, 2))
+  y = X @ np.array([1.2, -0.7]) + 0.3 * rng.normal(size=100)
+
+  def L(w):
+      return 0.5 * np.mean((X @ w - y) ** 2)
+
+  def numerical_gradient(f, w, h=1e-5):
+      g = np.zeros_like(w)
+      for i in range(len(w)):
+          e = np.zeros_like(w); e[i] = h
+          g[i] = ...
+      return g
+
+  def grad_L(w):
+      return ...
+
+  w = np.array([0.5, 0.5])
+  print("analytic", grad_L(w).round(5), " numerical", numerical_gradient(L, w).round(5))
+`}
+hint="g[i] = (f(w + e) - f(w - e)) / (2 * h). For the analytic gradient, the error vector is X @ w - y, and averaging error times input over trials is X.T @ (X @ w - y) / len(y)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(8)
+  X = rng.normal(size=(100, 2))
+  y = X @ np.array([1.2, -0.7]) + 0.3 * rng.normal(size=100)
+
+  def L(w):
+      return 0.5 * np.mean((X @ w - y) ** 2)
+
+  def numerical_gradient(f, w, h=1e-5):
+      g = np.zeros_like(w)
+      for i in range(len(w)):
+          e = np.zeros_like(w); e[i] = h
+          g[i] = (f(w + e) - f(w - e)) / (2 * h)
+      return g
+
+  def grad_L(w):
+      return X.T @ (X @ w - y) / len(y)
+
+  w = np.array([0.5, 0.5])
+  print("analytic", grad_L(w).round(5), " numerical", numerical_gradient(L, w).round(5))
+`} />
+
+The gradient of the squared error is $\frac{1}{T}X^\top(X\mathbf{w} - \mathbf{y})$. Setting it to zero gives $X^\top X\mathbf{w} = X^\top\mathbf{y}$, the normal equations of Week 5, now derived by calculus instead of geometry. Stepping against it, $\mathbf{w} \leftarrow \mathbf{w} - \eta\nabla L$, is the delta rule of Widrow and Hoff and the simplest form of gradient descent (Week 12).
+
+<Step n={3} title="A neuron's most sensitive direction" minutes={30} />
+
+Now take the gradient with respect to the **stimulus** rather than the weights. For the linear-nonlinear neuron $r = \sigma(\mathbf{w} \cdot \mathbf{x})$, the chain rule gives
+
+$$
+\nabla_{\mathbf{x}}\, r = \sigma'(\mathbf{w} \cdot \mathbf{x})\,\mathbf{w}
+$$
+
+The gradient always points along the receptive field $\mathbf{w}$, scaled by the slope of the nonlinearity. By the proof above, the small change of stimulus that raises firing most, for a fixed size of change, is a change along $\mathbf{w}$. That answers the prediction: change pixels in proportion to their weights. This is the logic behind **adversarial examples** for deep networks (small, carefully shaped changes that flip a decision) and behind finding images that maximally drive a neuron (Week 100).
+
+<PyCell id="sensitive" title="Probe a model neuron" tests={String.raw`
+  import numpy as np
+  def test_grad():
+      "grad_x matches the numerical gradient of the neuron's rate"
+      assert np.allclose(grad_x(x0), numerical_gradient(rate, x0), atol=1e-6)
+
+  def test_best():
+      "the change along the gradient raises the rate more than every random change of the same size"
+      assert gain_best > max(gains_random)
+
+  def test_parallel():
+      "the gradient is parallel to the receptive field w"
+      g = grad_x(x0)
+      assert np.isclose(abs(g @ w_rf) / (np.linalg.norm(g) * np.linalg.norm(w_rf)), 1)
+`} prompt="For a 100-pixel model neuron, write `grad_x(x)`, the gradient of its rate with respect to the stimulus. Starting from the image `x0`, compare the rise in rate produced by a change of length 0.5 along the gradient (`gain_best`) with 200 random changes of the same length (`gains_random`)."
+code={String.raw`
+  n_pix = 100
+  w_rf = np.sin(np.linspace(0, 3 * np.pi, n_pix)) * np.exp(-np.linspace(-2, 2, n_pix) ** 2)   # a receptive field
+  def sigmoid(u): return 1 / (1 + np.exp(-u))
+  def rate(x): return 50 * sigmoid(w_rf @ x - 1)
+
+  def grad_x(x):
+      u = w_rf @ x - 1
+      return ...
+
+  x0 = rng.normal(size=n_pix) * 0.1
+  g = grad_x(x0)
+  step = 0.5 * g / np.linalg.norm(g)
+  gain_best = rate(x0 + step) - rate(x0)
+  gains_random = []
+  for _ in range(200):
+      d = rng.normal(size=n_pix); d = 0.5 * d / np.linalg.norm(d)
+      gains_random.append(rate(x0 + d) - rate(x0))
+
+  plt.figure(figsize=(5, 3)); plt.hist(gains_random, bins=25, label="random changes"); plt.axvline(gain_best, color="C1", label="along the gradient")
+  plt.xlabel("change in rate (Hz)"); plt.legend(frameon=False); plt.show()
+  print("best", round(gain_best, 2), "Hz;  best random", round(max(gains_random), 2), "Hz")
+`}
+hint="With s = sigmoid(u), the slope is s * (1 - s), and the rate has a factor of 50, so return 50 * s * (1 - s) * w_rf."
+solution={String.raw`
+  n_pix = 100
+  w_rf = np.sin(np.linspace(0, 3 * np.pi, n_pix)) * np.exp(-np.linspace(-2, 2, n_pix) ** 2)   # a receptive field
+  def sigmoid(u): return 1 / (1 + np.exp(-u))
+  def rate(x): return 50 * sigmoid(w_rf @ x - 1)
+
+  def grad_x(x):
+      u = w_rf @ x - 1
+      s = sigmoid(u)
+      return 50 * s * (1 - s) * w_rf
+
+  x0 = rng.normal(size=n_pix) * 0.1
+  g = grad_x(x0)
+  step = 0.5 * g / np.linalg.norm(g)
+  gain_best = rate(x0 + step) - rate(x0)
+  gains_random = []
+  for _ in range(200):
+      d = rng.normal(size=n_pix); d = 0.5 * d / np.linalg.norm(d)
+      gains_random.append(rate(x0 + d) - rate(x0))
+
+  plt.figure(figsize=(5, 3)); plt.hist(gains_random, bins=25, label="random changes"); plt.axvline(gain_best, color="C1", label="along the gradient")
+  plt.xlabel("change in rate (Hz)"); plt.legend(frameon=False); plt.show()
+  print("best", round(gain_best, 2), "Hz;  best random", round(max(gains_random), 2), "Hz")
+`} />
+
+Random changes of the same size move the rate far less, at best by about a third as much, because in 100 dimensions a random direction is nearly perpendicular to any particular one (Week 4). The change along the gradient is the best possible.
+
+<Step n={4} title="Populations add up" minutes={25} />
+
+Day 1 gave one Poisson neuron's Fisher information, $I_i(\theta) = Tf_i'(\theta)^2/f_i(\theta)$. For a population of independent neurons, Fisher information **adds**: $I(\theta) = \sum_i I_i(\theta)$. Seung and Sompolinsky (1993), today's paper, used this to show how precisely a population can encode a stimulus, and that an optimal decoder reaches the bound $\delta\theta \approx 1/\sqrt{I}$ for large populations.
+
+<PyCell id="pop" title="Discrimination by a population" tests={String.raw`
+  import numpy as np
+  def test_info():
+      "pop_fisher sums each neuron's T f'^2 / f"
+      prefs = np.array([30.0, 90.0])
+      expected = sum(0.5 * dtune(60.0, p) ** 2 / tune(60.0, p) for p in prefs)
+      assert np.isclose(pop_fisher(60.0, prefs, 0.5), expected)
+
+  def test_scaling():
+      "the threshold falls roughly like 1 / sqrt(N)"
+      ratio = thresholds[0] / thresholds[-1]
+      assert abs(ratio - np.sqrt(Ns[-1] / Ns[0])) / np.sqrt(Ns[-1] / Ns[0]) < 0.15
+`} prompt="Write `pop_fisher(theta, prefs, T)` for a population of Gaussian-tuned Poisson neurons with preferred orientations `prefs` (use `tune` and `dtune` below, which wrap orientation round 180°). For populations of N = 10, 40, 160 and 640 neurons with evenly spaced preferences, compute the discrimination threshold $1/\sqrt{I}$ at 60° in a 0.5 s window, and plot it against N on log-log axes."
+code={String.raw`
+  def wrap(d):
+      return (d + 90) % 180 - 90          # orientation difference in (-90, 90]
+
+  def tune(theta, pref, b=5.0, A=40.0, s=25.0):
+      return b + A * np.exp(-wrap(theta - pref) ** 2 / (2 * s ** 2))
+
+  def dtune(theta, pref, b=5.0, A=40.0, s=25.0):
+      d = wrap(theta - pref)
+      return -A * d / s ** 2 * np.exp(-d ** 2 / (2 * s ** 2))
+
+  def pop_fisher(theta, prefs, T):
+      return ...
+
+  Ns = [10, 40, 160, 640]
+  thresholds = [1 / np.sqrt(pop_fisher(60.0, np.linspace(0, 180, N, endpoint=False), 0.5)) for N in Ns]
+  plt.figure(figsize=(5, 3)); plt.loglog(Ns, thresholds, "o-"); plt.xlabel("neurons N"); plt.ylabel("threshold (degrees)"); plt.show()
+  print(np.round(thresholds, 3))
+`}
+hint="Vectorise over the population: return np.sum(T * dtune(theta, prefs) ** 2 / tune(theta, prefs))."
+solution={String.raw`
+  def wrap(d):
+      return (d + 90) % 180 - 90          # orientation difference in (-90, 90]
+
+  def tune(theta, pref, b=5.0, A=40.0, s=25.0):
+      return b + A * np.exp(-wrap(theta - pref) ** 2 / (2 * s ** 2))
+
+  def dtune(theta, pref, b=5.0, A=40.0, s=25.0):
+      d = wrap(theta - pref)
+      return -A * d / s ** 2 * np.exp(-d ** 2 / (2 * s ** 2))
+
+  def pop_fisher(theta, prefs, T):
+      return np.sum(T * dtune(theta, prefs) ** 2 / tune(theta, prefs))
+
+  Ns = [10, 40, 160, 640]
+  thresholds = [1 / np.sqrt(pop_fisher(60.0, np.linspace(0, 180, N, endpoint=False), 0.5)) for N in Ns]
+  plt.figure(figsize=(5, 3)); plt.loglog(Ns, thresholds, "o-"); plt.xlabel("neurons N"); plt.ylabel("threshold (degrees)"); plt.show()
+  print(np.round(thresholds, 3))
+`} />
+
+Every fourfold increase in neurons halves the threshold: $1/\sqrt{N}$ scaling, because independent informations add. With a few hundred neurons the population can resolve fractions of a degree, finer than any single neuron. In real cortex, noise correlations limit this gain, a central topic of Week 119.
+
+<Bridge title="Gradients everywhere"
+  neuro="The gradient of a neuron's response with respect to its stimulus is its locally most effective stimulus, which is what experiments that optimise images to drive a neuron are searching for. Fisher information, built from tuning-curve derivatives, is the standard measure of how well a population encodes a variable."
+  ai="Training a network means computing the gradient of the loss with respect to every weight. Adversarial examples use the gradient with respect to the input instead: a tiny change along it can flip a network's decision, an attack that also probes how similar a network's sensitivities are to the brain's.">
+
+The gradient answers "which small change matters most?" for any quantity that depends on many others.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "For $f = x^2y + y^3$, $\\partial f/\\partial x$ is...", options: ["$2xy$", "$x^2 + 3y^2$", "$2xy + 3y^2$", "$2x$"], answer: 0, explain: "Hold y fixed." },
+  { q: "...and $\\partial f/\\partial y$ is...", options: ["$2xy$", "$x^2 + 3y^2$", "$3y^2$", "$x^2$"], answer: 1, explain: "Hold x fixed." },
+  { q: "The gradient points...", options: ["Along the contour lines", "In the direction of steepest increase", "Towards the minimum always", "Nowhere in particular"], answer: 1, explain: "It maximises the directional derivative." },
+  { q: "The directional derivative along unit vector u is...", options: ["$\\lVert\\nabla f\\rVert$", "$\\nabla f \\cdot \\mathbf{u}$", "$f(\\mathbf{u})$", "$\\mathbf{u}$"], answer: 1, explain: "From the tangent-plane approximation." },
+  { q: "The gradient of $\\frac{1}{2T}\\lVert X\\mathbf{w} - \\mathbf{y}\\rVert^2$ is...", options: ["$X\\mathbf{w}$", "$\\frac{1}{T}X^\\top(X\\mathbf{w} - \\mathbf{y})$", "$X^\\top\\mathbf{y}$", "$\\mathbf{w}$"], answer: 1, explain: "Average error times input." },
+  { q: "For $r = \\sigma(\\mathbf{w} \\cdot \\mathbf{x})$, the gradient with respect to x points along...", options: ["x", "w", "The first pixel", "All ones"], answer: 1, explain: "$\\sigma'(\\mathbf{w}\\cdot\\mathbf{x})\\mathbf{w}$." },
+  { q: "For independent neurons, population Fisher information...", options: ["Averages", "Adds", "Multiplies", "Is the maximum"], answer: 1, explain: "So the threshold falls like $1/\\sqrt{N}$." },
+]} />
+
+<Flashcards cards={[
+  { front: "Partial derivative?", back: "Derivative in one variable with all others held fixed." },
+  { front: "Gradient and tangent plane?", back: "$\\nabla f$ = vector of partials; $f(\\mathbf{w} + \\mathbf{h}) \\approx f(\\mathbf{w}) + \\nabla f\\cdot\\mathbf{h}$." },
+  { front: "Why the gradient is steepest?", back: "$\\nabla f\\cdot\\mathbf{u} = \\lVert\\nabla f\\rVert\\cos\\theta$, largest at θ = 0; perpendicular directions are contours." },
+  { front: "Gradient of squared error of a linear model?", back: "$\\frac{1}{T}X^\\top(X\\mathbf{w} - \\mathbf{y})$; zero at the normal equations." },
+  { front: "Population Fisher information?", back: "$I = \\sum_i Tf_i'^2/f_i$ for independent Poisson neurons; threshold about $1/\\sqrt{I}$." },
+]} />
+
+<Predict revisit question="Which change of stimulus raises the neuron's firing the most?" />
+
+<Key title="Before you go">
+<ul>
+<li>Partial derivatives vary one input at a time; the gradient collects them.</li>
+<li>The gradient is the direction of steepest increase and is perpendicular to contours.</li>
+<li>A linear-nonlinear neuron's stimulus gradient lies along its receptive field.</li>
+<li>Fisher information of independent neurons adds, so thresholds fall like $1/\sqrt{N}$.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Seung and Sompolinsky (1993), <em>Simple models for reading neuronal population codes</em>.</li>
+<li>Goodfellow, Bengio and Courville, <em>Deep Learning</em> (free online), Chapter 4.3: gradient-based optimisation.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Adversarial examples exploit the gradient of a network's output with respect to its input. Would you expect the brain to have adversarial examples too? Explain your reasoning, and how you might look for one." />

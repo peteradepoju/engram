@@ -1,0 +1,390 @@
+export const meta = {
+  title: "Backpropagation: the chain rule through a network",
+  intro: "A network with millions of weights needs millions of partial derivatives on every training step. Computing each by finite differences would take millions of forward passes. Backpropagation gets all of them for the cost of about one extra pass, by walking the chain rule backwards through the network and reusing every intermediate result. Today you derive it, implement it by hand for a two-layer network, check it numerically, build a tiny automatic differentiation engine, and train a network to learn a tuning curve.",
+  goals: [
+    "Describe a network as a computational graph and run forward and backward passes",
+    "Derive and implement backpropagation for a two-layer network",
+    "Check analytic gradients against numerical ones",
+    "Build a minimal reverse-mode automatic differentiation engine",
+  ],
+  plan: [
+    { label: "Predict and computational graphs", minutes: 20 },
+    { label: "Backpropagation in a two-layer network", minutes: 35 },
+    { label: "Automatic differentiation", minutes: 30 },
+    { label: "Training a network", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "lillicrap-2020",
+};
+
+<Predict question="A network has one million weights. Computing its gradient by central differences takes two forward passes per weight. Backpropagation computes the exact gradient in roughly how many forward passes' worth of work: about 2, about 1,000, or about 2 million?" />
+
+<Step n={1} title="Computational graphs" minutes={20} />
+
+Any calculation can be drawn as a **computational graph**: nodes are quantities, and arrows show which quantities are computed from which. The **forward pass** evaluates the graph from inputs to the loss. The **backward pass** then visits the nodes in reverse order and computes, for each one, the derivative of the loss with respect to it, written $\bar{v} = \partial L/\partial v$ (read "v bar", sometimes called the adjoint).
+
+The rule at every node is the chain rule. If $v$ feeds into nodes $u_1, \dots, u_k$, then
+
+$$
+\bar{v} = \sum_{j} \bar{u}_j\,\frac{\partial u_j}{\partial v}
+$$
+
+The sum appears because a change in $v$ affects the loss along every path out of it (the multivariable chain rule: contributions along separate paths add).
+
+<Figure caption="A two-neuron chain as a computational graph. Blue numbers are forward values; pink numbers are gradients of the loss, computed right to left." credit="Interactive figure by Engram.">
+  <BackpropGraph />
+</Figure>
+
+<Video id="Ilg3gGewQ5U" title="Backpropagation, intuitively | Chapter 3, Deep learning" by="3Blue1Brown (Grant Sanderson)" note="What backpropagation is doing, without the algebra: how each training example nudges every weight." />
+
+<Step n={2} title="Backpropagation in a two-layer network" minutes={35} />
+
+A network with one hidden layer of tanh units and a linear output, applied to a batch of $T$ inputs stacked as rows of $X$:
+
+$$
+Z = XW_1 + \mathbf{b}_1, \quad H = \tanh(Z), \quad \hat{\mathbf{y}} = H\mathbf{w}_2 + b_2, \quad L = \frac{1}{2T}\lVert\hat{\mathbf{y}} - \mathbf{y}\rVert^2
+$$
+
+<Derivation title="The backward pass">
+  <div>
+
+Start at the output. $\bar{\hat{\mathbf{y}}} = \partial L/\partial\hat{\mathbf{y}} = (\hat{\mathbf{y}} - \mathbf{y})/T$, one error per example.
+
+  </div>
+  <div>
+
+The output layer is linear, so (as for the linear neuron on Day 4) $\bar{\mathbf{w}}_2 = H^\top\bar{\hat{\mathbf{y}}}$ and $\bar{b}_2 = \sum_t\bar{\hat{y}}_t$. The error is sent back to the hidden units through the same weights: $\bar{H} = \bar{\hat{\mathbf{y}}}\,\mathbf{w}_2^\top$.
+
+  </div>
+  <div>
+
+Through the nonlinearity, element by element: $\bar{Z} = \bar{H} \odot (1 - H^2)$, where $\odot$ multiplies entries pairwise and $1 - \tanh^2$ is tanh's slope (Day 2).
+
+  </div>
+  <div>
+
+Finally the first layer, again linear: $\bar{W}_1 = X^\top\bar{Z}$ and $\bar{\mathbf{b}}_1 = \sum_t \bar{Z}_t$ (summing over the rows). Each weight's gradient is its input times the error signal arriving at its output, the same pattern as Day 3, now for whole matrices.
+
+  </div>
+</Derivation>
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1986)
+  theta = rng.uniform(-np.pi, np.pi, 200)                       # motion direction on each trial (radians)
+  X = np.column_stack([np.cos(theta), np.sin(theta)])           # direction as a unit vector
+  y = 10 + 30 * np.exp(2 * (np.cos(theta - 0.8) - 1)) + 2 * rng.normal(size=200)   # a von Mises tuning curve, Hz
+  params = {"W1": rng.normal(size=(2, 16)) * 0.8, "b1": np.zeros(16), "w2": rng.normal(size=16) * 0.5, "b2": np.array(0.0)}
+
+  def forward(p, X):
+      Z = X @ p["W1"] + p["b1"]
+      H = np.tanh(Z)
+      return Z, H, H @ p["w2"] + p["b2"]
+
+  def loss(p, X, y):
+      return 0.5 * np.mean((forward(p, X)[2] - y) ** 2)
+  print("initial loss", round(loss(params, X, y), 2))
+`} />
+
+<PyCell id="backprop" title="Write the backward pass" tests={String.raw`
+  import numpy as np
+  def num_grad(p, name, h=1e-6):
+      g = np.zeros_like(np.asarray(p[name], dtype=float))
+      it = np.nditer(g, flags=["multi_index"])
+      for _ in it:
+          i = it.multi_index
+          q = {k: np.array(v, dtype=float, copy=True) for k, v in p.items()}
+          q[name][i] += h; Lp = loss(q, X, y)
+          q[name][i] -= 2 * h; Lm = loss(q, X, y)
+          g[i] = (Lp - Lm) / (2 * h)
+      return g
+
+  def test_shapes():
+      "backward returns a gradient with the shape of every parameter"
+      g = backward(params, X, y)
+      for k in params:
+          assert np.shape(g[k]) == np.shape(params[k]), k
+
+  def test_check():
+      "every gradient matches a numerical gradient"
+      g = backward(params, X, y)
+      for k in params:
+          assert np.allclose(g[k], num_grad(params, k), rtol=1e-4, atol=1e-6), k
+`} prompt="Write `backward(p, X, y)` that returns a dictionary of gradients with the same keys and shapes as `params`, following the four steps of the derivation. The check that follows compares every entry with a central difference: the gradient check that every hand-written backward pass should pass."
+code={String.raw`
+  def backward(p, X, y):
+      Z, H, yhat = forward(p, X)
+      T = len(y)
+      d_yhat = ...
+      g = {}
+      g["w2"] = ...
+      g["b2"] = ...
+      dH = ...
+      dZ = ...
+      g["W1"] = ...
+      g["b1"] = ...
+      return g
+
+  g = backward(params, X, y)
+  print({k: np.round(np.ravel(v)[:3], 4) for k, v in g.items()})
+`}
+hint="d_yhat = (yhat - y) / T. g['w2'] = H.T @ d_yhat; g['b2'] = np.sum(d_yhat). dH = np.outer(d_yhat, p['w2']); dZ = dH * (1 - H ** 2). g['W1'] = X.T @ dZ; g['b1'] = dZ.sum(axis=0)."
+solution={String.raw`
+  def backward(p, X, y):
+      Z, H, yhat = forward(p, X)
+      T = len(y)
+      d_yhat = (yhat - y) / T
+      g = {}
+      g["w2"] = H.T @ d_yhat
+      g["b2"] = np.sum(d_yhat)
+      dH = np.outer(d_yhat, p["w2"])
+      dZ = dH * (1 - H ** 2)
+      g["W1"] = X.T @ dZ
+      g["b1"] = dZ.sum(axis=0)
+      return g
+
+  g = backward(params, X, y)
+  print({k: np.round(np.ravel(v)[:3], 4) for k, v in g.items()})
+`} />
+
+The backward pass costs about the same as the forward pass: the same matrix multiplications, run with transposed matrices. The numerical check needed two full forward passes for each of the 65 parameters. With a million parameters backpropagation needs roughly two or three passes' worth of work, against two million for finite differences. That answers the prediction, and it is why training large networks is possible at all.
+
+<Step n={3} title="Automatic differentiation" minutes={30} />
+
+Writing backward passes by hand is error-prone. Libraries such as PyTorch and JAX do it automatically: every operation records how to pass gradients back to its inputs, and calling `backward()` walks the graph in reverse. This is **reverse-mode automatic differentiation**, and backpropagation is its special case for neural networks. Here is the core of such an engine in a few lines, adapted from Andrej Karpathy's teaching library *micrograd* (MIT licence).
+
+<PyCell id="autodiff" title="A tiny autodiff engine" tests={String.raw`
+  import numpy as np
+  def test_mul_add():
+      "gradients of a*b + a are correct"
+      a, b = Value(2.0), Value(-3.0)
+      out = a * b + a
+      out.backward()
+      assert np.isclose(a.grad, -2.0) and np.isclose(b.grad, 2.0)
+
+  def test_tanh():
+      "tanh backward uses 1 - tanh^2"
+      x = Value(0.5)
+      out = x.tanh()
+      out.backward()
+      assert np.isclose(x.grad, 1 - np.tanh(0.5) ** 2)
+
+  def test_neuron():
+      "a whole neuron's weight gradient matches the chain rule"
+      w, xv, bv = Value(0.8), Value(1.5), Value(-0.2)
+      r = (w * xv + bv).tanh()
+      r.backward()
+      assert np.isclose(w.grad, (1 - np.tanh(0.8 * 1.5 - 0.2) ** 2) * 1.5)
+`} prompt="Complete the `_backward` functions for multiplication and tanh. Each one receives the gradient arriving at the output (`out.grad`) and adds the correct share to each input's `.grad`, using the local derivative. Then differentiate a neuron, tanh(w x + b), with respect to w."
+code={String.raw`
+  import math
+
+  class Value:
+      """A number that remembers how it was computed, so gradients can flow back through it."""
+      def __init__(self, data, parents=()):
+          self.data, self.grad, self._parents, self._backward = data, 0.0, parents, lambda: None
+
+      def __add__(self, other):
+          other = other if isinstance(other, Value) else Value(other)
+          out = Value(self.data + other.data, (self, other))
+          def _backward():
+              self.grad += out.grad            # d(a + b)/da = 1
+              other.grad += out.grad
+          out._backward = _backward
+          return out
+
+      def __mul__(self, other):
+          other = other if isinstance(other, Value) else Value(other)
+          out = Value(self.data * other.data, (self, other))
+          def _backward():
+              ...
+          out._backward = _backward
+          return out
+
+      def tanh(self):
+          t = math.tanh(self.data)
+          out = Value(t, (self,))
+          def _backward():
+              ...
+          out._backward = _backward
+          return out
+
+      def backward(self):
+          order, seen = [], set()
+          def visit(v):                        # topological order: every node after its inputs
+              if v not in seen:
+                  seen.add(v)
+                  for p in v._parents:
+                      visit(p)
+                  order.append(v)
+          visit(self)
+          self.grad = 1.0
+          for v in reversed(order):
+              v._backward()
+
+  w, x, b = Value(0.8), Value(1.5), Value(-0.2)
+  r = (w * x + b).tanh()
+  r.backward()
+  print("r =", round(r.data, 4), " dr/dw =", round(w.grad, 4), " dr/dx =", round(x.grad, 4), " dr/db =", round(b.grad, 4))
+`}
+hint="Multiplication: self.grad += other.data * out.grad and other.grad += self.data * out.grad. tanh: self.grad += (1 - t ** 2) * out.grad. Using += lets gradients from several paths add up."
+solution={String.raw`
+  import math
+
+  class Value:
+      """A number that remembers how it was computed, so gradients can flow back through it."""
+      def __init__(self, data, parents=()):
+          self.data, self.grad, self._parents, self._backward = data, 0.0, parents, lambda: None
+
+      def __add__(self, other):
+          other = other if isinstance(other, Value) else Value(other)
+          out = Value(self.data + other.data, (self, other))
+          def _backward():
+              self.grad += out.grad            # d(a + b)/da = 1
+              other.grad += out.grad
+          out._backward = _backward
+          return out
+
+      def __mul__(self, other):
+          other = other if isinstance(other, Value) else Value(other)
+          out = Value(self.data * other.data, (self, other))
+          def _backward():
+              self.grad += other.data * out.grad
+              other.grad += self.data * out.grad
+          out._backward = _backward
+          return out
+
+      def tanh(self):
+          t = math.tanh(self.data)
+          out = Value(t, (self,))
+          def _backward():
+              self.grad += (1 - t ** 2) * out.grad
+          out._backward = _backward
+          return out
+
+      def backward(self):
+          order, seen = [], set()
+          def visit(v):                        # topological order: every node after its inputs
+              if v not in seen:
+                  seen.add(v)
+                  for p in v._parents:
+                      visit(p)
+                  order.append(v)
+          visit(self)
+          self.grad = 1.0
+          for v in reversed(order):
+              v._backward()
+
+  w, x, b = Value(0.8), Value(1.5), Value(-0.2)
+  r = (w * x + b).tanh()
+  r.backward()
+  print("r =", round(r.data, 4), " dr/dw =", round(w.grad, 4), " dr/dx =", round(x.grad, 4), " dr/db =", round(b.grad, 4))
+`} />
+
+The `+=` matters: in `a * b + a` the value `a` is used twice, and the gradients from both uses must add, exactly the sum over paths in Step 1. With a few more operations (powers, exponentials, subtraction) this engine can train small networks; PyTorch is the same idea, operating on arrays and running on GPUs.
+
+<Step n={4} title="Training a network" minutes={20} />
+
+<PyCell id="train" title="Learn a tuning curve" tests={String.raw`
+  import numpy as np
+  def test_losses():
+      "losses has one value per step and falls by more than a factor of 10"
+      assert len(losses) == 2000
+      assert losses[-1] < losses[0] / 10
+
+  def test_fit():
+      "the trained network's error is close to the noise level (variance 4)"
+      assert losses[-1] < 4.0
+`} prompt="Train the network by gradient descent: for 2000 steps, compute the gradients with `backward` and move every parameter a step of size `lr` against its gradient. Record the loss each step in `losses`, then plot the learned tuning curve over the data."
+code={String.raw`
+  p = {k: np.array(v, dtype=float, copy=True) for k, v in params.items()}
+  lr = 0.05
+  losses = []
+  for step in range(2000):
+      ...
+
+  grid = np.linspace(-np.pi, np.pi, 200)
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].semilogy(losses); ax[0].set_xlabel("step"); ax[0].set_ylabel("loss")
+  ax[1].plot(theta, y, ".", ms=3, alpha=0.5); ax[1].plot(grid, forward(p, np.column_stack([np.cos(grid), np.sin(grid)]))[2], lw=2)
+  ax[1].set_xlabel("direction (rad)"); ax[1].set_ylabel("rate (Hz)"); plt.tight_layout(); plt.show()
+  print("final loss", round(losses[-1], 3))
+`}
+hint="Inside the loop: g = backward(p, X, y); then for k in p: p[k] = p[k] - lr * g[k]; and losses.append(loss(p, X, y))."
+solution={String.raw`
+  p = {k: np.array(v, dtype=float, copy=True) for k, v in params.items()}
+  lr = 0.05
+  losses = []
+  for step in range(2000):
+      g = backward(p, X, y)
+      for k in p:
+          p[k] = p[k] - lr * g[k]
+      losses.append(loss(p, X, y))
+
+  grid = np.linspace(-np.pi, np.pi, 200)
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].semilogy(losses); ax[0].set_xlabel("step"); ax[0].set_ylabel("loss")
+  ax[1].plot(theta, y, ".", ms=3, alpha=0.5); ax[1].plot(grid, forward(p, np.column_stack([np.cos(grid), np.sin(grid)]))[2], lw=2)
+  ax[1].set_xlabel("direction (rad)"); ax[1].set_ylabel("rate (Hz)"); plt.tight_layout(); plt.show()
+  print("final loss", round(losses[-1], 3))
+`} />
+
+Sixteen tanh units, trained only by following the gradient, have learned the shape of a direction-tuned neuron. The final loss is near half the noise variance (the loss has a factor of one half), so the network fits the tuning curve without chasing the noise.
+
+<Bridge title="Could the brain backpropagate?"
+  neuro="Backpropagation needs each synapse to receive an error signal computed with the transpose of the forward weights, delivered separately from the forward activity. Neither is obviously available in cortex. Lillicrap and colleagues (today's paper) review the objections and argue that differences in activity, for example between dendritic compartments, could carry error signals (Week 136)."
+  ai="Backpropagation with automatic differentiation trains essentially every modern network. Lillicrap and colleagues also showed in 2016 that random fixed feedback weights, instead of the transpose, still let networks learn ('feedback alignment'), weakening the strongest objection to brain-like backpropagation.">
+
+Backpropagation is just the chain rule, organised so that nothing is computed twice.
+
+</Bridge>
+
+<Prove title="Why backpropagation is cheap" task="For a chain of L stages with one scalar input and output, the forward pass costs about L operations. Compare the cost of the gradient with respect to all L stage parameters computed (a) by finite differences and (b) by the backward pass.">
+
+(a) Finite differences need two forward passes per parameter, so about $2L \times L = 2L^2$ operations.
+
+(b) The backward pass starts with $\bar{h}_L = 1$ and computes $\bar{h}_{l-1} = \bar{h}_l\,f_l'(h_{l-1})$, one multiplication per stage, reusing the forward values. Each parameter's gradient is then $\bar{h}_l$ times one local derivative. That is about $2L$ operations, a constant multiple of the forward pass.
+
+The saving is the reuse: $\bar{h}_l$ is the product of all the derivatives after stage $l$, shared by every earlier stage. In general, reverse mode computes the gradient of one output with respect to any number of inputs at a small constant multiple of the cost of evaluating the function.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "The backward pass visits nodes...", options: ["In the same order as the forward pass", "In reverse order, from the loss to the inputs", "Randomly", "Only once at the input"], answer: 1, explain: "Each gradient needs those of the nodes after it." },
+  { q: "If v feeds into two nodes, $\\bar{v}$ is...", options: ["The larger of the two contributions", "The sum of the contributions along both paths", "Their product", "Zero"], answer: 1, explain: "Multivariable chain rule." },
+  { q: "For a linear layer $\\hat{\\mathbf{y}} = H\\mathbf{w}$, the weight gradient is...", options: ["$H\\bar{\\hat{\\mathbf{y}}}$", "$H^\\top\\bar{\\hat{\\mathbf{y}}}$", "$\\bar{\\hat{\\mathbf{y}}}$", "$\\mathbf{w}^\\top H$"], answer: 1, explain: "Inputs times arriving error." },
+  { q: "Through a tanh layer the error is multiplied by...", options: ["tanh(Z)", "$1 - H^2$ entry by entry", "$H^2$", "The weights"], answer: 1, explain: "tanh's derivative." },
+  { q: "A gradient check compares analytic gradients with...", options: ["Zero", "Finite-difference gradients", "The loss", "Random numbers"], answer: 1, explain: "Central differences, one parameter at a time." },
+  { q: "Backpropagation's cost is about...", options: ["One parameter per forward pass", "A small multiple of one forward pass", "The square of the number of parameters", "Exponential in depth"], answer: 1, explain: "Intermediate results are reused." },
+  { q: "Feedback alignment shows that...", options: ["Backpropagation is impossible", "Networks can learn with random fixed feedback weights", "Gradients must be exact", "Weights must be symmetric"], answer: 1, explain: "Lillicrap and colleagues, 2016." },
+]} />
+
+<Flashcards cards={[
+  { front: "Adjoint $\\bar{v}$?", back: "$\\partial L/\\partial v$; $\\bar{v} = \\sum_j\\bar{u}_j\\,\\partial u_j/\\partial v$ over the nodes u that v feeds." },
+  { front: "Backward pass of a two-layer tanh network?", back: "$\\bar{\\hat{y}} = (\\hat{y} - y)/T$; $\\bar{w}_2 = H^\\top\\bar{\\hat{y}}$; $\\bar{H} = \\bar{\\hat{y}}w_2^\\top$; $\\bar{Z} = \\bar{H}\\odot(1 - H^2)$; $\\bar{W}_1 = X^\\top\\bar{Z}$." },
+  { front: "Gradient check?", back: "Compare each analytic partial with a central difference; always do it for hand-written backward passes." },
+  { front: "Reverse-mode autodiff?", back: "Each operation records how to send gradients to its inputs; backward() runs them in reverse topological order." },
+  { front: "Credit assignment problem?", back: "Working out how much each synapse contributed to an error; backpropagation solves it exactly, the brain's solution is unknown." },
+]} />
+
+<Predict revisit question="How many forward passes' worth of work does backpropagation need for a million weights?" />
+
+<Key title="Before you go">
+<ul>
+<li>A network is a computational graph; the backward pass applies the chain rule node by node in reverse.</li>
+<li>Each weight's gradient is its input times the error signal arriving at its output.</li>
+<li>Always check hand-written gradients numerically.</li>
+<li>Backpropagation costs a small multiple of a forward pass, however many weights there are.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>This week's deep read: Lillicrap, Santoro, Marris, Akerman and Hinton (2020), <em>Backpropagation and the brain</em>. First pass today.</li>
+<li>Andrej Karpathy, <em>micrograd</em> (github.com/karpathy/micrograd): the full teaching autodiff engine today's code is adapted from.</li>
+<li>Rumelhart, Hinton and Williams (1986), <em>Learning representations by back-propagating errors</em> (Week 5's classic paper): read it again now that you can follow the derivation.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="List the steps of backpropagation that seem hardest for a biological brain to carry out. For each, write one way the brain might approximate it." />

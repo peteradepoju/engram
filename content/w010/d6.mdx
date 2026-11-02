@@ -1,0 +1,258 @@
+export const meta = {
+  title: "Forge: Week 10 challenge, quiz and deep read",
+  intro: "This week integrals turned rates into counts, the membrane turned out to be a filter, and convolution connected spike trains, receptive fields and neural networks. Today's challenge is a complete characterisation of a model retinal ganglion cell, the analysis Chichilnisky describes. Estimate its spatiotemporal receptive field from white noise, take it apart with the SVD into a spatial and a temporal profile, measure its nonlinearity, and then test the model honestly on repeated presentations of a new stimulus, against the best that any model could do.",
+  goals: [
+    "Estimate a spatiotemporal receptive field by spike-triggered averaging",
+    "Test separability with the SVD and recover spatial and temporal profiles",
+    "Predict responses to a repeated stimulus with a linear-nonlinear model",
+    "Compare a model's performance with the noise ceiling set by trial-to-trial variability",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "chichilnisky-2001",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. $\int_0^2 3t^2\,dt$?
+2. The full convolution of $[1, 1]$ with $[1, 2, 3]$?
+3. A membrane with $\tau = 10$ ms starts at 0 and is driven towards 20 mV. Where is it after 10 ms?
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  print("1.", 2 ** 3, "(an antiderivative is t^3)")
+  print("2.", np.convolve([1, 1], [1, 2, 3]))
+  print("3.", round(20 * (1 - np.exp(-1)), 2), "mV")
+`} />
+
+<Step n={2} title="Weekly challenge: characterise a retinal ganglion cell" minutes={60} />
+
+**The experiment.** A retinal ganglion cell views a row of 16 pixels, each flickering independently with Gaussian white noise, updated every 10 ms, for 5 minutes (30,000 frames). Its receptive field, hidden from you, has a centre-surround spatial profile and a biphasic temporal profile, followed by an exponential nonlinearity and Poisson spiking. Afterwards, a new 5 s noise sequence (500 frames) is shown 40 times, to test the model. Run the cell to record the data.
+
+<PyCell code={String.raw`
+  rng = np.random.default_rng(2001)
+  P, L, T = 16, 15, 30000                       # pixels, lags (150 ms), frames
+  x = np.arange(P) - 7.5
+  k = np.arange(L)
+  _sp = np.exp(-x ** 2 / (2 * 1.5 ** 2)) - 0.5 * np.exp(-x ** 2 / (2 * 4 ** 2)); _sp /= np.linalg.norm(_sp)
+  _tm = np.exp(-(k - 3) ** 2 / 3) - 0.6 * np.exp(-(k - 7) ** 2 / 6); _tm /= np.linalg.norm(_tm)
+  _RF = np.outer(_sp, _tm)                      # hidden: pixels by lags
+
+  def generator(S, F):
+      """Generator signal of a space-time filter F (pixels by lags) applied to stimulus S (frames by pixels)."""
+      g = np.zeros(len(S))
+      for lag in range(F.shape[1]):
+          g[lag:] += S[:len(S) - lag] @ F[:, lag]
+      return g
+
+  S = rng.normal(size=(T, P))
+  spikes = rng.poisson(0.05 * np.exp(1.5 * generator(S, _RF)))
+  S_rep = rng.normal(size=(500, P))
+  _rate_rep = 0.05 * np.exp(1.5 * generator(S_rep, _RF))
+  repeats = rng.poisson(_rate_rep, size=(40, 500))   # 40 repeats of the test stimulus
+  print("training spikes:", spikes.sum(), "  test spikes per repeat:", repeats.sum(axis=1).mean())
+`} />
+
+<PyCell id="partA" title="Part A: the spatiotemporal receptive field" tests={String.raw`
+  import numpy as np
+  def test_sta():
+      "sta is pixels by lags and matches the definition at one entry"
+      assert sta.shape == (P, L)
+      assert np.isclose(sta[5, 3], np.sum(spikes[L:] * S[L - 3:T - 3, 5]) / spikes[L:].sum())
+
+  def test_separable():
+      "the receptive field is close to separable: sep_index above 0.9"
+      assert sep_index > 0.9
+
+  def test_profiles():
+      "the SVD's top spatial and temporal vectors match the hidden profiles"
+      assert abs(spatial_hat @ _sp) > 0.97 and abs(temporal_hat @ _tm) > 0.97
+`} prompt="Compute the spike-triggered average for every pixel and lag (a 16 by 15 array; one matrix product per lag). Take its SVD: store the separability index $\sigma_1^2/\sum\sigma_i^2$ (Week 7) in `sep_index`, and the top left and right singular vectors, the spatial and temporal profiles, in `spatial_hat` and `temporal_hat`. Plot the STA and both profiles."
+code={String.raw`
+  sta = np.zeros((P, L))
+  for lag in range(L):
+      sta[:, lag] = ...
+
+  U, s, Vt = np.linalg.svd(sta)
+  sep_index = ...
+  spatial_hat, temporal_hat = ..., ...
+
+  fig, ax = plt.subplots(1, 3, figsize=(10, 2.8))
+  ax[0].imshow(sta, cmap="RdBu_r", aspect="auto"); ax[0].set_xlabel("lag (10 ms)"); ax[0].set_ylabel("pixel"); ax[0].set_title("STA")
+  ax[1].plot(x, spatial_hat * np.sign(spatial_hat[8])); ax[1].set_title("spatial profile"); ax[1].set_xlabel("pixel")
+  ax[2].plot(k * 10, temporal_hat * np.sign(temporal_hat[3])); ax[2].set_title("temporal profile"); ax[2].set_xlabel("ms before spike")
+  plt.tight_layout(); plt.show()
+  print("separability", round(sep_index, 3))
+`}
+hint="sta[:, lag] = spikes[L:] @ S[L - lag:T - lag] / spikes[L:].sum() averages the stimulus frame lag bins before each spike. sep_index = s[0] ** 2 / np.sum(s ** 2); spatial_hat, temporal_hat = U[:, 0], Vt[0]."
+solution={String.raw`
+  sta = np.zeros((P, L))
+  for lag in range(L):
+      sta[:, lag] = spikes[L:] @ S[L - lag:T - lag] / spikes[L:].sum()
+
+  U, s, Vt = np.linalg.svd(sta)
+  sep_index = s[0] ** 2 / np.sum(s ** 2)
+  spatial_hat, temporal_hat = U[:, 0], Vt[0]
+
+  fig, ax = plt.subplots(1, 3, figsize=(10, 2.8))
+  ax[0].imshow(sta, cmap="RdBu_r", aspect="auto"); ax[0].set_xlabel("lag (10 ms)"); ax[0].set_ylabel("pixel"); ax[0].set_title("STA")
+  ax[1].plot(x, spatial_hat * np.sign(spatial_hat[8])); ax[1].set_title("spatial profile"); ax[1].set_xlabel("pixel")
+  ax[2].plot(k * 10, temporal_hat * np.sign(temporal_hat[3])); ax[2].set_title("temporal profile"); ax[2].set_xlabel("ms before spike")
+  plt.tight_layout(); plt.show()
+  print("separability", round(sep_index, 3))
+`} />
+
+The STA shows a positive centre flanked by a weaker negative surround, peaking about 30 ms before each spike and reversing sign further back: an ON-centre cell responding to light that has just increased in its centre. Because the receptive field is separable, the SVD splits it cleanly into a spatial profile (a difference of Gaussians) and a temporal one (biphasic). The separability index falls just short of 1 only because of estimation noise in the 240 numbers of the STA.
+
+<PyCell id="partB" title="Part B: measure the nonlinearity and predict the repeats" tests={String.raw`
+  import numpy as np
+  def test_nl():
+      "nl and centres describe the nonlinearity in 20 bins, rising with the generator"
+      assert nl.shape == (20,) and centres.shape == (20,)
+      assert nl[-1] > 5 * nl[0] and np.all(np.diff(centres) > 0)
+
+  def test_pred():
+      "pred has one predicted mean count per test frame and correlates with the PSTH above 0.7"
+      assert pred.shape == (500,)
+      assert r_model > 0.7
+`} prompt="Compute the training generator signal with the unit-length STA as the filter, split it into 20 quantile bins, and store the mean spike count (`nl`) and mean generator value (`centres`) of each bin. Then predict the test responses: compute the generator for `S_rep`, interpolate the nonlinearity with `np.interp(g, centres, nl)` to get `pred`, and store its correlation with the repeat-averaged PSTH in `r_model`."
+code={String.raw`
+  F_hat = sta / np.linalg.norm(sta)
+  g_train = generator(S, F_hat)
+  edges = np.quantile(g_train, np.linspace(0, 1, 21))
+  which = np.clip(np.digitize(g_train, edges) - 1, 0, 19)
+  nl = ...
+  centres = ...
+
+  pred = ...
+  psth = repeats.mean(axis=0)
+  r_model = ...
+
+  fig, ax = plt.subplots(1, 2, figsize=(10, 3))
+  ax[0].plot(centres, nl, "o-"); ax[0].set_xlabel("generator signal"); ax[0].set_ylabel("spikes per frame"); ax[0].set_title("measured nonlinearity")
+  ax[1].plot(np.arange(200) * 10, psth[:200], label="PSTH (40 repeats)"); ax[1].plot(np.arange(200) * 10, pred[:200], label="model")
+  ax[1].set_xlabel("time (ms)"); ax[1].legend(frameon=False); plt.tight_layout(); plt.show()
+  print("correlation of model with PSTH:", round(r_model, 3))
+`}
+hint="nl = np.array([spikes[which == b].mean() for b in range(20)]); centres = np.array([g_train[which == b].mean() for b in range(20)]). pred = np.interp(generator(S_rep, F_hat), centres, nl); r_model = np.corrcoef(pred, psth)[0, 1]."
+solution={String.raw`
+  F_hat = sta / np.linalg.norm(sta)
+  g_train = generator(S, F_hat)
+  edges = np.quantile(g_train, np.linspace(0, 1, 21))
+  which = np.clip(np.digitize(g_train, edges) - 1, 0, 19)
+  nl = np.array([spikes[which == b].mean() for b in range(20)])
+  centres = np.array([g_train[which == b].mean() for b in range(20)])
+
+  pred = np.interp(generator(S_rep, F_hat), centres, nl)
+  psth = repeats.mean(axis=0)
+  r_model = np.corrcoef(pred, psth)[0, 1]
+
+  fig, ax = plt.subplots(1, 2, figsize=(10, 3))
+  ax[0].plot(centres, nl, "o-"); ax[0].set_xlabel("generator signal"); ax[0].set_ylabel("spikes per frame"); ax[0].set_title("measured nonlinearity")
+  ax[1].plot(np.arange(200) * 10, psth[:200], label="PSTH (40 repeats)"); ax[1].plot(np.arange(200) * 10, pred[:200], label="model")
+  ax[1].set_xlabel("time (ms)"); ax[1].legend(frameon=False); plt.tight_layout(); plt.show()
+  print("correlation of model with PSTH:", round(r_model, 3))
+`} />
+
+**Part C: how good is good?** A correlation of 0.78 sounds decent, but even the true model could not reach 1, because the PSTH from 40 repeats still contains Poisson noise. To know how much of the explainable structure your model captures, estimate the **noise ceiling**: split the repeats into two halves, correlate their PSTHs ($r_{\text{half}}$), and correct for using half the data with the Spearman-Brown formula, $r_{\text{full}} = 2r_{\text{half}}/(1 + r_{\text{half}})$. That is the reliability of the full PSTH; the best possible correlation of any model with it is $\sqrt{r_{\text{full}}}$.
+
+<PyCell id="partC" title="Part C: the noise ceiling" tests={String.raw`
+  import numpy as np
+  def test_reliability():
+      "r_half and r_full follow the definitions"
+      A, B = repeats[::2].mean(axis=0), repeats[1::2].mean(axis=0)
+      assert np.isclose(r_half, np.corrcoef(A, B)[0, 1])
+      assert np.isclose(r_full, 2 * r_half / (1 + r_half))
+
+  def test_normalised():
+      "the model reaches more than 70% of the ceiling"
+      assert np.isclose(normalised, r_model / np.sqrt(r_full))
+      assert normalised > 0.7
+`} prompt="Compute `r_half` from even and odd repeats, the corrected reliability `r_full`, and the model's normalised correlation, `normalised` = `r_model` divided by the ceiling $\sqrt{r_{\text{full}}}$. How much of the explainable response does the LN model capture?"
+code={String.raw`
+  r_half = ...
+  r_full = ...
+  normalised = ...
+  print(f"split-half {r_half:.3f}, reliability {r_full:.3f}, ceiling {np.sqrt(r_full):.3f};  model {r_model:.3f} = {100 * normalised:.0f}% of the ceiling")
+`}
+hint="r_half = np.corrcoef(repeats[::2].mean(axis=0), repeats[1::2].mean(axis=0))[0, 1]; r_full = 2 * r_half / (1 + r_half); normalised = r_model / np.sqrt(r_full)."
+solution={String.raw`
+  r_half = np.corrcoef(repeats[::2].mean(axis=0), repeats[1::2].mean(axis=0))[0, 1]
+  r_full = 2 * r_half / (1 + r_half)
+  normalised = r_model / np.sqrt(r_full)
+  print(f"split-half {r_half:.3f}, reliability {r_full:.3f}, ceiling {np.sqrt(r_full):.3f};  model {r_model:.3f} = {100 * normalised:.0f}% of the ceiling")
+`} />
+
+The ceiling is close to 1 here, and the model reaches about 80% of it. The shortfall comes from the coarse 20-bin nonlinearity and from the STA's estimation noise, since the true model is exactly an LN model. With a real cell the gap would also contain everything the LN model leaves out (adaptation, spike history, nonlinear spatial pooling), and comparing models against a noise ceiling is how the field decides whether that gap matters (Weeks 35 and 133).
+
+**Part D (in your journal).** Real retinal ganglion cells adapt to contrast: their filter becomes faster and their gain lower when the stimulus contrast rises. How would that show up if you estimated the LN model separately at high and low contrast, and why can a single LN model not capture it?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The membrane's response to a single input pulse" task="A membrane $\tau\dot{V} = -V + RI(t)$ at rest receives a very brief current pulse that delivers a charge Q at t = 0, so that $I(t) = Q\,\delta(t)$, where $\delta$ is a spike of unit area. Using the convolution form of the solution, show that $V(t) = \frac{Q}{C}e^{-t/\tau}$ for $t \gt 0$, and interpret the result.">
+
+The solution is $V(t) = \int_{-\infty}^{t}\frac{1}{\tau}e^{-(t - s)/\tau}RI(s)\,ds$. With $I(s) = Q\,\delta(s)$, the integral picks out the integrand at $s = 0$: $V(t) = \frac{1}{\tau}e^{-t/\tau}RQ$.
+
+Since $\tau = RC$, $\frac{RQ}{\tau} = \frac{RQ}{RC} = \frac{Q}{C}$, so $V(t) = \frac{Q}{C}e^{-t/\tau}$.
+
+The pulse instantly charges the capacitor by $Q/C$, the basic relation between charge and voltage, and the charge then leaks away with time constant $\tau$. This impulse response is exactly the kernel of the convolution: the membrane's response to any input is a sum of such decaying steps, one for each moment of input.
+
+</Prove>
+
+<Prove title="2. The area of a convolution" task="Show that for integrable functions $\int(f * g)(t)\,dt = \left(\int f\right)\left(\int g\right)$. Use it to show that convolving a rate $r(t)$ with a normalised kernel leaves the expected spike count unchanged.">
+
+$\int(f * g)(t)\,dt = \int\int f(s)g(t - s)\,ds\,dt$. Swap the order of integration and substitute $u = t - s$ in the inner integral: $\int f(s)\left(\int g(u)\,du\right)ds = \left(\int g\right)\left(\int f\right)$.
+
+With $f = r$ and $g$ a kernel of area 1, $\int(r * g) = \int r$: the smoothed rate has the same integral, so the same expected spike count, as the original. Smoothing redistributes spikes in time; it never creates or destroys them (Day 3, in continuous form).
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 10 quiz (15 questions)" questions={[
+  { q: "$\\int_a^b r(t)dt$ for a firing rate is...", options: ["The peak rate", "The expected spike count", "The mean interval", "The derivative"], answer: 1, explain: "Rate times time, accumulated." },
+  { q: "The trapezoid rule's error scales like...", options: ["$\\Delta t$", "$\\Delta t^2$", "$\\Delta t^4$", "It is exact"], answer: 1, explain: "Second order." },
+  { q: "$\\int_0^\\infty Ae^{-t/\\tau}dt$ is...", options: ["A", "τ", "Aτ", "A/τ"], answer: 2, explain: "Height times time constant." },
+  { q: "The fundamental theorem says $\\frac{d}{dt}\\int_0^t r(s)ds$ is...", options: ["0", "r(t)", "t", "r(0)"], answer: 1, explain: "Integration and differentiation undo each other." },
+  { q: "For constant input the membrane voltage approaches RI...", options: ["Linearly", "Exponentially with time constant τ", "Instantly", "Never"], answer: 1, explain: "$V_\\infty + (V_0 - V_\\infty)e^{-t/\\tau}$." },
+  { q: "The membrane's response to arbitrary input is...", options: ["The input itself", "The input convolved with an exponential kernel", "The input's derivative", "A step"], answer: 1, explain: "It is a low-pass filter." },
+  { q: "The LIF neuron's time to threshold from rest is...", options: ["$\\tau\\theta/RI$ exactly", "$\\tau\\ln\\frac{RI}{RI - \\theta}$", "$\\tau$", "$RI/\\theta$"], answer: 1, explain: "From the exact solution." },
+  { q: "Full convolution of length-5 and length-3 sequences has length...", options: ["5", "7", "8", "15"], answer: 1, explain: "N + M − 1." },
+  { q: "A wide smoothing kernel gives rate estimates with high...", options: ["Variance", "Bias", "Spike counts", "Resolution"], answer: 1, explain: "It blurs fast changes." },
+  { q: "Kernel width should be chosen by...", options: ["Eye", "Cross-validation over trials", "The largest value", "The spike count"], answer: 1, explain: "Smooth half, test on the other half." },
+  { q: "In an LNP model the L stage is...", options: ["A Poisson draw", "A causal convolution of the stimulus", "An exponential", "A threshold"], answer: 1, explain: "The generator signal." },
+  { q: "For Gaussian white noise the STA is proportional to...", options: ["The nonlinearity", "The linear filter", "The spike rate", "Zero"], answer: 1, explain: "Stein's lemma." },
+  { q: "A Gabor kernel models...", options: ["Retinal centre-surround cells", "V1 simple cells", "Complex cells", "Photoreceptors"], answer: 1, explain: "An oriented grating in a Gaussian window." },
+  { q: "Max pooling over position gives...", options: ["Translation equivariance", "Approximate translation invariance", "Orientation tuning", "Higher resolution"], answer: 1, explain: "Like a complex cell." },
+  { q: "The noise ceiling of a PSTH is set by...", options: ["The model's parameters", "Trial-to-trial variability across repeats", "The stimulus contrast", "The bin width only"], answer: 1, explain: "Split-half reliability, corrected." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Chichilnisky (2001) its third pass and write your critique under the five headings. Focus on one question: **white noise made the linear-nonlinear model easy to estimate; does a model estimated with white noise describe how the cell responds to the natural world?** Consider what white noise lacks (spatial and temporal correlations, a natural range of contrasts), what adaptation does to the filter, and how you would test the model with natural movies.
+
+<Callout kind="research">
+Predicting responses to natural stimuli, and comparing with the noise ceiling, is the modern test of an encoding model, from the retina (deep networks trained on retinal data) to visual cortex (Week 133). Write down one stimulus set you would use to show where the LN model breaks down, and what you would expect to see.
+</Callout>
+
+<Key title="Week 10 review checklist">
+<ul>
+<li>I can interpret integrals as accumulated totals and compute them with midpoint and trapezoid sums.</li>
+<li>I can compute expected spike counts and use cumulative sums to illustrate the fundamental theorem.</li>
+<li>I can solve the membrane equation exactly and with Euler steps, and derive the LIF f-I curve.</li>
+<li>I can implement convolution and smooth spike trains with a cross-validated kernel width.</li>
+<li>I can simulate an LNP model, recover its filter by spike-triggered averaging and measure its nonlinearity.</li>
+<li>I can implement 2D convolution, build centre-surround and Gabor kernels, and explain equivariance and pooling.</li>
+<li>I can evaluate an encoding model against a noise ceiling.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part D: how would contrast adaptation show up in LN models fitted at high and low contrast, and why can one LN model not capture it? Then describe the stimulus set you proposed for breaking the LN model." />
