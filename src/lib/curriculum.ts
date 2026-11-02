@@ -151,6 +151,14 @@ export const DAY_TITLES: Record<number, string[]> = {
     "Optimisation in practice: early stopping, schedules and weight decay",
     "Forge: Week 13 challenge, quiz and deep read",
   ],
+  15: [
+    "Random variables and distributions: describing variable responses",
+    "Expectation, variance and the binomial: quantal synaptic release",
+    "The Poisson distribution: limits, intervals and over-dispersion",
+    "Continuous distributions, the Gaussian and the central limit theorem",
+    "Simulating randomness: inverse transforms, thinning and dropout",
+    "Forge: Week 15 challenge, quiz and deep read",
+  ],
 };
 
 export const DAYS_PER_WEEK = 6;
@@ -179,7 +187,7 @@ export function dayTitle(w: number, d: number): string {
 }
 
 /** Weeks whose lesson files exist. Kept in sync by hand as content is written. */
-export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
 export const isWritten = (w: number) => WRITTEN_WEEKS.includes(w);
 
 /** Every lesson that is published, in order. */

@@ -1,0 +1,273 @@
+export const meta = {
+  title: "Random variables and distributions: describing variable responses",
+  intro: "Show a neuron the same stimulus a hundred times and you get a hundred different spike counts. Ask a network to sample a sentence twice and you get two different sentences. Neither is broken: both are random, and the right description of a random quantity is not a single number but a distribution. This week builds the language of probability that the rest of the course relies on. Today you meet outcomes, events and the rules of probability; random variables and their probability mass and cumulative distribution functions; joint distributions of two neurons and what it means for them to be independent; and the law of large numbers, which tells you how much data you need.",
+  goals: [
+    "Use the axioms of probability to compute the probabilities of events",
+    "Describe a discrete random variable by its probability mass function and its cumulative distribution function",
+    "Compute marginal distributions from a joint distribution and test for independence",
+    "Explain the law of large numbers and the one over root n rule for sampling error",
+  ],
+  plan: [
+    { label: "Predict and the rules of probability", minutes: 20 },
+    { label: "Random variables, PMFs and CDFs", minutes: 30 },
+    { label: "Two neurons: joint distributions and independence", minutes: 30 },
+    { label: "The law of large numbers", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "tolhurst-1983",
+};
+
+<Predict question="A neuron fires 4 spikes on average in response to a stimulus, and its counts are Poisson. On a single trial, which is more likely: exactly 4 spikes, or any number other than 4?" />
+
+<Step n={1} title="The rules of probability" minutes={20} />
+
+An experiment, such as one presentation of a stimulus, has a set of possible **outcomes**, its **sample space** $\Omega$. An **event** is a set of outcomes, such as "the neuron fired at least 5 spikes". A probability assigns to each event $A$ a number $P(A)$ that obeys three rules (Kolmogorov, 1933):
+
+1. $P(A) \ge 0$ for every event.
+2. $P(\Omega) = 1$: something happens.
+3. If $A$ and $B$ cannot both happen, $P(A \text{ or } B) = P(A) + P(B)$ (and likewise for any countable list of such events).
+
+Everything else follows. The complement rule $P(\text{not } A) = 1 - P(A)$ comes from rules 2 and 3, and for events that can overlap, $P(A \text{ or } B) = P(A) + P(B) - P(A \text{ and } B)$, since otherwise the overlap is counted twice.
+
+What probability *means* is a separate question. The **frequentist** reading is the long-run fraction of repetitions in which the event happens; the **Bayesian** reading is a degree of belief, which can apply to a single event such as "this neuron is tuned to motion" (Week 16). The rules are the same either way.
+
+<Video id="SL0_6rw8zrM" title="Basic Probability" by="Neuromatch Academy (prerequisite course)" note="Neuromatch's introduction to probability, events and distributions, from the statistics day of its prerequisite course." />
+
+<Step n={2} title="Random variables, PMFs and CDFs" minutes={30} />
+
+A **random variable** $X$ is a rule that assigns a number to each outcome: the spike count, the reaction time, the label a network predicts. A **discrete** random variable takes values in a list (counts 0, 1, 2, ...), and is described by its **probability mass function** (PMF)
+
+$$
+p(k) = P(X = k), \qquad \sum_k p(k) = 1,
+$$
+
+or equivalently by its **cumulative distribution function** (CDF), $F(x) = P(X \le x)$, which rises in steps from 0 to 1. Probabilities of ranges come straight from the CDF: $P(a \lt X \le b) = F(b) - F(a)$. The **quantile** at level $q$ is the smallest $x$ with $F(x) \ge q$; the median is the quantile at 0.5.
+
+<Figure caption="Draw samples from a distribution. The histogram of relative frequencies approaches the probability mass function as the number of samples grows." credit="Interactive figure by Engram.">
+  <SampleHistogram />
+</Figure>
+
+<PyCell id="pmf" title="A PMF from data" tests={String.raw`
+  import numpy as np
+  def test_pmf():
+      "pmf sums to 1 and matches the relative frequencies"
+      assert abs(pmf.sum() - 1) < 1e-12 and abs(pmf[4] - np.mean(counts == 4)) < 1e-12
+
+  def test_cdf():
+      "cdf is the running sum of the pmf"
+      assert np.allclose(cdf, np.cumsum(pmf))
+
+  def test_events():
+      "P(X = 4) and P(X >= 5) are computed correctly from the pmf and cdf"
+      assert abs(p_four - np.mean(counts == 4)) < 1e-12
+      assert abs(p_five_or_more - np.mean(counts >= 5)) < 1e-12
+
+  def test_median():
+      "the median is the smallest k with cdf at least 0.5"
+      assert median == int(np.argmax(cdf >= 0.5))
+`} prompt="Here are spike counts from 2,000 presentations of one stimulus. Build the empirical PMF `pmf` (index k holds the fraction of trials with k spikes) and CDF `cdf`. Use them to find `p_four` = P(X = 4), `p_five_or_more` = P(X ≥ 5) via the complement rule, and the `median`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1983)
+  counts = rng.poisson(4.0, 2000)
+
+  pmf = ...                       # np.bincount helps
+  cdf = ...
+  p_four = ...
+  p_five_or_more = ...            # 1 minus P(X <= 4)
+  median = ...
+  print(f"P(X = 4) = {p_four:.3f},  P(X != 4) = {1 - p_four:.3f},  P(X >= 5) = {p_five_or_more:.3f},  median = {median}")
+  plt.bar(np.arange(len(pmf)), pmf, label="PMF"); plt.step(np.arange(len(cdf)), cdf, where="post", color="k", label="CDF")
+  plt.xlabel("spike count"); plt.legend(); plt.show()
+`}
+hint="pmf = np.bincount(counts) / len(counts); cdf = np.cumsum(pmf); p_four = pmf[4]; p_five_or_more = 1 - cdf[4]; median = int(np.argmax(cdf >= 0.5))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1983)
+  counts = rng.poisson(4.0, 2000)
+
+  pmf = np.bincount(counts) / len(counts)                       # np.bincount helps
+  cdf = np.cumsum(pmf)
+  p_four = pmf[4]
+  p_five_or_more = 1 - cdf[4]            # 1 minus P(X <= 4)
+  median = int(np.argmax(cdf >= 0.5))
+  print(f"P(X = 4) = {p_four:.3f},  P(X != 4) = {1 - p_four:.3f},  P(X >= 5) = {p_five_or_more:.3f},  median = {median}")
+  plt.bar(np.arange(len(pmf)), pmf, label="PMF"); plt.step(np.arange(len(cdf)), cdf, where="post", color="k", label="CDF")
+  plt.xlabel("spike count"); plt.legend(); plt.show()
+`} />
+
+Even the most likely count, 4, turns up on only about one trial in five. Getting some other number is four times as likely, which answers the prediction. The mean is a summary of a distribution, not a typical outcome, and a single trial tells you little about it. Tolhurst, Movshon and Dean (1983, today's paper) measured exactly this spread in visual cortex and found it is the rule, not the exception.
+
+<Step n={3} title="Two neurons: joint distributions and independence" minutes={30} />
+
+For two random variables, the **joint PMF** $p(a, b) = P(X = a \text{ and } Y = b)$ gives the probability of every pair of values. Summing over one variable gives the **marginal** distribution of the other:
+
+$$
+p_X(a) = \sum_b p(a, b), \qquad p_Y(b) = \sum_a p(a, b).
+$$
+
+$X$ and $Y$ are **independent** if $p(a, b) = p_X(a)\,p_Y(b)$ for every pair: knowing one tells you nothing about the other. Neurons recorded together are rarely independent. A common reason is a shared fluctuation, such as the animal's arousal or attention, that scales both neurons' responses up or down together from trial to trial.
+
+<PyCell id="joint" title="Shared gain makes neurons dependent" tests={String.raw`
+  import numpy as np
+  def test_joint():
+      "joint is a normalised 2-D table of relative frequencies"
+      assert abs(joint.sum() - 1) < 1e-12 and abs(joint[0, 0] - np.mean((a == 0) & (b == 0))) < 1e-12
+
+  def test_marginals():
+      "the marginals are the row and column sums"
+      assert np.allclose(pa, joint.sum(1)) and np.allclose(pb, joint.sum(0))
+
+  def test_dependence():
+      "with a shared gain, the joint differs from the product of marginals much more than for independent neurons"
+      assert gap_shared > 3 * gap_indep
+`} prompt="Two neurons share a random gain g on each trial. Build `joint(a, b)` from their counts, its marginals `pa` and `pb`, and the largest absolute difference between the joint table and the outer product of the marginals, `gap_shared`. Repeat with a fixed gain to get `gap_indep`."
+code={String.raw`
+  T = 20000
+  g = rng.gamma(5.0, 1 / 5.0, T)                  # shared gain: mean 1, varies from trial to trial
+  a = rng.poisson(3 * g); b = rng.poisson(5 * g)
+
+  def joint_table(a, b):
+      J = np.zeros((a.max() + 1, b.max() + 1))
+      np.add.at(J, (a, b), 1)
+      return J / len(a)
+
+  joint = joint_table(a, b)
+  pa, pb = ..., ...
+  gap_shared = ...
+
+  a2, b2 = rng.poisson(3, T), rng.poisson(5, T)    # fixed gain
+  J2 = joint_table(a2, b2)
+  gap_indep = ...
+  print(f"largest |joint - product|: shared gain {gap_shared:.4f}, fixed gain {gap_indep:.4f}")
+  print("P(both silent) =", round(joint[0, 0], 4), " product of marginals =", round(pa[0] * pb[0], 4))
+`}
+hint="pa, pb = joint.sum(1), joint.sum(0); gap_shared = np.abs(joint - np.outer(pa, pb)).max(); gap_indep the same with J2 and its own marginals."
+solution={String.raw`
+  T = 20000
+  g = rng.gamma(5.0, 1 / 5.0, T)                  # shared gain: mean 1, varies from trial to trial
+  a = rng.poisson(3 * g); b = rng.poisson(5 * g)
+
+  def joint_table(a, b):
+      J = np.zeros((a.max() + 1, b.max() + 1))
+      np.add.at(J, (a, b), 1)
+      return J / len(a)
+
+  joint = joint_table(a, b)
+  pa, pb = joint.sum(1), joint.sum(0)
+  gap_shared = np.abs(joint - np.outer(pa, pb)).max()
+
+  a2, b2 = rng.poisson(3, T), rng.poisson(5, T)    # fixed gain
+  J2 = joint_table(a2, b2)
+  gap_indep = np.abs(J2 - np.outer(J2.sum(1), J2.sum(0))).max()
+  print(f"largest |joint - product|: shared gain {gap_shared:.4f}, fixed gain {gap_indep:.4f}")
+  print("P(both silent) =", round(joint[0, 0], 4), " product of marginals =", round(pa[0] * pb[0], 4))
+`} />
+
+With a shared gain both neurons tend to be silent together, or busy together, more often than independence predicts: here both are silent on 0.86% of trials, against 0.32% if they were independent. With a fixed gain the joint table matches the product of its marginals up to sampling noise. Fluctuations shared across a population are now known to be a large part of cortical variability, and you will measure them properly as noise correlations (Week 16) and partition them on Day 3.
+
+<Step n={4} title="The law of large numbers" minutes={25} />
+
+If $X_1, X_2, \dots, X_n$ are independent draws from the same distribution with mean $\mu$, their average $\bar{X}_n$ gets closer to $\mu$ as $n$ grows: this is the **law of large numbers**, the bridge between probability as a rule and probability as a long-run frequency. How close? The typical error, the **standard error**, is $\sigma/\sqrt{n}$, where $\sigma$ is the standard deviation of one draw (tomorrow you will prove it). Quadrupling the data only halves the error.
+
+<PyCell id="lln" title="One over root n" tests={String.raw`
+  import numpy as np
+  def test_errors():
+      "errors has one entry per n, each the standard deviation of 2000 sample means"
+      assert len(errors) == len(ns) and np.all(np.diff(errors) < 0)
+
+  def test_slope():
+      "on log-log axes the error falls with slope close to -1/2"
+      assert abs(slope + 0.5) < 0.05
+
+  def test_formula():
+      "the error at n = 100 is close to sigma / sqrt(100) = 0.2"
+      assert abs(errors[list(ns).index(100)] - 0.2) < 0.02
+`} prompt="For each n in `ns`, draw 2,000 independent samples of size n from a Poisson distribution with mean 4, compute each sample's mean, and store the standard deviation of those means in `errors`. Fit the slope of log(error) against log(n)."
+code={String.raw`
+  ns = np.array([4, 10, 25, 100, 400, 1600])
+  errors = []
+  for n in ns:
+      means = ...                                    # 2000 sample means, each from n draws
+      errors.append(...)
+  errors = np.array(errors)
+  slope = np.polyfit(np.log(ns), np.log(errors), 1)[0]
+  print("errors:", errors.round(4), " slope:", round(slope, 3), " sigma / sqrt(n):", (2 / np.sqrt(ns)).round(4))
+  plt.loglog(ns, errors, "o-", label="measured"); plt.loglog(ns, 2 / np.sqrt(ns), "k--", label="σ/√n"); plt.xlabel("n"); plt.legend(); plt.show()
+`}
+hint="means = rng.poisson(4.0, (2000, n)).mean(axis=1); errors.append(means.std())."
+solution={String.raw`
+  ns = np.array([4, 10, 25, 100, 400, 1600])
+  errors = []
+  for n in ns:
+      means = rng.poisson(4.0, (2000, n)).mean(axis=1)                                    # 2000 sample means, each from n draws
+      errors.append(means.std())
+  errors = np.array(errors)
+  slope = np.polyfit(np.log(ns), np.log(errors), 1)[0]
+  print("errors:", errors.round(4), " slope:", round(slope, 3), " sigma / sqrt(n):", (2 / np.sqrt(ns)).round(4))
+  plt.loglog(ns, errors, "o-", label="measured"); plt.loglog(ns, 2 / np.sqrt(ns), "k--", label="σ/√n"); plt.xlabel("n"); plt.legend(); plt.show()
+`} />
+
+The slope is $-\tfrac{1}{2}$, as promised. This one fact decides how many trials an experiment needs and how many samples a Monte Carlo estimate needs (Day 5), and it is why averaging over a pool of neurons, if their noise is independent, makes a signal more reliable.
+
+<Bridge title="Distributions in brains and machines"
+  neuro="A neuron's response to a stimulus is a distribution over spike counts, and the shape of that distribution, especially how its variance grows with its mean, constrains how the brain can read it out. Tolhurst and colleagues found variance roughly proportional to the mean throughout visual cortex."
+  ai="A classifier's softmax output is a PMF over labels, and a language model outputs a PMF over the next token at every step. Sampling from it, rather than always taking the most likely token, is what makes generated text varied (Day 5).">
+
+A single response is one draw; the distribution is the thing to describe.
+
+</Bridge>
+
+<Prove title="The inclusion-exclusion rule" task="Using only the three rules of probability, show that $P(A \text{ or } B) = P(A) + P(B) - P(A \text{ and } B)$.">
+
+Split $A \text{ or } B$ into three pieces that cannot overlap: $A$ without $B$, $B$ without $A$, and $A$ and $B$ together. By rule 3,
+
+$$
+P(A \text{ or } B) = P(A \text{ only}) + P(B \text{ only}) + P(A \text{ and } B).
+$$
+
+Likewise $A$ splits into "$A$ only" and "$A$ and $B$", so $P(A \text{ only}) = P(A) - P(A \text{ and } B)$, and similarly for $B$.
+
+Substituting gives $P(A) + P(B) - P(A \text{ and } B)$. The subtraction removes the overlap, which would otherwise be counted twice.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "The sample space is...", options: ["The most likely outcome", "The set of all possible outcomes", "The mean", "An event with probability 0"], answer: 1, explain: "Ω." },
+  { q: "If P(A) = 0.3, then P(not A) is...", options: ["0.3", "0.7", "1.3", "Unknown"], answer: 1, explain: "The complement rule." },
+  { q: "A probability mass function must...", options: ["Be increasing", "Sum to 1 over all values", "Be less than 0.5", "Be symmetric"], answer: 1, explain: "Something happens." },
+  { q: "P(a less than X, X at most b) equals...", options: ["F(a) − F(b)", "F(b) − F(a)", "F(b)", "p(b) − p(a)"], answer: 1, explain: "Differences of the CDF." },
+  { q: "Two random variables are independent when...", options: ["They have the same mean", "Their joint PMF equals the product of the marginals everywhere", "They are uncorrelated at one value", "Their marginals are equal"], answer: 1, explain: "Knowing one tells you nothing about the other." },
+  { q: "A shared gain fluctuation across trials makes two neurons...", options: ["Independent", "Dependent", "Identical", "Silent"], answer: 1, explain: "Both go up and down together." },
+  { q: "To halve the standard error of a sample mean you need...", options: ["Twice the data", "Four times the data", "Half the data", "√2 times the data"], answer: 1, explain: "$\\sigma/\\sqrt{n}$." },
+]} />
+
+<Flashcards cards={[
+  { front: "Kolmogorov's three rules?", back: "P(A) ≥ 0; P(Ω) = 1; probabilities of events that cannot overlap add." },
+  { front: "PMF and CDF?", back: "$p(k) = P(X = k)$; $F(x) = P(X \\le x)$, the running sum of the PMF." },
+  { front: "Marginal from joint?", back: "$p_X(a) = \\sum_b p(a, b)$." },
+  { front: "Independence?", back: "$p(a, b) = p_X(a)p_Y(b)$ for every pair." },
+  { front: "Standard error of a mean?", back: "$\\sigma/\\sqrt{n}$ for n independent draws." },
+]} />
+
+<Predict revisit question="With a mean of 4 Poisson spikes, is exactly 4 more likely than anything else?" />
+
+<Key title="Before you go">
+<ul>
+<li>Probabilities follow three rules; everything else, such as the complement and inclusion-exclusion rules, follows from them.</li>
+<li>A discrete random variable is described by its PMF or, equivalently, its CDF.</li>
+<li>Joint distributions give marginals by summing; independence means the joint factorises.</li>
+<li>Averages converge to expectations with error σ/√n.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Tolhurst, Movshon and Dean (1983), <em>The statistical reliability of signals in single neurons in cat and monkey visual cortex</em>. Focus on the variance against mean plots.</li>
+<li>Joseph Blitzstein and Jessica Hwang, <em>Introduction to Probability</em> (second edition, 2019), chapters 1 and 3; free online from the authors, with Blitzstein's Harvard Stat 110 lectures.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Two neurons in your recording are almost always silent together. Write down two different explanations, one involving a shared input and one not, and an analysis that could tell them apart." />

@@ -1,0 +1,301 @@
+export const meta = {
+  title: "The Poisson distribution: limits, intervals and over-dispersion",
+  intro: "In Week 2 you simulated Poisson spike trains and measured their Fano factor. Today you find out where the Poisson distribution comes from and what it implies. It is the limit of the binomial when there are many chances and each is rare, which is why it describes vesicles, photons and spikes alike. Its intervals are exponential and memoryless, sums of Poisson counts are Poisson, and its variance equals its mean. Real cortical neurons break that last rule in a revealing way: their variance grows faster than their mean, and a simple model with a fluctuating gain explains why.",
+  goals: [
+    "Derive the Poisson distribution as a limit of the binomial, and its mean and variance",
+    "Show that Poisson intervals are exponential and memoryless, and contrast them with gamma intervals",
+    "Use the superposition property for pooled spike counts",
+    "Fit a modulated Poisson model to over-dispersed counts and separate the two sources of variance",
+  ],
+  plan: [
+    { label: "Predict and the Poisson limit", minutes: 25 },
+    { label: "Intervals and memorylessness", minutes: 25 },
+    { label: "Superposition", minutes: 15 },
+    { label: "Over-dispersion", minutes: 40 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "shadlen-1998",
+};
+
+<Predict question="A neuron fires as a Poisson process at 20 spikes per second. It has just been silent for 100 ms, twice its average interval. Is the next spike now more likely than usual to come in the next 10 ms, less likely, or exactly as likely?" />
+
+<Step n={1} title="The Poisson limit" minutes={25} />
+
+Divide a window into $n$ tiny bins, each holding a spike with probability $p = \lambda/n$, independently. The count is binomial($n$, $\lambda/n$). As the bins shrink ($n \to \infty$ with $\lambda$ fixed), it converges to the **Poisson distribution**
+
+$$
+P(K = k) = \frac{\lambda^k e^{-\lambda}}{k!}, \qquad k = 0, 1, 2, \dots
+$$
+
+<Derivation title="From binomial to Poisson">
+
+<div>
+
+Write the binomial probability with $p = \lambda/n$:
+
+$$
+\binom{n}{k}\left(\frac{\lambda}{n}\right)^k\left(1 - \frac{\lambda}{n}\right)^{n - k} = \frac{\lambda^k}{k!}\cdot\frac{n(n-1)\cdots(n-k+1)}{n^k}\cdot\left(1 - \frac{\lambda}{n}\right)^{n}\cdot\left(1 - \frac{\lambda}{n}\right)^{-k}.
+$$
+
+</div>
+
+<div>
+
+For fixed $k$, as $n \to \infty$: the second factor is a product of $k$ terms each tending to 1; the third tends to $e^{-\lambda}$ (the definition of the exponential, Week 8); the fourth tends to 1.
+
+</div>
+
+<div>
+
+What remains is $\lambda^k e^{-\lambda}/k!$. The binomial mean $np = \lambda$ and variance $np(1 - p) = \lambda(1 - \lambda/n)$ tend to $\lambda$ as well, so a Poisson variable has **mean equal to variance**, $\lambda$.
+
+</div>
+
+</Derivation>
+
+This is why the Poisson distribution turns up wherever many independent opportunities each rarely succeed: vesicles from many sites at low release probability (yesterday), photons absorbed from a dim light, and, roughly, spikes.
+
+<Figure caption="The binomial with n bins and p = λ/n against the Poisson distribution. Increase n to watch them merge." credit="Interactive figure by Engram.">
+  <BinomialPoisson />
+</Figure>
+
+<Video id="E_nvNb596DY" title="Poisson distribution" by="Neuromatch Academy (prerequisite course)" note="Neuromatch's introduction to the Poisson distribution and its use for spike counts." />
+
+<PyCell id="limit" title="How fast does the binomial become Poisson?" tests={String.raw`
+  import numpy as np
+  def test_pmfs():
+      "both PMFs sum to almost 1 over 0..30"
+      assert abs(sum(poisson_pmf(k, 3) for k in range(31)) - 1) < 1e-9
+      assert abs(sum(binom_pmf(k, 100, 0.03) for k in range(31)) - 1) < 1e-9
+
+  def test_shrinks():
+      "the total variation distance falls roughly like 1/n"
+      assert tv[0] > tv[1] > tv[2] and 5 < tv[0] / tv[1] < 15 and 5 < tv[1] / tv[2] < 15
+`} prompt="Write `poisson_pmf(k, lam)` and `binom_pmf(k, n, p)` with the `math` module. For λ = 3 and n = 10, 100 and 1000, compute the total variation distance, half the sum over k = 0..30 of |binomial − Poisson|, and store the three values in `tv`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from math import comb, exp, factorial
+
+  def poisson_pmf(k, lam):
+      return ...
+
+  def binom_pmf(k, n, p):
+      return ... if k <= n else 0.0
+
+  lam = 3
+  tv = [0.5 * sum(abs(binom_pmf(k, n, lam / n) - poisson_pmf(k, lam)) for k in range(31)) for n in [10, 100, 1000]]
+  print("total variation distance for n = 10, 100, 1000:", np.round(tv, 5))
+`}
+hint="poisson_pmf: lam ** k * exp(-lam) / factorial(k). binom_pmf: comb(n, k) * p ** k * (1 - p) ** (n - k)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from math import comb, exp, factorial
+
+  def poisson_pmf(k, lam):
+      return lam ** k * exp(-lam) / factorial(k)
+
+  def binom_pmf(k, n, p):
+      return comb(n, k) * p ** k * (1 - p) ** (n - k) if k <= n else 0.0
+
+  lam = 3
+  tv = [0.5 * sum(abs(binom_pmf(k, n, lam / n) - poisson_pmf(k, lam)) for k in range(31)) for n in [10, 100, 1000]]
+  print("total variation distance for n = 10, 100, 1000:", np.round(tv, 5))
+`} />
+
+Each tenfold increase in $n$ cuts the distance about tenfold. With 1-ms bins and rates of tens of spikes per second, $p$ is small, and the Bernoulli-bin simulation of Week 2 is already very close to Poisson.
+
+<Step n={2} title="Intervals and memorylessness" minutes={25} />
+
+In a **Poisson process** of rate $r$, the count in any window of length $t$ is Poisson($rt$), and counts in non-overlapping windows are independent. The probability of waiting longer than $t$ for the next event is the probability of no events in $t$:
+
+$$
+P(\text{wait} > t) = e^{-rt},
+$$
+
+so intervals are **exponential** with mean $1/r$ and standard deviation $1/r$, giving a coefficient of variation of 1. The exponential is **memoryless**: $P(\text{wait} > s + t \mid \text{wait} > s) = e^{-r(s+t)}/e^{-rs} = e^{-rt}$. Having waited already tells you nothing; the **hazard**, the instantaneous chance of an event given none so far, is constant at $r$. That answers the prediction: exactly as likely. Real neurons have a refractory period and are not memoryless at short times, which a **gamma** distribution of intervals, a sum of several exponential stages, captures better.
+
+<PyCell id="memory" title="Memoryless and not" tests={String.raw`
+  import numpy as np
+  def test_exponential():
+      "for exponential intervals, P(wait > 100 | wait > 50) matches P(wait > 50)"
+      assert abs(cond_exp - uncond_exp) < 0.03
+
+  def test_gamma():
+      "for gamma intervals of the same mean, having waited 50 ms makes a long further wait less likely"
+      assert cond_gam < uncond_gam - 0.1
+`} prompt="Draw 200,000 intervals at 20 Hz, once exponential and once gamma with shape 4 and the same mean. For each, compute the unconditional P(wait > 50 ms) and the conditional P(wait > 100 ms | wait > 50 ms)."
+code={String.raw`
+  rng = np.random.default_rng(1998)
+  isi_exp = rng.exponential(0.05, 200000)
+  isi_gam = rng.gamma(4.0, 0.05 / 4, 200000)
+
+  def survival_pair(isi):
+      uncond = ...                      # P(wait > 0.05)
+      cond = ...                        # P(wait > 0.10 | wait > 0.05)
+      return uncond, cond
+
+  uncond_exp, cond_exp = survival_pair(isi_exp)
+  uncond_gam, cond_gam = survival_pair(isi_gam)
+  print(f"exponential: P(>50 ms) = {uncond_exp:.3f}, P(>100 | >50) = {cond_exp:.3f}")
+  print(f"gamma(4):    P(>50 ms) = {uncond_gam:.3f}, P(>100 | >50) = {cond_gam:.3f}")
+  print("coefficients of variation:", round(isi_exp.std() / isi_exp.mean(), 3), round(isi_gam.std() / isi_gam.mean(), 3))
+`}
+hint="uncond = np.mean(isi > 0.05); cond = np.mean(isi[isi > 0.05] > 0.10)."
+solution={String.raw`
+  rng = np.random.default_rng(1998)
+  isi_exp = rng.exponential(0.05, 200000)
+  isi_gam = rng.gamma(4.0, 0.05 / 4, 200000)
+
+  def survival_pair(isi):
+      uncond = np.mean(isi > 0.05)                      # P(wait > 0.05)
+      cond = np.mean(isi[isi > 0.05] > 0.10)                        # P(wait > 0.10 | wait > 0.05)
+      return uncond, cond
+
+  uncond_exp, cond_exp = survival_pair(isi_exp)
+  uncond_gam, cond_gam = survival_pair(isi_gam)
+  print(f"exponential: P(>50 ms) = {uncond_exp:.3f}, P(>100 | >50) = {cond_exp:.3f}")
+  print(f"gamma(4):    P(>50 ms) = {uncond_gam:.3f}, P(>100 | >50) = {cond_gam:.3f}")
+  print("coefficients of variation:", round(isi_exp.std() / isi_exp.mean(), 3), round(isi_gam.std() / isi_gam.mean(), 3))
+`} />
+
+For gamma intervals, a neuron that has waited a while is "due": its hazard rises with time, so a long further wait becomes less likely, and its coefficient of variation is $1/\sqrt{4} = 0.5$, more regular than Poisson.
+
+<Step n={3} title="Superposition" minutes={15} />
+
+If $K_1, \dots, K_m$ are independent Poisson counts with means $\lambda_1, \dots, \lambda_m$, their sum is Poisson with mean $\sum_i\lambda_i$. Pooling the spikes of many independent Poisson neurons gives a Poisson process with the summed rate, which is why the input to a cortical neuron from thousands of synapses is often modelled as Poisson even if each input is not. (The sum of many independent, sparse, non-Poisson processes also tends towards Poisson, a result due to Palm and Khinchin.)
+
+<PyCell id="pool" title="Pooled counts" tests={String.raw`
+  import numpy as np
+  def test_pooled():
+      "the pooled count has mean close to the summed rate and a Fano factor close to 1"
+      assert abs(pooled.mean() - lam_total) / lam_total < 0.02 and abs(pooled.var() / pooled.mean() - 1) < 0.05
+`} prompt="Fifty independent neurons with rates drawn between 1 and 10 spikes per 100 ms window each give 5,000 Poisson counts. Sum across neurons to get `pooled`, and compare its mean and Fano factor with the total rate `lam_total`."
+code={String.raw`
+  rates = rng.uniform(1, 10, 50)
+  counts50 = rng.poisson(rates, (5000, 50))
+  pooled = ...
+  lam_total = ...
+  print(f"pooled mean {pooled.mean():.2f} (total rate {lam_total:.2f}), Fano factor {pooled.var() / pooled.mean():.3f}")
+`}
+hint="pooled = counts50.sum(axis=1); lam_total = rates.sum()."
+solution={String.raw`
+  rates = rng.uniform(1, 10, 50)
+  counts50 = rng.poisson(rates, (5000, 50))
+  pooled = counts50.sum(axis=1)
+  lam_total = rates.sum()
+  print(f"pooled mean {pooled.mean():.2f} (total rate {lam_total:.2f}), Fano factor {pooled.var() / pooled.mean():.3f}")
+`} />
+
+<Step n={4} title="Over-dispersion" minutes={40} />
+
+Recorded in an awake animal, cortical spike counts usually have Fano factors above 1, and the excess grows with the mean, just as Tolhurst and colleagues saw. A Poisson process cannot do this, but a Poisson process whose rate itself varies from trial to trial can. Let the rate on each trial be $g\,f(\theta)$, where $f(\theta)$ is the tuning curve and $g$ a gain with mean 1 and variance $\sigma_g^2$, shared by all spikes in the trial. By the **law of total variance** (Week 16),
+
+$$
+\operatorname{Var}(K) = \underbrace{\mathbb{E}[\operatorname{Var}(K \mid g)]}_{\text{Poisson part, } \mu} + \underbrace{\operatorname{Var}(\mathbb{E}[K \mid g])}_{\text{gain part, } \sigma_g^2\mu^2} = \mu + \sigma_g^2\mu^2.
+$$
+
+Goris, Movshon and Simoncelli (2014) fitted this **modulated Poisson** model to neurons in visual cortex and found that gain fluctuations account for much of the excess variability, more so in higher visual areas.
+
+<PyCell id="overdispersion" title="Partition the variability" tests={String.raw`
+  import numpy as np
+  def test_super_poisson():
+      "the Fano factor rises with the mean, and is above 1 at the preferred orientation"
+      assert fano[np.argmax(mu)] > 1.3 and np.corrcoef(mu, fano)[0, 1] > 0.9
+
+  def test_fit():
+      "the fitted gain variance is within 25% of the true 0.1"
+      assert abs(sigma2_hat - 0.1) / 0.1 < 0.25
+`} prompt="A neuron is tested at 8 orientations, 300 trials each, with a gamma-distributed gain of variance 0.1 on every trial. Compute the mean `mu` and variance `var` at each orientation, the Fano factors `fano`, and fit σ² in Var = μ + σ²μ² by least squares on (Var − μ) against μ²."
+code={String.raw`
+  thetas = np.linspace(0, np.pi, 8, endpoint=False)
+  f = 2 + 18 * np.exp(2 * (np.cos(2 * (thetas - np.pi / 2)) - 1))    # tuning curve: mean count per trial
+  sigma2 = 0.1
+  gain = rng.gamma(1 / sigma2, sigma2, (300, 8))                      # mean 1, variance 0.1
+  K = rng.poisson(gain * f)
+
+  mu = ...
+  var = ...
+  fano = var / mu
+  sigma2_hat = ...                                                    # least squares slope through the origin
+  print("mean:", mu.round(1)); print("Fano:", fano.round(2)); print(f"fitted gain variance {sigma2_hat:.3f} (true 0.1)")
+  m = np.linspace(0, mu.max() * 1.1, 100)
+  plt.plot(mu, var, "o"); plt.plot(m, m, "k--", label="Poisson"); plt.plot(m, m + sigma2_hat * m ** 2, label="modulated Poisson")
+  plt.xlabel("mean count"); plt.ylabel("variance"); plt.legend(); plt.show()
+`}
+hint="mu = K.mean(axis=0); var = K.var(axis=0, ddof=1); sigma2_hat = np.sum((var - mu) * mu ** 2) / np.sum(mu ** 4)."
+solution={String.raw`
+  thetas = np.linspace(0, np.pi, 8, endpoint=False)
+  f = 2 + 18 * np.exp(2 * (np.cos(2 * (thetas - np.pi / 2)) - 1))    # tuning curve: mean count per trial
+  sigma2 = 0.1
+  gain = rng.gamma(1 / sigma2, sigma2, (300, 8))                      # mean 1, variance 0.1
+  K = rng.poisson(gain * f)
+
+  mu = K.mean(axis=0)
+  var = K.var(axis=0, ddof=1)
+  fano = var / mu
+  sigma2_hat = np.sum((var - mu) * mu ** 2) / np.sum(mu ** 4)                                                    # least squares slope through the origin
+  print("mean:", mu.round(1)); print("Fano:", fano.round(2)); print(f"fitted gain variance {sigma2_hat:.3f} (true 0.1)")
+  m = np.linspace(0, mu.max() * 1.1, 100)
+  plt.plot(mu, var, "o"); plt.plot(m, m, "k--", label="Poisson"); plt.plot(m, m + sigma2_hat * m ** 2, label="modulated Poisson")
+  plt.xlabel("mean count"); plt.ylabel("variance"); plt.legend(); plt.show()
+`} />
+
+At low rates the counts look Poisson, because the $\mu$ term dominates; at the preferred orientation the gain term takes over and the Fano factor rises towards 3. A single Fano factor for a neuron is therefore not very meaningful: it depends on the stimulus. The model also predicts that gain fluctuations shared between neurons produce correlated variability, the dependence you saw on Day 1.
+
+<Bridge title="Poisson in brains and machines"
+  neuro="Shadlen and Newsome (1998, this week's deep read) argued that roughly Poisson variability is the natural state of a cortical neuron with balanced excitation and inhibition, and that it forces the brain to compute with pooled rates. The modulated Poisson model refines this: part of the variability is private noise, part is a shared gain that may reflect attention or arousal."
+  ai="Poisson likelihoods are the standard loss for count data, from spike-train GLMs (Week 12) to event models in machine learning. Poisson processes model arrival times in queues and in point-process neural networks, and the same thinning trick you will use on Day 5 simulates them.">
+
+Many rare chances give Poisson counts; a fluctuating rate on top gives the over-dispersion real neurons show.
+
+</Bridge>
+
+<Prove title="The mean of a Poisson variable" task="Show directly from the PMF that $\mathbb{E}[K] = \lambda$ for $K \sim$ Poisson($\lambda$). Then show that $\mathbb{E}[K(K-1)] = \lambda^2$ and deduce that $\operatorname{Var}(K) = \lambda$.">
+
+$\mathbb{E}[K] = \sum_{k \ge 0} k\,\frac{\lambda^k e^{-\lambda}}{k!} = \lambda e^{-\lambda}\sum_{k \ge 1}\frac{\lambda^{k-1}}{(k-1)!} = \lambda e^{-\lambda}e^{\lambda} = \lambda$, using the series for $e^\lambda$.
+
+In the same way, $\mathbb{E}[K(K-1)] = \lambda^2 e^{-\lambda}\sum_{k \ge 2}\frac{\lambda^{k-2}}{(k-2)!} = \lambda^2$.
+
+Then $\mathbb{E}[K^2] = \lambda^2 + \lambda$, so $\operatorname{Var}(K) = \lambda^2 + \lambda - \lambda^2 = \lambda$.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "The Poisson distribution is the limit of the binomial when...", options: ["n is small and p large", "n is large and p small with np fixed", "p = 1/2", "n = 1"], answer: 1, explain: "Many rare chances." },
+  { q: "A Poisson variable with mean 6 has variance...", options: ["√6", "6", "36", "3"], answer: 1, explain: "Mean equals variance." },
+  { q: "Intervals of a Poisson process are...", options: ["Gaussian", "Exponential", "Uniform", "Constant"], answer: 1, explain: "$P(\\text{wait} > t) = e^{-rt}$." },
+  { q: "Memorylessness means...", options: ["The neuron forgets its inputs", "Having waited does not change the chance of an event soon", "Intervals are constant", "Rates decay"], answer: 1, explain: "Constant hazard." },
+  { q: "Gamma intervals with shape 4 have a coefficient of variation of...", options: ["1", "0.5", "4", "0.25"], answer: 1, explain: "$1/\\sqrt{4}$." },
+  { q: "The sum of independent Poisson counts is...", options: ["Gaussian", "Poisson with the summed mean", "Binomial", "Exponential"], answer: 1, explain: "Superposition." },
+  { q: "In the modulated Poisson model, the variance is...", options: ["μ", "μ + σ²μ²", "σ²", "μ²"], answer: 1, explain: "Poisson part plus gain part." },
+]} />
+
+<Flashcards cards={[
+  { front: "Poisson PMF?", back: "$P(K = k) = \\lambda^k e^{-\\lambda}/k!$, mean and variance λ." },
+  { front: "Poisson process intervals?", back: "Exponential with mean 1/r; CV = 1; memoryless." },
+  { front: "Hazard?", back: "Instantaneous event rate given no event so far; constant for Poisson, rising for gamma." },
+  { front: "Superposition?", back: "Independent Poisson processes add to a Poisson process with the summed rate." },
+  { front: "Modulated Poisson?", back: "Rate g f(θ) with gain variance σ²: Var = μ + σ²μ² (Goris, Movshon and Simoncelli, 2014)." },
+]} />
+
+<Predict revisit question="After 100 ms of silence, is a Poisson neuron's next spike more likely, less likely or exactly as likely to come soon?" />
+
+<Key title="Before you go">
+<ul>
+<li>Poisson = many independent rare chances; mean equals variance.</li>
+<li>Poisson intervals are exponential and memoryless; refractory neurons are more regular.</li>
+<li>Independent Poisson counts add to a Poisson count.</li>
+<li>Over-dispersion in cortex is well described by a Poisson process with a fluctuating gain: Var = μ + σ²μ².</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>This week's deep read: Shadlen and Newsome (1998), <em>The variable discharge of cortical neurons</em>. Start the first pass today.</li>
+<li>Goris, Movshon and Simoncelli (2014), <em>Partitioning neuronal variability</em>, Nature Neuroscience 17, 858 to 865.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="The gain in the modulated Poisson model is a hidden variable. Name two things in an experiment that might cause it to fluctuate from trial to trial, and one measurement you could record alongside the spikes to test your idea." />

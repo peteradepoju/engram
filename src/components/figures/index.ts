@@ -64,3 +64,8 @@ export { OptimiserRace } from "./optimiser-race";
 export { LagrangeContours } from "./lagrange-contours";
 export { L1L2Ball } from "./l1-l2-ball";
 export { EarlyStop } from "./early-stop";
+export { SampleHistogram } from "./sample-histogram";
+export { BinomialRelease } from "./binomial-release";
+export { BinomialPoisson } from "./binomial-poisson";
+export { CentralLimit } from "./central-limit";
+export { Thinning } from "./thinning";

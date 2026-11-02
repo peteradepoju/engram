@@ -1,0 +1,258 @@
+export const meta = {
+  title: "Forge: Week 15 challenge, quiz and deep read",
+  intro: "This week gave you the language of randomness: distributions, expectation and variance, the binomial and Poisson, densities, the Gaussian and the central limit theorem, and the craft of simulating it all. Today's challenge puts it to work on three questions neuroscientists really ask. Is this neuron Poisson? What happens to quantal analysis when release sites differ? And how many neurons must be pooled to make a reliable decision, if their noise is shared? The last one is the heart of this week's deep read, Shadlen and Newsome's argument about variable discharge.",
+  goals: [
+    "Test whether a spike train is Poisson using its intervals, and compare exponential and gamma models by likelihood",
+    "Show how heterogeneous release probabilities bias variance-mean estimates",
+    "Use Monte Carlo to show that shared gain noise limits the benefit of pooling neurons",
+    "Critique the argument that variable discharge forces rate coding in pools",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "shadlen-1998",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. P(no spikes) for a Poisson count with mean 2?
+2. The standard deviation of the mean of 400 draws with standard deviation 10?
+3. The variance of a modulated Poisson count with mean 10 and gain variance 0.2?
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from math import lgamma
+  print("1. e^-2 =", round(np.exp(-2), 4))
+  print("2. 10 / sqrt(400) =", 10 / np.sqrt(400))
+  print("3. mu + sigma^2 mu^2 =", 10 + 0.2 * 10 ** 2)
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: is this neuron Poisson?** You have 3,000 interspike intervals from one neuron firing steadily at about 20 Hz. A Poisson neuron would have exponential intervals with a coefficient of variation of 1. Compute the CV, fit an exponential and a gamma distribution (by matching moments), and compare their log-likelihoods.
+
+<PyCell id="partA" title="Part A: exponential or gamma?" tests={String.raw`
+  import numpy as np
+  def test_cv():
+      "the coefficient of variation is well below 1"
+      assert abs(cv - isi.std() / isi.mean()) < 1e-12 and cv < 0.8
+
+  def test_ll():
+      "the gamma model's log-likelihood beats the exponential's by more than 100"
+      assert ll_gamma > ll_exp + 100
+
+  def test_shape():
+      "the fitted gamma shape is 1 / CV squared"
+      assert abs(k_hat - 1 / cv ** 2) < 1e-9
+`} prompt="Compute `cv`. Fit the exponential rate r = 1/mean and its log-likelihood `ll_exp` = Σ log(r e^(−r t)). Fit a gamma by moments, shape `k_hat` = mean²/var and scale θ = var/mean, and compute `ll_gamma` = Σ [(k − 1) log t − t/θ − k log θ − log Γ(k)] (use `lgamma`)."
+code={String.raw`
+  rng = np.random.default_rng(1998)
+  isi = 0.002 + rng.gamma(3.0, 0.048 / 3, 3000)        # seconds; includes a 2 ms refractory period
+
+  cv = ...
+  r = 1 / isi.mean()
+  ll_exp = ...
+  k_hat = ...
+  theta = isi.var() / isi.mean()
+  ll_gamma = ...
+  print(f"CV {cv:.3f};  log-likelihoods: exponential {ll_exp:.1f}, gamma (k = {k_hat:.2f}) {ll_gamma:.1f}")
+  t = np.linspace(0.0005, 0.2, 400)
+  plt.hist(isi, 80, density=True, alpha=0.5); plt.plot(t, r * np.exp(-r * t), label="exponential")
+  plt.plot(t, np.exp((k_hat - 1) * np.log(t) - t / theta - k_hat * np.log(theta) - lgamma(k_hat)), label="gamma"); plt.legend(); plt.xlabel("interval (s)"); plt.show()
+`}
+hint="cv = isi.std() / isi.mean(); ll_exp = np.sum(np.log(r) - r * isi); k_hat = isi.mean() ** 2 / isi.var(); ll_gamma = np.sum((k_hat - 1) * np.log(isi) - isi / theta - k_hat * np.log(theta) - lgamma(k_hat))."
+solution={String.raw`
+  rng = np.random.default_rng(1998)
+  isi = 0.002 + rng.gamma(3.0, 0.048 / 3, 3000)        # seconds; includes a 2 ms refractory period
+
+  cv = isi.std() / isi.mean()
+  r = 1 / isi.mean()
+  ll_exp = np.sum(np.log(r) - r * isi)
+  k_hat = isi.mean() ** 2 / isi.var()
+  theta = isi.var() / isi.mean()
+  ll_gamma = np.sum((k_hat - 1) * np.log(isi) - isi / theta - k_hat * np.log(theta) - lgamma(k_hat))
+  print(f"CV {cv:.3f};  log-likelihoods: exponential {ll_exp:.1f}, gamma (k = {k_hat:.2f}) {ll_gamma:.1f}")
+  t = np.linspace(0.0005, 0.2, 400)
+  plt.hist(isi, 80, density=True, alpha=0.5); plt.plot(t, r * np.exp(-r * t), label="exponential")
+  plt.plot(t, np.exp((k_hat - 1) * np.log(t) - t / theta - k_hat * np.log(theta) - lgamma(k_hat)), label="gamma"); plt.legend(); plt.xlabel("interval (s)"); plt.ylabel("density"); plt.show()
+`} />
+
+With a CV of about 0.55 this neuron is far more regular than Poisson, and the gamma model is overwhelmingly more likely. Short intervals are the giveaway: the exponential density is highest at zero, while real neurons, with refractoriness, almost never fire twice within a few milliseconds. Likelihoods and how to compare models fairly are the subject of Weeks 17 and 18.
+
+**Part B: when sites differ.** Day 2's variance-mean analysis assumed every site had the same release probability. Here the eight sites have different probabilities, all scaled up and down together as calcium changes.
+
+<PyCell id="partB" title="Part B: a biased parabola" tests={String.raw`
+  import numpy as np
+  def test_points():
+      "six (mean, variance) points were measured"
+      assert len(means_h) == 6 and len(vars_h) == 6
+
+  def test_bias():
+      "with heterogeneous probabilities the fit underestimates both n and q"
+      assert n_hat_h < 7.6 and q_hat_h < 0.38
+`} prompt="For each calcium scale in `scales`, set the site probabilities to `base * scale` (capped at 0.97), simulate 2,000 trials with quantal size 0.4 mV, and record the mean and variance. Fit the parabola as on Day 2 and store `n_hat_h` and `q_hat_h`."
+code={String.raw`
+  q, base = 0.4, np.array([0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.6, 0.8])
+  scales = [0.1, 0.3, 0.6, 1.0, 1.4, 1.8]
+  means_h, vars_h = [], []
+  for s in scales:
+      p_sites = np.minimum(base * s, 0.97)
+      amp = q * (rng.random((2000, 8)) < p_sites).sum(axis=1)
+      ...
+  means_h, vars_h = np.array(means_h), np.array(vars_h)
+  a_coef, b_coef = np.linalg.lstsq(np.column_stack([means_h, means_h ** 2]), vars_h, rcond=None)[0]
+  q_hat_h, n_hat_h = ..., ...
+  print(f"heterogeneous sites: estimated n = {n_hat_h:.2f} (true 8), q = {q_hat_h:.3f} mV (true 0.4)")
+`}
+hint="Append amp.mean() to means_h and amp.var() to vars_h. q_hat_h, n_hat_h = a_coef, -1 / b_coef."
+solution={String.raw`
+  q, base = 0.4, np.array([0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.6, 0.8])
+  scales = [0.1, 0.3, 0.6, 1.0, 1.4, 1.8]
+  means_h, vars_h = [], []
+  for s in scales:
+      p_sites = np.minimum(base * s, 0.97)
+      amp = q * (rng.random((2000, 8)) < p_sites).sum(axis=1)
+      means_h.append(amp.mean())
+      vars_h.append(amp.var())
+  means_h, vars_h = np.array(means_h), np.array(vars_h)
+  a_coef, b_coef = np.linalg.lstsq(np.column_stack([means_h, means_h ** 2]), vars_h, rcond=None)[0]
+  q_hat_h, n_hat_h = a_coef, -1 / b_coef
+  print(f"heterogeneous sites: estimated n = {n_hat_h:.2f} (true 8), q = {q_hat_h:.3f} mV (true 0.4)")
+`} />
+
+Even with no quantal variability and plenty of trials, both estimates are biased low. Sites with high probability saturate early, so the variance falls sooner than a uniform-probability synapse would predict. The method is still useful, but its numbers are effective values, and published analyses use more general models (Silver, 2003, reviews them).
+
+**Part C: does pooling help?** A downstream area decides which of two stimuli was shown by summing the spike counts of $N$ neurons that each fire 10 or 12 spikes on average. Use Monte Carlo to find the accuracy as $N$ grows, with independent Poisson noise and with a gain of variance 0.05 shared by the whole pool on each trial. Superposition (Day 3) means the pooled count is a single Poisson draw with mean $gN\mu$.
+
+<PyCell id="partC" title="Part C: the pooling limit" tests={String.raw`
+  import numpy as np
+  def test_independent():
+      "with independent noise, accuracy approaches 1 for a pool of 1000"
+      assert acc_indep[-1] > 0.99 and acc_indep[0] < 0.7
+
+  def test_shared():
+      "with shared gain noise, accuracy stays below 0.7 even for 1000 neurons"
+      assert max(acc_shared) < 0.7
+
+  def test_ceiling():
+      "the Monte Carlo ceiling agrees with the Gaussian prediction Phi(d' / 2) to within 0.03"
+      assert abs(acc_shared[-1] - ceiling) < 0.03
+`} prompt="For N in `pool_sizes`, simulate 20,000 trials of each kind, with the stimulus chosen at random. Decide 'stimulus 2' when the pooled count exceeds 11N. Store the accuracies in `acc_indep` and `acc_shared`. Then compute the predicted ceiling for large N: the shared gain alone gives d′ = 2 / (0.05 ** 0.5 × 11), and accuracy Φ(d′/2)."
+code={String.raw`
+  from math import erf, sqrt
+  def Phi(z): return 0.5 * (1 + erf(z / sqrt(2)))
+  pool_sizes = [1, 10, 100, 1000]
+  sigma2, T = 0.05, 20000
+
+  def accuracy(N, shared):
+      s = rng.integers(0, 2, T)                         # which stimulus
+      mu = np.where(s == 1, 12.0, 10.0)
+      g = rng.gamma(1 / sigma2, sigma2, T) if shared else np.ones(T)
+      pooled = ...                                      # one Poisson draw per trial (superposition)
+      return ...
+
+  acc_indep = [accuracy(N, False) for N in pool_sizes]
+  acc_shared = [accuracy(N, True) for N in pool_sizes]
+  ceiling = ...
+  print("independent:", np.round(acc_indep, 3), "  shared gain:", np.round(acc_shared, 3), f"  predicted ceiling {ceiling:.3f}")
+  plt.semilogx(pool_sizes, acc_indep, "o-", label="independent"); plt.semilogx(pool_sizes, acc_shared, "o-", label="shared gain")
+  plt.axhline(ceiling, ls="--", c="k"); plt.xlabel("neurons pooled"); plt.ylabel("accuracy"); plt.legend(); plt.show()
+`}
+hint="pooled = rng.poisson(g * mu * N); return np.mean((pooled > 11 * N) == (s == 1)). ceiling = Phi(2 / (np.sqrt(sigma2) * 11) / 2)."
+solution={String.raw`
+  from math import erf, sqrt
+  def Phi(z): return 0.5 * (1 + erf(z / sqrt(2)))
+  pool_sizes = [1, 10, 100, 1000]
+  sigma2, T = 0.05, 20000
+
+  def accuracy(N, shared):
+      s = rng.integers(0, 2, T)                         # which stimulus
+      mu = np.where(s == 1, 12.0, 10.0)
+      g = rng.gamma(1 / sigma2, sigma2, T) if shared else np.ones(T)
+      pooled = rng.poisson(g * mu * N)                                      # one Poisson draw per trial (superposition)
+      return np.mean((pooled > 11 * N) == (s == 1))
+
+  acc_indep = [accuracy(N, False) for N in pool_sizes]
+  acc_shared = [accuracy(N, True) for N in pool_sizes]
+  ceiling = Phi(2 / (np.sqrt(sigma2) * 11) / 2)
+  print("independent:", np.round(acc_indep, 3), "  shared gain:", np.round(acc_shared, 3), f"  predicted ceiling {ceiling:.3f}")
+  plt.semilogx(pool_sizes, acc_indep, "o-", label="independent"); plt.semilogx(pool_sizes, acc_shared, "o-", label="shared gain")
+  plt.axhline(ceiling, ls="--", c="k"); plt.xlabel("neurons pooled"); plt.ylabel("accuracy"); plt.legend(); plt.show()
+`} />
+
+With independent noise, a hundred neurons decide almost perfectly. With a modest shared gain, a thousand neurons do barely better than ten: the variance of the pooled count is $N\mu + \sigma_g^2N^2\mu^2$, and the second term grows as fast as the squared signal, so the signal-to-noise ratio saturates. This is the quantitative core of Shadlen and Newsome's argument, and of later work on how correlations limit population codes (Week 119).
+
+**Part D (written).** Answer in your journal: which of today's three conclusions depends most on an assumption you could not check from the data alone, and what experiment would check it?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The pooling limit" task="Let the pooled count be Poisson with mean $gN\mu$, where $g$ has mean 1 and variance $\sigma_g^2$. Show that $\operatorname{Var} = N\mu + \sigma_g^2N^2\mu^2$, and that the ratio of the squared mean difference $(N\Delta\mu)^2$ to this variance tends to $\Delta\mu^2/(\sigma_g^2\mu^2)$ as $N \to \infty$.">
+
+By the law of total variance, $\operatorname{Var} = \mathbb{E}[\operatorname{Var}(K \mid g)] + \operatorname{Var}(\mathbb{E}[K \mid g]) = \mathbb{E}[gN\mu] + \operatorname{Var}(gN\mu) = N\mu + \sigma_g^2N^2\mu^2$.
+
+Then $\dfrac{N^2\Delta\mu^2}{N\mu + \sigma_g^2N^2\mu^2} = \dfrac{\Delta\mu^2}{\mu/N + \sigma_g^2\mu^2} \to \dfrac{\Delta\mu^2}{\sigma_g^2\mu^2}$.
+
+The square root, $d' = \Delta\mu/(\sigma_g\mu)$, does not grow with $N$: with $\Delta\mu = 2$, $\mu = 11$ and $\sigma_g^2 = 0.05$ it is about 0.81, the ceiling in Part C.
+
+</Prove>
+
+<Prove title="2. The method of failures" task="If the number of quanta released is Poisson with mean $m$, show that $m = -\ln P(\text{failure})$. If it is binomial($n$, $p$), what does $-\ln P(\text{failure})$ estimate instead, and is it larger or smaller than $np$?">
+
+For Poisson, $P(K = 0) = e^{-m}$, so $m = -\ln P(K = 0)$.
+
+For the binomial, $P(K = 0) = (1 - p)^n$, so $-\ln P(K = 0) = -n\ln(1 - p) = n\left(p + p^2/2 + p^3/3 + \cdots\right)$.
+
+This exceeds $np$ for every $p > 0$, by a factor close to $1 + p/2$ when $p$ is small. The method of failures is accurate only when release probability is low, which is why del Castillo and Katz lowered calcium.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 15 quiz (15 questions)" questions={[
+  { q: "P(A or B) for overlapping events is...", options: ["P(A) + P(B)", "P(A) + P(B) − P(A and B)", "P(A)P(B)", "max(P(A), P(B))"], answer: 1, explain: "Inclusion-exclusion." },
+  { q: "The CDF of a discrete variable is...", options: ["Its PMF", "The running sum of its PMF", "Its mean", "Always 1"], answer: 1, explain: "$F(x) = P(X \\le x)$." },
+  { q: "Independence means the joint PMF...", options: ["Is symmetric", "Equals the product of the marginals", "Sums to 2", "Has zero mean"], answer: 1, explain: "Knowing one tells you nothing." },
+  { q: "The standard error of a mean of n independent draws is...", options: ["σ/n", "σ/√n", "σ", "√n σ"], answer: 1, explain: "Variances add." },
+  { q: "Linearity of expectation needs...", options: ["Independence", "Nothing more", "Gaussians", "Equal means"], answer: 1, explain: "Always true." },
+  { q: "The binomial variance is...", options: ["np", "np(1 − p)", "p(1 − p)", "n²p"], answer: 1, explain: "A sum of Bernoullis." },
+  { q: "On a variance-mean plot, synaptic responses trace...", options: ["A line", "A parabola", "A circle", "A step"], answer: 1, explain: "$q\\mu - \\mu^2/n$." },
+  { q: "The Poisson distribution has...", options: ["Variance equal to the mean", "Variance equal to the mean squared", "Zero variance", "Variance 1"], answer: 0, explain: "Both λ." },
+  { q: "Poisson intervals are...", options: ["Gaussian", "Exponential and memoryless", "Uniform", "Gamma with shape 4"], answer: 1, explain: "Constant hazard." },
+  { q: "A neuron with ISI CV 0.5 is...", options: ["More regular than Poisson", "Poisson", "More irregular than Poisson", "Silent"], answer: 0, explain: "Poisson has CV 1." },
+  { q: "Over-dispersion in cortex is well described by...", options: ["A binomial", "A Poisson process with a fluctuating gain", "A uniform", "A Gaussian with zero mean"], answer: 1, explain: "$\\mu + \\sigma^2\\mu^2$." },
+  { q: "The central limit theorem fails for...", options: ["Exponential draws", "Cauchy draws", "Bernoulli draws", "Uniform draws"], answer: 1, explain: "Infinite variance." },
+  { q: "To sample from a CDF F using uniform U, compute...", options: ["F(U)", "$F^{-1}(U)$", "U²", "1 − U"], answer: 1, explain: "The inverse transform." },
+  { q: "Thinning keeps a candidate with probability...", options: ["λ(t)/λmax", "λmax", "1/2", "λ(t)"], answer: 0, explain: "Lewis and Shedler." },
+  { q: "Shared gain noise across a pool makes accuracy...", options: ["Approach 1 as the pool grows", "Saturate below 1", "Fall to 0.5 for large pools", "Unchanged"], answer: 1, explain: "The shared variance grows like N²." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Shadlen and Newsome (1998) its third pass and write your critique under the five headings. Focus on one question: **does irregular, roughly Poisson firing really force the brain to compute with rates in pools, or does the argument depend on assumptions that later data have overturned?** Consider Part C (what limits pooling, and is a shared gain the right model of correlations?), the modulated Poisson results of Goris and colleagues (2014), evidence for precise spike timing in some systems (such as auditory brainstem and hippocampal phase coding), and the balanced-network theory of Week 107.
+
+<Callout kind="research">
+
+Which correlations actually limit population codes is still debated: Moreno-Bote and colleagues (2014) argued that only "differential" correlations, aligned with the signal, matter, and a uniform shared gain is not exactly of that kind. Design a variant of Part C in which the shared noise moves the two stimuli's responses in different directions, and predict whether the ceiling rises or falls.
+
+</Callout>
+
+<Key title="Week 15 review checklist">
+<ul>
+<li>I can use the rules of probability, PMFs, CDFs and joint distributions, and test for independence.</li>
+<li>I can compute expectations and variances, including of sums, and derive σ/√n.</li>
+<li>I can do quantal analysis: variance-mean parabola and the method of failures, and explain their biases.</li>
+<li>I can derive the Poisson distribution, its mean and variance, and the exponential intervals of a Poisson process.</li>
+<li>I can fit and interpret a modulated Poisson model of over-dispersed counts.</li>
+<li>I can work with densities and the Gaussian, and explain the central limit theorem and when it fails.</li>
+<li>I can sample by inverse transform and thinning, estimate probabilities by Monte Carlo with error bars, and analyse dropout.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part D: which conclusion depends most on an assumption you could not check from the data, and what experiment would check it? Then write your prediction for the research question about differential correlations." />

@@ -1,0 +1,341 @@
+export const meta = {
+  title: "Simulating randomness: inverse transforms, thinning and dropout",
+  intro: "A computer produces only one kind of randomness: numbers spread evenly between 0 and 1. Everything else, from exponential intervals to time-varying spike trains to the next word of a language model, is built from those. Today you learn the two workhorse constructions, the inverse transform and thinning, use random simulation to compute a probability that has no tidy formula, and then turn to a place where randomness is put into a network on purpose: dropout, which silences units at random during training, like synapses that fail to release.",
+  goals: [
+    "Generate samples from any distribution with a known CDF by the inverse transform, including sampling a token from a softmax",
+    "Simulate a time-varying Poisson process by thinning",
+    "Estimate a probability by Monte Carlo and report its standard error",
+    "Derive the mean and variance that inverted dropout adds to a unit's input",
+  ],
+  plan: [
+    { label: "Predict and the inverse transform", minutes: 30 },
+    { label: "Thinning", minutes: 25 },
+    { label: "Monte Carlo with error bars", minutes: 25 },
+    { label: "Dropout", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "srivastava-2014",
+};
+
+<Predict question="During training with dropout, each input to a unit is kept with probability 0.8 and, if kept, multiplied by 1/0.8. Does this change the expected input the unit receives? Does it change the variance?" />
+
+<Step n={1} title="The inverse transform" minutes={30} />
+
+If $U$ is uniform on $[0, 1]$ and $F$ is a CDF, then $X = F^{-1}(U)$ has CDF $F$. (Last week's Forge proved the reverse: $F(X)$ is uniform.) For the exponential, $F(t) = 1 - e^{-rt}$, so $F^{-1}(u) = -\ln(1 - u)/r$, and since $1 - U$ is also uniform, $-\ln(U)/r$ works too.
+
+For a discrete distribution, $F^{-1}$ means: find the first value whose cumulative probability exceeds $U$. This is exactly how a language model picks its next token. It turns its scores (logits) $z_k$ into a PMF with a softmax at **temperature** $\tau$,
+
+$$
+p_k = \frac{e^{z_k/\tau}}{\sum_j e^{z_j/\tau}},
+$$
+
+and draws one token by the inverse transform. Low temperature concentrates the probability on the top token; high temperature spreads it out.
+
+<PyCell id="inverse" title="From uniform numbers to anything" tests={String.raw`
+  import numpy as np
+  def test_exponential():
+      "sample_exponential gives mean 1/r and coefficient of variation 1"
+      x = sample_exponential(np.random.default_rng(0).random(200000), 20)
+      assert abs(x.mean() - 0.05) < 0.001 and abs(x.std() / x.mean() - 1) < 0.02
+
+  def test_discrete():
+      "sample_discrete reproduces the PMF"
+      pmf = np.array([0.1, 0.6, 0.3])
+      k = sample_discrete(pmf, np.random.default_rng(1).random(100000))
+      assert np.allclose(np.bincount(k, minlength=3) / len(k), pmf, atol=0.01)
+
+  def test_temperature():
+      "lower temperature makes the top token more frequent"
+      assert top_freq[0.5] > top_freq[1.0] > top_freq[2.0]
+`} prompt="Write `sample_exponential(u, r)` and `sample_discrete(pmf, u)` (use the cumulative sum and np.searchsorted). Then sample 20,000 tokens from the softmax of the logits at temperatures 0.5, 1 and 2, and store the frequency of the top token at each temperature in the dictionary `top_freq`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1979)
+
+  def sample_exponential(u, r):
+      return ...
+
+  def sample_discrete(pmf, u):
+      return ...                     # the index of the first cumulative probability above u
+
+  def softmax(z, tau):
+      e = np.exp((z - z.max()) / tau)
+      return e / e.sum()
+
+  logits = np.array([2.0, 1.5, 0.5, 0.0, -1.0])
+  top_freq = {}
+  for tau in [0.5, 1.0, 2.0]:
+      tokens = sample_discrete(softmax(logits, tau), rng.random(20000))
+      top_freq[tau] = ...
+  print("frequency of the top token at temperatures 0.5, 1, 2:", {t: round(f, 3) for t, f in top_freq.items()})
+`}
+hint="sample_exponential returns -np.log(u) / r. sample_discrete returns np.searchsorted(np.cumsum(pmf), u, side='right'). top_freq[tau] = np.mean(tokens == 0)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1979)
+
+  def sample_exponential(u, r):
+      return -np.log(u) / r
+
+  def sample_discrete(pmf, u):
+      return np.searchsorted(np.cumsum(pmf), u, side="right")                     # the index of the first cumulative probability above u
+
+  def softmax(z, tau):
+      e = np.exp((z - z.max()) / tau)
+      return e / e.sum()
+
+  logits = np.array([2.0, 1.5, 0.5, 0.0, -1.0])
+  top_freq = {}
+  for tau in [0.5, 1.0, 2.0]:
+      tokens = sample_discrete(softmax(logits, tau), rng.random(20000))
+      top_freq[tau] = np.mean(tokens == 0)
+  print("frequency of the top token at temperatures 0.5, 1, 2:", {t: round(f, 3) for t, f in top_freq.items()})
+`} />
+
+<Step n={2} title="Thinning" minutes={25} />
+
+To simulate a Poisson process whose rate $\lambda(t)$ changes in time, you could cut time into tiny bins (Week 2). A neater, exact method is **thinning** (Lewis and Shedler, 1979): generate candidate events from a constant-rate process at $\lambda_{\max} \ge \lambda(t)$, using exponential intervals, and keep each candidate at time $t$ with probability $\lambda(t)/\lambda_{\max}$. Thinning a Poisson process independently gives a Poisson process, and the kept events have exactly rate $\lambda(t)$.
+
+<Figure caption="Thinning: candidates from a constant-rate process at the peak rate, each kept with probability λ(t)/λmax. The kept spikes follow the time-varying rate." credit="Interactive figure by Engram, after Lewis and Shedler (1979).">
+  <Thinning />
+</Figure>
+
+<PyCell id="thin" title="Spikes from a time-varying rate" tests={String.raw`
+  import numpy as np
+  def test_counts():
+      "the mean count per trial matches the integral of the rate (to within 3%)"
+      assert abs(np.mean([len(s) for s in trials]) - expected_count) / expected_count < 0.03
+
+  def test_psth():
+      "the PSTH follows the rate: correlation above 0.95"
+      assert np.corrcoef(psth, rate(centres))[0, 1] > 0.95
+
+  def test_in_range():
+      "all spike times lie in [0, T]"
+      assert all((s.min() >= 0) and (s.max() <= T) for s in trials if len(s))
+`} prompt="Write `thinning(rate, lmax, T, rng)` that returns an array of spike times. Generate 300 trials of a rate rising and falling as a stimulus comes on, build a PSTH in 50 ms bins (spikes per second), and compare the mean count with the integral of the rate."
+code={String.raw`
+  def thinning(rate, lmax, T, rng):
+      times = []
+      t = 0.0
+      while True:
+          t += ...                                 # exponential interval at rate lmax
+          if t > T:
+              break
+          if ...:                                  # keep with probability rate(t) / lmax
+              times.append(t)
+      return np.array(times)
+
+  T = 2.0
+  def rate(t): return 5 + 45 * np.exp(-((t - 0.8) / 0.15) ** 2)      # a transient response to a stimulus at 0.8 s
+  lmax = 50
+  trials = [thinning(rate, lmax, T, rng) for _ in range(300)]
+  edges = np.arange(0, T + 1e-9, 0.05); centres = (edges[:-1] + edges[1:]) / 2
+  psth = np.histogram(np.concatenate(trials), edges)[0] / (300 * 0.05)
+  tt = np.linspace(0, T, 4001)
+  expected_count = np.sum(rate(tt[:-1]) * np.diff(tt))
+  print(f"mean count {np.mean([len(s) for s in trials]):.2f}, integral of the rate {expected_count:.2f}")
+  plt.bar(centres, psth, width=0.045, alpha=0.5, label="PSTH"); plt.plot(tt, rate(tt), "k", label="rate"); plt.legend(); plt.xlabel("time (s)"); plt.show()
+`}
+hint="t += rng.exponential(1 / lmax); keep if rng.random() < rate(t) / lmax."
+solution={String.raw`
+  def thinning(rate, lmax, T, rng):
+      times = []
+      t = 0.0
+      while True:
+          t += rng.exponential(1 / lmax)                                 # exponential interval at rate lmax
+          if t > T:
+              break
+          if rng.random() < rate(t) / lmax:                                  # keep with probability rate(t) / lmax
+              times.append(t)
+      return np.array(times)
+
+  T = 2.0
+  def rate(t): return 5 + 45 * np.exp(-((t - 0.8) / 0.15) ** 2)      # a transient response to a stimulus at 0.8 s
+  lmax = 50
+  trials = [thinning(rate, lmax, T, rng) for _ in range(300)]
+  edges = np.arange(0, T + 1e-9, 0.05); centres = (edges[:-1] + edges[1:]) / 2
+  psth = np.histogram(np.concatenate(trials), edges)[0] / (300 * 0.05)
+  tt = np.linspace(0, T, 4001)
+  expected_count = np.sum(rate(tt[:-1]) * np.diff(tt))
+  print(f"mean count {np.mean([len(s) for s in trials]):.2f}, integral of the rate {expected_count:.2f}")
+  plt.bar(centres, psth, width=0.045, alpha=0.5, label="PSTH"); plt.plot(tt, rate(tt), "k", label="rate"); plt.legend(); plt.xlabel("time (s)"); plt.show()
+`} />
+
+<Step n={3} title="Monte Carlo with error bars" minutes={25} />
+
+Many probabilities have no convenient formula, but they can be estimated by simulating the process many times and counting: this is the **Monte Carlo** method, named by Ulam and von Neumann after the casino. An estimate $\hat{p}$ from $n$ independent simulations is a mean of Bernoulli variables, so its standard error is $\sqrt{\hat{p}(1 - \hat{p})/n}$ (Day 2), and $\hat{p} \pm 1.96$ standard errors is an approximate 95% interval (Day 4).
+
+Take the question from Day 2's journal: a synapse with 8 release sites whose release probabilities differ. What is the probability that at least 3 sites release? There is an exact answer, but Monte Carlo gets it in two lines.
+
+<PyCell id="mc" title="At least three of eight" tests={String.raw`
+  import numpy as np
+  def test_exact():
+      "the exact probability, by convolving the Bernoulli PMFs, is a valid probability"
+      assert 0 < p_exact < 1
+
+  def test_covers():
+      "the Monte Carlo 95% interval contains the exact value"
+      assert abs(p_mc - p_exact) < 1.96 * se_mc * 1.5
+
+  def test_se():
+      "the standard error is computed from p_mc and n"
+      assert abs(se_mc - np.sqrt(p_mc * (1 - p_mc) / n_sims)) < 1e-12
+`} prompt="Release probabilities differ across 8 sites. Estimate P(at least 3 release) by simulating 20,000 trials (`p_mc`) with its standard error `se_mc`. Compute the exact value `p_exact` by convolving the eight Bernoulli PMFs [1 − p, p]."
+code={String.raw`
+  p_sites = np.array([0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.6, 0.8])
+  n_sims = 20000
+  released = rng.random((n_sims, 8)) < p_sites            # True where a site released
+  p_mc = ...
+  se_mc = ...
+
+  pmf = np.array([1.0])
+  for p in p_sites:
+      pmf = np.convolve(pmf, [1 - p, p])                   # PMF of the number released so far
+  p_exact = ...
+  print(f"Monte Carlo {p_mc:.4f} ± {1.96 * se_mc:.4f} (95%),  exact {p_exact:.4f}")
+`}
+hint="p_mc = np.mean(released.sum(axis=1) >= 3); se_mc = np.sqrt(p_mc * (1 - p_mc) / n_sims); p_exact = pmf[3:].sum()."
+solution={String.raw`
+  p_sites = np.array([0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.6, 0.8])
+  n_sims = 20000
+  released = rng.random((n_sims, 8)) < p_sites            # True where a site released
+  p_mc = np.mean(released.sum(axis=1) >= 3)
+  se_mc = np.sqrt(p_mc * (1 - p_mc) / n_sims)
+
+  pmf = np.array([1.0])
+  for p in p_sites:
+      pmf = np.convolve(pmf, [1 - p, p])                   # PMF of the number released so far
+  p_exact = pmf[3:].sum()
+  print(f"Monte Carlo {p_mc:.4f} ± {1.96 * se_mc:.4f} (95%),  exact {p_exact:.4f}")
+`} />
+
+Each extra decimal place of accuracy costs a hundred times more simulations, the $1/\sqrt{n}$ rule again. Monte Carlo is slow but general, and it is the basis of the sampling methods of Week 19.
+
+<Step n={4} title="Dropout" minutes={25} />
+
+**Dropout** (Srivastava and colleagues, 2014, today's paper) multiplies each input to a layer, during training, by an independent Bernoulli mask $m_i$ that is 1 with probability $p$. In the usual **inverted** form, kept inputs are scaled by $1/p$, so the unit receives $u = \sum_i w_i x_i m_i/p$.
+
+<Derivation title="What dropout does to a unit's input">
+
+<div>
+
+By linearity, with $\mathbb{E}[m_i] = p$:
+
+$$
+\mathbb{E}[u] = \sum_i w_i x_i\,\frac{\mathbb{E}[m_i]}{p} = \sum_i w_i x_i.
+$$
+
+The expected input is unchanged, which is why no rescaling is needed at test time.
+
+</div>
+
+<div>
+
+The masks are independent, so variances add. Each term $w_i x_i m_i/p$ has variance $(w_i x_i/p)^2\,p(1 - p)$:
+
+$$
+\operatorname{Var}(u) = \frac{1 - p}{p}\sum_i w_i^2 x_i^2.
+$$
+
+</div>
+
+<div>
+
+Dropout adds noise whose size depends on the weights: large weights on active inputs are penalised most, so the network is pushed to spread its reliance across many inputs. For linear models this is close to an adaptive L2 penalty (Wager, Wang and Liang, 2013).
+
+</div>
+
+</Derivation>
+
+<Video id="UZfUzawej3A" title="Dropout" by="Neuromatch Academy (Deep Learning course)" note="Neuromatch's explanation of dropout as a regulariser, with examples of its effect on overfitting." />
+
+<PyCell id="dropout" title="Check the dropout moments" tests={String.raw`
+  import numpy as np
+  def test_mean():
+      "the simulated mean input matches w . x to within 1%"
+      assert abs(u.mean() - w @ x) / abs(w @ x) < 0.01
+
+  def test_var():
+      "the simulated variance matches (1 - p) / p * sum (w x)^2 to within 3%"
+      assert abs(u.var() - var_pred) / var_pred < 0.03
+`} prompt="For a unit with 100 inputs, simulate 50,000 inverted-dropout masks with keep probability 0.8, compute the input `u` on each, and compare its mean and variance with the formulas (`var_pred`)."
+code={String.raw`
+  p_keep = 0.8
+  x = rng.exponential(1.0, 100)              # one input pattern
+  w = rng.normal(0, 0.1, 100)
+  masks = rng.random((50000, 100)) < p_keep
+  u = ...
+  var_pred = ...
+  print(f"mean {u.mean():.4f} (w.x = {w @ x:.4f}),  variance {u.var():.5f} (predicted {var_pred:.5f})")
+`}
+hint="u = (masks * x / p_keep) @ w; var_pred = (1 - p_keep) / p_keep * np.sum((w * x) ** 2)."
+solution={String.raw`
+  p_keep = 0.8
+  x = rng.exponential(1.0, 100)              # one input pattern
+  w = rng.normal(0, 0.1, 100)
+  masks = rng.random((50000, 100)) < p_keep
+  u = (masks * x / p_keep) @ w
+  var_pred = (1 - p_keep) / p_keep * np.sum((w * x) ** 2)
+  print(f"mean {u.mean():.4f} (w.x = {w @ x:.4f}),  variance {u.var():.5f} (predicted {var_pred:.5f})")
+`} />
+
+That answers the prediction: the mean is unchanged and the variance rises, by a factor set by $(1 - p)/p$, here one quarter of the sum of squared contributions.
+
+<Bridge title="Noise by design"
+  neuro="Central synapses fail to release on most spikes (Day 2), so every neuron's input is already subject to something like dropout. Whether this unreliability is a cost the brain pays for small, cheap synapses or, as dropout suggests, a benefit that improves generalisation, is an open question that several theorists have taken up."
+  ai="Randomness is built into modern AI: dropout and data augmentation in training, temperature sampling in generation, and Monte Carlo estimates of gradients in reinforcement learning (Week 71) and variational inference.">
+
+Every random number is a transformed uniform; every dropout mask is a Bernoulli draw.
+
+</Bridge>
+
+<Prove title="Why the inverse transform works" task="Let $F$ be a continuous, strictly increasing CDF and $U$ uniform on $[0, 1]$. Show that $X = F^{-1}(U)$ has CDF $F$.">
+
+For any $x$, $P(X \le x) = P(F^{-1}(U) \le x)$.
+
+Because $F$ is strictly increasing, $F^{-1}(U) \le x$ exactly when $U \le F(x)$.
+
+For a uniform variable, $P(U \le c) = c$ for $c$ in $[0, 1]$, so $P(X \le x) = F(x)$. For discrete distributions the same argument works with the generalised inverse, the smallest $x$ with $F(x) \ge u$.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "If U is uniform, −ln(U)/r is...", options: ["Uniform", "Exponential with rate r", "Gaussian", "Poisson"], answer: 1, explain: "The inverse of the exponential CDF." },
+  { q: "Lowering the softmax temperature...", options: ["Spreads probability across tokens", "Concentrates it on the top token", "Has no effect", "Reverses the ranking"], answer: 1, explain: "Dividing logits by a small τ exaggerates differences." },
+  { q: "In thinning, a candidate at time t is kept with probability...", options: ["λmax", "λ(t)/λmax", "1/2", "λ(t)"], answer: 1, explain: "Requires λmax at least the largest rate." },
+  { q: "The standard error of a Monte Carlo probability estimate from n runs is...", options: ["p/n", "$\\sqrt{p(1-p)/n}$", "1/n", "$p(1-p)$"], answer: 1, explain: "A mean of Bernoulli variables." },
+  { q: "To make a Monte Carlo estimate ten times more precise you need...", options: ["10 times more runs", "100 times more runs", "√10 times more", "The same"], answer: 1, explain: "The $1/\\sqrt{n}$ rule." },
+  { q: "Inverted dropout leaves the expected input...", options: ["Scaled by p", "Unchanged", "Zero", "Doubled"], answer: 1, explain: "Kept inputs are divided by p." },
+  { q: "Dropout's added variance is proportional to...", options: ["$\\sum w_i$", "$\\frac{1-p}{p}\\sum w_i^2x_i^2$", "p", "The number of layers"], answer: 1, explain: "Independent Bernoulli masks." },
+]} />
+
+<Flashcards cards={[
+  { front: "Inverse transform?", back: "If U is uniform, $F^{-1}(U)$ has CDF F." },
+  { front: "Temperature sampling?", back: "$p_k \\propto e^{z_k/\\tau}$; low τ is greedy, high τ is diverse." },
+  { front: "Thinning?", back: "Candidates at rate λmax, keep each with probability λ(t)/λmax (Lewis and Shedler, 1979)." },
+  { front: "Monte Carlo error?", back: "$\\sqrt{\\hat{p}(1 - \\hat{p})/n}$ for a probability." },
+  { front: "Inverted dropout moments?", back: "Mean $w \\cdot x$; variance $\\frac{1-p}{p}\\sum w_i^2x_i^2$." },
+]} />
+
+<Predict revisit question="Does inverted dropout change the expected input to a unit? The variance?" />
+
+<Key title="Before you go">
+<ul>
+<li>Every distribution can be sampled from uniform numbers through its inverse CDF.</li>
+<li>Thinning simulates time-varying Poisson processes exactly.</li>
+<li>Monte Carlo estimates come with a standard error that falls like 1/√n.</li>
+<li>Inverted dropout preserves the mean input and adds weight-dependent variance.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Srivastava and colleagues (2014), <em>Dropout: a simple way to prevent neural networks from overfitting</em>, sections 1 to 4.</li>
+<li>P. A. W. Lewis and G. S. Shedler (1979), <em>Simulation of nonhomogeneous Poisson processes by thinning</em>, Naval Research Logistics Quarterly 26, 403 to 413.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Dropout silences units independently. Real synaptic failures may be correlated, for example when a whole axon fails to conduct. How would correlated failures change the variance formula, and would you expect them to help or hurt generalisation?" />

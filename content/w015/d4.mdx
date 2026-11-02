@@ -1,0 +1,303 @@
+export const meta = {
+  title: "Continuous distributions, the Gaussian and the central limit theorem",
+  intro: "Spike counts are whole numbers, but interspike intervals, membrane potentials, reaction times and network weights are continuous. For them, the probability of any exact value is zero, and probability lives in a density instead. Today you learn to work with densities and cumulative distributions, meet the exponential and the Gaussian, and then the reason the Gaussian is everywhere: the central limit theorem, which says that sums of many small independent effects are approximately Gaussian, whatever the effects look like individually. A neuron's membrane potential, summing thousands of synaptic inputs, is the textbook case, and you will build it.",
+  goals: [
+    "Compute probabilities from a probability density and its cumulative distribution function",
+    "Use the Gaussian density, standardisation and the error function",
+    "State the central limit theorem and show it at work in a model membrane potential",
+    "Recognise when the theorem fails, for heavy-tailed distributions",
+  ],
+  plan: [
+    { label: "Predict and densities", minutes: 25 },
+    { label: "The Gaussian", minutes: 25 },
+    { label: "The central limit theorem", minutes: 40 },
+    { label: "When it fails", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "faisal-2008",
+};
+
+<Predict question="A neuron receives 2,000 synapses. On any 10 ms window each one fires with small probability, and each produces a postsynaptic potential whose size is very skewed: most are tiny, a few are large. Will the histogram of the summed potential across many windows be skewed like the individual inputs, or close to a symmetric bell curve?" />
+
+<Step n={1} title="Densities" minutes={25} />
+
+A continuous random variable $X$ has a **probability density function** (PDF) $f(x) \ge 0$ with
+
+$$
+P(a \le X \le b) = \int_a^b f(x)\,\mathrm{d}x, \qquad \int_{-\infty}^{\infty} f(x)\,\mathrm{d}x = 1.
+$$
+
+The density is not a probability: it can exceed 1, and it has units of one over the units of $X$ (per millisecond, per millivolt). The probability of any single exact value is zero, since an interval of zero width has zero area. The CDF is $F(x) = \int_{-\infty}^x f(u)\,\mathrm{d}u$, so the density is its derivative, and expectations are integrals: $\mathbb{E}[X] = \int x f(x)\,\mathrm{d}x$.
+
+Two densities matter today. The **exponential**, $f(t) = re^{-rt}$ for $t \ge 0$, describes Poisson intervals (yesterday). The **uniform** on $[0, 1]$, $f(x) = 1$, is what a computer's random number generator produces, and on Day 5 you will turn it into anything else.
+
+<PyCell id="density" title="Three ways to get one probability" tests={String.raw`
+  import numpy as np
+  def test_three():
+      "the empirical fraction, the integral of the density and the CDF formula agree for P(ISI less than 10 ms)"
+      assert abs(p_integral - p_formula) < 1e-6 and abs(p_empirical - p_formula) < 0.01
+
+  def test_density_units():
+      "the density at t = 0 is the rate, 20 per second, greater than 1"
+      assert abs(exp_pdf(0.0, 20) - 20) < 1e-12
+`} prompt="For exponential intervals at 20 Hz, compute P(ISI less than 10 ms) three ways: as the fraction of 100,000 simulated intervals, by integrating `exp_pdf` from 0 to 0.01 with the trapezoid rule on 1,001 points, and from the CDF 1 − exp(−rt)."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2008)
+  r = 20
+  isi = rng.exponential(1 / r, 100000)
+
+  def exp_pdf(t, r):
+      return ...
+
+  t = np.linspace(0, 0.01, 1001)
+  p_empirical = ...
+  p_integral = ...                 # np.trapezoid(y, t), or np.trapz in older numpy
+  p_formula = ...
+  print(f"empirical {p_empirical:.4f}, integral {p_integral:.6f}, formula {p_formula:.6f}")
+  plt.hist(isi, 100, density=True, alpha=0.5, label="histogram (density)"); tt = np.linspace(0, 0.3, 300)
+  plt.plot(tt, exp_pdf(tt, r), label="exponential density"); plt.xlabel("interval (s)"); plt.ylabel("density (per second)"); plt.legend(); plt.show()
+`}
+hint="exp_pdf returns r * np.exp(-r * t). p_empirical = np.mean(isi < 0.01); p_integral = np.trapezoid(exp_pdf(t, r), t) (use np.trapz if trapezoid is missing); p_formula = 1 - np.exp(-r * 0.01)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2008)
+  r = 20
+  isi = rng.exponential(1 / r, 100000)
+
+  def exp_pdf(t, r):
+      return r * np.exp(-r * t)
+
+  trap = getattr(np, "trapezoid", None) or np.trapz
+  t = np.linspace(0, 0.01, 1001)
+  p_empirical = np.mean(isi < 0.01)
+  p_integral = trap(exp_pdf(t, r), t)                 # np.trapezoid(y, t), or np.trapz in older numpy
+  p_formula = 1 - np.exp(-r * 0.01)
+  print(f"empirical {p_empirical:.4f}, integral {p_integral:.6f}, formula {p_formula:.6f}")
+  plt.hist(isi, 100, density=True, alpha=0.5, label="histogram (density)"); tt = np.linspace(0, 0.3, 300)
+  plt.plot(tt, exp_pdf(tt, r), label="exponential density"); plt.xlabel("interval (s)"); plt.ylabel("density (per second)"); plt.legend(); plt.show()
+`} />
+
+<Step n={2} title="The Gaussian" minutes={25} />
+
+The **Gaussian** (normal) density with mean $\mu$ and standard deviation $\sigma$ is
+
+$$
+f(x) = \frac{1}{\sigma\sqrt{2\pi}}\exp\!\left(-\frac{(x - \mu)^2}{2\sigma^2}\right).
+$$
+
+Any Gaussian becomes the **standard normal** (mean 0, sd 1) after **standardising**, $z = (x - \mu)/\sigma$. About 68% of the probability lies within one standard deviation of the mean, 95% within two (1.96 to be exact) and 99.7% within three. Its CDF has no formula in elementary functions, but is written with the error function, $\Phi(z) = \tfrac{1}{2}\left(1 + \operatorname{erf}(z/\sqrt{2})\right)$, available as `math.erf`.
+
+<PyCell id="gauss" title="Standardise and look up" tests={String.raw`
+  import numpy as np
+  def test_phi():
+      "Phi matches known values"
+      assert abs(Phi(0) - 0.5) < 1e-12 and abs(Phi(1.96) - 0.975) < 1e-3
+
+  def test_rule():
+      "the empirical fractions within 1, 2 and 3 sd are close to 0.683, 0.954 and 0.997"
+      assert np.allclose(within, [0.683, 0.954, 0.997], atol=0.005)
+
+  def test_threshold():
+      "the probability of crossing threshold matches the Gaussian tail"
+      assert abs(p_cross - (1 - Phi((-50 - (-58)) / 4))) < 1e-12
+`} prompt="Write `Phi(z)` with `math.erf`. Check the 68-95-99.7 rule on 200,000 standard normal draws (store the three fractions in `within`). Then, for a membrane potential that is Gaussian with mean −58 mV and sd 4 mV, compute `p_cross` = P(V above −50 mV)."
+code={String.raw`
+  from math import erf, sqrt
+  def Phi(z):
+      return ...
+
+  z = rng.normal(size=200000)
+  within = [np.mean(np.abs(z) < k) for k in (1, 2, 3)]
+  p_cross = ...
+  print("within 1, 2, 3 sd:", np.round(within, 4), f"  P(V > -50 mV) = {p_cross:.4f}")
+`}
+hint="Phi = 0.5 * (1 + erf(z / sqrt(2))); p_cross = 1 - Phi((-50 - (-58)) / 4)."
+solution={String.raw`
+  from math import erf, sqrt
+  def Phi(z):
+      return 0.5 * (1 + erf(z / sqrt(2)))
+
+  z = rng.normal(size=200000)
+  within = [np.mean(np.abs(z) < k) for k in (1, 2, 3)]
+  p_cross = 1 - Phi((-50 - (-58)) / 4)
+  print("within 1, 2, 3 sd:", np.round(within, 4), f"  P(V > -50 mV) = {p_cross:.4f}")
+`} />
+
+A membrane potential sitting two standard deviations below threshold crosses it on about 2% of moments. This is the fluctuation-driven regime of Shadlen and Newsome: the mean input keeps the neuron below threshold, and its spikes are caused by the noise, which is why they are irregular.
+
+<Step n={3} title="The central limit theorem" minutes={40} />
+
+Let $X_1, \dots, X_n$ be independent draws from any distribution with mean $\mu$ and finite variance $\sigma^2$. The **central limit theorem** (CLT) says that the standardised sum
+
+$$
+Z_n = \frac{\sum_{i=1}^n X_i - n\mu}{\sigma\sqrt{n}}
+$$
+
+has a distribution that approaches the standard normal as $n \to \infty$. The shape of the individual distribution washes out; only its mean and variance survive. Asymmetry fades slowly, with the skewness of the sum falling like $1/\sqrt{n}$.
+
+<Figure caption="Sums of skewed (exponential) draws, standardised, against the standard Gaussian. Add more draws and the skew disappears." credit="Interactive figure by Engram.">
+  <CentralLimit />
+</Figure>
+
+<Video id="zeJD6dqJ5lo" title="But what is the Central Limit Theorem?" by="3Blue1Brown" note="Grant Sanderson shows why sums of dice approach a bell curve, and exactly what the theorem does and does not claim." />
+
+<PyCell id="membrane" title="A membrane potential from 2,000 synapses" tests={String.raw`
+  import numpy as np
+  def test_moments():
+      "the simulated mean and variance match the predictions from linearity and independence to within 3%"
+      assert abs(V.mean() - mean_pred) / abs(mean_pred) < 0.03 and abs(V.var() - var_pred) / var_pred < 0.03
+
+  def test_skew():
+      "one synapse's contribution is very skewed, the sum nearly symmetric"
+      assert skew_single > 5 and abs(skew_sum) < 0.3
+
+  def test_tail():
+      "the Gaussian with the predicted mean and variance gets P(V above mean + 2 sd) right to within 0.005"
+      assert abs(p_tail_sim - p_tail_gauss) < 0.005
+`} prompt="Each of 1,600 excitatory and 400 inhibitory synapses fires in a 10 ms window with probability 0.05. Excitatory potentials are exponential with mean 0.5 mV, inhibitory ones exponential with mean −1 mV. Simulate 20,000 windows, predict the mean and variance of the summed potential from the single-synapse moments, and compare the skewness of one synapse with that of the sum."
+code={String.raw`
+  nE, nI, p, aE, aI, W = 1600, 400, 0.05, 0.5, 1.0, 20000
+
+  def one_synapse_moments(p, a):
+      # contribution = (Bernoulli(p)) * (exponential with mean a): mean p a, E[X^2] = p * 2 a^2
+      mean = ...
+      var = ...
+      return mean, var
+
+  mE, vE = one_synapse_moments(p, aE)
+  mI, vI = one_synapse_moments(p, aI)
+  mean_pred = nE * mE - nI * mI
+  var_pred = ...
+
+  kE = rng.binomial(nE, p, W); kI = rng.binomial(nI, p, W)            # how many of each fire
+  V = np.array([rng.exponential(aE, ke).sum() - rng.exponential(aI, ki).sum() for ke, ki in zip(kE, kI)])
+
+  def skewness(x): return np.mean(((x - x.mean()) / x.std()) ** 3)
+  single = (rng.random(200000) < p) * rng.exponential(aE, 200000)
+  skew_single, skew_sum = skewness(single), skewness(V)
+  p_tail_sim = np.mean(V > mean_pred + 2 * np.sqrt(var_pred))
+  p_tail_gauss = 1 - Phi(2)
+  print(f"mean {V.mean():.3f} (predicted {mean_pred:.3f}),  variance {V.var():.3f} (predicted {var_pred:.3f})")
+  print(f"skewness: one synapse {skew_single:.1f}, sum {skew_sum:.3f};  P(above mean + 2 sd): {p_tail_sim:.4f} vs Gaussian {p_tail_gauss:.4f}")
+  plt.hist(V, 80, density=True, alpha=0.5); x = np.linspace(V.min(), V.max(), 200)
+  plt.plot(x, np.exp(-(x - mean_pred) ** 2 / (2 * var_pred)) / np.sqrt(2 * np.pi * var_pred)); plt.xlabel("summed potential (mV)"); plt.show()
+`}
+hint="mean = p * a; var = p * 2 * a ** 2 - (p * a) ** 2. var_pred = nE * vE + nI * vI (variances add for independent synapses, whatever the sign)."
+solution={String.raw`
+  nE, nI, p, aE, aI, W = 1600, 400, 0.05, 0.5, 1.0, 20000
+
+  def one_synapse_moments(p, a):
+      # contribution = (Bernoulli(p)) * (exponential with mean a): mean p a, E[X^2] = p * 2 a^2
+      mean = p * a
+      var = p * 2 * a ** 2 - (p * a) ** 2
+      return mean, var
+
+  mE, vE = one_synapse_moments(p, aE)
+  mI, vI = one_synapse_moments(p, aI)
+  mean_pred = nE * mE - nI * mI
+  var_pred = nE * vE + nI * vI
+
+  kE = rng.binomial(nE, p, W); kI = rng.binomial(nI, p, W)            # how many of each fire
+  V = np.array([rng.exponential(aE, ke).sum() - rng.exponential(aI, ki).sum() for ke, ki in zip(kE, kI)])
+
+  def skewness(x): return np.mean(((x - x.mean()) / x.std()) ** 3)
+  single = (rng.random(200000) < p) * rng.exponential(aE, 200000)
+  skew_single, skew_sum = skewness(single), skewness(V)
+  p_tail_sim = np.mean(V > mean_pred + 2 * np.sqrt(var_pred))
+  p_tail_gauss = 1 - Phi(2)
+  print(f"mean {V.mean():.3f} (predicted {mean_pred:.3f}),  variance {V.var():.3f} (predicted {var_pred:.3f})")
+  print(f"skewness: one synapse {skew_single:.1f}, sum {skew_sum:.3f};  P(above mean + 2 sd): {p_tail_sim:.4f} vs Gaussian {p_tail_gauss:.4f}")
+  plt.hist(V, 80, density=True, alpha=0.5); x = np.linspace(V.min(), V.max(), 200)
+  plt.plot(x, np.exp(-(x - mean_pred) ** 2 / (2 * var_pred)) / np.sqrt(2 * np.pi * var_pred)); plt.xlabel("summed potential (mV)"); plt.show()
+`} />
+
+A single synapse's contribution is wildly skewed (almost always zero, occasionally large), yet the sum of 2,000 is nearly symmetric, and a Gaussian with the predicted mean and variance gets even its tail right. That answers the prediction. Note how much the inhibition matters: it halves the mean (from 40 mV of summed excitation to 20 mV) while roughly *doubling* the variance, which is exactly the balanced, fluctuation-driven regime.
+
+<Step n={4} title="When it fails" minutes={15} />
+
+The CLT needs independence (or weak dependence) and finite variance. Strongly correlated inputs do not average out, so their sum stays as variable as the shared part. And some distributions have tails so heavy that the variance is infinite. The **Cauchy** distribution, for example, the ratio of two independent standard normals, has no mean at all: the average of a thousand Cauchy draws is exactly as spread out as a single draw.
+
+<PyCell id="cauchy" title="An average that never settles" tests={String.raw`
+  import numpy as np
+  def test_cauchy():
+      "the interquartile range of Cauchy sample means does not shrink from n = 10 to n = 1000"
+      assert iqr_cauchy[1] > 0.7 * iqr_cauchy[0]
+
+  def test_normal():
+      "for normal draws it shrinks about tenfold"
+      assert 7 < iqr_normal[0] / iqr_normal[1] < 13
+`} prompt="For n = 10 and n = 1000, take 5,000 sample means of standard Cauchy draws and of standard normal draws, and store the interquartile range of the means (75th minus 25th percentile) in `iqr_cauchy` and `iqr_normal`."
+code={String.raw`
+  def iqr(x): return np.percentile(x, 75) - np.percentile(x, 25)
+  iqr_cauchy = [iqr(rng.standard_cauchy((5000, n)).mean(axis=1)) for n in (10, 1000)]
+  iqr_normal = ...
+  print("Cauchy IQR of means for n = 10, 1000:", np.round(iqr_cauchy, 3), "   normal:", np.round(iqr_normal, 3))
+`}
+hint="iqr_normal = [iqr(rng.normal(size=(5000, n)).mean(axis=1)) for n in (10, 1000)]."
+solution={String.raw`
+  def iqr(x): return np.percentile(x, 75) - np.percentile(x, 25)
+  iqr_cauchy = [iqr(rng.standard_cauchy((5000, n)).mean(axis=1)) for n in (10, 1000)]
+  iqr_normal = [iqr(rng.normal(size=(5000, n)).mean(axis=1)) for n in (10, 1000)]
+  print("Cauchy IQR of means for n = 10, 1000:", np.round(iqr_cauchy, 3), "   normal:", np.round(iqr_normal, 3))
+`} />
+
+Heavy tails are not exotic: the distribution of synaptic weights in cortex is close to log-normal, with a long tail of very strong connections (Song and colleagues, 2005), and a few strong inputs can dominate a sum in a way the CLT does not describe.
+
+<Bridge title="Gaussians in brains and machines"
+  neuro="Channel noise, synaptic bombardment and photon noise all sum many small independent events, which is why the membrane potential of a cortical neuron in vivo fluctuates roughly like a Gaussian (Faisal, Selen and Wolpert, 2008, today's paper). The exceptions, such as correlated inputs and heavy-tailed weights, are where the interesting biology often is."
+  ai="Network weights are initialised from Gaussians scaled by one over the square root of the number of inputs, so that each unit's summed input, by the CLT, has a fixed variance (Week 82). Gaussian noise is added and removed in diffusion models, and Gaussian likelihoods underlie the squared-error loss.">
+
+Add up enough small independent things and you get a Gaussian, whatever the things were.
+
+</Bridge>
+
+<Prove title="Mean and variance of the exponential" task="For $f(t) = re^{-rt}$ on $t \ge 0$, show that $\mathbb{E}[T] = 1/r$ and $\operatorname{Var}(T) = 1/r^2$, so the coefficient of variation is 1.">
+
+Integrate by parts with $u = t$, $\mathrm{d}v = re^{-rt}\mathrm{d}t$: $\mathbb{E}[T] = \left[-te^{-rt}\right]_0^\infty + \int_0^\infty e^{-rt}\mathrm{d}t = 0 + 1/r$.
+
+Similarly $\mathbb{E}[T^2] = \left[-t^2e^{-rt}\right]_0^\infty + \int_0^\infty 2te^{-rt}\mathrm{d}t = \tfrac{2}{r}\mathbb{E}[T] = 2/r^2$.
+
+So $\operatorname{Var}(T) = 2/r^2 - 1/r^2 = 1/r^2$, the standard deviation is $1/r$, and the coefficient of variation is $(1/r)/(1/r) = 1$.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "For a continuous random variable, P(X = 2.5) is...", options: ["f(2.5)", "0", "F(2.5)", "Undefined"], answer: 1, explain: "An interval of zero width has zero area." },
+  { q: "A probability density can be...", options: ["Negative", "Greater than 1", "Only between 0 and 1", "Undefined at its mean"], answer: 1, explain: "It is probability per unit." },
+  { q: "The density is the derivative of...", options: ["The mean", "The CDF", "The variance", "The PMF"], answer: 1, explain: "$f = F'$." },
+  { q: "About what fraction of a Gaussian lies within 2 sd of the mean?", options: ["68%", "95%", "99.7%", "50%"], answer: 1, explain: "1.96 sd for exactly 95%." },
+  { q: "The CLT requires...", options: ["Gaussian inputs", "Independent draws with finite variance", "Positive values", "Small n"], answer: 1, explain: "Shape does not matter." },
+  { q: "The skewness of a sum of n independent draws falls like...", options: ["1/n", "1/√n", "It does not change", "n"], answer: 1, explain: "Tails Gaussianise last." },
+  { q: "The mean of 1000 Cauchy draws is...", options: ["Much less spread than one draw", "Just as spread as one draw", "Always zero", "Gaussian"], answer: 1, explain: "Infinite variance breaks the CLT." },
+]} />
+
+<Flashcards cards={[
+  { front: "Density?", back: "$P(a \\le X \\le b) = \\int_a^b f$; integrates to 1; can exceed 1." },
+  { front: "Exponential density?", back: "$re^{-rt}$; mean and sd 1/r." },
+  { front: "Standardising?", back: "$z = (x - \\mu)/\\sigma$." },
+  { front: "Gaussian CDF?", back: "$\\Phi(z) = \\tfrac{1}{2}(1 + \\text{erf}(z/\\sqrt{2}))$." },
+  { front: "Central limit theorem?", back: "Standardised sums of independent finite-variance draws approach the standard normal." },
+]} />
+
+<Predict revisit question="Is the summed potential from 2,000 skewed synaptic inputs skewed or nearly Gaussian?" />
+
+<Key title="Before you go">
+<ul>
+<li>Continuous probabilities are areas under a density; the CDF integrates it.</li>
+<li>Standardise any Gaussian to look up probabilities with the error function.</li>
+<li>Sums of many small independent effects are approximately Gaussian, with mean and variance from linearity.</li>
+<li>Correlation and heavy tails break the theorem.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Faisal, Selen and Wolpert (2008), <em>Noise in the nervous system</em>.</li>
+<li>3Blue1Brown, <em>Why "probability of 0" does not mean "impossible"</em>, for more on densities.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Today's model treated 2,000 synapses as independent. Suppose 10% of them always fire together. Predict what happens to the variance and to the shape of the summed potential, then say how you would check your prediction with today's code." />
