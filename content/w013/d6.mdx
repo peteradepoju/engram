@@ -1,0 +1,317 @@
+export const meta = {
+  title: "Forge: Week 13 challenge, quiz and deep read",
+  intro: "This week you went beyond plain gradient descent: momentum for long valleys, adaptive steps for badly scaled parameters, Lagrange multipliers and KKT conditions for constrained problems, the L1 penalty for sparsity, and the practical craft of stopping, scheduling and decay. Today's challenge has three parts. You race optimisers on the orientation decoder and find that a faster optimiser also overfits sooner. You show that Laughlin's optimal response curve must adapt when the world gets brighter. And you recover a sparse set of synaptic inputs with the lasso, choosing its penalty on held-out data. Then the weekly quiz and a critique of Olshausen and Field.",
+  goals: [
+    "Compare gradient descent, momentum and Adam on training speed and on held-out loss",
+    "Show that the entropy-maximising response curve depends on the input distribution",
+    "Choose an L1 penalty by validation and assess the support it recovers",
+    "Critique the sparse coding account of V1 receptive fields",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "olshausen-1996",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. The best heavy-ball β for a quadratic with condition number 100?
+2. Adam's first step when the gradient is (−50, 0.002)?
+3. soft(−1.3, 0.5)?
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  k = 100
+  print("1. ((sqrt(k) - 1) / (sqrt(k) + 1))^2 =", round(((np.sqrt(k) - 1) / (np.sqrt(k) + 1)) ** 2, 4))
+  print("2. every entry moves by lr against its sign: (+lr, -lr)")
+  print("3.", np.sign(-1.3) * max(abs(-1.3) - 0.5, 0))
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: the optimiser race.** The decoder from last week's Forge reports whether a grating lies within 45° of the diagonal, from the raw spike counts of 50 neurons. The first 1,500 trials train it and the last 500 are a validation set.
+
+<PyCell code={String.raw`
+  rng = np.random.default_rng(2018)
+  N, T = 50, 2000
+  prefs = np.linspace(0, np.pi, N, endpoint=False)
+  theta = rng.uniform(0, np.pi, T)
+  labels = (np.cos(2 * (theta - np.pi / 4)) > 0).astype(float)
+  counts = rng.poisson((10 + 20 * np.exp(2 * (np.cos(2 * (theta[:, None] - prefs[None])) - 1))) * 0.2)
+  tr, va = np.arange(1500), np.arange(1500, T)
+  def sigmoid(u): return 1 / (1 + np.exp(-u))
+  def xent(w, Z, y):
+      p = np.clip(sigmoid(Z @ w), 1e-12, 1 - 1e-12)
+      return -np.mean(y * np.log(p) + (1 - y) * np.log(1 - p))
+  def grad(w, Z, y): return Z.T @ (sigmoid(Z @ w) - y) / len(y)
+  Z = np.column_stack([counts, np.ones(T)])
+  Ztr, ytr, Zva, yva = Z[tr], labels[tr], Z[va], labels[va]
+  lr = 1.9 / np.linalg.eigvalsh(Ztr.T @ Ztr / (4 * len(tr))).max()
+`} />
+
+<PyCell id="partA" title="Part A: faster to fit, faster to overfit" tests={String.raw`
+  import numpy as np
+  def test_train_speed():
+      "momentum and Adam reach a lower training loss than gradient descent after 1000 steps"
+      assert results["momentum"]["train"] < results["GD"]["train"] and results["Adam"]["train"] < results["GD"]["train"]
+
+  def test_best_early():
+      "momentum and Adam reach their lowest validation loss more than ten times sooner than gradient descent"
+      assert 10 * results["momentum"]["best_step"] < results["GD"]["best_step"]
+      assert 10 * results["Adam"]["best_step"] < results["GD"]["best_step"]
+
+  def test_overfit():
+      "after 1000 steps, Adam's validation loss is above its own minimum by more than 0.01"
+      assert results["Adam"]["val"][-1] > min(results["Adam"]["val"]) + 0.01
+`} prompt="Train for 1,000 steps with gradient descent (lr above), momentum (same lr, β = 0.9) and Adam (learning rate 0.03), recording the validation loss after each step. For each, store in `results[name]` the final training loss under 'train', the list of validation losses under 'val', and the step with the lowest validation loss under 'best_step'."
+code={String.raw`
+  def train(kind, steps=1000):
+      w, v, m, s = np.zeros(N + 1), np.zeros(N + 1), np.zeros(N + 1), np.zeros(N + 1)
+      val = []
+      for k in range(1, steps + 1):
+          g = grad(w, Ztr, ytr)
+          if kind == "GD":
+              w = ...
+          elif kind == "momentum":
+              ...
+          else:
+              ...
+          val.append(xent(w, Zva, yva))
+      return {"train": xent(w, Ztr, ytr), "val": val, "best_step": int(np.argmin(val)) + 1}
+
+  results = {name: train(name) for name in ["GD", "momentum", "Adam"]}
+  for name, r in results.items():
+      print(f"{name:9s} train {r['train']:.4f}  best validation {min(r['val']):.4f} at step {r['best_step']}  final validation {r['val'][-1]:.4f}")
+  for name, r in results.items():
+      plt.semilogx(np.arange(1, 1001), r["val"], label=name)
+  plt.xlabel("step"); plt.ylabel("validation loss"); plt.legend(); plt.show()
+`}
+hint="GD: w = w - lr * g. Momentum: v = 0.9 * v - lr * g; w = w + v. Adam: m = 0.9 * m + 0.1 * g; s = 0.999 * s + 0.001 * g ** 2; w = w - 0.03 * (m / (1 - 0.9 ** k)) / (np.sqrt(s / (1 - 0.999 ** k)) + 1e-8)."
+solution={String.raw`
+  def train(kind, steps=1000):
+      w, v, m, s = np.zeros(N + 1), np.zeros(N + 1), np.zeros(N + 1), np.zeros(N + 1)
+      val = []
+      for k in range(1, steps + 1):
+          g = grad(w, Ztr, ytr)
+          if kind == "GD":
+              w = w - lr * g
+          elif kind == "momentum":
+              v = 0.9 * v - lr * g
+              w = w + v
+          else:
+              m = 0.9 * m + 0.1 * g
+              s = 0.999 * s + 0.001 * g ** 2
+              w = w - 0.03 * (m / (1 - 0.9 ** k)) / (np.sqrt(s / (1 - 0.999 ** k)) + 1e-8)
+          val.append(xent(w, Zva, yva))
+      return {"train": xent(w, Ztr, ytr), "val": val, "best_step": int(np.argmin(val)) + 1}
+
+  results = {name: train(name) for name in ["GD", "momentum", "Adam"]}
+  for name, r in results.items():
+      print(f"{name:9s} train {r['train']:.4f}  best validation {min(r['val']):.4f} at step {r['best_step']}  final validation {r['val'][-1]:.4f}")
+  for name, r in results.items():
+      plt.semilogx(np.arange(1, 1001), r["val"], label=name)
+  plt.xlabel("step"); plt.ylabel("validation loss"); plt.legend(); plt.show()
+`} />
+
+The faster optimisers win on training loss, and they also reach a slightly better best validation loss. But they get there in a few dozen steps and then overfit, ending worse on validation than gradient descent, which is still improving slowly at step 1,000. Speed and generalisation are separate questions, and early stopping (Day 5) matters most for fast optimisers.
+
+**Part B: adapting to the light.** A photoreceptor's input intensities are roughly log-normal. Laughlin's rule says the best response curve with ten levels is the cumulative distribution of the inputs. What happens when the animal walks from shade into sunlight and every intensity rises by a factor of $e$?
+
+<PyCell id="partB" title="Part B: the curve must move" tests={String.raw`
+  import numpy as np
+  def test_matched():
+      "each curve gives the maximum entropy, log2(10), in its own world"
+      assert abs(H_shade_shade - np.log2(10)) < 0.01 and abs(H_sun_sun - np.log2(10)) < 0.01
+
+  def test_mismatch():
+      "the shade curve loses more than one bit in sunlight"
+      assert H_shade_sun < np.log2(10) - 1
+`} prompt="Draw 20,000 shade intensities (log-normal, mean of the log 0, sd 0.5) and 20,000 sunlight intensities (mean of the log 1). Build the CDF response for each world and compute the ten-level entropy of the shade curve in shade, the shade curve in sunlight, and the sunlight curve in sunlight."
+code={String.raw`
+  x_shade = rng.lognormal(0, 0.5, 20000)
+  x_sun = rng.lognormal(1, 0.5, 20000)
+
+  def entropy10(r):
+      p = np.bincount(np.minimum((r * 10).astype(int), 9), minlength=10) / len(r)
+      p = p[p > 0]
+      return -(p * np.log2(p)).sum()
+
+  def cdf_curve(samples):
+      s = np.sort(samples)
+      return lambda x: ...
+
+  F_shade, F_sun = cdf_curve(x_shade), cdf_curve(x_sun)
+  H_shade_shade = entropy10(F_shade(x_shade))
+  H_shade_sun = ...
+  H_sun_sun = ...
+  print(f"shade curve in shade {H_shade_shade:.2f} bits, in sunlight {H_shade_sun:.2f} bits; sunlight curve in sunlight {H_sun_sun:.2f} bits")
+`}
+hint="return lambda x: np.searchsorted(s, x) / len(s). H_shade_sun = entropy10(F_shade(x_sun)); H_sun_sun = entropy10(F_sun(x_sun))."
+solution={String.raw`
+  x_shade = rng.lognormal(0, 0.5, 20000)
+  x_sun = rng.lognormal(1, 0.5, 20000)
+
+  def entropy10(r):
+      p = np.bincount(np.minimum((r * 10).astype(int), 9), minlength=10) / len(r)
+      p = p[p > 0]
+      return -(p * np.log2(p)).sum()
+
+  def cdf_curve(samples):
+      s = np.sort(samples)
+      return lambda x: np.searchsorted(s, x) / len(s)
+
+  F_shade, F_sun = cdf_curve(x_shade), cdf_curve(x_sun)
+  H_shade_shade = entropy10(F_shade(x_shade))
+  H_shade_sun = entropy10(F_shade(x_sun))
+  H_sun_sun = entropy10(F_sun(x_sun))
+  print(f"shade curve in shade {H_shade_shade:.2f} bits, in sunlight {H_shade_sun:.2f} bits; sunlight curve in sunlight {H_sun_sun:.2f} bits")
+`} />
+
+Kept unchanged, the shade curve saturates in sunlight and its output drops from 3.32 to about 1.3 bits. An optimal neuron must keep re-solving the constrained problem as the world changes, which is one reading of **light adaptation**, and more broadly of the gain control seen throughout sensory systems.
+
+**Part C: few inputs, chosen honestly.** A neuron receives 120 candidate inputs, of which 8 are real, all excitatory. You have 80 trials of presynaptic rates and noisy postsynaptic responses, plus 200 validation trials. Run the lasso (ISTA) over a range of penalties and choose λ by validation error.
+
+<PyCell id="partC" title="Part C: the lasso on held-out data" tests={String.raw`
+  import numpy as np
+  def test_choice():
+      "lam_best is the penalty with the lowest validation error"
+      assert lam_best == lams[int(np.argmin(val_err))]
+
+  def test_recall():
+      "the chosen model keeps all 8 true inputs"
+      assert set(true_inputs) <= set(np.flatnonzero(w_best))
+
+  def test_selective():
+      "it selects fewer than a third of the 120 candidates"
+      assert np.count_nonzero(w_best) < 40
+`} prompt="For each λ in `lams`, run ISTA (3,000 steps) on the training trials and record the validation mean squared error. Store the errors in `val_err`, the best penalty in `lam_best` and its weights in `w_best`, and report how many inputs it selects and how many of them are real."
+code={String.raw`
+  n, p, k = 80, 120, 8
+  A = rng.gamma(2, 1, (n, p)); A = A - A.mean(0)
+  w_true = np.zeros(p)
+  true_inputs = rng.choice(p, k, replace=False)
+  w_true[true_inputs] = rng.uniform(0.5, 1.5, k)
+  y = A @ w_true + rng.normal(size=n)
+  Av = rng.gamma(2, 1, (200, p)); Av = Av - Av.mean(0)
+  yv = Av @ w_true + rng.normal(size=200)
+
+  def soft(z, tau): return np.sign(z) * np.maximum(np.abs(z) - tau, 0)
+  def ista(A, y, lam, steps=3000):
+      L = np.linalg.norm(A, 2) ** 2
+      w = np.zeros(A.shape[1])
+      for _ in range(steps):
+          w = soft(w - A.T @ (A @ w - y) / L, lam / L)
+      return w
+
+  lams = [0.1, 1, 3, 10, 30, 100]
+  fits = ...
+  val_err = ...
+  lam_best = ...
+  w_best = ...
+  for lam, w, e in zip(lams, fits, val_err):
+      sel = np.flatnonzero(w)
+      print(f"lambda {lam:6}: validation error {e:.2f}, selects {len(sel):3d}, of which real {len(set(sel) & set(true_inputs))}")
+`}
+hint="fits = [ista(A, y, lam) for lam in lams]; val_err = [np.mean((Av @ w - yv) ** 2) for w in fits]; i = int(np.argmin(val_err)); lam_best, w_best = lams[i], fits[i]."
+solution={String.raw`
+  n, p, k = 80, 120, 8
+  A = rng.gamma(2, 1, (n, p)); A = A - A.mean(0)
+  w_true = np.zeros(p)
+  true_inputs = rng.choice(p, k, replace=False)
+  w_true[true_inputs] = rng.uniform(0.5, 1.5, k)
+  y = A @ w_true + rng.normal(size=n)
+  Av = rng.gamma(2, 1, (200, p)); Av = Av - Av.mean(0)
+  yv = Av @ w_true + rng.normal(size=200)
+
+  def soft(z, tau): return np.sign(z) * np.maximum(np.abs(z) - tau, 0)
+  def ista(A, y, lam, steps=3000):
+      L = np.linalg.norm(A, 2) ** 2
+      w = np.zeros(A.shape[1])
+      for _ in range(steps):
+          w = soft(w - A.T @ (A @ w - y) / L, lam / L)
+      return w
+
+  lams = [0.1, 1, 3, 10, 30, 100]
+  fits = [ista(A, y, lam) for lam in lams]
+  val_err = [np.mean((Av @ w - yv) ** 2) for w in fits]
+  lam_best = lams[int(np.argmin(val_err))]
+  w_best = fits[int(np.argmin(val_err))]
+  for lam, w, e in zip(lams, fits, val_err):
+      sel = np.flatnonzero(w)
+      print(f"lambda {lam:6}: validation error {e:.2f}, selects {len(sel):3d}, of which real {len(set(sel) & set(true_inputs))}")
+`} />
+
+Validation picks the penalty that predicts best, and that model keeps every real input but also selects many false ones, since a slightly smaller penalty helps prediction by soaking up noise. A larger penalty selects far fewer candidates with nearly the same validation error. This is a well-known property of the lasso: the penalty that predicts best is not the one that selects best, so claims about which inputs "really" drive a neuron need more care (stability selection, or a test of each input; Week 18).
+
+**Part D (written).** Answer in your journal: in Part A, which optimiser would you choose for this decoder and how would you stop it? In Part C, how would you report which inputs drive the neuron?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. Histogram equalisation gives a uniform output" task="Let $x$ have a continuous, strictly increasing cumulative distribution $F$. Show that $r = F(x)$ is uniformly distributed on $[0, 1]$.">
+
+For $u$ in $[0, 1]$, $P(r \le u) = P(F(x) \le u) = P(x \le F^{-1}(u))$, because $F$ is strictly increasing.
+
+By the definition of $F$ this is $F(F^{-1}(u)) = u$. A variable with $P(r \le u) = u$ on $[0, 1]$ is uniform. This is also how computers turn uniform random numbers into any distribution, run in reverse: $x = F^{-1}(u)$.
+
+</Prove>
+
+<Prove title="2. When the lasso gives all zeros" task="Show that $\mathbf{w} = \mathbf{0}$ minimises $\tfrac{1}{2}\lVert A\mathbf{w} - \mathbf{y}\rVert^2 + \lambda\lVert\mathbf{w}\rVert_1$ if and only if $\lambda \ge \max_i |\mathbf{a}_i^\top\mathbf{y}|$, where $\mathbf{a}_i$ is the $i$-th column of $A$.">
+
+The objective is convex, so $\mathbf{0}$ is a minimum exactly when $\mathbf{0}$ lies in its subgradient there.
+
+The smooth part has gradient $A^\top(A\mathbf{0} - \mathbf{y}) = -A^\top\mathbf{y}$ at zero. The subgradient of $\lambda|w_i|$ at $w_i = 0$ is the interval $[-\lambda, \lambda]$.
+
+So we need, for every $i$, $0 \in -\mathbf{a}_i^\top\mathbf{y} + [-\lambda, \lambda]$, that is $|\mathbf{a}_i^\top\mathbf{y}| \le \lambda$. The smallest such penalty, $\lambda_{\max} = \lVert A^\top\mathbf{y}\rVert_\infty$, is where software starts its grid of penalties, and as λ falls below it inputs enter one at a time.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 13 quiz (15 questions)" questions={[
+  { q: "The heavy-ball update adds to the gradient step...", options: ["A random kick", "β times the previous step", "The Hessian", "Weight decay"], answer: 1, explain: "$v \\leftarrow \\beta v - \\eta\\nabla L$." },
+  { q: "With well-chosen momentum, steps needed on a quadratic scale like...", options: ["κ", "√κ", "κ²", "log κ"], answer: 1, explain: "The heavy ball's advantage." },
+  { q: "Momentum's velocity is...", options: ["The last gradient", "An exponentially weighted sum of past gradients", "The Hessian times the gradient", "Zero at the start only"], answer: 1, explain: "Consistent directions accumulate." },
+  { q: "AdaGrad divides by...", options: ["The sum of past squared gradients' square root", "The last gradient", "The Hessian", "A constant"], answer: 0, explain: "So its steps keep shrinking." },
+  { q: "Adam's bias correction divides by...", options: ["$1 - \\beta^k$", "β", "k", "ε"], answer: 0, explain: "The averages start at zero." },
+  { q: "Multiplying the loss by 1000 changes Adam's path...", options: ["A thousandfold", "Hardly at all", "To divergence", "By √1000"], answer: 1, explain: "Mean and root mean square scale together." },
+  { q: "At a constrained optimum with g = 0...", options: ["∇f = 0", "∇f = λ∇g", "∇g = 0", "f = g"], answer: 1, explain: "Tangency." },
+  { q: "PCA's first component is the solution of...", options: ["max uᵀΣu with |u| = 1", "min |u|", "max |Σ|", "min uᵀu"], answer: 0, explain: "The multiplier is the eigenvalue." },
+  { q: "The minimum-variance unbiased linear decoder is proportional to...", options: ["f′", "C⁻¹f′", "Cf′", "1"], answer: 1, explain: "Undo the correlations." },
+  { q: "Laughlin's fly codes contrast with a curve matching...", options: ["A line", "The input CDF", "A Gaussian", "The noise"], answer: 1, explain: "Histogram equalisation." },
+  { q: "Complementary slackness means...", options: ["μ = 0 unless the constraint is active", "All μ positive", "All constraints active", "μ negative"], answer: 0, explain: "$\\mu_j g_j = 0$." },
+  { q: "soft(z, τ) for |z| less than τ is...", options: ["z", "0", "τ", "−z"], answer: 1, explain: "Thresholded to zero." },
+  { q: "Early stopping acts like...", options: ["An L2 penalty", "Momentum", "Dropout", "A larger learning rate"], answer: 0, explain: "Small singular directions are left unfitted." },
+  { q: "Cosine decay ends the learning rate at...", options: ["Its start value", "Zero", "Half", "Twice"], answer: 1, explain: "$\\tfrac{1}{2}\\eta_0(1 + \\cos\\pi) = 0$." },
+  { q: "Inside Adam, an L2 penalty...", options: ["Equals weight decay", "Is rescaled per weight, so it is not true weight decay", "Is ignored", "Doubles the learning rate"], answer: 1, explain: "Hence AdamW." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Olshausen and Field (1996) its third pass and write your critique under the five headings. Focus on one question: **does the result show that V1 is optimised for sparseness, or only that sparseness is one of several objectives that give the same filters?** Consider that independent component analysis (Bell and Sejnowski, 1997) produced similar filters from a different objective; that the images were whitened first, which itself shapes the result; what the model says about complex cells, which it does not produce; and what measurement of real V1 activity would distinguish a sparse code from the alternatives.
+
+<Callout kind="research">
+
+Sparse coding is still being extended: to spiking networks that solve the L1 problem with their dynamics (Rozell and colleagues, 2008), to the hierarchy beyond V1, and, under the name sparse autoencoders, to finding features inside large AI models (Weeks 100 and 146). Write down one prediction of sparse coding about V1 responses to natural movies that you could test with a public dataset such as the Allen Brain Observatory.
+
+</Callout>
+
+<Key title="Week 13 review checklist">
+<ul>
+<li>I can implement the heavy ball, choose β from the condition number and explain the √κ speed-up.</li>
+<li>I can implement Adam with bias correction and explain its scale invariance.</li>
+<li>I can solve equality-constrained problems with Lagrange multipliers, including PCA and the best unbiased decoder.</li>
+<li>I can explain Laughlin's histogram equalisation and why the optimal curve must adapt.</li>
+<li>I can state the KKT conditions and use projected gradient descent.</li>
+<li>I can explain why L1 gives sparse solutions and implement ISTA.</li>
+<li>I can use early stopping, learning-rate schedules and AdamW, and explain why each helps.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part D: which optimiser you would choose for the decoder and how you would stop it, and how you would report which inputs drive the neuron in Part C. Then write the sparse coding prediction you proposed." />

@@ -1,0 +1,278 @@
+export const meta = {
+  title: "Adaptive methods: AdaGrad, RMSProp and Adam",
+  intro: "Momentum helps in long valleys, but it still uses one learning rate for every parameter. In a network some weights see large, frequent gradients and others small, rare ones, and the right step for one is wrong for the other. Adaptive methods give each parameter its own step, scaled down where gradients have been large and up where they have been small. Today you build AdaGrad, RMSProp and Adam from that one idea, see why Adam is nearly insensitive to the scale of the loss, and use it on the badly conditioned decoder from yesterday.",
+  goals: [
+    "Explain per-parameter learning rates and derive AdaGrad and RMSProp",
+    "Implement Adam, including its bias correction",
+    "Show that Adam's steps are nearly invariant to rescaling the loss or a parameter",
+    "Compare gradient descent, momentum and Adam on an ill-conditioned problem",
+  ],
+  plan: [
+    { label: "Predict and per-parameter steps", minutes: 25 },
+    { label: "Adam", minutes: 30 },
+    { label: "Scale invariance", minutes: 25 },
+    { label: "A race on a real problem", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "kingma-2015",
+};
+
+<Predict question="You train a decoder with Adam and get a certain sequence of weights. Then you multiply the whole loss by 1,000 (same problem, different units) and train again with the same settings. Will Adam's weights follow almost the same path, a path 1,000 times faster, or diverge?" />
+
+<Step n={1} title="Per-parameter steps" minutes={25} />
+
+Suppose parameter $i$ has typically seen gradients of size $s_i$. Gradient descent moves it by about $\eta s_i$ per step: parameters with big gradients race and ones with small gradients crawl, regardless of how far each is from its best value. The adaptive idea is to divide each parameter's step by an estimate of $s_i$.
+
+- **AdaGrad** (Duchi, Hazan and Singer, 2011) divides by the square root of the *sum* of all past squared gradients, $\sqrt{G_i}$ with $G_i = \sum_k g_{i,k}^2$. Rarely updated parameters keep large steps, which suits sparse features, but the sum only grows, so every step eventually shrinks towards zero.
+- **RMSProp** (Hinton, in lecture notes) replaces the sum with an exponential moving average, $v_i \leftarrow \rho v_i + (1 - \rho)g_i^2$, and steps by $-\eta\,g_i/(\sqrt{v_i} + \epsilon)$. The step no longer shrinks for ever; it tracks the recent scale of the gradient.
+
+The small constant $\epsilon$ (for example $10^{-8}$) prevents division by zero.
+
+<Figure caption="Four optimisers on a loss whose curvature differs a hundredfold between the two weights. Change the learning rate and the gradient noise." credit="Interactive figure by Engram.">
+  <OptimiserRace />
+</Figure>
+
+<Video id="Zr6r2kfmQUM" title="Adaptive Methods" by="Neuromatch Academy (Deep Learning course)" note="Neuromatch's introduction to AdaGrad, RMSProp and Adam: giving every parameter its own learning rate." />
+
+<Step n={2} title="Adam" minutes={30} />
+
+**Adam** (Kingma and Ba, 2015, today's paper) combines momentum with RMSProp. With $\beta_1 = 0.9$, $\beta_2 = 0.999$ and step counter $k$:
+
+$$
+\mathbf{m} \leftarrow \beta_1\mathbf{m} + (1 - \beta_1)\mathbf{g}, \qquad \mathbf{v} \leftarrow \beta_2\mathbf{v} + (1 - \beta_2)\mathbf{g}^2
+$$
+
+$$
+\hat{\mathbf{m}} = \frac{\mathbf{m}}{1 - \beta_1^k}, \quad \hat{\mathbf{v}} = \frac{\mathbf{v}}{1 - \beta_2^k}, \qquad \mathbf{w} \leftarrow \mathbf{w} - \eta\,\frac{\hat{\mathbf{m}}}{\sqrt{\hat{\mathbf{v}}} + \epsilon}
+$$
+
+(squares and square roots taken entry by entry). $\mathbf{m}$ estimates the mean gradient, $\mathbf{v}$ its mean square. Both start at zero, so early on they are biased towards zero; dividing by $1 - \beta^k$ corrects that, which matters most in the first few hundred steps, since $\beta_2 = 0.999$ takes about a thousand steps to forget its initial zero.
+
+<PyCell id="adam" title="Implement Adam" tests={String.raw`
+  import numpy as np
+  def test_first_step():
+      "Adam's first step moves every parameter by about lr, against the sign of its gradient, whatever the gradient's size"
+      g = lambda w: np.array([1000.0, -0.001, 3.0])
+      h = adam(g, np.zeros(3), 0.01, 1)
+      assert np.allclose(h[1], [-0.01, 0.01, -0.01], atol=1e-6)
+
+  def test_converges():
+      "Adam minimises a simple quadratic"
+      h = adam(lambda w: 2 * (w - 3.0), np.zeros(2), 0.1, 1000)
+      assert np.allclose(h[-1], 3.0, atol=1e-2)
+`} prompt="Write `adam(grad, x0, lr, steps, b1=0.9, b2=0.999, eps=1e-8)` returning the array of iterates. Check its first step on a gradient whose entries differ by six orders of magnitude."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def adam(grad, x0, lr, steps, b1=0.9, b2=0.999, eps=1e-8):
+      w = np.array(x0, dtype=float)
+      m, v = np.zeros_like(w), np.zeros_like(w)
+      history = [w.copy()]
+      for k in range(1, steps + 1):
+          g = grad(w)
+          m = ...
+          v = ...
+          m_hat = ...
+          v_hat = ...
+          w = ...
+          history.append(w.copy())
+      return np.array(history)
+
+  print("first step:", adam(lambda w: np.array([1000.0, -0.001, 3.0]), np.zeros(3), 0.01, 1)[1])
+`}
+hint="m = b1 * m + (1 - b1) * g; v = b2 * v + (1 - b2) * g ** 2; m_hat = m / (1 - b1 ** k); v_hat = v / (1 - b2 ** k); w = w - lr * m_hat / (np.sqrt(v_hat) + eps)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def adam(grad, x0, lr, steps, b1=0.9, b2=0.999, eps=1e-8):
+      w = np.array(x0, dtype=float)
+      m, v = np.zeros_like(w), np.zeros_like(w)
+      history = [w.copy()]
+      for k in range(1, steps + 1):
+          g = grad(w)
+          m = b1 * m + (1 - b1) * g
+          v = b2 * v + (1 - b2) * g ** 2
+          m_hat = m / (1 - b1 ** k)
+          v_hat = v / (1 - b2 ** k)
+          w = w - lr * m_hat / (np.sqrt(v_hat) + eps)
+          history.append(w.copy())
+      return np.array(history)
+
+  print("first step:", adam(lambda w: np.array([1000.0, -0.001, 3.0]), np.zeros(3), 0.01, 1)[1])
+`} />
+
+On the first step, $\hat{\mathbf{m}} = \mathbf{g}$ and $\hat{\mathbf{v}} = \mathbf{g}^2$, so every parameter moves by exactly the learning rate, whichever way its gradient points and however large it is. Adam's learning rate is therefore a step size in parameter units, which makes it much easier to choose than a gradient-descent learning rate.
+
+<Step n={3} title="Scale invariance" minutes={25} />
+
+Because Adam divides the averaged gradient by its own root mean square, multiplying the loss by a constant $c$ multiplies both by $c$ and leaves the step unchanged (apart from the tiny $\epsilon$). Gradient descent's step, by contrast, grows by $c$. The same holds per parameter: rescaling one input feature changes its gradient's size but not Adam's step for its weight by much. This is the main practical reason Adam works with default settings on so many problems.
+
+<PyCell id="invariance" title="Rescale the loss" tests={String.raw`
+  import numpy as np
+  def test_adam_invariant():
+      "Adam's path is nearly unchanged when the loss is multiplied by 1000"
+      assert np.max(np.abs(path_adam_1 - path_adam_1000)) < 1e-3
+
+  def test_gd_not():
+      "gradient descent's path changes completely (here it diverges or jumps far)"
+      assert np.max(np.abs(path_gd_1 - path_gd_1000)) > 1
+`} prompt="On the badly scaled quadratic with curvatures 100 and 1, run 200 steps of Adam (learning rate 0.05) and of gradient descent (learning rate 0.009) from (1, 1), for the loss itself and for the loss multiplied by 1000. Store the four paths and compare."
+code={String.raw`
+  H = np.diag([100.0, 1.0])
+  g1 = lambda w: H @ w
+  g1000 = lambda w: 1000 * (H @ w)
+  def gd(grad, x0, lr, steps):
+      w = np.array(x0, dtype=float); out = [w.copy()]
+      for _ in range(steps):
+          w = w - lr * grad(w)
+          if np.max(np.abs(w)) > 1e6: break
+          out.append(w.copy())
+      out += [out[-1] * 0 + 1e6] * (steps + 1 - len(out))      # pad a diverged run
+      return np.array(out)
+
+  path_adam_1, path_adam_1000 = ..., ...
+  path_gd_1, path_gd_1000 = ..., ...
+  print("largest difference between Adam paths:", np.max(np.abs(path_adam_1 - path_adam_1000)).round(6))
+  print("gradient descent with the rescaled loss ends at", path_gd_1000[-1])
+`}
+hint="path_adam_1 = adam(g1, [1.0, 1.0], 0.05, 200) and the same with g1000; path_gd_1 = gd(g1, [1.0, 1.0], 0.009, 200) and the same with g1000."
+solution={String.raw`
+  H = np.diag([100.0, 1.0])
+  g1 = lambda w: H @ w
+  g1000 = lambda w: 1000 * (H @ w)
+  def gd(grad, x0, lr, steps):
+      w = np.array(x0, dtype=float); out = [w.copy()]
+      for _ in range(steps):
+          w = w - lr * grad(w)
+          if np.max(np.abs(w)) > 1e6: break
+          out.append(w.copy())
+      out += [out[-1] * 0 + 1e6] * (steps + 1 - len(out))      # pad a diverged run
+      return np.array(out)
+
+  path_adam_1, path_adam_1000 = adam(g1, [1.0, 1.0], 0.05, 200), adam(g1000, [1.0, 1.0], 0.05, 200)
+  path_gd_1, path_gd_1000 = gd(g1, [1.0, 1.0], 0.009, 200), gd(g1000, [1.0, 1.0], 0.009, 200)
+  print("largest difference between Adam paths:", np.max(np.abs(path_adam_1 - path_adam_1000)).round(6))
+  print("gradient descent with the rescaled loss ends at", path_gd_1000[-1])
+`} />
+
+Adam follows the same path to within rounding; gradient descent with the same learning rate explodes, because its step grew a thousandfold. That answers the prediction.
+
+<Step n={4} title="A race on a real problem" minutes={25} />
+
+<PyCell code={String.raw`
+  rng = np.random.default_rng(2018)
+  N, T = 50, 1500
+  prefs = np.linspace(0, np.pi, N, endpoint=False)
+  theta = rng.uniform(0, np.pi, T)
+  labels = (np.cos(2 * (theta - np.pi / 4)) > 0).astype(float)
+  counts = rng.poisson((10 + 20 * np.exp(2 * (np.cos(2 * (theta[:, None] - prefs[None])) - 1))) * 0.2)
+  Z = np.column_stack([counts, np.ones(T)])          # raw counts, badly conditioned
+  def sigmoid(u): return 1 / (1 + np.exp(-u))
+  def xent(w): p = np.clip(sigmoid(Z @ w), 1e-12, 1 - 1e-12); return -np.mean(labels * np.log(p) + (1 - labels) * np.log(1 - p))
+  def grad(w): return Z.T @ (sigmoid(Z @ w) - labels) / T
+  lam_max = np.linalg.eigvalsh(Z.T @ Z / (4 * T)).max()
+`} />
+
+<PyCell id="race" title="Gradient descent, momentum and Adam" tests={String.raw`
+  import numpy as np
+  def test_adam_best():
+      "Adam reaches a lower loss than gradient descent after 300 steps for every learning rate tried"
+      assert all(l < final["GD"] - 0.005 for l in adam_by_lr.values())
+
+  def test_robust():
+      "Adam's final loss varies little across a 30-fold range of learning rates"
+      vals = list(adam_by_lr.values())
+      assert max(vals) - min(vals) < 0.01
+`} prompt="Train the raw-count decoder for 300 steps with gradient descent (lr 1.9/λmax), momentum (same lr, β = 0.9, written as a short loop) and Adam with learning rates 0.003, 0.01, 0.03 and 0.1. Store the final losses in the dictionary `final` (keys 'GD' and 'momentum') and Adam's in `adam_by_lr`."
+code={String.raw`
+  lr = 1.9 / lam_max
+  w = np.zeros(N + 1)
+  for _ in range(300):
+      w = w - lr * grad(w)
+  final = {"GD": xent(w)}
+
+  w, v = np.zeros(N + 1), np.zeros(N + 1)
+  for _ in range(300):
+      ...
+  final["momentum"] = xent(w)
+
+  adam_by_lr = {a: ... for a in [0.003, 0.01, 0.03, 0.1]}
+  print({k: round(v_, 4) for k, v_ in final.items()}, " Adam:", {k: round(v_, 4) for k, v_ in adam_by_lr.items()})
+`}
+hint="Momentum loop: v = 0.9 * v - lr * grad(w); w = w + v. Adam: adam_by_lr = {a: xent(adam(grad, np.zeros(N + 1), a, 300)[-1]) for a in [0.003, 0.01, 0.03, 0.1]}."
+solution={String.raw`
+  lr = 1.9 / lam_max
+  w = np.zeros(N + 1)
+  for _ in range(300):
+      w = w - lr * grad(w)
+  final = {"GD": xent(w)}
+
+  w, v = np.zeros(N + 1), np.zeros(N + 1)
+  for _ in range(300):
+      v = 0.9 * v - lr * grad(w)
+      w = w + v
+  final["momentum"] = xent(w)
+
+  adam_by_lr = {a: xent(adam(grad, np.zeros(N + 1), a, 300)[-1]) for a in [0.003, 0.01, 0.03, 0.1]}
+  print({k: round(v_, 4) for k, v_ in final.items()}, " Adam:", {k: round(v_, 4) for k, v_ in adam_by_lr.items()})
+`} />
+
+Adam beats plain gradient descent at every learning rate across a thirtyfold range, and matches tuned momentum, without needing the largest curvature at all. This robustness is why it is the default. It is not always best: on some problems well-tuned SGD with momentum generalises better, and Adam needs care with weight decay (Day 5).
+
+<Bridge title="Adaptive steps in brains and machines"
+  neuro="Neurons and synapses adapt to the statistics of their inputs: gain control and synaptic scaling normalise responses so that inputs of very different sizes produce comparable changes, much as Adam normalises gradients. Metaplasticity, the idea that a synapse's history changes how easily it changes, is a biological analogue of per-parameter learning rates (Week 42)."
+  ai="Adam, and its weight-decay variant AdamW (Day 5), train almost all large models, including transformers. Its moments double the memory needed per parameter, which has motivated leaner variants such as Adafactor and sign-based methods for very large models.">
+
+Give every parameter a step sized to its own gradients, and one learning rate can fit many very different parameters.
+
+</Bridge>
+
+<Prove title="Adam and the sign of the gradient" task="Suppose a parameter's gradient is the same value g at every step. Show that Adam's bias-corrected step is exactly $-\eta\,g/(|g| + \epsilon) \approx -\eta\,\operatorname{sign}(g)$ at every step. What does this suggest Adam does when gradients are noisy?">
+
+With a constant gradient, $m_k = (1 - \beta_1)\sum_{j=0}^{k-1}\beta_1^j g = (1 - \beta_1^k)g$, so $\hat{m}_k = g$. Likewise $v_k = (1 - \beta_2^k)g^2$, so $\hat{v}_k = g^2$ and $\sqrt{\hat{v}_k} = |g|$.
+
+The step is therefore $-\eta g/(|g| + \epsilon) \approx -\eta\operatorname{sign}(g)$: a fixed-size step in the direction of descent, whatever the gradient's magnitude.
+
+With noisy gradients of mean $\mu$ and standard deviation $\sigma$, $\hat{m}$ estimates $\mu$ while $\sqrt{\hat{v}}$ estimates $\sqrt{\mu^2 + \sigma^2}$. The step is then roughly $\eta\,\mu/\sqrt{\mu^2 + \sigma^2}$: close to $\eta$ when the signal dominates, and much smaller when the noise does. Adam automatically takes cautious steps for parameters whose gradients are mostly noise.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "Adaptive methods give each parameter...", options: ["The same learning rate", "A step scaled by the size of its own recent gradients", "A random step", "No momentum"], answer: 1, explain: "Per-parameter learning rates." },
+  { q: "AdaGrad's steps eventually...", options: ["Grow without bound", "Shrink towards zero", "Stay constant", "Oscillate"], answer: 1, explain: "The sum of squared gradients only grows." },
+  { q: "RMSProp fixes AdaGrad by...", options: ["Removing the square root", "Using a moving average of squared gradients", "Adding momentum", "Using the Hessian"], answer: 1, explain: "Old gradients are forgotten." },
+  { q: "Adam's bias correction matters most...", options: ["Late in training", "In the first few hundred steps", "Never", "Only for large models"], answer: 1, explain: "The moving averages start at zero." },
+  { q: "Adam's first step moves each parameter by...", options: ["η times its gradient", "About η, whatever the gradient's size", "Zero", "Its gradient squared"], answer: 1, explain: "$\\hat{m}/\\sqrt{\\hat{v}} = g/|g|$." },
+  { q: "Multiplying the loss by 1000 changes Adam's path...", options: ["By a factor of 1000", "Hardly at all", "To divergence", "By a factor of √1000"], answer: 1, explain: "Mean and root mean square scale together." },
+  { q: "When a parameter's gradient is mostly noise, Adam's step for it is...", options: ["Larger", "Smaller", "Unchanged", "Exactly zero"], answer: 1, explain: "Roughly $\\eta\\mu/\\sqrt{\\mu^2 + \\sigma^2}$." },
+]} />
+
+<Flashcards cards={[
+  { front: "RMSProp?", back: "$v \\leftarrow \\rho v + (1 - \\rho)g^2$; $w \\leftarrow w - \\eta g/(\\sqrt{v} + \\epsilon)$." },
+  { front: "Adam update?", back: "Moving averages m of g and v of g², bias-corrected by $1 - \\beta^k$; step $-\\eta\\hat{m}/(\\sqrt{\\hat{v}} + \\epsilon)$; defaults β₁ = 0.9, β₂ = 0.999." },
+  { front: "Why bias correction?", back: "m and v start at zero, so early averages underestimate; dividing by $1 - \\beta^k$ fixes it." },
+  { front: "Scale invariance of Adam?", back: "Rescaling the loss or a parameter's gradients leaves the step nearly unchanged; the learning rate is a step size in parameter units." },
+  { front: "Adam with noisy gradients?", back: "Step ≈ $\\eta\\mu/\\sqrt{\\mu^2 + \\sigma^2}$: cautious where gradients are mostly noise." },
+]} />
+
+<Predict revisit question="After multiplying the loss by 1,000, does Adam follow the same path?" />
+
+<Key title="Before you go">
+<ul>
+<li>Adaptive methods divide each parameter's step by the root mean square of its recent gradients.</li>
+<li>Adam combines momentum with RMSProp and corrects both averages for their start at zero.</li>
+<li>Adam's steps are nearly invariant to the scale of the loss and of individual parameters.</li>
+<li>It works well across a wide range of learning rates, which is why it is the default.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Kingma and Ba (2015), <em>Adam: a method for stochastic optimization</em>. Read Algorithm 1 closely.</li>
+<li>Sebastian Ruder (2016), <em>An overview of gradient descent optimization algorithms</em>, arXiv:1609.04747.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Adam takes small steps for parameters whose gradients are mostly noise. Describe a situation in the brain where a synapse would benefit from the same caution, and what signal it could use to estimate its own gradient noise." />

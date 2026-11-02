@@ -59,3 +59,8 @@ export { DescentPaths } from "./descent-paths";
 export { ConvexChord } from "./convex-chord";
 export { SgdPaths } from "./sgd-paths";
 export { PerceptronLearn } from "./perceptron-learn";
+export { MomentumPaths } from "./momentum-paths";
+export { OptimiserRace } from "./optimiser-race";
+export { LagrangeContours } from "./lagrange-contours";
+export { L1L2Ball } from "./l1-l2-ball";
+export { EarlyStop } from "./early-stop";

@@ -1,0 +1,293 @@
+export const meta = {
+  title: "Optimisation in practice: early stopping, schedules and weight decay",
+  intro: "The optimisers of this week find minima of the training loss. But the training loss is not what we care about: we want models that work on data they have not seen. This lesson is about the practical choices that connect the two. Stopping early turns out to be a form of regularisation. Lowering the learning rate over training lets stochastic gradient descent settle instead of rattling around the minimum. And weight decay, which for plain gradient descent is the same as an L2 penalty, behaves very differently inside Adam, which is the observation behind AdamW, the optimiser that trains most large models today.",
+  goals: [
+    "Show that training error and test error can move in opposite directions, and use a held-out set to stop",
+    "Explain why early stopping behaves like ridge regression",
+    "Compare constant, step and cosine learning-rate schedules for SGD, and explain warm-up",
+    "Explain why an L2 penalty and weight decay differ inside Adam, and implement AdamW",
+  ],
+  plan: [
+    { label: "Predict and overfitting", minutes: 20 },
+    { label: "Early stopping", minutes: 30 },
+    { label: "Learning-rate schedules", minutes: 25 },
+    { label: "Weight decay and AdamW", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "loshchilov-2019",
+};
+
+<Predict question="You train with Adam and add an L2 penalty λ|w|² to the loss. One weight receives no gradient at all from the data. If you make λ a hundred times larger, does that weight shrink a hundred times faster, ten times faster, or at the same speed?" />
+
+<Step n={1} title="Overfitting" minutes={20} />
+
+With more parameters than examples, a linear model can fit its training data exactly, noise and all. Gradient descent started from zero gets there gradually: it fits the directions with the largest singular values first (Week 7), which usually carry the real structure, and only later the small directions, where the noise has most effect. So training error falls throughout, while test error first falls and then rises.
+
+<Figure caption="Gradient descent on thirty noisy examples. Increase the number of features or the noise to watch the test error separate from the training error." credit="Interactive figure by Engram.">
+  <EarlyStop />
+</Figure>
+
+<Video id="72IG2bX5l30" title="Early Stopping" by="Neuromatch Academy (Deep Learning course)" note="Neuromatch's short introduction to monitoring a validation set and stopping when it stops improving." />
+
+<Step n={2} title="Early stopping" minutes={30} />
+
+**Early stopping** keeps the weights from the step where a held-out validation error was lowest. Why does this work? For least squares started at zero, after $k$ steps of size $\eta$ the component of the weights along the $i$-th right singular vector has been fitted by a fraction $1 - (1 - \eta s_i^2)^k$ of its final value, where $s_i$ is the singular value. Ridge regression with penalty $\lambda$ fits the same component by a fraction $s_i^2/(s_i^2 + \lambda)$. Both are near 1 for large $s_i$ and near 0 for small $s_i$, and choosing $k$ roughly corresponds to choosing $\lambda \approx 1/(\eta k)$. Stopping early is an implicit penalty on the size of the weights.
+
+<PyCell id="early" title="Stop at the right moment" tests={String.raw`
+  import numpy as np
+  def test_curves():
+      "training error ends near zero while test error ends higher than its minimum"
+      assert train_err[-1] < 1e-6 and test_err[-1] > 1.5 * min(test_err)
+
+  def test_best_step():
+      "best_step is the step with the lowest test error"
+      assert test_err[best_step] == min(test_err)
+
+  def test_like_ridge():
+      "early stopping's best test error is within 10% of the best ridge test error"
+      assert abs(min(test_err) - best_ridge) / best_ridge < 0.1
+`} prompt="Thirty noisy examples, 36 features. Run 5,000 steps of gradient descent from zero (step size n / largest eigenvalue of XᵀX) and record training and test mean squared errors after each step. Find `best_step`, and compare its test error with the best ridge test error over 60 values of λ."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2019)
+  n, p = 30, 36
+  w_true = rng.normal(0, 1, p) * np.exp(-np.arange(p) / 10)
+  X = rng.normal(0, 1, (n, p)); y = X @ w_true + rng.normal(size=n)
+  Xt = rng.normal(0, 1, (2000, p)); yt = Xt @ w_true + rng.normal(size=2000)
+
+  lr = n / np.linalg.norm(X, 2) ** 2
+  w = np.zeros(p)
+  train_err, test_err = [], []
+  for k in range(5000):
+      ...
+  best_step = ...
+
+  lams = np.logspace(-3, 2, 60)
+  ridge_err = [np.mean((Xt @ np.linalg.solve(X.T @ X / n + l * np.eye(p), X.T @ y / n) - yt) ** 2) for l in lams]
+  best_ridge = min(ridge_err)
+  print(f"best step {best_step + 1}: test {min(test_err):.2f};  after 5000 steps: test {test_err[-1]:.2f};  best ridge {best_ridge:.2f}")
+  plt.semilogx(np.arange(1, 5001), train_err, label="train"); plt.semilogx(np.arange(1, 5001), test_err, label="test"); plt.legend(); plt.xlabel("step"); plt.show()
+`}
+hint="Inside the loop: w = w - lr * X.T @ (X @ w - y) / n, then append np.mean((X @ w - y) ** 2) and np.mean((Xt @ w - yt) ** 2). best_step = int(np.argmin(test_err))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2019)
+  n, p = 30, 36
+  w_true = rng.normal(0, 1, p) * np.exp(-np.arange(p) / 10)
+  X = rng.normal(0, 1, (n, p)); y = X @ w_true + rng.normal(size=n)
+  Xt = rng.normal(0, 1, (2000, p)); yt = Xt @ w_true + rng.normal(size=2000)
+
+  lr = n / np.linalg.norm(X, 2) ** 2
+  w = np.zeros(p)
+  train_err, test_err = [], []
+  for k in range(5000):
+      w = w - lr * X.T @ (X @ w - y) / n
+      train_err.append(np.mean((X @ w - y) ** 2))
+      test_err.append(np.mean((Xt @ w - yt) ** 2))
+  best_step = int(np.argmin(test_err))
+
+  lams = np.logspace(-3, 2, 60)
+  ridge_err = [np.mean((Xt @ np.linalg.solve(X.T @ X / n + l * np.eye(p), X.T @ y / n) - yt) ** 2) for l in lams]
+  best_ridge = min(ridge_err)
+  print(f"best step {best_step + 1}: test {min(test_err):.2f};  after 5000 steps: test {test_err[-1]:.2f};  best ridge {best_ridge:.2f}")
+  plt.semilogx(np.arange(1, 5001), train_err, label="train"); plt.semilogx(np.arange(1, 5001), test_err, label="test"); plt.legend(); plt.xlabel("step"); plt.show()
+`} />
+
+Running to convergence triples the test error (from 3.25 to 9.93). Stopping at the best step, very early here, does about as well as the best ridge penalty (3.11), without ever solving a ridge problem. In practice the stopping point is chosen on a validation set, never on the test set, or the test error stops being an honest estimate (Week 18).
+
+<Callout kind="research">
+
+The picture is not always this simple. Large neural networks can show **double descent**: test error rises as the model approaches the size where it can just interpolate the data, then falls again as it grows further (Belkin and colleagues, 2019). Try 30 features in the figure, close to the number of examples, and then 80.
+
+</Callout>
+
+<Step n={3} title="Learning-rate schedules" minutes={25} />
+
+With stochastic gradients, a constant learning rate never settles: near the minimum the noise in each step keeps the weights moving within a cloud whose size grows with the learning rate (Week 12). The Robbins-Monro conditions say the steps should shrink, but not too fast. Common schedules:
+
+- **Step decay**: divide the learning rate by 10 at fixed points in training.
+- **Cosine decay**: $\eta_k = \tfrac{1}{2}\eta_0\left(1 + \cos(\pi k/K)\right)$, falling smoothly to zero at step $K$.
+- **Warm-up**: start very small and grow linearly over the first few hundred or thousand steps. Adam's second-moment estimate is unreliable early on, and in large networks the first gradients can be huge; warm-up avoids taking big steps before either has settled.
+
+<PyCell id="schedule" title="Constant, step and cosine" tests={String.raw`
+  import numpy as np
+  def test_decay_helps():
+      "both decaying schedules end at least five times closer to the least-squares solution than the constant one"
+      assert errs["step"] * 5 < errs["constant"] and errs["cosine"] * 5 < errs["constant"]
+`} prompt="Run 4,000 steps of single-example SGD on a 10-weight linear regression with base learning rate 0.02 under three schedules, averaging the squared distance to the least-squares solution over five seeds. Store the results in the dictionary `errs`."
+code={String.raw`
+  rng = np.random.default_rng(2019)
+  N2, p2 = 2000, 10
+  X2 = rng.normal(0, 1, (N2, p2)); y2 = X2 @ rng.normal(0, 1, p2) + rng.normal(size=N2)
+  w_ls = np.linalg.lstsq(X2, y2, rcond=None)[0]
+  K, eta0 = 4000, 0.02
+
+  def sgd(schedule, seed):
+      r = np.random.default_rng(seed); w = np.zeros(p2)
+      for k in range(K):
+          i = r.integers(N2)
+          w = w - schedule(k) * (X2[i] @ w - y2[i]) * X2[i]
+      return np.sum((w - w_ls) ** 2)
+
+  schedules = {
+      "constant": lambda k: eta0,
+      "step": ...,             # eta0 for the first half, eta0 / 10 after
+      "cosine": ...,
+  }
+  errs = {name: np.mean([sgd(s, seed) for seed in range(5)]) for name, s in schedules.items()}
+  print({k: round(v, 4) for k, v in errs.items()})
+`}
+hint="step: lambda k: eta0 * (0.1 if k > K // 2 else 1); cosine: lambda k: eta0 * 0.5 * (1 + np.cos(np.pi * k / K))."
+solution={String.raw`
+  rng = np.random.default_rng(2019)
+  N2, p2 = 2000, 10
+  X2 = rng.normal(0, 1, (N2, p2)); y2 = X2 @ rng.normal(0, 1, p2) + rng.normal(size=N2)
+  w_ls = np.linalg.lstsq(X2, y2, rcond=None)[0]
+  K, eta0 = 4000, 0.02
+
+  def sgd(schedule, seed):
+      r = np.random.default_rng(seed); w = np.zeros(p2)
+      for k in range(K):
+          i = r.integers(N2)
+          w = w - schedule(k) * (X2[i] @ w - y2[i]) * X2[i]
+      return np.sum((w - w_ls) ** 2)
+
+  schedules = {
+      "constant": lambda k: eta0,
+      "step": lambda k: eta0 * (0.1 if k > K // 2 else 1),             # eta0 for the first half, eta0 / 10 after
+      "cosine": lambda k: eta0 * 0.5 * (1 + np.cos(np.pi * k / K)),
+  }
+  errs = {name: np.mean([sgd(s, seed) for seed in range(5)]) for name, s in schedules.items()}
+  print({k: round(v, 4) for k, v in errs.items()})
+`} />
+
+Both decaying schedules end more than ten times closer to the least-squares solution than the constant one: the early large steps make fast progress, and the late small ones average away the noise.
+
+<Step n={4} title="Weight decay and AdamW" minutes={30} />
+
+**Weight decay** shrinks the weights a little every step: $\mathbf{w} \leftarrow (1 - \eta\lambda)\mathbf{w} - \eta\nabla L$. For plain gradient descent this is exactly the same as adding $\tfrac{\lambda}{2}\lVert\mathbf{w}\rVert^2$ to the loss, whose gradient is $\lambda\mathbf{w}$. Inside Adam the two differ. If the penalty's gradient is added to $\mathbf{g}$, it is divided by $\sqrt{\hat{\mathbf{v}}}$ like everything else: weights with large gradients are barely regularised, and weights with tiny gradients are shrunk by about the learning rate per step whatever $\lambda$ is (Day 2's sign-like behaviour). Loshchilov and Hutter (2019, today's paper) proposed **AdamW**, which applies the decay directly to the weights, outside the adaptive step, so every weight decays at the rate $\eta\lambda$.
+
+<PyCell id="adamw" title="L2 in Adam against decoupled decay" tests={String.raw`
+  import numpy as np
+  def test_l2_ignores_lambda():
+      "with the L2 penalty inside Adam, the unused weight ends in the same place for lambda 0.01 and 1"
+      assert abs(adam_l2(0.01)[0] - adam_l2(1.0)[0]) < 1e-3
+
+  def test_l2_spares_noisy():
+      "with the L2 penalty inside Adam, the weight with large gradients barely decays even for lambda 1"
+      assert adam_l2(1.0)[1] > 0.95
+
+  def test_adamw_uniform():
+      "with AdamW and lambda 1, both weights decay to about exp(-0.5)"
+      w = adamw(1.0)
+      assert np.all(np.abs(w - np.exp(-0.5)) < 0.1)
+`} prompt="Two weights start at 1. The first gets no gradient from the data; the second gets large, zero-mean noise. Write `adam_l2(lam)` (penalty gradient added to g) and `adamw(lam)` (decay applied to w outside the Adam step), each running 500 steps with learning rate 0.001 and returning the final weights."
+code={String.raw`
+  def data_grads(steps, seed=0):
+      r = np.random.default_rng(seed)
+      return np.column_stack([np.zeros(steps), 100 * r.normal(size=steps)])
+
+  def adam_run(lam, decoupled, steps=500, lr=0.001, b1=0.9, b2=0.999, eps=1e-8):
+      w, m, v = np.ones(2), np.zeros(2), np.zeros(2)
+      G = data_grads(steps)
+      for k in range(1, steps + 1):
+          g = G[k - 1] + (0 if decoupled else lam * w)
+          m = b1 * m + (1 - b1) * g
+          v = b2 * v + (1 - b2) * g ** 2
+          w = w - lr * (m / (1 - b1 ** k)) / (np.sqrt(v / (1 - b2 ** k)) + eps)
+          if decoupled:
+              w = ...                       # decoupled weight decay
+      return w
+
+  def adam_l2(lam): return adam_run(lam, decoupled=False)
+  def adamw(lam): return adam_run(lam, decoupled=True)
+  for lam in [0.01, 1.0]:
+      print(f"lambda {lam}:  Adam + L2 {adam_l2(lam).round(3)}   AdamW {adamw(lam).round(3)}")
+`}
+hint="w = w - lr * lam * w."
+solution={String.raw`
+  def data_grads(steps, seed=0):
+      r = np.random.default_rng(seed)
+      return np.column_stack([np.zeros(steps), 100 * r.normal(size=steps)])
+
+  def adam_run(lam, decoupled, steps=500, lr=0.001, b1=0.9, b2=0.999, eps=1e-8):
+      w, m, v = np.ones(2), np.zeros(2), np.zeros(2)
+      G = data_grads(steps)
+      for k in range(1, steps + 1):
+          g = G[k - 1] + (0 if decoupled else lam * w)
+          m = b1 * m + (1 - b1) * g
+          v = b2 * v + (1 - b2) * g ** 2
+          w = w - lr * (m / (1 - b1 ** k)) / (np.sqrt(v / (1 - b2 ** k)) + eps)
+          if decoupled:
+              w = w - lr * lam * w                       # decoupled weight decay
+      return w
+
+  def adam_l2(lam): return adam_run(lam, decoupled=False)
+  def adamw(lam): return adam_run(lam, decoupled=True)
+  for lam in [0.01, 1.0]:
+      print(f"lambda {lam}:  Adam + L2 {adam_l2(lam).round(3)}   AdamW {adamw(lam).round(3)}")
+`} />
+
+With the penalty inside Adam, the unused weight falls to 0.56 whether $\lambda$ is 0.01 or 1, a hundredfold change with no effect, which answers the prediction: it shrinks at the same speed. Meanwhile the noisy weight is hardly regularised at all. AdamW does what weight decay is supposed to do: nothing much for $\lambda = 0.01$, and a shrinkage by about $e^{-0.5} \approx 0.61$ for both weights when $\lambda = 1$.
+
+<Bridge title="Knowing when to stop"
+  neuro="Synapses that are not used weaken over time, and homeostatic synaptic scaling (Turrigiano and colleagues, 1998) multiplies all of a neuron's synapses by a common factor, much like weight decay. Learning in the brain also slows: critical periods in development close, and plasticity is gated by neuromodulators, a kind of learning-rate schedule (Week 42)."
+  ai="A typical recipe for a large model is AdamW with linear warm-up, cosine decay and a small weight decay, with a validation set watched throughout. Each choice in it came from the kind of small experiment you ran today.">
+
+Minimising the training loss is the means; generalising is the end. Stopping, scheduling and decay are how you steer between them.
+
+</Bridge>
+
+<Prove title="Weight decay equals L2 for gradient descent" task="Show that one gradient descent step on $L(\mathbf{w}) + \tfrac{\lambda}{2}\lVert\mathbf{w}\rVert^2$ with step $\eta$ equals the weight-decay update $\mathbf{w} \leftarrow (1 - \eta\lambda)\mathbf{w} - \eta\nabla L$. Then explain in one sentence why the equivalence breaks for Adam.">
+
+The gradient of the penalised loss is $\nabla L + \lambda\mathbf{w}$, so one step gives
+
+$$
+\mathbf{w} - \eta(\nabla L + \lambda\mathbf{w}) = (1 - \eta\lambda)\mathbf{w} - \eta\nabla L,
+$$
+
+which is the weight-decay update.
+
+In Adam the penalty's gradient $\lambda\mathbf{w}$ is divided entry by entry by $\sqrt{\hat{v}_i}$, which depends on each weight's gradient history, so the effective decay rate differs between weights and is no longer $\eta\lambda$.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "With more parameters than examples, gradient descent from zero first fits...", options: ["The noise", "The directions with the largest singular values", "Random directions", "Nothing"], answer: 1, explain: "Large singular values converge fastest." },
+  { q: "Early stopping behaves most like...", options: ["Momentum", "Ridge regression", "Dropout", "Batch normalisation"], answer: 1, explain: "Both shrink the small-singular-value directions." },
+  { q: "The stopping step should be chosen on...", options: ["The test set", "A validation set", "The training set", "The first batch"], answer: 1, explain: "The test set must stay untouched." },
+  { q: "Why decay the learning rate in SGD?", options: ["To speed up early training", "So the noise in late steps is averaged away", "To avoid computing gradients", "It is never helpful"], answer: 1, explain: "Constant steps rattle around the minimum." },
+  { q: "Warm-up means...", options: ["Starting with a large learning rate", "Increasing the learning rate gradually at the start", "Pre-training on random data", "Freezing the first layer"], answer: 1, explain: "Avoids big steps before statistics settle." },
+  { q: "For plain gradient descent, weight decay and an L2 penalty are...", options: ["Different", "Identical", "Unrelated", "Opposites"], answer: 1, explain: "One line of algebra." },
+  { q: "AdamW differs from Adam with L2 by...", options: ["Using no momentum", "Applying decay to the weights outside the adaptive step", "Removing bias correction", "Using a larger ε"], answer: 1, explain: "Decoupled weight decay." },
+]} />
+
+<Flashcards cards={[
+  { front: "Early stopping?", back: "Keep the weights with the lowest validation error; acts like ridge with $\\lambda \\approx 1/(\\eta k)$." },
+  { front: "Cosine schedule?", back: "$\\eta_k = \\tfrac{1}{2}\\eta_0(1 + \\cos(\\pi k/K))$." },
+  { front: "Warm-up?", back: "Grow the learning rate from near zero over the first steps." },
+  { front: "Weight decay?", back: "$w \\leftarrow (1 - \\eta\\lambda)w - \\eta\\nabla L$." },
+  { front: "AdamW?", back: "Adam with decay applied directly to the weights, so all decay at rate ηλ (Loshchilov and Hutter, 2019)." },
+]} />
+
+<Predict revisit question="Does a hundredfold larger λ make the unused weight shrink faster under Adam with an L2 penalty?" />
+
+<Key title="Before you go">
+<ul>
+<li>Training error and test error can move in opposite directions; watch a validation set.</li>
+<li>Early stopping is an implicit L2 penalty.</li>
+<li>Decaying the learning rate lets SGD settle; warm-up protects the first steps.</li>
+<li>Inside Adam, use decoupled weight decay (AdamW), not an L2 penalty.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Loshchilov and Hutter (2019), <em>Decoupled weight decay regularization</em>, sections 1 to 3.</li>
+<li>Goodfellow, Bengio and Courville (2016), <em>Deep Learning</em>, section 7.8 on early stopping (free online).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Brains do not have a held-out validation set. What signals might tell a learning circuit that it has started to fit noise, and how could it slow its own learning in response?" />

@@ -1,0 +1,297 @@
+export const meta = {
+  title: "Inequality constraints, sparsity and the L1 penalty",
+  intro: "Yesterday's constraints were equalities. Many real limits are inequalities: firing rates cannot be negative, excitatory synapses cannot change sign, a budget can be spent but not exceeded. Today you learn the conditions that characterise an optimum when some constraints bind and others do not, and the projected gradient method that respects them. Then you meet the most useful inequality-shaped idea in modern data analysis, the L1 penalty, which produces solutions with exactly zero entries. You will recover a sparse set of synaptic weights from too few measurements, and see how Olshausen and Field used sparsity to explain the receptive fields of visual cortex.",
+  goals: [
+    "State the KKT conditions and check them at a solution",
+    "Use projected gradient descent for non-negative least squares",
+    "Explain geometrically why an L1 penalty gives exactly sparse solutions",
+    "Implement soft thresholding and ISTA, and recover a sparse signal from few measurements",
+  ],
+  plan: [
+    { label: "Predict and inequality constraints", minutes: 25 },
+    { label: "Non-negative weights", minutes: 25 },
+    { label: "Why L1 gives zeros", minutes: 25 },
+    { label: "ISTA and sparse recovery", minutes: 20 },
+    { label: "Sparse coding in V1", minutes: 10 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "olshausen-1996",
+};
+
+<Predict question="You want to find which 5 of 100 presynaptic neurons drive a cell, but you only have 60 measurements, fewer than the number of unknowns. Ordinary least squares has infinitely many exact solutions. Can any method reliably find the right 5?" />
+
+<Step n={1} title="Inequality constraints" minutes={25} />
+
+Minimise $f(\mathbf{x})$ subject to $g_j(\mathbf{x}) \le 0$ for each $j$. At the solution each constraint is either **active** ($g_j = 0$, pressing against its limit) or **inactive** ($g_j \lt 0$, irrelevant locally). An inactive constraint behaves as if it were absent; an active one behaves like yesterday's equality, but with a sign: the constraint may only push the solution back inside, never pull it out.
+
+These ideas are collected in the **Karush-Kuhn-Tucker (KKT) conditions**. At a local minimum (under mild regularity conditions) there are multipliers $\mu_j$ with
+
+$$
+\nabla f + \sum_j \mu_j\nabla g_j = \mathbf{0}, \qquad \mu_j \ge 0, \qquad \mu_j\,g_j(\mathbf{x}) = 0.
+$$
+
+The last condition, **complementary slackness**, says each multiplier is zero unless its constraint is active. For convex problems the KKT conditions are not only necessary but sufficient.
+
+<Callout kind="history">
+
+William Karush derived these conditions in his 1939 master's thesis at Chicago; Harold Kuhn and Albert Tucker published them independently in 1951, and for decades they bore only the later names.
+
+</Callout>
+
+<Step n={2} title="Non-negative weights" minutes={25} />
+
+The simplest inequality is $x_i \ge 0$. Projected gradient descent handles it by taking an ordinary gradient step and then **projecting** back onto the allowed set, which here just means setting negative entries to zero: $\mathbf{x} \leftarrow \max(\mathbf{x} - \eta\nabla f, 0)$. For non-negative least squares, KKT says that at the solution every positive weight has zero gradient and every zero weight has a gradient that is non-negative (pushing it further down would help, but it is not allowed).
+
+<PyCell id="nnls" title="Excitatory weights by projected gradient" tests={String.raw`
+  import numpy as np
+  def test_nonneg():
+      "all fitted weights are non-negative"
+      assert np.all(v >= 0)
+
+  def test_kkt():
+      "KKT holds: zero gradient where v > 0, non-negative gradient where v = 0"
+      g = B.T @ (B @ v - t)
+      assert np.abs(g[v > 0]).max() < 1e-6 and g[v == 0].min() > -1e-6
+
+  def test_ls_negative():
+      "unconstrained least squares gives some negative weights"
+      assert np.sum(w_ls < 0) >= 1
+`} prompt="A cell receives 20 excitatory inputs. Fit their non-negative weights from 200 noisy trials by projected gradient descent (5,000 steps, step size 1/L with L the largest eigenvalue of BᵀB). Store the result in `v`, the unconstrained least-squares fit in `w_ls`, and check the KKT conditions."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1996)
+  B = rng.normal(0, 1, (200, 20))                 # presynaptic activity on each trial
+  w_true = np.maximum(rng.normal(0, 1, 20), 0)    # excitatory weights, many exactly zero
+  t = B @ w_true + 0.5 * rng.normal(size=200)     # postsynaptic response
+
+  L = np.linalg.norm(B, 2) ** 2
+  v = np.zeros(20)
+  for _ in range(5000):
+      v = ...
+  w_ls = np.linalg.lstsq(B, t, rcond=None)[0]
+  g = B.T @ (B @ v - t)
+  print("zero weights:", np.sum(v == 0), " least-squares negatives:", np.sum(w_ls < 0))
+  print("largest |gradient| on positive weights:", np.abs(g[v > 0]).max(), " smallest gradient on zero weights:", g[v == 0].min().round(3))
+`}
+hint="v = np.maximum(v - B.T @ (B @ v - t) / L, 0)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1996)
+  B = rng.normal(0, 1, (200, 20))                 # presynaptic activity on each trial
+  w_true = np.maximum(rng.normal(0, 1, 20), 0)    # excitatory weights, many exactly zero
+  t = B @ w_true + 0.5 * rng.normal(size=200)     # postsynaptic response
+
+  L = np.linalg.norm(B, 2) ** 2
+  v = np.zeros(20)
+  for _ in range(5000):
+      v = np.maximum(v - B.T @ (B @ v - t) / L, 0)
+  w_ls = np.linalg.lstsq(B, t, rcond=None)[0]
+  g = B.T @ (B @ v - t)
+  print("zero weights:", np.sum(v == 0), " least-squares negatives:", np.sum(w_ls < 0))
+  print("largest |gradient| on positive weights:", np.abs(g[v > 0]).max(), " smallest gradient on zero weights:", g[v == 0].min().round(3))
+`} />
+
+The constraint is active for eight weights, and the multiplier on each is simply its gradient, positive as KKT requires. Least squares, free to go negative, gives eight weights the wrong sign for an excitatory synapse.
+
+<Step n={3} title="Why L1 gives zeros" minutes={25} />
+
+Penalised regression, $\min_\mathbf{w} \tfrac{1}{2}\lVert A\mathbf{w} - \mathbf{y}\rVert^2 + \lambda R(\mathbf{w})$, is the Lagrangian of a constrained problem: minimise the error subject to $R(\mathbf{w}) \le c$. With the **L2** penalty $R = \lVert\mathbf{w}\rVert_2^2$ (ridge regression, Week 5) the allowed region is a disc. With the **L1** penalty $R = \lVert\mathbf{w}\rVert_1 = \sum_i |w_i|$ (the lasso; Tibshirani, 1996) it is a diamond, with corners on the axes.
+
+The solution is where the expanding error contours first touch the region. A disc is smooth, so the touching point is almost never on an axis. A diamond's corners stick out, so the contours very often touch first at a corner, where some coordinates are exactly zero.
+
+<Figure caption="Error contours (ellipses) meet an L1 diamond or an L2 disc of the same size. Move the unconstrained optimum and the budget: the L1 solution sits on a corner, with one weight exactly zero, over a wide range of positions." credit="Interactive figure by Engram.">
+  <L1L2Ball />
+</Figure>
+
+<Video id="oQNdloKdysM" title="L1 and L2 regularization" by="Neuromatch Academy (Deep Learning course)" note="Neuromatch's comparison of the two penalties and their effect on the weights." />
+
+In one dimension the L1-penalised problem $\min_w \tfrac{1}{2}(w - z)^2 + \tau|w|$ has the closed-form answer
+
+$$
+w^* = S_\tau(z) = \operatorname{sign}(z)\max(|z| - \tau, 0),
+$$
+
+the **soft-thresholding** operator: shrink towards zero by $\tau$, and set to exactly zero anything smaller than $\tau$.
+
+<Derivation title="Soft thresholding">
+
+<div>
+
+For $w > 0$ the objective is $\tfrac{1}{2}(w - z)^2 + \tau w$, minimised at $w = z - \tau$, which is valid (positive) only if $z > \tau$. Similarly, for $w \lt 0$ the minimum is $w = z + \tau$, valid only if $z \lt -\tau$.
+
+</div>
+
+<div>
+
+If $|z| \le \tau$, neither branch is valid, and the minimum is at the kink $w = 0$. Here the absolute value has no derivative, but every slope between $-\tau$ and $\tau$ is a valid subgradient, and $0 \in (0 - z) + [-\tau, \tau]$ holds exactly when $|z| \le \tau$.
+
+</div>
+
+<div>
+
+Together: $w^* = \operatorname{sign}(z)\max(|z| - \tau, 0)$. The kink in $|w|$ is what makes zero an attractive answer, which a smooth penalty like $w^2$ can never do.
+
+</div>
+
+</Derivation>
+
+<PyCell id="soft" title="Soft thresholding" tests={String.raw`
+  import numpy as np
+  def test_values():
+      "soft(z, 1) shrinks by 1 and zeros the middle"
+      assert np.allclose(soft(np.array([-3.0, -0.5, 0.0, 0.8, 2.5]), 1.0), [-2, 0, 0, 0, 1.5])
+
+  def test_minimises():
+      "soft(z, tau) minimises 0.5 (w - z)^2 + tau |w| on a fine grid"
+      ws = np.linspace(-5, 5, 100001)
+      for z in [-2.2, 0.3, 1.7]:
+          obj = 0.5 * (ws - z) ** 2 + 0.6 * np.abs(ws)
+          assert abs(ws[np.argmin(obj)] - soft(np.array([z]), 0.6)[0]) < 1e-3
+`} prompt="Write `soft(z, tau)` for arrays."
+code={String.raw`
+  def soft(z, tau):
+      return ...
+
+  print(soft(np.array([-3.0, -0.5, 0.0, 0.8, 2.5]), 1.0))
+`}
+hint="np.sign(z) * np.maximum(np.abs(z) - tau, 0)."
+solution={String.raw`
+  def soft(z, tau):
+      return np.sign(z) * np.maximum(np.abs(z) - tau, 0)
+
+  print(soft(np.array([-3.0, -0.5, 0.0, 0.8, 2.5]), 1.0))
+`} />
+
+<Step n={4} title="ISTA and sparse recovery" minutes={20} />
+
+For many weights, the **iterative shrinkage-thresholding algorithm** (ISTA) alternates a gradient step on the smooth error with soft thresholding:
+
+$$
+\mathbf{w} \leftarrow S_{\lambda/L}\!\left(\mathbf{w} - \tfrac{1}{L}A^\top(A\mathbf{w} - \mathbf{y})\right),
+$$
+
+with $L$ the largest eigenvalue of $A^\top A$. It is projected gradient descent with the projection replaced by the L1 penalty's own proximal step, and it converges for convex problems at the rate of plain gradient descent (a momentum version, FISTA, is faster).
+
+<PyCell id="ista" title="Find the five inputs from sixty measurements" tests={String.raw`
+  import numpy as np
+  def test_support():
+      "ISTA's weights larger than 0.1 are exactly the five true inputs"
+      assert set(np.flatnonzero(np.abs(w_ista) > 0.1)) == set(support)
+
+  def test_accurate():
+      "ISTA's weights are within 0.1 of the truth"
+      assert np.abs(w_ista - w_true).max() < 0.1
+
+  def test_minnorm_dense():
+      "the minimum-norm least-squares solution is dense and wrong"
+      assert np.sum(np.abs(w_mn) > 0.1) > 20
+`} prompt="Write `ista(A, y, lam, steps)`. Recover a 5-sparse weight vector of length 100 from 60 noisy measurements with lam = 0.02 and 3,000 steps. Compare with the minimum-norm solution `w_mn = np.linalg.pinv(A) @ y`."
+code={String.raw`
+  rng = np.random.default_rng(1996)
+  n, p, k = 60, 100, 5
+  A = rng.normal(0, 1, (n, p)) / np.sqrt(n)
+  w_true = np.zeros(p)
+  support = rng.choice(p, k, replace=False)
+  w_true[support] = rng.choice([-1, 1], k) * rng.uniform(1, 2, k)
+  y = A @ w_true + 0.01 * rng.normal(size=n)
+
+  def ista(A, y, lam, steps):
+      L = np.linalg.norm(A, 2) ** 2
+      w = np.zeros(A.shape[1])
+      for _ in range(steps):
+          w = ...
+      return w
+
+  w_ista = ista(A, y, 0.02, 3000)
+  w_mn = np.linalg.pinv(A) @ y
+  print("true inputs:", sorted(support), " found:", np.flatnonzero(np.abs(w_ista) > 0.1))
+  print("largest error, ISTA:", np.abs(w_ista - w_true).max().round(3), " minimum norm:", np.abs(w_mn - w_true).max().round(3))
+  plt.stem(w_true, linefmt="k-", markerfmt="ko", label="true"); plt.plot(w_ista, "o", label="ISTA"); plt.plot(w_mn, ".", label="minimum norm"); plt.legend(); plt.show()
+`}
+hint="w = soft(w - A.T @ (A @ w - y) / L, lam / L)."
+solution={String.raw`
+  rng = np.random.default_rng(1996)
+  n, p, k = 60, 100, 5
+  A = rng.normal(0, 1, (n, p)) / np.sqrt(n)
+  w_true = np.zeros(p)
+  support = rng.choice(p, k, replace=False)
+  w_true[support] = rng.choice([-1, 1], k) * rng.uniform(1, 2, k)
+  y = A @ w_true + 0.01 * rng.normal(size=n)
+
+  def ista(A, y, lam, steps):
+      L = np.linalg.norm(A, 2) ** 2
+      w = np.zeros(A.shape[1])
+      for _ in range(steps):
+          w = soft(w - A.T @ (A @ w - y) / L, lam / L)
+      return w
+
+  w_ista = ista(A, y, 0.02, 3000)
+  w_mn = np.linalg.pinv(A) @ y
+  print("true inputs:", sorted(support), " found:", np.flatnonzero(np.abs(w_ista) > 0.1))
+  print("largest error, ISTA:", np.abs(w_ista - w_true).max().round(3), " minimum norm:", np.abs(w_mn - w_true).max().round(3))
+  plt.stem(w_true, linefmt="k-", markerfmt="ko", label="true"); plt.plot(w_ista, "o", label="ISTA"); plt.plot(w_mn, ".", label="minimum norm"); plt.legend(); plt.show()
+`} />
+
+With fewer measurements than unknowns, ISTA finds the five true inputs, with every weight within about 0.04 of its true value (a few others come out tiny but non-zero). The minimum-norm solution spreads the signal over more than half of the inputs and gets individual weights wrong by up to 0.67. That answers the prediction: when the truth is sparse, the L1 penalty can recover it from far fewer measurements than unknowns. This is the foundation of **compressed sensing** (Candès, Romberg and Tao; Donoho, 2006), and of connectivity inference from limited recordings.
+
+<Step n={5} title="Sparse coding in visual cortex" minutes={10} />
+
+Olshausen and Field (1996, this week's deep read) asked what basis functions would let natural image patches be represented with few active units at a time. They minimised reconstruction error plus a sparsity penalty on the coefficients, inferring the coefficients for each patch (much as ISTA does) and slowly adapting the basis. The learned basis functions were localised, oriented and bandpass, strikingly like the receptive fields of simple cells in V1. Sparsity alone, applied to natural images, was enough to produce them.
+
+<Bridge title="Sparsity in brains and machines"
+  neuro="Cortical activity is sparse: at any moment only a small fraction of neurons fire strongly. Sparse coding explains V1 receptive fields, and Rozell and colleagues (2008) showed that a network of leaky neurons with lateral inhibition, the locally competitive algorithm, solves the same L1 problem with dynamics a circuit could implement."
+  ai="L1 penalties select features in regression and prune weights in networks. Sparse autoencoders, trained with an L1 penalty on their hidden units, are now a main tool for finding interpretable features inside large language models.">
+
+Corners on the constraint region give zeros in the solution, and zeros are what let you find a few causes among many candidates.
+
+</Bridge>
+
+<Prove title="KKT for non-negative least squares" task="For $\min_{\mathbf{x} \ge 0} f(\mathbf{x})$ with $f$ convex and differentiable, show that the KKT conditions reduce to: $\partial f/\partial x_i = 0$ wherever $x_i > 0$, and $\partial f/\partial x_i \ge 0$ wherever $x_i = 0$.">
+
+Write the constraints as $g_i(\mathbf{x}) = -x_i \le 0$, so $\nabla g_i = -\mathbf{e}_i$.
+
+Stationarity gives $\nabla f - \sum_i\mu_i\mathbf{e}_i = 0$, that is $\partial f/\partial x_i = \mu_i$ for each $i$.
+
+Dual feasibility, $\mu_i \ge 0$, gives $\partial f/\partial x_i \ge 0$ everywhere. Complementary slackness, $\mu_i x_i = 0$, gives $\mu_i = 0$ (and so $\partial f/\partial x_i = 0$) wherever $x_i > 0$. Because $f$ is convex, these conditions are also sufficient for a minimum, which is what the exercise checked.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "Complementary slackness says...", options: ["All multipliers are zero", "A multiplier is zero unless its constraint is active", "All constraints are active", "Multipliers are negative"], answer: 1, explain: "$\\mu_j g_j = 0$." },
+  { q: "Projected gradient descent for x ≥ 0 projects by...", options: ["Normalising", "Setting negative entries to zero", "Taking absolute values", "Adding a constant"], answer: 1, explain: "The nearest non-negative point." },
+  { q: "At a non-negative least-squares solution, a weight that is zero has gradient...", options: ["Negative", "Non-negative", "Exactly zero always", "Undefined"], answer: 1, explain: "It would like to go lower but may not." },
+  { q: "L1 penalties give exactly zero weights because...", options: ["They are smooth", "The L1 ball has corners on the axes", "They are larger than L2", "They use the Hessian"], answer: 1, explain: "Contours touch the corners first." },
+  { q: "soft(0.4, 1) equals...", options: ["0.4", "-0.6", "0", "1"], answer: 2, explain: "Anything smaller than the threshold is set to zero." },
+  { q: "ISTA alternates...", options: ["Two gradient steps", "A gradient step and soft thresholding", "Newton and momentum", "Sampling and averaging"], answer: 1, explain: "Gradient on the error, proximal step on the penalty." },
+  { q: "Olshausen and Field showed that sparse coding of natural images produces...", options: ["Random filters", "Localised, oriented, bandpass filters like V1 simple cells", "Colour filters only", "Place fields"], answer: 1, explain: "Sparsity alone was enough." },
+]} />
+
+<Flashcards cards={[
+  { front: "KKT conditions?", back: "$\\nabla f + \\sum\\mu_j\\nabla g_j = 0$, $\\mu_j \\ge 0$, $\\mu_j g_j = 0$, $g_j \\le 0$." },
+  { front: "Projected gradient?", back: "Gradient step, then the nearest point in the allowed set." },
+  { front: "Soft thresholding?", back: "$S_\\tau(z) = \\operatorname{sign}(z)\\max(|z| - \\tau, 0)$." },
+  { front: "ISTA?", back: "$w \\leftarrow S_{\\lambda/L}(w - A^\\top(Aw - y)/L)$." },
+  { front: "Why L1 is sparse?", back: "The L1 ball's corners lie on the axes, where the error contours tend to touch first." },
+]} />
+
+<Predict revisit question="Can a method find 5 inputs among 100 from 60 measurements?" />
+
+<Key title="Before you go">
+<ul>
+<li>KKT: stationarity, non-negative multipliers, and multipliers that vanish on inactive constraints.</li>
+<li>Projected gradient descent respects simple constraints such as non-negativity.</li>
+<li>The L1 penalty's corners give exact zeros; soft thresholding is its one-dimensional solution.</li>
+<li>ISTA recovers sparse signals from fewer measurements than unknowns; sparse coding of images gives V1-like receptive fields.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>This week's deep read: Olshausen and Field (1996), <em>Emergence of simple-cell receptive field properties by learning a sparse code for natural images</em>. Start today; we discuss it in the Forge.</li>
+<li>Hastie, Tibshirani and Wainwright (2015), <em>Statistical Learning with Sparsity</em>, chapter 2 (free from the authors' site).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Sparse recovery worked here because only 5 of 100 inputs were truly active. Is that a reasonable assumption for the inputs that drive a real cortical neuron? What would happen to ISTA if it were not?" />

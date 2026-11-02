@@ -1,0 +1,271 @@
+export const meta = {
+  title: "Momentum: heavy balls in long valleys",
+  intro: "Last week ended with a problem: in a long, narrow valley gradient descent must take tiny steps to avoid bouncing between the steep walls, and so it crawls along the shallow floor, at a speed set by the condition number. Momentum fixes this with a simple physical idea. Let the parameters behave like a heavy ball that remembers its velocity: along the floor, where the gradient keeps pointing the same way, it picks up speed; across the valley, where the gradient keeps flipping, the pushes cancel. Today you implement it, prove what it does to the speed of convergence, and use it to train a badly conditioned neural decoder.",
+  goals: [
+    "Write the heavy-ball momentum update and explain each term",
+    "Show that momentum averages past gradients and raises the effective step size",
+    "Compare the convergence of gradient descent and momentum on ill-conditioned quadratics",
+    "Use momentum to speed up the training of a decoder",
+  ],
+  plan: [
+    { label: "Predict and the heavy ball", minutes: 25 },
+    { label: "Momentum as averaging", minutes: 20 },
+    { label: "How much faster?", minutes: 35 },
+    { label: "Momentum in practice", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "polyak-1964",
+};
+
+<Predict question="On a quadratic valley with condition number 100, gradient descent at its best fixed step needs about 700 steps to reduce the error a millionfold. With the best momentum, roughly how many steps will it need: about 700, about 70, or about 7?" />
+
+<Step n={1} title="The heavy ball" minutes={25} />
+
+Polyak's **heavy-ball** method (1964), today's paper, keeps a velocity $\mathbf{v}$ and updates
+
+$$
+\mathbf{v}_{k+1} = \beta\,\mathbf{v}_k - \eta\,\nabla L(\mathbf{w}_k), \qquad \mathbf{w}_{k+1} = \mathbf{w}_k + \mathbf{v}_{k+1}
+$$
+
+with **momentum** $0 \leq \beta \lt 1$. With $\beta = 0$ it is gradient descent. Think of a ball rolling on the loss surface with friction: $-\eta\nabla L$ is the push of the slope and $\beta$ is how much of its speed survives each step (1 − β is the friction). A common variant, Nesterov momentum, evaluates the gradient at the look-ahead point $\mathbf{w}_k + \beta\mathbf{v}_k$ and is slightly more stable.
+
+<Figure caption="Gradient descent (blue) and gradient descent with momentum (pink), with the same step size, on a long valley. Change the condition number and the momentum." credit="Interactive figure by Engram.">
+  <MomentumPaths />
+</Figure>
+
+<Video id="3ES5O58Y_2M" title="Momentum" by="Neuromatch Academy (Deep Learning course)" note="Neuromatch's introduction to momentum: why remembering past gradients helps in ravine-shaped losses." />
+
+<Step n={2} title="Momentum as averaging" minutes={20} />
+
+Unrolling the velocity update shows what momentum does:
+
+$$
+\mathbf{v}_{k+1} = -\eta\left(\nabla L_k + \beta\nabla L_{k-1} + \beta^2\nabla L_{k-2} + \dots\right)
+$$
+
+The step is an **exponentially weighted sum of past gradients**, with weights $1, \beta, \beta^2, \dots$ that fade over about $1/(1 - \beta)$ steps. Two consequences follow:
+
+- Along a direction where the gradient is steady, the sum approaches $\frac{1}{1 - \beta}$ times one gradient: the effective step grows to $\eta/(1 - \beta)$, ten times larger for $\beta = 0.9$.
+- Along a direction where the gradient alternates in sign (zigzagging across a valley), the terms cancel and the effective step shrinks.
+
+So momentum acts like a large step where the landscape is consistent and a small step where it is not: exactly what a long valley needs. It also averages away some of the noise in stochastic gradients, like the low-pass filter of Week 11.
+
+<PyCell id="heavy" title="Implement the heavy ball" tests={String.raw`
+  import numpy as np
+  def test_zero_beta():
+      "with beta 0 the method is gradient descent"
+      g = lambda w: 2 * w
+      h = heavy_ball(g, np.array([1.0]), 0.1, 0.0, 3)
+      assert np.allclose(h[:, 0], [1, 0.8, 0.64, 0.512])
+
+  def test_velocity():
+      "with a constant gradient the step approaches lr / (1 - beta)"
+      h = heavy_ball(lambda w: np.array([1.0]), np.array([0.0]), 0.1, 0.9, 200)
+      assert np.isclose(h[-1, 0] - h[-2, 0], -0.1 / (1 - 0.9), rtol=1e-3)
+`} prompt="Write `heavy_ball(grad, x0, lr, beta, steps)` returning the array of iterates. Check that with a constant gradient of 1 the step size settles at lr/(1 − β)."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def heavy_ball(grad, x0, lr, beta, steps):
+      w = np.array(x0, dtype=float)
+      v = np.zeros_like(w)
+      history = [w.copy()]
+      for _ in range(steps):
+          v = ...
+          w = ...
+          history.append(w.copy())
+      return np.array(history)
+
+  h = heavy_ball(lambda w: np.array([1.0]), [0.0], 0.1, 0.9, 60)
+  plt.figure(figsize=(5, 2.8)); plt.plot(-np.diff(h[:, 0])); plt.axhline(1.0, ls="--", color="0.5")
+  plt.xlabel("step"); plt.ylabel("step length"); plt.show()
+`}
+hint="v = beta * v - lr * grad(w); w = w + v."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def heavy_ball(grad, x0, lr, beta, steps):
+      w = np.array(x0, dtype=float)
+      v = np.zeros_like(w)
+      history = [w.copy()]
+      for _ in range(steps):
+          v = beta * v - lr * grad(w)
+          w = w + v
+          history.append(w.copy())
+      return np.array(history)
+
+  h = heavy_ball(lambda w: np.array([1.0]), [0.0], 0.1, 0.9, 60)
+  plt.figure(figsize=(5, 2.8)); plt.plot(-np.diff(h[:, 0])); plt.axhline(1.0, ls="--", color="0.5")
+  plt.xlabel("step"); plt.ylabel("step length"); plt.show()
+`} />
+
+The step length climbs from 0.1 towards 1.0, ten times the learning rate, as the velocity builds up under a steady gradient.
+
+<Step n={3} title="How much faster?" minutes={35} />
+
+On a quadratic with curvatures between $\mu$ and $\Lambda$ (condition number $\kappa = \Lambda/\mu$), Polyak showed that the best choices
+
+$$
+\eta^* = \frac{4}{(\sqrt{\Lambda} + \sqrt{\mu})^2}, \qquad \beta^* = \left(\frac{\sqrt{\kappa} - 1}{\sqrt{\kappa} + 1}\right)^2
+$$
+
+give an error that shrinks per step by about $\frac{\sqrt{\kappa} - 1}{\sqrt{\kappa} + 1}$, compared with $\frac{\kappa - 1}{\kappa + 1}$ for gradient descent (Week 12). The number of steps now grows like $\sqrt{\kappa}$ instead of $\kappa$: for $\kappa = 100$, ten times fewer.
+
+<PyCell id="race" title="Gradient descent against the heavy ball" tests={String.raw`
+  import numpy as np
+  def test_counts():
+      "steps holds the number of steps to a millionfold reduction for GD and the heavy ball, for each kappa"
+      assert len(steps_gd) == len(kappas) == len(steps_hb)
+
+  def test_speedup():
+      "for kappa = 100 the heavy ball needs fewer than a fifth of gradient descent's steps"
+      assert steps_hb[-1] < steps_gd[-1] / 5
+
+  def test_sqrt():
+      "the heavy ball's steps grow roughly like sqrt(kappa): from kappa 10 to 100 by a factor between 2 and 5"
+      assert 2 < steps_hb[-1] / steps_hb[1] < 5
+`} prompt="For Hessians diag(κ, 1) with κ = 2, 10 and 100, count the steps until the distance from the minimum (starting at (1, 1)) falls below 1e-6, for gradient descent with $\eta = 2/(\kappa + 1)$ and for the heavy ball with the optimal η* and β* above. Store the counts in `steps_gd` and `steps_hb`."
+code={String.raw`
+  def steps_to(history, tol=1e-6):
+      d = np.linalg.norm(history, axis=1)
+      return int(np.argmax(d < tol)) if np.any(d < tol) else len(d)
+
+  kappas = [2.0, 10.0, 100.0]
+  steps_gd, steps_hb = [], []
+  for kap in kappas:
+      H = np.diag([kap, 1.0]); g = lambda w, H=H: H @ w
+      steps_gd.append(steps_to(heavy_ball(g, [1.0, 1.0], 2 / (kap + 1), 0.0, 5000)))
+      lr_star = ...
+      beta_star = ...
+      steps_hb.append(steps_to(heavy_ball(g, [1.0, 1.0], lr_star, beta_star, 5000)))
+  print("kappa:", kappas, "\ngradient descent:", steps_gd, "\nheavy ball:      ", steps_hb)
+`}
+hint="With Λ = kap and μ = 1: lr_star = 4 / (np.sqrt(kap) + 1) ** 2 and beta_star = ((np.sqrt(kap) - 1) / (np.sqrt(kap) + 1)) ** 2."
+solution={String.raw`
+  def steps_to(history, tol=1e-6):
+      d = np.linalg.norm(history, axis=1)
+      return int(np.argmax(d < tol)) if np.any(d < tol) else len(d)
+
+  kappas = [2.0, 10.0, 100.0]
+  steps_gd, steps_hb = [], []
+  for kap in kappas:
+      H = np.diag([kap, 1.0]); g = lambda w, H=H: H @ w
+      steps_gd.append(steps_to(heavy_ball(g, [1.0, 1.0], 2 / (kap + 1), 0.0, 5000)))
+      lr_star = 4 / (np.sqrt(kap) + 1) ** 2
+      beta_star = ((np.sqrt(kap) - 1) / (np.sqrt(kap) + 1)) ** 2
+      steps_hb.append(steps_to(heavy_ball(g, [1.0, 1.0], lr_star, beta_star, 5000)))
+  print("kappa:", kappas, "\ngradient descent:", steps_gd, "\nheavy ball:      ", steps_hb)
+`} />
+
+For a condition number of 100, gradient descent needs about 700 steps and the heavy ball fewer than a hundred, about seven times fewer. That answers the prediction: the nearest option was 70. The gain grows with $\kappa$, because $\sqrt{\kappa}$ grows much more slowly than $\kappa$.
+
+<Step n={4} title="Momentum in practice" minutes={25} />
+
+Real losses are not quadratic and you do not know $\Lambda$ and $\mu$, so in practice $\beta$ is simply set to 0.9 (sometimes 0.99), and the learning rate is reduced to compensate for the larger effective step. With stochastic gradients, momentum also smooths the noise. A side effect is **overshoot**: a fast ball can roll past the minimum and up the other side, so the loss is not guaranteed to fall every step.
+
+<PyCell code={String.raw`
+  rng = np.random.default_rng(2018)
+  N, T = 50, 1500
+  prefs = np.linspace(0, np.pi, N, endpoint=False)
+  theta = rng.uniform(0, np.pi, T)
+  labels = (np.cos(2 * (theta - np.pi / 4)) > 0).astype(float)
+  counts = rng.poisson((10 + 20 * np.exp(2 * (np.cos(2 * (theta[:, None] - prefs[None])) - 1))) * 0.2)
+  Z = np.column_stack([counts, np.ones(T)])          # raw counts: badly conditioned (Week 12 Forge)
+  def sigmoid(u): return 1 / (1 + np.exp(-u))
+  def xent(w): p = np.clip(sigmoid(Z @ w), 1e-12, 1 - 1e-12); return -np.mean(labels * np.log(p) + (1 - labels) * np.log(1 - p))
+  def grad(w): return Z.T @ (sigmoid(Z @ w) - labels) / T
+  lam_max = np.linalg.eigvalsh(Z.T @ Z / (4 * T)).max()
+  print("largest curvature", round(lam_max, 1))
+`} />
+
+<PyCell id="decoder" title="Momentum on a badly conditioned decoder" tests={String.raw`
+  import numpy as np
+  def test_runs():
+      "both runs record 300 losses"
+      assert len(loss_gd) == len(loss_mom) == 301
+
+  def test_better():
+      "momentum reaches a clearly lower loss than gradient descent in 300 steps"
+      assert loss_mom[-1] < loss_gd[-1] - 0.01
+`} prompt="Train the logistic decoder on raw spike counts for 300 steps with gradient descent at learning rate 1.9/λmax, and with the heavy ball at the same learning rate with β = 0.9. Record the loss at every iterate in `loss_gd` and `loss_mom`."
+code={String.raw`
+  lr = 1.9 / lam_max
+  h_gd = heavy_ball(grad, np.zeros(N + 1), lr, 0.0, 300)
+  h_mom = ...
+  loss_gd = [xent(w) for w in h_gd]
+  loss_mom = [xent(w) for w in h_mom]
+
+  plt.figure(figsize=(5, 3)); plt.plot(loss_gd, label="gradient descent"); plt.plot(loss_mom, label="momentum 0.9")
+  plt.xlabel("step"); plt.ylabel("training loss"); plt.legend(frameon=False); plt.show()
+  print(f"after 300 steps: GD {loss_gd[-1]:.4f}, momentum {loss_mom[-1]:.4f}")
+`}
+hint="h_mom = heavy_ball(grad, np.zeros(N + 1), lr, 0.9, 300)"
+solution={String.raw`
+  lr = 1.9 / lam_max
+  h_gd = heavy_ball(grad, np.zeros(N + 1), lr, 0.0, 300)
+  h_mom = heavy_ball(grad, np.zeros(N + 1), lr, 0.9, 300)
+  loss_gd = [xent(w) for w in h_gd]
+  loss_mom = [xent(w) for w in h_mom]
+
+  plt.figure(figsize=(5, 3)); plt.plot(loss_gd, label="gradient descent"); plt.plot(loss_mom, label="momentum 0.9")
+  plt.xlabel("step"); plt.ylabel("training loss"); plt.legend(frameon=False); plt.show()
+  print(f"after 300 steps: GD {loss_gd[-1]:.4f}, momentum {loss_mom[-1]:.4f}")
+`} />
+
+Momentum gets further. You might expect the same learning rate, now multiplied up to ten times by momentum, to be unstable along the steep direction (the shared offset of the raw counts). It is not, because along that direction the gradient keeps changing sign and momentum's averaging cancels it, while along the shallow directions the full speed-up applies. Notice the wobble early on, the ball overshooting before it settles. (Try scaling the learning rate down by 1 − β instead: the gain mostly disappears, which shows the speed-up comes from the larger effective step in the shallow directions.)
+
+<Bridge title="Momentum in brains and machines"
+  neuro="Synaptic changes in the brain are not instantaneous: biochemical cascades integrate learning signals over seconds to hours, a kind of averaging of past updates. Eligibility traces, slowly decaying records of recent activity at a synapse, play a role like momentum's velocity, and help link actions to delayed rewards (Week 71)."
+  ai="Momentum, usually with β = 0.9, is part of almost every deep-learning optimiser, including SGD with momentum and Adam (tomorrow). Nesterov's accelerated method achieves the √κ rate for all smooth convex functions, not only quadratics, and is provably optimal among first-order methods.">
+
+Remembering where you have been heading is often the cheapest way to get somewhere faster.
+
+</Bridge>
+
+<Prove title="The steady velocity" task="Suppose the gradient is a constant vector $\mathbf{g}$. Show that the heavy-ball velocity converges to $-\frac{\eta}{1 - \beta}\mathbf{g}$, and find how many steps it takes to get within $1/e$ of that value.">
+
+The velocity obeys $\mathbf{v}_{k+1} = \beta\mathbf{v}_k - \eta\mathbf{g}$. Its fixed point $\mathbf{v}^*$ satisfies $\mathbf{v}^* = \beta\mathbf{v}^* - \eta\mathbf{g}$, so $\mathbf{v}^* = -\frac{\eta}{1 - \beta}\mathbf{g}$.
+
+The deviation $\mathbf{d}_k = \mathbf{v}_k - \mathbf{v}^*$ obeys $\mathbf{d}_{k+1} = \beta\mathbf{d}_k$, so $\mathbf{d}_k = \beta^k\mathbf{d}_0$: it shrinks geometrically. It falls to $1/e$ of its starting size when $\beta^k = e^{-1}$, that is $k = -1/\ln\beta \approx \frac{1}{1 - \beta}$ for $\beta$ close to 1. So $\beta = 0.9$ remembers about the last 10 gradients and $\beta = 0.99$ about the last 100, and the effective learning rate is $\eta/(1 - \beta)$.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "The heavy-ball update adds to each step...", options: ["A random term", "β times the previous step", "The Hessian", "The squared gradient"], answer: 1, explain: "$\\mathbf{v}_{k+1} = \\beta\\mathbf{v}_k - \\eta\\nabla L$." },
+  { q: "With β = 0, momentum reduces to...", options: ["Newton's method", "Gradient descent", "Adam", "Nothing"], answer: 1, explain: "No memory of past steps." },
+  { q: "Under a constant gradient, the step settles at...", options: ["η", "η/(1 − β)", "βη", "η(1 − β)"], answer: 1, explain: "A geometric series." },
+  { q: "Momentum helps in long valleys because...", options: ["It increases the curvature", "Consistent gradients add up while alternating ones cancel", "It removes noise entirely", "It uses second derivatives"], answer: 1, explain: "Fast along the floor, damped across." },
+  { q: "With optimal settings on a quadratic, the steps needed grow like...", options: ["κ", "√κ", "κ²", "log κ"], answer: 1, explain: "Polyak's result." },
+  { q: "β = 0.99 averages roughly the last...", options: ["1 gradient", "10 gradients", "100 gradients", "1000 gradients"], answer: 2, explain: "About 1/(1 − β)." },
+  { q: "A side effect of momentum is...", options: ["Guaranteed monotone decrease", "Overshoot: the loss can rise temporarily", "No need for a learning rate", "Divergence always"], answer: 1, explain: "The ball rolls past the minimum." },
+]} />
+
+<Flashcards cards={[
+  { front: "Heavy-ball momentum?", back: "$\\mathbf{v} \\leftarrow \\beta\\mathbf{v} - \\eta\\nabla L$, $\\mathbf{w} \\leftarrow \\mathbf{w} + \\mathbf{v}$." },
+  { front: "Momentum as averaging?", back: "The step is an exponentially weighted sum of past gradients with weights $\\beta^j$; effective step $\\eta/(1 - \\beta)$." },
+  { front: "Optimal heavy ball on a quadratic?", back: "$\\eta^* = 4/(\\sqrt{\\Lambda} + \\sqrt{\\mu})^2$, $\\beta^* = ((\\sqrt{\\kappa} - 1)/(\\sqrt{\\kappa} + 1))^2$; rate $(\\sqrt{\\kappa} - 1)/(\\sqrt{\\kappa} + 1)$." },
+  { front: "Speed-up from momentum?", back: "Steps grow like √κ instead of κ: ten times fewer for κ = 100." },
+  { front: "Nesterov momentum?", back: "Evaluate the gradient at the look-ahead point $\\mathbf{w} + \\beta\\mathbf{v}$; optimal for smooth convex functions." },
+]} />
+
+<Predict revisit question="How many steps does the best momentum need where gradient descent needs 700?" />
+
+<Key title="Before you go">
+<ul>
+<li>Momentum keeps a velocity that averages past gradients with weights $\beta^j$.</li>
+<li>Consistent directions speed up to an effective step $\eta/(1 - \beta)$; oscillating ones are damped.</li>
+<li>On quadratics the steps needed fall from order κ to order √κ.</li>
+<li>In practice β = 0.9 with a correspondingly smaller learning rate is the standard choice.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Polyak (1964), <em>Some methods of speeding up the convergence of iteration methods</em>.</li>
+<li>Gabriel Goh (2017), <em>Why momentum really works</em>, Distill (free online): an interactive explanation.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Momentum makes learning depend on the history of recent errors, not just the current one. Can you think of a behavioural experiment where an animal's learning seems to show momentum, carrying on in the same direction after the feedback changes?" />

@@ -143,6 +143,14 @@ export const DAY_TITLES: Record<number, string[]> = {
     "Learning rules as optimisation: perceptron, delta rule and tempotron",
     "Forge: Week 12 challenge, quiz and deep read",
   ],
+  13: [
+    "Momentum: heavy balls in long valleys",
+    "Adaptive methods: AdaGrad, RMSProp and Adam",
+    "Constrained optimisation and Lagrange multipliers",
+    "Inequality constraints, sparsity and the L1 penalty",
+    "Optimisation in practice: early stopping, schedules and weight decay",
+    "Forge: Week 13 challenge, quiz and deep read",
+  ],
 };
 
 export const DAYS_PER_WEEK = 6;
@@ -171,7 +179,7 @@ export function dayTitle(w: number, d: number): string {
 }
 
 /** Weeks whose lesson files exist. Kept in sync by hand as content is written. */
-export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
 export const isWritten = (w: number) => WRITTEN_WEEKS.includes(w);
 
 /** Every lesson that is published, in order. */

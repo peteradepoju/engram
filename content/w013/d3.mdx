@@ -1,0 +1,313 @@
+export const meta = {
+  title: "Constrained optimisation and Lagrange multipliers",
+  intro: "Many of the best questions in neuroscience and machine learning have the form: do as well as possible, subject to a limit. Find the direction of greatest variance, but only among unit vectors. Read out a stimulus with the least noise, but without bias. Carry as much information as possible, with a limited range of firing rates. Lagrange multipliers turn each of these into an ordinary set of equations. Today you derive the method from a picture, recover PCA from it, build the minimum-variance population decoder, and reproduce Laughlin's famous result that a fly's neuron codes contrast by equalising its histogram.",
+  goals: [
+    "Explain why gradients of the objective and constraint are parallel at a constrained optimum",
+    "Solve equality-constrained problems with the Lagrangian",
+    "Derive PCA and the minimum-variance unbiased linear decoder as constrained problems",
+    "Show that matching a response curve to the input CDF maximises output entropy",
+  ],
+  plan: [
+    { label: "Predict and the tangency picture", minutes: 25 },
+    { label: "The Lagrangian, and PCA again", minutes: 25 },
+    { label: "The best unbiased decoder", minutes: 30 },
+    { label: "Laughlin's fly", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "laughlin-1981",
+};
+
+<Predict question="A neuron can fire at any rate between 0 and its maximum, and it wants its responses to carry as much information as possible about the input contrast. Most contrasts it sees are small; large ones are rare. Should its response curve be a straight line, steepest where inputs are common, or steepest where inputs are rare?" />
+
+<Step n={1} title="The tangency picture" minutes={25} />
+
+Suppose you want to maximise $f(\mathbf{x})$ but only among points that satisfy $g(\mathbf{x}) = 0$. Walk along the constraint curve. As long as the curve cuts across the contours of $f$, walking one way increases $f$, so you are not yet at the best point. You stop only where the constraint curve runs *along* a contour of $f$, touching it without crossing.
+
+At that point the two curves are tangent, so their normals are parallel. The normal to a contour is the gradient, so
+
+$$
+\nabla f(\mathbf{x}^*) = \lambda\,\nabla g(\mathbf{x}^*)
+$$
+
+for some number $\lambda$, the **Lagrange multiplier**. Together with $g(\mathbf{x}^*) = 0$ this gives as many equations as unknowns.
+
+<Figure caption="Contours of the variance uᵀΣu and the unit-circle constraint. Drag the point around the circle: the two gradients line up exactly at the top eigenvector, where the variance is largest." credit="Interactive figure by Engram.">
+  <LagrangeContours />
+</Figure>
+
+<Video id="yuqB-d5MjZA" title="Lagrange multipliers, using tangency to solve constrained optimization" by="Khan Academy (Grant Sanderson)" note="The tangency argument drawn carefully, with a worked example." />
+
+<Step n={2} title="The Lagrangian, and PCA again" minutes={25} />
+
+The condition is neatly packaged in the **Lagrangian**
+
+$$
+\mathcal{L}(\mathbf{x}, \lambda) = f(\mathbf{x}) - \lambda\,g(\mathbf{x}).
+$$
+
+Setting $\partial\mathcal{L}/\partial\mathbf{x} = 0$ gives $\nabla f = \lambda\nabla g$; setting $\partial\mathcal{L}/\partial\lambda = 0$ gives back the constraint. A constrained problem in $n$ variables becomes an unconstrained stationary point in $n + 1$.
+
+The multiplier has a meaning: $\lambda = \mathrm{d}f^*/\mathrm{d}c$ when the constraint is $g(\mathbf{x}) = c$. It is the price of the constraint, how much the best value would improve if the limit were loosened by one unit.
+
+<Derivation title="PCA from a Lagrangian">
+
+<div>
+
+Maximise the variance of the projection, $\mathbf{u}^\top\Sigma\mathbf{u}$, subject to $\mathbf{u}^\top\mathbf{u} = 1$. The Lagrangian is
+
+$$
+\mathcal{L} = \mathbf{u}^\top\Sigma\mathbf{u} - \lambda(\mathbf{u}^\top\mathbf{u} - 1).
+$$
+
+</div>
+
+<div>
+
+The gradient with respect to $\mathbf{u}$ is $2\Sigma\mathbf{u} - 2\lambda\mathbf{u}$. Setting it to zero:
+
+$$
+\Sigma\mathbf{u} = \lambda\mathbf{u}.
+$$
+
+Every stationary point is an eigenvector, and the multiplier is its eigenvalue.
+
+</div>
+
+<div>
+
+At such a point the objective is $\mathbf{u}^\top\Sigma\mathbf{u} = \lambda\mathbf{u}^\top\mathbf{u} = \lambda$. The maximum is therefore the eigenvector with the largest eigenvalue: the first principal component of Week 7, now derived in three lines.
+
+</div>
+
+</Derivation>
+
+<PyCell id="projected" title="Projected gradient ascent is power iteration" tests={String.raw`
+  import numpy as np
+  def test_top_eigvec():
+      "projected gradient ascent finds the top eigenvector (up to sign)"
+      top = np.linalg.eigh(S)[1][:, -1]
+      assert abs(abs(u_star @ top) - 1) < 1e-6
+
+  def test_multiplier():
+      "the multiplier u'Su equals the largest eigenvalue"
+      assert abs(lam_star - np.linalg.eigvalsh(S).max()) < 1e-6
+`} prompt="Solve the constrained problem numerically: take a gradient step on u'Su, then project back onto the unit circle by normalising. Repeat 200 times from (0, 1) with step 0.1. Store the result in `u_star` and the multiplier u'Su in `lam_star`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  S = np.array([[3.0, 1.2], [1.2, 1.0]])
+  u = np.array([0.0, 1.0])
+  for _ in range(200):
+      u = ...           # gradient step on u'Su (the gradient is 2Su)
+      u = ...           # project back onto the unit circle
+  u_star = u
+  lam_star = ...
+  print("u* =", u_star.round(4), " lambda =", round(lam_star, 4), " eigenvalues:", np.linalg.eigvalsh(S).round(4))
+`}
+hint="u = u + 0.1 * 2 * S @ u; u = u / np.linalg.norm(u); lam_star = u_star @ S @ u_star."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  S = np.array([[3.0, 1.2], [1.2, 1.0]])
+  u = np.array([0.0, 1.0])
+  for _ in range(200):
+      u = u + 0.1 * 2 * S @ u
+      u = u / np.linalg.norm(u)
+  u_star = u
+  lam_star = u_star @ S @ u_star
+  print("u* =", u_star.round(4), " lambda =", round(lam_star, 4), " eigenvalues:", np.linalg.eigvalsh(S).round(4))
+`} />
+
+Step then project: each update multiplies $\mathbf{u}$ by $I + 0.2\Sigma$ and rescales, which is exactly the power iteration of Week 6 applied to a shifted matrix. Projecting onto the constraint after every step is a general recipe you will use again tomorrow.
+
+<Step n={3} title="The best unbiased decoder" minutes={30} />
+
+A population of $N$ neurons responds to a stimulus $\theta$ with mean rates $\mathbf{f}(\theta)$ and noise covariance $C$. A linear readout estimates small changes in $\theta$ from $\mathbf{w}^\top\mathbf{r}$. To be **unbiased**, the readout must move by exactly one unit when $\theta$ moves by one: $\mathbf{w}^\top\mathbf{f}' = 1$. Among such readouts we want the least noisy, so we minimise the variance $\mathbf{w}^\top C\mathbf{w}$.
+
+<Derivation title="The minimum-variance unbiased linear decoder">
+
+<div>
+
+$$
+\mathcal{L} = \mathbf{w}^\top C\mathbf{w} - \lambda(\mathbf{w}^\top\mathbf{f}' - 1).
+$$
+
+Setting the gradient to zero, $2C\mathbf{w} = \lambda\mathbf{f}'$, so $\mathbf{w} = \tfrac{\lambda}{2}C^{-1}\mathbf{f}'$.
+
+</div>
+
+<div>
+
+The constraint fixes the scale: $\tfrac{\lambda}{2}\,\mathbf{f}'^\top C^{-1}\mathbf{f}' = 1$, so
+
+$$
+\mathbf{w}^* = \frac{C^{-1}\mathbf{f}'}{\mathbf{f}'^\top C^{-1}\mathbf{f}'}, \qquad \operatorname{Var} = \frac{1}{\mathbf{f}'^\top C^{-1}\mathbf{f}'}.
+$$
+
+</div>
+
+<div>
+
+The denominator $\mathbf{f}'^\top C^{-1}\mathbf{f}'$ is the linear Fisher information of the population, which you will meet properly in Week 17. The best unbiased linear readout achieves a variance of one over it.
+
+</div>
+
+</Derivation>
+
+<PyCell id="decoder" title="Correlated noise and the best readout" tests={String.raw`
+  import numpy as np
+  def test_unbiased():
+      "both readouts satisfy the constraint w'f' = 1"
+      assert abs(w_opt @ fp - 1) < 1e-8 and abs(w_naive @ fp - 1) < 1e-8
+
+  def test_formula():
+      "the optimal variance equals 1 / (f' C^-1 f')"
+      assert abs(var_opt - 1 / (fp @ np.linalg.solve(C, fp))) < 1e-10
+
+  def test_better():
+      "the optimal readout has lower variance than the readout that ignores correlations"
+      assert var_opt < var_naive
+`} prompt="Forty orientation-tuned neurons have correlated noise that is strongest between neurons with similar preferences. Build the optimal readout `w_opt` from the formula and a naive readout `w_naive` proportional to f' (scaled to be unbiased). Store both variances in `var_opt` and `var_naive`."
+code={String.raw`
+  N = 40
+  prefs = np.linspace(0, np.pi, N, endpoint=False)
+  theta0 = np.pi / 3
+  def f(t): return 5 + 20 * np.exp(2 * (np.cos(2 * (t - prefs)) - 1))
+  fp = (f(theta0 + 1e-4) - f(theta0 - 1e-4)) / 2e-4            # tuning-curve slopes
+  d = np.abs(np.subtract.outer(prefs, prefs)); d = np.minimum(d, np.pi - d)
+  rate = f(theta0)
+  C = np.diag(0.5 * rate) + 0.5 * np.sqrt(np.outer(rate, rate)) * np.exp(-d / 1.0)
+
+  w_opt = ...
+  w_naive = ...
+  var_opt, var_naive = ..., ...
+  print(f"optimal variance {var_opt:.5f}, naive {var_naive:.5f}, ratio {var_naive / var_opt:.3f}")
+`}
+hint="Ci_fp = np.linalg.solve(C, fp); w_opt = Ci_fp / (fp @ Ci_fp); w_naive = fp / (fp @ fp); variances are w @ C @ w."
+solution={String.raw`
+  N = 40
+  prefs = np.linspace(0, np.pi, N, endpoint=False)
+  theta0 = np.pi / 3
+  def f(t): return 5 + 20 * np.exp(2 * (np.cos(2 * (t - prefs)) - 1))
+  fp = (f(theta0 + 1e-4) - f(theta0 - 1e-4)) / 2e-4            # tuning-curve slopes
+  d = np.abs(np.subtract.outer(prefs, prefs)); d = np.minimum(d, np.pi - d)
+  rate = f(theta0)
+  C = np.diag(0.5 * rate) + 0.5 * np.sqrt(np.outer(rate, rate)) * np.exp(-d / 1.0)
+
+  Ci_fp = np.linalg.solve(C, fp)
+  w_opt = Ci_fp / (fp @ Ci_fp)
+  w_naive = fp / (fp @ fp)
+  var_opt, var_naive = w_opt @ C @ w_opt, w_naive @ C @ w_naive
+  print(f"optimal variance {var_opt:.5f}, naive {var_naive:.5f}, ratio {var_naive / var_opt:.3f}")
+`} />
+
+Taking the correlations into account cuts the variance by about 16% here. The gain depends on the structure of the noise: correlations along $\mathbf{f}'$ itself, called differential correlations (Moreno-Bote and colleagues, 2014), cannot be removed by any readout and set a hard limit on what a population can encode.
+
+<Step n={4} title="Laughlin's fly" minutes={25} />
+
+In 1981 Simon Laughlin measured the contrasts a blowfly sees in its natural habitat and, separately, the response curve of its large monopolar cells, the neurons just after the photoreceptors. The two matched: the response curve was, to within the scatter of the data, the cumulative distribution of natural contrasts.
+
+The reason is a constrained optimisation. A neuron with a limited range of responses (say a fixed number of distinguishable levels) carries the most information when every level is used equally often, because the uniform distribution has the highest entropy on a bounded range (Week 20). If the response is $r = F(x)$, with $F$ the cumulative distribution of the input, then $r$ is uniformly distributed: this is **histogram equalisation**. The curve is steep where inputs are common, spreading them over many levels, and flat where they are rare. That answers the prediction.
+
+<PyCell id="laughlin" title="Equalise the histogram" tests={String.raw`
+  import numpy as np
+  def test_cdf_uniform():
+      "the CDF response uses all ten levels almost equally"
+      p = np.bincount(np.minimum((r_cdf * 10).astype(int), 9), minlength=10) / len(r_cdf)
+      assert np.all(np.abs(p - 0.1) < 0.005)
+
+  def test_entropy_gain():
+      "the CDF response has higher entropy than the linear one, and is close to the maximum log2(10)"
+      assert H_cdf > H_lin + 0.3 and abs(H_cdf - np.log2(10)) < 0.01
+`} prompt="Draw 20,000 skewed contrasts. Compare a linear response (scaled so the 99.5th percentile maps to 1) with the empirical CDF as response. Quantise each into ten levels and compute the entropy in bits. Store `r_lin`, `r_cdf`, `H_lin` and `H_cdf`."
+code={String.raw`
+  rng = np.random.default_rng(1981)
+  x = rng.gamma(2.0, 1.0, 20000)             # many small contrasts, few large
+
+  def entropy10(r):
+      p = np.bincount(np.minimum((r * 10).astype(int), 9), minlength=10) / len(r)
+      p = p[p > 0]
+      return -(p * np.log2(p)).sum()
+
+  r_lin = ...
+  r_cdf = ...                                # the rank of each x divided by the number of samples
+  H_lin, H_cdf = entropy10(r_lin), entropy10(r_cdf)
+  print(f"linear {H_lin:.3f} bits, CDF {H_cdf:.3f} bits, maximum {np.log2(10):.3f}")
+  plt.plot(np.sort(x), np.sort(r_cdf), label="CDF response"); plt.plot(np.sort(x), np.sort(r_lin), label="linear")
+  plt.hist(x, 80, density=True, alpha=0.3, label="input density"); plt.legend(); plt.xlabel("contrast"); plt.show()
+`}
+hint="r_lin = np.clip(x / np.percentile(x, 99.5), 0, 1); r_cdf = np.searchsorted(np.sort(x), x) / len(x)."
+solution={String.raw`
+  rng = np.random.default_rng(1981)
+  x = rng.gamma(2.0, 1.0, 20000)             # many small contrasts, few large
+
+  def entropy10(r):
+      p = np.bincount(np.minimum((r * 10).astype(int), 9), minlength=10) / len(r)
+      p = p[p > 0]
+      return -(p * np.log2(p)).sum()
+
+  r_lin = np.clip(x / np.percentile(x, 99.5), 0, 1)
+  r_cdf = np.searchsorted(np.sort(x), x) / len(x)                                # the rank of each x divided by the number of samples
+  H_lin, H_cdf = entropy10(r_lin), entropy10(r_cdf)
+  print(f"linear {H_lin:.3f} bits, CDF {H_cdf:.3f} bits, maximum {np.log2(10):.3f}")
+  plt.plot(np.sort(x), np.sort(r_cdf), label="CDF response"); plt.plot(np.sort(x), np.sort(r_lin), label="linear")
+  plt.hist(x, 80, density=True, alpha=0.3, label="input density"); plt.legend(); plt.xlabel("contrast"); plt.show()
+`} />
+
+The linear curve wastes its top levels on rare large contrasts and crowds common small ones into a few levels, giving 2.76 bits; the CDF curve reaches the maximum of 3.32 bits. The same idea, applied to whole images and populations, becomes the efficient coding hypothesis (Barlow, 1961) that returns in Weeks 39 and 111.
+
+<Bridge title="Optimal under constraints"
+  neuro="Much of theoretical neuroscience asks what a system would do if it were optimal under a constraint: maximal information with limited firing rates (Laughlin), least noisy readout with no bias, sparse codes with limited activity (tomorrow). The Lagrange multiplier often has a physical meaning, such as the metabolic price of a spike."
+  ai="Constraints appear throughout machine learning: normalised weights, probability vectors that sum to one (the softmax arises from maximum entropy with a fixed expected score), trust regions, and the KL limits in policy optimisation. Penalties added to a loss are often Lagrange multipliers in disguise.">
+
+At a constrained optimum the objective can improve only by breaking the constraint, so their gradients point the same way.
+
+</Bridge>
+
+<Prove title="Maximum entropy on a finite set" task="Use a Lagrange multiplier to show that among probability vectors $(p_1, \dots, p_n)$ with $\sum_i p_i = 1$, the entropy $H = -\sum_i p_i\log p_i$ is stationary only at the uniform distribution.">
+
+The Lagrangian is $\mathcal{L} = -\sum_i p_i\log p_i - \lambda\left(\sum_i p_i - 1\right)$.
+
+Differentiating with respect to $p_i$: $-\log p_i - 1 - \lambda = 0$, so $p_i = e^{-1-\lambda}$, the same for every $i$.
+
+The constraint then gives $n\,e^{-1-\lambda} = 1$, so $p_i = 1/n$. Since $H$ is concave this stationary point is the maximum, with $H = \log n$ (3.32 bits for ten levels, as in the exercise).
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "At a constrained optimum, ∇f is...", options: ["Zero", "Parallel to ∇g", "Perpendicular to ∇g", "Equal to g"], answer: 1, explain: "The constraint curve is tangent to a contour of f." },
+  { q: "The Lagrange multiplier measures...", options: ["The step size", "How much the optimum improves per unit loosening of the constraint", "The curvature", "The number of constraints"], answer: 1, explain: "$\\lambda = \\mathrm{d}f^*/\\mathrm{d}c$." },
+  { q: "Maximising uᵀΣu with |u| = 1 gives...", options: ["Any unit vector", "An eigenvector, with multiplier equal to its eigenvalue", "The mean", "The smallest eigenvalue"], answer: 1, explain: "$\\Sigma u = \\lambda u$." },
+  { q: "Gradient step then normalise, on uᵀΣu, is...", options: ["Newton's method", "Power iteration on a shifted matrix", "Adam", "Unstable"], answer: 1, explain: "Each update multiplies by $I + 2\\eta\\Sigma$." },
+  { q: "The minimum-variance unbiased linear readout is proportional to...", options: ["f′", "C⁻¹f′", "Cf′", "The mean rates"], answer: 1, explain: "Correlations are undone by the inverse covariance." },
+  { q: "Laughlin found that the fly's response curve matched...", options: ["A straight line", "The cumulative distribution of natural contrasts", "A step function", "The photoreceptor noise"], answer: 1, explain: "Histogram equalisation." },
+  { q: "On a bounded range, the maximum-entropy distribution is...", options: ["Gaussian", "Uniform", "Exponential", "Poisson"], answer: 1, explain: "Every level used equally often." },
+]} />
+
+<Flashcards cards={[
+  { front: "Lagrange condition?", back: "$\\nabla f = \\lambda\\nabla g$ together with $g = 0$." },
+  { front: "Lagrangian?", back: "$\\mathcal{L} = f - \\lambda g$; stationary in x and λ." },
+  { front: "Meaning of λ?", back: "The price of the constraint: $\\mathrm{d}f^*/\\mathrm{d}c$." },
+  { front: "Minimum-variance unbiased linear decoder?", back: "$w = C^{-1}f'/(f'^\\top C^{-1}f')$, variance $1/(f'^\\top C^{-1}f')$." },
+  { front: "Histogram equalisation?", back: "Response = input CDF; output is uniform, so entropy is maximal on a bounded range (Laughlin, 1981)." },
+]} />
+
+<Predict revisit question="Where should the neuron's response curve be steepest?" />
+
+<Key title="Before you go">
+<ul>
+<li>At a constrained optimum the objective's gradient is a multiple of the constraint's.</li>
+<li>The Lagrangian turns constrained problems into stationary points; the multiplier is the price of the constraint.</li>
+<li>PCA and the minimum-variance unbiased decoder are both Lagrange problems.</li>
+<li>A neuron with a limited range carries most information when its response curve is the input CDF.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Laughlin (1981), <em>A simple coding procedure enhances a neuron's information capacity</em>. Two pages; read all of it and look closely at the figure.</li>
+<li>Dayan and Abbott (2001), <em>Theoretical Neuroscience</em>, section 4.2 on entropy maximisation.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Laughlin's result assumes the neuron's only limit is its range of responses. Name another constraint a real neuron faces (energy, noise, time) and say how it might change the optimal response curve." />
