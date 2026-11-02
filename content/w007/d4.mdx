@@ -1,0 +1,304 @@
+export const meta = {
+  title: "PCA on neural populations: trajectories and dimensionality reduction",
+  intro: "Record 60 neurons while a monkey reaches in eight directions and you have 60 numbers changing over time, for each reach. Nobody can look at that directly. Arrange the data the right way, normalise sensibly, run PCA, and the population's activity becomes a handful of smooth trajectories you can plot and reason about. Today you do the whole pipeline, as in the motor-cortex studies of Churchland and colleagues, and meet the participation ratio, a single number for how many dimensions the activity uses.",
+  goals: [
+    "Arrange population data as an observations-by-neurons matrix",
+    "Explain and apply soft normalisation before PCA",
+    "Project population activity onto principal components and plot trajectories",
+    "Compute the participation ratio and compare it with variance thresholds",
+  ],
+  plan: [
+    { label: "Predict and arranging the data", minutes: 25 },
+    { label: "Normalisation", minutes: 20 },
+    { label: "Population trajectories", minutes: 35 },
+    { label: "How many dimensions?", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "cunningham-2014",
+};
+
+<Predict question="Sixty motor-cortex neurons are recorded during reaches in eight directions. Each neuron's firing rate rises and falls in its own complicated way. How many principal components do you expect to need to capture 80% of the variance of the trial-averaged activity: about 3, about 15, or about 50?" />
+
+<Step n={1} title="Arranging the data" minutes={25} />
+
+A typical experiment gives an array of firing rates with shape **neurons × conditions × time** (after averaging over repeated trials of each condition). PCA needs a matrix with **observations as rows and variables as columns**. For population analysis the variables are the neurons, and each moment of each condition is one observation: a point in the 60-dimensional state space of Week 4. So the data matrix is $(C \cdot T) \times N$.
+
+<Figure caption="Simulated population during four reaches, projected onto pairs of principal components, with its scree plot." credit="Interactive figure by Engram, after the analyses of Churchland and colleagues (2012).">
+  <NeuralTrajectories />
+</Figure>
+
+Run the next cell to simulate the experiment. Every neuron mixes three hidden signals with its own weights: a rotation whose phase depends on the reach direction, and a slow ramp. Spikes are Poisson, recorded on 40 trials of each condition in 20 ms bins, and some neurons fire far more than others.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2012)
+  N, C, T, K, dt = 60, 8, 50, 40, 0.02             # neurons, conditions, time bins, trials, bin width (s)
+  t = np.linspace(0, 1, T)
+  theta = np.arange(C) * 2 * np.pi / C
+  env = np.sin(np.pi * t)
+  z = np.zeros((3, C, T))
+  for c in range(C):
+      phase = 2 * np.pi * 0.8 * t + theta[c]
+      z[0, c], z[1, c], z[2, c] = env * np.cos(phase), env * np.sin(phase), t
+  mixing = rng.normal(size=(N, 3))
+  gain = rng.uniform(0.3, 3, N)                     # some neurons fire much more than others
+  rate = np.clip(gain[:, None, None] * (15 + 12 * np.einsum("nk,kct->nct", mixing, z)), 0, None)
+  counts = rng.poisson(rate[..., None] * dt, size=(N, C, T, K))
+  psth = counts.mean(axis=-1) / dt                  # trial-averaged rate in Hz, shape (60, 8, 50)
+  print(psth.shape)
+  fig, ax = plt.subplots(1, 3, figsize=(9, 2.5), sharex=True)
+  for a, n in zip(ax, [0, 1, 2]):
+      a.plot(t, psth[n].T); a.set_title(f"neuron {n}"); a.set_xlabel("time (s)")
+  plt.tight_layout(); plt.show()
+`} />
+
+<PyCell id="arrange" title="Build the data matrix" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "to_matrix gives one row per condition and time bin, one column per neuron"
+      assert to_matrix(psth).shape == (C * T, N)
+
+  def test_order():
+      "row c*T + t holds the population state for condition c at time t"
+      X = to_matrix(psth)
+      assert np.allclose(X[3 * T + 7], psth[:, 3, 7])
+
+  def test_back():
+      "from_scores turns a (C*T, k) score matrix back into (C, T, k)"
+      S = np.arange(C * T * 2).reshape(C * T, 2)
+      assert np.array_equal(from_scores(S, C, T)[3, 7], S[3 * T + 7])
+`} prompt="Write `to_matrix(R)` that turns an array of shape (N, C, T) into a (C·T) by N matrix whose row `c*T + t` is the population state for condition c at time t. Write `from_scores(S, C, T)` that reshapes a (C·T) by k matrix of scores into (C, T, k) for plotting."
+code={String.raw`
+  def to_matrix(R):
+      n, c, t = R.shape
+      return ...
+
+  def from_scores(S, C, T):
+      return ...
+
+  print(to_matrix(psth).shape)
+`}
+hint="Move the neuron axis to the end and flatten the rest: R.transpose(1, 2, 0).reshape(c * t, n). For the reverse, S.reshape(C, T, -1)."
+solution={String.raw`
+  def to_matrix(R):
+      n, c, t = R.shape
+      return R.transpose(1, 2, 0).reshape(c * t, n)
+
+  def from_scores(S, C, T):
+      return S.reshape(C, T, -1)
+
+  print(to_matrix(psth).shape)
+`} />
+
+<Step n={2} title="Normalisation" minutes={20} />
+
+PCA finds directions of greatest variance, and variance depends on units. A neuron firing at 100 Hz with a 40 Hz swing contributes far more variance than one at 5 Hz with a 2 Hz swing, so without normalisation the top components describe the few loudest neurons. Dividing every neuron by its standard deviation (z-scoring) goes too far the other way: a nearly silent neuron's noise is blown up to the same size as a strongly modulated neuron's signal.
+
+The usual compromise in population studies is **soft normalisation**: divide each neuron's rate by its range plus a constant,
+
+$$
+\tilde{r}_n = \frac{r_n}{\max r_n - \min r_n + 5\ \text{Hz}}
+$$
+
+Strongly modulated neurons end up with a range near 1, while weakly modulated ones are shrunk rather than inflated. The constant (5 Hz is the common choice) sets the boundary between "weak" and "strong".
+
+<PyCell id="norm" title="Soft-normalise and centre" tests={String.raw`
+  import numpy as np
+  def test_soft():
+      "soft_norm divides each neuron by its range over conditions and time plus 5 Hz"
+      Rn = soft_norm(psth)
+      rng_ = psth.max(axis=(1, 2)) - psth.min(axis=(1, 2))
+      assert np.allclose(Rn, psth / (rng_ + 5)[:, None, None])
+
+  def test_ranges():
+      "after soft normalisation no neuron has a range above 1"
+      Rn = soft_norm(psth)
+      assert np.all(Rn.max(axis=(1, 2)) - Rn.min(axis=(1, 2)) < 1)
+
+  def test_X():
+      "X is the centred data matrix of the soft-normalised rates"
+      assert X.shape == (C * T, N) and np.allclose(X.mean(axis=0), 0)
+      assert np.allclose(X + to_matrix(soft_norm(psth)).mean(axis=0), to_matrix(soft_norm(psth)))
+`} prompt="Write `soft_norm(R)` for an (N, C, T) array, then build `X`, the centred (C·T) by N matrix of soft-normalised rates. Compare how much variance the three loudest neurons hold before and after."
+code={String.raw`
+  def soft_norm(R, c=5.0):
+      span = ...                     # one value per neuron
+      return ...
+
+  X = ...
+
+  raw = to_matrix(psth)
+  v_raw, v_norm = raw.var(axis=0), X.var(axis=0)
+  top3 = np.argsort(v_raw)[-3:]
+  print("share of variance in the 3 loudest neurons: raw", (v_raw[top3].sum() / v_raw.sum()).round(2), " normalised", (v_norm[top3].sum() / v_norm.sum()).round(2))
+`}
+hint="span = R.max(axis=(1, 2)) - R.min(axis=(1, 2)); return R / (span + c)[:, None, None]. Then M = to_matrix(soft_norm(psth)) and X = M - M.mean(axis=0)."
+solution={String.raw`
+  def soft_norm(R, c=5.0):
+      span = R.max(axis=(1, 2)) - R.min(axis=(1, 2))
+      return R / (span + c)[:, None, None]
+
+  M = to_matrix(soft_norm(psth))
+  X = M - M.mean(axis=0)
+
+  raw = to_matrix(psth)
+  v_raw, v_norm = raw.var(axis=0), X.var(axis=0)
+  top3 = np.argsort(v_raw)[-3:]
+  print("share of variance in the 3 loudest neurons: raw", (v_raw[top3].sum() / v_raw.sum()).round(2), " normalised", (v_norm[top3].sum() / v_norm.sum()).round(2))
+`} />
+
+<Step n={3} title="Population trajectories" minutes={35} />
+
+<PyCell id="traj" title="PCA and trajectories" tests={String.raw`
+  import numpy as np
+  def test_var():
+      "var_explained has one share per component, summing to 1, sorted"
+      assert var_explained.shape == (N,) and np.isclose(var_explained.sum(), 1)
+      assert np.all(np.diff(var_explained) <= 1e-12)
+
+  def test_top3():
+      "the top three components explain more than 75% of the variance"
+      assert var_explained[:3].sum() > 0.75
+
+  def test_traj():
+      "traj holds the scores on the first three PCs, shaped (C, T, 3)"
+      assert traj.shape == (C, T, 3)
+      U, s, Vt = np.linalg.svd(X, full_matrices=False)
+      assert np.allclose(np.abs(traj[2, 10]), np.abs((X @ Vt[:3].T)[2 * T + 10]))
+`} prompt="Take the SVD of `X`. Store the fraction of variance explained by every component in `var_explained`, and the scores on the first three components, reshaped to (C, T, 3), in `traj`. Plot the eight trajectories in the PC1 and PC2 plane, with a dot at the start of each, and a scree plot."
+code={String.raw`
+  U, s, Vt = np.linalg.svd(X, full_matrices=False)
+  var_explained = ...
+  traj = ...
+
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3.5))
+  for c in range(C):
+      ax[0].plot(traj[c, :, 0], traj[c, :, 1], color=plt.cm.hsv(c / C)); ax[0].plot(traj[c, 0, 0], traj[c, 0, 1], "o", color=plt.cm.hsv(c / C))
+  ax[0].set_xlabel("PC1"); ax[0].set_ylabel("PC2"); ax[0].set_aspect("equal")
+  ax[1].bar(np.arange(1, 13), var_explained[:12]); ax[1].set_xlabel("component"); ax[1].set_ylabel("variance explained")
+  plt.tight_layout(); plt.show()
+  print("top 3 explain", var_explained[:3].sum().round(3))
+`}
+hint="var_explained = s ** 2 / np.sum(s ** 2). The scores are X @ Vt[:3].T (or U[:, :3] * s[:3]); then traj = from_scores(X @ Vt[:3].T, C, T)."
+solution={String.raw`
+  U, s, Vt = np.linalg.svd(X, full_matrices=False)
+  var_explained = s ** 2 / np.sum(s ** 2)
+  traj = from_scores(X @ Vt[:3].T, C, T)
+
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3.5))
+  for c in range(C):
+      ax[0].plot(traj[c, :, 0], traj[c, :, 1], color=plt.cm.hsv(c / C)); ax[0].plot(traj[c, 0, 0], traj[c, 0, 1], "o", color=plt.cm.hsv(c / C))
+  ax[0].set_xlabel("PC1"); ax[0].set_ylabel("PC2"); ax[0].set_aspect("equal")
+  ax[1].bar(np.arange(1, 13), var_explained[:12]); ax[1].set_xlabel("component"); ax[1].set_ylabel("variance explained")
+  plt.tight_layout(); plt.show()
+  print("top 3 explain", var_explained[:3].sum().round(3))
+`} />
+
+Sixty messy firing-rate curves collapse onto eight clean loops that rotate in the PC1 to PC2 plane, each reach starting at a different phase. Three components capture about 80% of the variance. That answers the prediction, and the remaining components hold little more than Poisson noise. Churchland and colleagues (2012) found rotations like these in real motor cortex and argued that they reflect the dynamics that generate movement (Week 41), the representation-versus-dynamics debate you met in Week 4.
+
+<Video id="Lsue2gEM9D0" title="PCA in Python" by="StatQuest with Josh Starmer" note="Doing PCA in Python with scikit-learn, including scaling the data first and drawing the scree plot." />
+
+The components are not neurons. Each is a weighted combination of all 60, and PC1 has no special meaning beyond carrying the most variance. Rotating the top three axes within their subspace would describe the data equally well, which is why later methods (Week 61, Week 116) look for axes that are easier to interpret.
+
+<Step n={4} title="How many dimensions?" minutes={25} />
+
+"Three components explain 80%" depends on picking 80%. A threshold-free summary of how spread out the variance is is the **participation ratio**:
+
+$$
+\text{PR} = \frac{\left(\sum_i\lambda_i\right)^2}{\sum_i\lambda_i^2}
+$$
+
+If all the variance is in one component, PR is 1; if it is spread equally over $d$ components, PR is $d$. It is widely used to compare the dimensionality of neural activity across areas, tasks and models (Gao and Ganguli, 2015).
+
+<PyCell id="pr" title="Participation ratio" tests={String.raw`
+  import numpy as np
+  def test_simple():
+      "PR is 1 for one component and d for d equal components"
+      assert np.isclose(participation_ratio(np.array([5.0, 0, 0])), 1)
+      assert np.isclose(participation_ratio(np.ones(7)), 7)
+
+  def test_scale():
+      "PR does not depend on the units of the eigenvalues"
+      lam = np.array([4.0, 2.0, 1.0])
+      assert np.isclose(participation_ratio(lam), participation_ratio(10 * lam))
+
+  def test_data():
+      "pr_data is the PR of this dataset's eigenvalues, and n80 the components needed for 80%"
+      assert np.isclose(pr_data, participation_ratio(s ** 2))
+      assert n80 == int(np.searchsorted(np.cumsum(var_explained), 0.8) + 1)
+`} prompt="Write `participation_ratio(lam)`. Compute it for the population (`pr_data`, from the squared singular values) and the number of components needed to reach 80% of the variance (`n80`). Which number would you report, and why do they differ?"
+code={String.raw`
+  def participation_ratio(lam):
+      return ...
+
+  pr_data = ...
+  n80 = ...
+  print("participation ratio", round(pr_data, 2), "  components for 80%:", n80)
+`}
+hint="return np.sum(lam) ** 2 / np.sum(lam ** 2). pr_data = participation_ratio(s ** 2). n80 = int(np.searchsorted(np.cumsum(var_explained), 0.8) + 1): searchsorted finds the first index where the running total reaches 0.8."
+solution={String.raw`
+  def participation_ratio(lam):
+      return np.sum(lam) ** 2 / np.sum(lam ** 2)
+
+  pr_data = participation_ratio(s ** 2)
+  n80 = int(np.searchsorted(np.cumsum(var_explained), 0.8) + 1)
+  print("participation ratio", round(pr_data, 2), "  components for 80%:", n80)
+`} />
+
+The participation ratio comes out a little above 4: the three signal components, which have unequal variances, count as fewer than 3, while the long tail of small noise components adds a bit more than 1. Both numbers depend on the noise, which inflates every estimate of dimensionality. Separating signal dimensions from noise dimensions honestly is tomorrow's topic.
+
+<Bridge title="Low-dimensional dynamics"
+  neuro="Across motor, prefrontal and sensory areas, trial-averaged activity is often far lower-dimensional than the number of neurons recorded. Gao and Ganguli argued that this partly reflects the simplicity of the tasks: dimensionality is bounded by the number of task variables and how smoothly activity changes with them (Week 116)."
+  ai="The same pipeline is used to look inside artificial networks: PCA of a recurrent network's hidden states during a task shows its trajectories and fixed points (Sussillo and Barak, Week 6), and comparing trajectory shapes between a network and the brain is one way to test a model (Week 135).">
+
+A population recording becomes interpretable once you find the few directions where its activity moves.
+
+</Bridge>
+
+<Prove title="Bounds on the participation ratio" task="For non-negative eigenvalues $\lambda_1, \dots, \lambda_n$, not all zero, show that $1 \leq \text{PR} \leq n$, with PR $= n$ exactly when all eigenvalues are equal.">
+
+**Upper bound.** Apply Cauchy-Schwarz (Week 4) to the vectors $(\lambda_1, \dots, \lambda_n)$ and $(1, \dots, 1)$: $\left(\sum_i\lambda_i\right)^2 \leq n\sum_i\lambda_i^2$. Dividing gives PR $\leq n$, with equality when the two vectors are parallel, that is when all eigenvalues are equal.
+
+**Lower bound.** Because every $\lambda_i \geq 0$, expanding the square gives $\left(\sum_i\lambda_i\right)^2 = \sum_i\lambda_i^2 + \sum_{i \neq j}\lambda_i\lambda_j \geq \sum_i\lambda_i^2$, so PR $\geq 1$, with equality when only one eigenvalue is nonzero.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "For population PCA, the columns of the data matrix are...", options: ["Time bins", "Neurons", "Conditions", "Trials"], answer: 1, explain: "Neurons are the variables; each condition and time is an observation." },
+  { q: "An array of shape (60, 8, 50) becomes a data matrix of shape...", options: ["(60, 400)", "(400, 60)", "(8, 3000)", "(50, 480)"], answer: 1, explain: "8 × 50 observations by 60 neurons." },
+  { q: "Without normalisation, PCA of firing rates is dominated by...", options: ["Silent neurons", "Neurons with the largest variance, often the highest-rate ones", "Inhibitory neurons", "Nothing"], answer: 1, explain: "Variance depends on units and scale." },
+  { q: "Soft normalisation divides each neuron by...", options: ["Its standard deviation", "Its range plus a constant", "Its mean", "The number of neurons"], answer: 1, explain: "Weak neurons are shrunk, not inflated." },
+  { q: "A principal component of population activity is...", options: ["A single neuron", "A weighted combination of all neurons", "A time bin", "A condition"], answer: 1, explain: "It is a direction in neural state space." },
+  { q: "Equal variance in 5 components gives a participation ratio of...", options: ["1", "5", "25", "0.2"], answer: 1, explain: "PR equals d for d equal eigenvalues." },
+  { q: "Noise tends to make dimensionality estimates...", options: ["Smaller", "Larger", "Unchanged", "Negative"], answer: 1, explain: "It spreads variance over many small components." },
+]} />
+
+<Flashcards cards={[
+  { front: "Population data matrix?", back: "(conditions × time) rows by neurons columns: each row is a point in neural state space." },
+  { front: "Soft normalisation?", back: "$r_n / (\\text{range}_n + 5\\text{ Hz})$: equalises strong neurons without inflating weak, noisy ones." },
+  { front: "Neural trajectory?", back: "The path of the population state over time, usually shown projected onto the top PCs." },
+  { front: "Participation ratio?", back: "$(\\sum\\lambda_i)^2/\\sum\\lambda_i^2$; between 1 and n; equals d for d equal components." },
+  { front: "Rotational dynamics?", back: "Churchland et al. 2012: motor cortex population activity rotates in a low-dimensional plane during reaching." },
+]} />
+
+<Predict revisit question="How many components for 80% of the variance: about 3, 15 or 50?" />
+
+<Key title="Before you go">
+<ul>
+<li>Arrange population data as (conditions × time) by neurons, then centre.</li>
+<li>Soft-normalise so a few loud neurons do not dominate the components.</li>
+<li>Projecting onto the top PCs turns many noisy rates into a few smooth trajectories.</li>
+<li>The participation ratio summarises dimensionality without a threshold, but noise inflates it.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>This week's deep read: Cunningham and Yu (2014), <em>Dimensionality reduction for large-scale neural recordings</em>. First pass today.</li>
+<li>Churchland, Cunningham, Kaufman and colleagues (2012), <em>Neural population dynamics during reaching</em>, Nature: the rotations you simulated today.</li>
+<li>Gao and Ganguli (2015), <em>On simplicity and complexity in the brave new world of large-scale neuroscience</em>, Current Opinion in Neurobiology.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Trial averaging removed most of the noise before PCA today. Describe one kind of structure that trial averaging would hide, and how you might look for it in single trials." />

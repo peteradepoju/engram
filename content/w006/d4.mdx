@@ -1,0 +1,281 @@
+export const meta = {
+  title: "Linear dynamics: stability, oscillation and the line attractor",
+  intro: "Neurons do not update in discrete steps: their activity changes continuously, leaking away while recurrent input pushes it back up. Write that as a linear differential equation and eigenvalues tell you everything: which patterns decay, which explode, which oscillate, and how long each lasts. Then you will build the circuit that holds your eyes still between saccades, a network tuned so that one eigenvalue exactly cancels the leak.",
+  goals: [
+    "Write the rate dynamics of a linear recurrent network and solve them with eigenvectors",
+    "State the stability condition and compute each mode's time constant",
+    "Relate complex eigenvalues to the frequency of oscillation",
+    "Build and tune a line-attractor integrator, and explain what mistuning does",
+  ],
+  plan: [
+    { label: "Predict and continuous-time dynamics", minutes: 25 },
+    { label: "Phase portraits", minutes: 20 },
+    { label: "Simulating a network", minutes: 25 },
+    { label: "The oculomotor integrator", minutes: 35 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "seung-1996",
+};
+
+<Predict question="A neuron's activity leaks away with a time constant of 100 ms. Brainstem neurons that code eye position hold steady firing for 10 seconds or more after a saccade. Roughly how close to perfect must recurrent excitation be to stretch 100 ms into 20 s: within 50%, within 5%, or within 0.5%?" />
+
+<Step n={1} title="Continuous-time dynamics" minutes={25} />
+
+The standard rate model of a recurrent network of $n$ units is
+
+$$
+\tau\frac{d\mathbf{x}}{dt} = -\mathbf{x} + W\mathbf{x} + \mathbf{u}(t)
+$$
+
+Each unit's activity $x_i$ leaks back to zero with time constant $\tau$ (the $-\mathbf{x}$ term), is pushed by the others through the weights $W$, and receives external input $\mathbf{u}$. Without input it is $\tau\dot{\mathbf{x}} = (W - I)\mathbf{x}$, a linear system.
+
+<Derivation title="Solving it with eigenvectors">
+  <div>
+
+Let $W\mathbf{v} = \lambda\mathbf{v}$. Then $(W - I)\mathbf{v} = (\lambda - 1)\mathbf{v}$: subtracting $I$ shifts every eigenvalue by 1 and keeps the eigenvectors (Day 1).
+
+  </div>
+  <div>
+
+Try activity that stays along $\mathbf{v}$: $\mathbf{x}(t) = c(t)\mathbf{v}$. Substituting gives $\tau\dot{c}\,\mathbf{v} = (\lambda - 1)c\,\mathbf{v}$, so $\tau\dot{c} = (\lambda - 1)c$, whose solution is
+
+$$
+c(t) = c(0)\,e^{(\lambda - 1)t/\tau}
+$$
+
+  </div>
+  <div>
+
+If $W$ is diagonalisable, any start is a combination of eigenvectors, and each piece evolves on its own:
+
+$$
+\mathbf{x}(t) = \sum_i c_i(0)\,e^{(\lambda_i - 1)t/\tau}\,\mathbf{v}_i
+$$
+
+  </div>
+  <div>
+
+A mode with real $\lambda \lt 1$ decays with an **effective time constant**
+
+$$
+\tau_{\text{eff}} = \frac{\tau}{1 - \lambda}
+$$
+
+As $\lambda$ approaches 1, recurrent excitation cancels the leak and the mode lasts longer and longer. At $\lambda = 1$ it does not decay at all; above 1 it grows.
+
+  </div>
+</Derivation>
+
+So the network is stable when every eigenvalue of $W$ has real part less than 1, which is the same as every eigenvalue of $W - I$ having negative real part. For a complex pair $\lambda = \alpha \pm i\omega$, the factor $e^{(\alpha - 1)t/\tau}e^{\pm i\omega t/\tau}$ combines into a decaying (or growing) oscillation with angular frequency $\omega/\tau$, that is $\frac{\omega}{2\pi\tau}$ cycles per second.
+
+<Step n={2} title="Phase portraits" minutes={20} />
+
+<Figure caption="The flow of dx/dt = Ax for a 2 by 2 matrix A (think of A as (W − I)/τ). Change the entries or pick a preset and watch the trajectories." credit="Interactive figure by Engram.">
+  <PhasePortrait />
+</Figure>
+
+Work through the presets and match each picture to its eigenvalues: real and negative (a node: straight decay along the eigenvectors), opposite signs (a saddle: one direction decays while the other grows), complex with negative real part (a spiral inwards), and purely imaginary (a centre: closed orbits). The **line attractor** preset has one eigenvalue of exactly zero: every point on the dashed line through the origin is a fixed point, and everything else flows onto that line and stops.
+
+<Video id="IZqwi0wJovM" title="Lecture 23: Differential equations and exp(At) (MIT 18.06 Linear Algebra)" by="Gilbert Strang, MIT OpenCourseWare" note="How eigenvalues solve systems of linear differential equations, and when solutions decay, grow or oscillate." />
+
+<Step n={3} title="Simulating a network" minutes={25} />
+
+The simplest way to simulate is **Euler's method**: step forward by a small $\Delta t$ using the current rate of change, $\mathbf{x}(t + \Delta t) \approx \mathbf{x}(t) + \frac{\Delta t}{\tau}\left(-\mathbf{x} + W\mathbf{x} + \mathbf{u}\right)$. It is accurate when $\Delta t$ is much smaller than every time constant in the system (Week 25 covers better methods).
+
+<PyCell id="simulate" title="Euler simulation of a rate network" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "returns n_steps + 1 rows, one column per unit"
+      X = simulate(np.zeros((3, 3)), np.ones(3), tau=0.1, dt=0.001, n_steps=50)
+      assert X.shape == (51, 3) and np.allclose(X[0], 1)
+
+  def test_decay():
+      "with W diagonal, each unit decays with time constant tau / (1 - w)"
+      W = np.diag([0.0, 0.5])
+      X = simulate(W, np.array([1.0, 1.0]), tau=0.1, dt=0.0005, n_steps=400)
+      t = 400 * 0.0005
+      assert np.allclose(X[-1], np.exp(-(1 - np.diag(W)) * t / 0.1), rtol=0.01)
+
+  def test_input():
+      "a constant input drives an isolated unit to the steady state u / (1 - w)"
+      X = simulate(np.array([[0.5]]), np.array([0.0]), tau=0.01, dt=0.0005, n_steps=2000, u=np.full((2000, 1), 1.0))
+      assert np.isclose(X[-1, 0], 2.0, rtol=0.01)
+`} prompt="Write `simulate(W, x0, tau, dt, n_steps, u=None)` using Euler's method for $\tau\dot{\mathbf{x}} = -\mathbf{x} + W\mathbf{x} + \mathbf{u}$. `u`, if given, is an array with one row of input per step. Return an array whose row k is the state after k steps (row 0 is `x0`)."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def simulate(W, x0, tau, dt, n_steps, u=None):
+      X = np.zeros((n_steps + 1, len(x0)))
+      X[0] = x0
+      for k in range(n_steps):
+          inp = 0 if u is None else u[k]
+          ...
+      return X
+
+  X = simulate(np.array([[0.0, -1.2], [1.2, 0.0]]) * 0.9 + 0.5 * np.eye(2), np.array([1.0, 0.0]), tau=0.01, dt=0.0002, n_steps=1000)
+  plt.figure(figsize=(5, 3)); plt.plot(np.arange(1001) * 0.0002 * 1000, X); plt.xlabel("time (ms)"); plt.show()
+`}
+hint="X[k + 1] = X[k] + dt / tau * (-X[k] + W @ X[k] + inp)"
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def simulate(W, x0, tau, dt, n_steps, u=None):
+      X = np.zeros((n_steps + 1, len(x0)))
+      X[0] = x0
+      for k in range(n_steps):
+          inp = 0 if u is None else u[k]
+          X[k + 1] = X[k] + dt / tau * (-X[k] + W @ X[k] + inp)
+      return X
+
+  X = simulate(np.array([[0.0, -1.2], [1.2, 0.0]]) * 0.9 + 0.5 * np.eye(2), np.array([1.0, 0.0]), tau=0.01, dt=0.0002, n_steps=1000)
+  plt.figure(figsize=(5, 3)); plt.plot(np.arange(1001) * 0.0002 * 1000, X); plt.xlabel("time (ms)"); plt.show()
+`} />
+
+<PyCell code={String.raw`
+  Wosc = np.array([[0.0, -1.2], [1.2, 0.0]]) * 0.9 + 0.5 * np.eye(2)
+  lam = np.linalg.eigvals(Wosc)
+  tau = 0.01
+  print("eigenvalues of W:", lam.round(3))
+  print("decay time constant:", round(1000 * tau / (1 - lam[0].real), 1), "ms")
+  print("predicted frequency:", round(abs(lam[0].imag) / (2 * np.pi * tau), 1), "Hz")
+`} />
+
+Check the plot: the oscillation in the previous cell should complete about one cycle every 58 ms (about 17 Hz) while decaying with a 20 ms time constant, exactly as the eigenvalues predict. You did not need to simulate to know that.
+
+<Step n={4} title="The oculomotor integrator" minutes={35} />
+
+Each saccade is driven by a brief burst of velocity commands. Neurons in the brainstem (in the nucleus prepositus hypoglossi and the medial vestibular nucleus of the goldfish and the primate) integrate those bursts: their firing jumps with each saccade and then stays put, coding eye position. Seung (1996), this week's deep read, proposed that they hold the position through recurrent excitation tuned so that one eigenvalue of $W$ equals 1. Activity along that eigenvector neither decays nor grows, and the set of all such states is a **line attractor**.
+
+Take two mutually exciting neurons with $W = \begin{pmatrix} a & b \\ b & a \end{pmatrix}$. Its eigenvectors are $(1, 1)$, both neurons together, with eigenvalue $a + b$, and $(1, -1)$, the difference, with eigenvalue $a - b$. Eye position is read from the sum mode.
+
+<PyCell id="integrator" title="Tune the integrator" tests={String.raw`
+  import numpy as np
+  def test_tau_eff():
+      "tau_eff gives tau / (1 - lambda)"
+      assert np.isclose(tau_eff(0.9, 0.1), 1.0) and np.isclose(tau_eff(0.995, 0.1), 20.0)
+
+  def test_b():
+      "b_tuned makes the sum mode's time constant 20 s"
+      assert np.isclose(tau_eff(a + b_tuned, tau), 20.0)
+
+  def test_hold():
+      "the tuned network holds eye position: about 10% drift over 2 s, as a 20 s time constant predicts"
+      assert 0.07 < drift_tuned < 0.12, f"drift {drift_tuned:.3f}"
+
+  def test_mistuned():
+      "a 2% mistuning makes the position decay noticeably"
+      assert drift_mistuned > 0.2
+`} prompt="With τ = 0.1 s and a = 0.5, write `tau_eff(lam, tau)` and choose `b_tuned` so that the sum mode lasts 20 s. Simulate four saccade commands, read eye position as the mean of the two neurons, and measure the fractional drift over the last 2 s: `drift = (pos at 4 s minus pos at 6 s) / pos at 4 s`. Repeat with $a + b$ lowered by 0.02."
+code={String.raw`
+  tau, a, dt = 0.1, 0.5, 0.001
+  def tau_eff(lam, tau):
+      return ...
+
+  b_tuned = ...
+
+  n = 6000                                  # 6 s
+  u = np.zeros((n, 2))
+  for t_sac, size in [(0.5, 3.0), (1.5, 2.0), (2.5, -4.0), (3.5, 2.5)]:
+      k = int(t_sac / dt); u[k:k + 20] = size / (20 * dt) * tau   # brief burst into both neurons
+
+  def run(b):
+      X = simulate(np.array([[a, b], [b, a]]), np.zeros(2), tau, dt, n, u)
+      return X.mean(axis=1)
+
+  pos_tuned, pos_mis = run(b_tuned), run(b_tuned - 0.02)
+  drift_tuned = ...
+  drift_mistuned = ...
+
+  t = np.arange(n + 1) * dt
+  plt.figure(figsize=(6, 3)); plt.plot(t, pos_tuned, label="tuned (a + b = 0.995)"); plt.plot(t, pos_mis, label="mistuned by 0.02")
+  plt.xlabel("time (s)"); plt.ylabel("eye position (a.u.)"); plt.legend(frameon=False); plt.show()
+  print("drift tuned:", round(drift_tuned, 3), " mistuned:", round(drift_mistuned, 3))
+`}
+hint="tau_eff returns tau / (1 - lam). From tau / (1 - (a + b)) = 20 you get b_tuned = 1 - tau / 20 - a. Positions at 4 s and 6 s are pos[4000] and pos[6000], so drift_tuned = (pos_tuned[4000] - pos_tuned[6000]) / pos_tuned[4000], and the same for pos_mis."
+solution={String.raw`
+  tau, a, dt = 0.1, 0.5, 0.001
+  def tau_eff(lam, tau):
+      return tau / (1 - lam)
+
+  b_tuned = 1 - tau / 20 - a
+
+  n = 6000                                  # 6 s
+  u = np.zeros((n, 2))
+  for t_sac, size in [(0.5, 3.0), (1.5, 2.0), (2.5, -4.0), (3.5, 2.5)]:
+      k = int(t_sac / dt); u[k:k + 20] = size / (20 * dt) * tau   # brief burst into both neurons
+
+  def run(b):
+      X = simulate(np.array([[a, b], [b, a]]), np.zeros(2), tau, dt, n, u)
+      return X.mean(axis=1)
+
+  pos_tuned, pos_mis = run(b_tuned), run(b_tuned - 0.02)
+  drift_tuned = (pos_tuned[4000] - pos_tuned[6000]) / pos_tuned[4000]
+  drift_mistuned = (pos_mis[4000] - pos_mis[6000]) / pos_mis[4000]
+
+  t = np.arange(n + 1) * dt
+  plt.figure(figsize=(6, 3)); plt.plot(t, pos_tuned, label="tuned (a + b = 0.995)"); plt.plot(t, pos_mis, label="mistuned by 0.02")
+  plt.xlabel("time (s)"); plt.ylabel("eye position (a.u.)"); plt.legend(frameon=False); plt.show()
+  print("drift tuned:", round(drift_tuned, 3), " mistuned:", round(drift_mistuned, 3))
+`} />
+
+To stretch 100 ms into 20 s the eigenvalue must sit at 0.995, within half a percent of 1. That answers the prediction, and it is the central puzzle of Seung's paper: biological synapses are noisy and change over time, so how does the brain keep this eigenvalue so finely tuned? A 2% error cuts the time constant from 20 s to 4 s and the eyes drift back towards the centre, which is just what is seen when the integrator is damaged. Seung suggested that visual feedback about the eyes slipping could be used to keep adjusting the weights.
+
+<Bridge title="Remembering with eigenvalues of one"
+  neuro="Line and ring attractors are proposed for eye position, head direction (Week 109) and parametric working memory (Week 46). In each case a continuous family of steady states is created by eigenvalues tuned to cancel the leak, and the fine-tuning problem is a real constraint on these models."
+  ai="State-space sequence models such as S4 and Mamba are built from linear dynamical systems whose eigenvalues are learned directly, with real parts kept negative for stability and close to zero for long memory. LSTMs (Week 86) avoid the fine-tuning problem with a gate that can hold its value exactly.">
+
+Long memory in any linear system needs eigenvalues on the edge of stability: in brains, in recurrent networks and in modern sequence models.
+
+</Bridge>
+
+<Prove title="Integration along the line attractor" task="With $W\mathbf{v} = \mathbf{v}$ ($\lambda = 1$, $\lVert\mathbf{v}\rVert = 1$) and input $\mathbf{u}(t) = s(t)\mathbf{v}$, show that the activity along $\mathbf{v}$, $c(t) = \mathbf{v} \cdot \mathbf{x}(t)$, satisfies $\tau\dot{c} = s(t)$ when $W$ is symmetric, so the network integrates its input. What happens with $\lambda$ slightly below 1?">
+
+For symmetric $W$, $\mathbf{v}^\top W = (W\mathbf{v})^\top = \mathbf{v}^\top$. Take the dot product of the dynamics with $\mathbf{v}$:
+
+$\tau\dot{c} = -\mathbf{v}^\top\mathbf{x} + \mathbf{v}^\top W\mathbf{x} + s(t)\,\mathbf{v}^\top\mathbf{v} = -c + c + s(t) = s(t)$.
+
+So $c(t) = c(0) + \frac{1}{\tau}\int_0^t s(t')\,dt'$: a perfect integrator. Velocity commands go in, position comes out.
+
+With $\lambda = 1 - \epsilon$, the same steps give $\tau\dot{c} = -\epsilon c + s(t)$, a leaky integrator with time constant $\tau/\epsilon$. Between inputs, position decays exponentially towards zero; with $\epsilon$ negative it grows away instead.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "In $\\tau\\dot{\\mathbf{x}} = -\\mathbf{x} + W\\mathbf{x}$, a mode with eigenvalue λ (real) of W decays as...", options: ["$e^{-\\lambda t}$", "$e^{(\\lambda - 1)t/\\tau}$", "$\\lambda^t$", "$e^{\\lambda t/\\tau}$"], answer: 1, explain: "W − I shifts the eigenvalue by 1." },
+  { q: "The network is stable when every eigenvalue of W has...", options: ["Real part less than 1", "Real part less than 0", "Magnitude less than 1", "Imaginary part 0"], answer: 0, explain: "Then every eigenvalue of W − I has negative real part." },
+  { q: "With τ = 10 ms and λ = 0.9, the effective time constant is...", options: ["9 ms", "11 ms", "100 ms", "1 s"], answer: 2, explain: "$\\tau/(1 - \\lambda) = 10/0.1$." },
+  { q: "Complex eigenvalues $\\alpha \\pm i\\omega$ of W give oscillations at...", options: ["$\\omega$ Hz", "$\\omega/(2\\pi\\tau)$ Hz", "$\\alpha$ Hz", "No oscillation"], answer: 1, explain: "Angular frequency ω/τ." },
+  { q: "A line attractor has an eigenvalue of W equal to...", options: ["0", "1", "−1", "2"], answer: 1, explain: "Recurrence exactly cancels the leak." },
+  { q: "If the integrator's key eigenvalue is slightly below 1, eye position...", options: ["Holds perfectly", "Drifts back towards the centre", "Oscillates", "Jumps randomly"], answer: 1, explain: "A leaky integrator decays towards zero." },
+  { q: "Euler's method is accurate when the time step is...", options: ["Much larger than the time constants", "Much smaller than the time constants", "Equal to τ", "Irrelevant"], answer: 1, explain: "It assumes the rate of change is nearly constant over a step." },
+]} />
+
+<Flashcards cards={[
+  { front: "Linear rate network?", back: "$\\tau\\dot{\\mathbf{x}} = -\\mathbf{x} + W\\mathbf{x} + \\mathbf{u}$." },
+  { front: "Mode solution?", back: "$\\mathbf{x}(t) = \\sum_i c_i e^{(\\lambda_i - 1)t/\\tau}\\mathbf{v}_i$." },
+  { front: "Effective time constant of a mode?", back: "$\\tau_{\\text{eff}} = \\tau / (1 - \\lambda)$; grows without bound as λ approaches 1." },
+  { front: "Line attractor?", back: "A line of fixed points created by an eigenvalue of exactly 1 in W; the network integrates input along that eigenvector." },
+  { front: "Fine-tuning problem?", back: "To hold activity for seconds with τ about 100 ms, the eigenvalue must be within a fraction of a percent of 1." },
+]} />
+
+<Predict revisit question="How close to perfect must recurrent excitation be to stretch 100 ms into 20 s?" />
+
+<Key title="Before you go">
+<ul>
+<li>For $\tau\dot{\mathbf{x}} = (W - I)\mathbf{x}$, each eigenvector of W evolves as $e^{(\lambda - 1)t/\tau}$.</li>
+<li>Stable when every eigenvalue of W has real part below 1; complex eigenvalues oscillate at $\omega/(2\pi\tau)$ Hz.</li>
+<li>Eigenvalues near 1 give long time constants $\tau/(1 - \lambda)$; exactly 1 gives a line attractor that integrates.</li>
+<li>Holding eye position for seconds needs the eigenvalue tuned to within about 0.5%.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>This week's deep read: Seung (1996), <em>How the brain keeps the eyes still</em>. First pass today.</li>
+<li>Dayan and Abbott, <em>Theoretical Neuroscience</em>, Chapter 7.4: recurrent networks, including the linear analysis used today.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="The line attractor needs an eigenvalue tuned to within half a percent. List three ways the brain might solve or sidestep this fine-tuning problem, and say which you find most plausible and why." />

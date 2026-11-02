@@ -1,0 +1,225 @@
+export const meta = {
+  title: "The singular value decomposition: rotate, stretch, rotate",
+  intro: "Eigenvectors need a square matrix and do not always exist. The singular value decomposition works for every matrix, of any shape, and always with perpendicular axes. It says that any linear map, such as the connections from one brain area to another, is a rotation, a stretch along perpendicular axes, and another rotation. The stretch factors, the singular values, tell you which input patterns the map amplifies and which it ignores.",
+  goals: [
+    "State the SVD and describe the role of U, Σ and V",
+    "Compute the SVD with NumPy and check its properties",
+    "Relate singular values to the eigenvalues of $A^\\top A$",
+    "Use the SVD to find which input patterns a connectivity matrix transmits",
+  ],
+  plan: [
+    { label: "Predict and the SVD", minutes: 25 },
+    { label: "The geometry", minutes: 25 },
+    { label: "Computing and checking", minutes: 25 },
+    { label: "What a connection matrix transmits", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "saxe-2014",
+};
+
+<Predict question="Area A has 30 neurons projecting to 20 neurons in area B through a 20 by 30 weight matrix. Every one of the 600 weights is nonzero. Could it still be that only two patterns of activity in A have any real effect on B?" />
+
+<Step n={1} title="The singular value decomposition" minutes={25} />
+
+Every real $m \times n$ matrix $A$ can be written as
+
+$$
+A = U\Sigma V^\top
+$$
+
+- $V$ is $n \times n$ and orthogonal. Its columns $\mathbf{v}_i$ are the **right singular vectors**: perpendicular directions in the input space.
+- $\Sigma$ is $m \times n$ and zero except for the **singular values** $\sigma_1 \geq \sigma_2 \geq \dots \geq 0$ on its diagonal.
+- $U$ is $m \times m$ and orthogonal. Its columns $\mathbf{u}_i$ are the **left singular vectors**: perpendicular directions in the output space.
+
+Multiply both sides by $V$ on the right and read column by column:
+
+$$
+A\mathbf{v}_i = \sigma_i\mathbf{u}_i
+$$
+
+The map sends the $i$th input direction to the $i$th output direction, scaled by $\sigma_i$. Unlike eigenvectors, the input and output directions are different (they live in different spaces when $A$ is not square), and they are always perpendicular sets. Equivalently, $A$ is a sum of rank-one pieces,
+
+$$
+A = \sum_{i} \sigma_i\,\mathbf{u}_i\mathbf{v}_i^\top
+$$
+
+each one reading the input along $\mathbf{v}_i$, scaling it by $\sigma_i$ and writing it out along $\mathbf{u}_i$. The number of nonzero singular values is the **rank** of $A$.
+
+<Step n={2} title="The geometry" minutes={25} />
+
+<Figure caption="Apply A = UΣVᵀ in three stages to the unit circle: rotate by Vᵀ, stretch the axes by the singular values, rotate by U." credit="Interactive figure by Engram.">
+  <SvdSteps />
+</Figure>
+
+Any 2 by 2 matrix turns the unit circle into an ellipse. The singular values are the lengths of the ellipse's half-axes, the left singular vectors are their directions, and the right singular vectors are the directions on the circle that land on those axes. Their product $\sigma_1\sigma_2$ is the area scaling $|\det A|$ from Week 5.
+
+<Video id="gXbThCXjZFM" title="Singular Value Decomposition (SVD): Overview" by="Steve Brunton, University of Washington" note="The opening video of Brunton's excellent SVD series: what the decomposition is and why it is everywhere in data science." />
+
+<Step n={3} title="Computing and checking" minutes={25} />
+
+`np.linalg.svd(A, full_matrices=False)` returns `U`, the singular values `s` as a 1D array in descending order, and `Vt`, which is $V^\top$ (its **rows** are the right singular vectors). With `full_matrices=False` you get the economy form: for a $5 \times 3$ matrix, `U` is $5 \times 3$ rather than $5 \times 5$, dropping columns that would only multiply zeros.
+
+<PyCell id="svd" title="Take a matrix apart" tests={String.raw`
+  import numpy as np
+  def test_shapes():
+      "economy SVD of a 5 by 3 matrix"
+      assert U.shape == (5, 3) and s.shape == (3,) and Vt.shape == (3, 3)
+
+  def test_props():
+      "recon_ok and ortho_ok are both True"
+      assert recon_ok is True and ortho_ok is True
+
+  def test_pairs():
+      "Av_i equals s_i u_i for every i"
+      assert np.allclose(A @ Vt.T, U * s)
+`} prompt="Compute the economy SVD of `A`. Check that `U @ np.diag(s) @ Vt` rebuilds `A` (store the result of `np.allclose` in `recon_ok`) and that the columns of `U` and the rows of `Vt` are orthonormal (`ortho_ok`)."
+code={String.raw`
+  import numpy as np
+  rng = np.random.default_rng(0)
+  A = rng.normal(size=(5, 3))
+  U, s, Vt = ...
+  recon_ok = ...
+  ortho_ok = ...
+  print("singular values:", s.round(3), recon_ok, ortho_ok)
+`}
+hint="U, s, Vt = np.linalg.svd(A, full_matrices=False). recon_ok = bool(np.allclose(U @ np.diag(s) @ Vt, A)). ortho_ok = bool(np.allclose(U.T @ U, np.eye(3)) and np.allclose(Vt @ Vt.T, np.eye(3)))."
+solution={String.raw`
+  import numpy as np
+  rng = np.random.default_rng(0)
+  A = rng.normal(size=(5, 3))
+  U, s, Vt = np.linalg.svd(A, full_matrices=False)
+  recon_ok = bool(np.allclose(U @ np.diag(s) @ Vt, A))
+  ortho_ok = bool(np.allclose(U.T @ U, np.eye(3)) and np.allclose(Vt @ Vt.T, np.eye(3)))
+  print("singular values:", s.round(3), recon_ok, ortho_ok)
+`} />
+
+<Prove title="Singular values from eigenvalues" task="Using $A = U\Sigma V^\top$, show that $A^\top A = V(\Sigma^\top\Sigma)V^\top$ and $AA^\top = U(\Sigma\Sigma^\top)U^\top$. What are the eigenvalues and eigenvectors of $A^\top A$?">
+
+$A^\top A = (U\Sigma V^\top)^\top U\Sigma V^\top = V\Sigma^\top U^\top U\Sigma V^\top = V(\Sigma^\top\Sigma)V^\top$, since $U^\top U = I$. The same steps give $AA^\top = U(\Sigma\Sigma^\top)U^\top$.
+
+$\Sigma^\top\Sigma$ is diagonal with entries $\sigma_i^2$, so this is the spectral decomposition of the symmetric matrix $A^\top A$ (Week 6, Day 5): its eigenvectors are the right singular vectors $\mathbf{v}_i$ and its eigenvalues are $\sigma_i^2$. Likewise the eigenvectors of $AA^\top$ are the $\mathbf{u}_i$. This is also a proof that the SVD exists: diagonalise $A^\top A$, take $\sigma_i = \sqrt{\lambda_i}$ and set $\mathbf{u}_i = A\mathbf{v}_i/\sigma_i$.
+
+</Prove>
+
+<PyCell id="fromeig" title="Check it numerically" tests={String.raw`
+  import numpy as np
+  def test_sv():
+      "sv_from_eig equals the singular values, in descending order"
+      assert np.allclose(sv_from_eig, s)
+
+  def test_vecs():
+      "each column of V_from_eig is plus or minus the matching right singular vector"
+      assert np.allclose(np.abs(np.sum(V_from_eig * Vt.T, axis=0)), 1)
+`} prompt="Compute the eigenvalues and eigenvectors of $A^\top A$ with `eigh`, sort them in descending order, and store the square roots of the eigenvalues in `sv_from_eig` and the eigenvectors (as columns) in `V_from_eig`. They should match `s` and the rows of `Vt` up to sign."
+code={String.raw`
+  lam, Vec = np.linalg.eigh(A.T @ A)
+  sv_from_eig = ...
+  V_from_eig = ...
+  print(sv_from_eig.round(4), s.round(4))
+`}
+hint="eigh sorts ascending, so reverse: sv_from_eig = np.sqrt(lam[::-1]) and V_from_eig = Vec[:, ::-1]."
+solution={String.raw`
+  lam, Vec = np.linalg.eigh(A.T @ A)
+  sv_from_eig = np.sqrt(lam[::-1])
+  V_from_eig = Vec[:, ::-1]
+  print(sv_from_eig.round(4), s.round(4))
+`} />
+
+Use `np.linalg.svd` in practice rather than this route: forming $A^\top A$ squares the condition number (Week 5), so small singular values lose accuracy.
+
+<Step n={4} title="What a connection matrix transmits" minutes={30} />
+
+Back to the prediction. A matrix with every entry nonzero can still have low rank, if its columns are combinations of a few patterns. Here is a simulated projection from 30 neurons in area A to 20 in area B, built from two input-output pattern pairs plus weak random connections.
+
+<PyCell code={String.raw`
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(7)
+  nA, nB = 30, 20
+  in_pat = np.linalg.qr(rng.normal(size=(nA, 2)))[0]      # two perpendicular input patterns in A
+  out_pat = np.linalg.qr(rng.normal(size=(nB, 2)))[0]     # two output patterns in B
+  Wab = 3.0 * np.outer(out_pat[:, 0], in_pat[:, 0]) + 1.5 * np.outer(out_pat[:, 1], in_pat[:, 1]) + 0.02 * rng.normal(size=(nB, nA))
+  print("shape", Wab.shape, " fraction of nonzero weights:", np.mean(Wab != 0))
+  plt.figure(figsize=(5, 3)); plt.imshow(Wab, cmap="RdBu_r"); plt.colorbar(); plt.xlabel("neuron in A"); plt.ylabel("neuron in B"); plt.show()
+`} />
+
+<PyCell id="transmit" title="Find the transmitted patterns" tests={String.raw`
+  import numpy as np
+  def test_sv():
+      "sv holds the singular values of Wab, largest first"
+      assert np.allclose(sv, np.linalg.svd(Wab, compute_uv=False))
+
+  def test_rank():
+      "eff_rank counts singular values above 10% of the largest: 2"
+      assert eff_rank == 2
+
+  def test_align():
+      "the top input direction found is the first planted input pattern (up to sign)"
+      assert abs(align) > 0.99
+`} prompt="Compute the singular values `sv` of `Wab`. Count how many exceed 10% of the largest (`eff_rank`). Then take the top right singular vector and measure how well it matches the first planted input pattern, `align` = their dot product. On average over random inputs, what share of the response in B passes through the top two modes? (It is the sum of their squared singular values over the total.)"
+code={String.raw`
+  Uab, sv, Vtab = ...
+  eff_rank = ...
+  align = ...
+
+  share = np.sum(sv[:2] ** 2) / np.sum(sv ** 2)   # average share of B's response in the top two modes
+  plt.figure(figsize=(5, 3)); plt.semilogy(sv, "o"); plt.xlabel("index"); plt.ylabel("singular value"); plt.show()
+  print("effective rank", eff_rank, " alignment", round(align, 4), " share of output in top 2 modes:", round(share, 3))
+`}
+hint="Uab, sv, Vtab = np.linalg.svd(Wab, full_matrices=False). eff_rank = int(np.sum(sv > 0.1 * sv[0])). align = Vtab[0] @ in_pat[:, 0]."
+solution={String.raw`
+  Uab, sv, Vtab = np.linalg.svd(Wab, full_matrices=False)
+  eff_rank = int(np.sum(sv > 0.1 * sv[0]))
+  align = Vtab[0] @ in_pat[:, 0]
+
+  share = np.sum(sv[:2] ** 2) / np.sum(sv ** 2)   # average share of B's response in the top two modes
+  plt.figure(figsize=(5, 3)); plt.semilogy(sv, "o"); plt.xlabel("index"); plt.ylabel("singular value"); plt.show()
+  print("effective rank", eff_rank, " alignment", round(align, 4), " share of output in top 2 modes:", round(share, 3))
+`} />
+
+Two singular values stand far above the rest, and on average 98% of B's response to a random input is carried by the two modes. Every weight is nonzero, but only a two-dimensional slice of A's activity really gets through. That answers the prediction. Activity in A along any of the other 28 directions is nearly invisible to B.
+
+<Bridge title="Communication subspaces and learning modes"
+  neuro="Semedo and colleagues (2019) found that activity in visual area V1 relates to activity in V2 only through a few dimensions, a 'communication subspace'. Activity in V1 outside it can vary freely without affecting V2, a possible way for an area to keep private computations (Week 116)."
+  ai="Saxe, McClelland and Ganguli (today's paper) showed that a deep linear network learns the singular modes of its input-output correlations one by one, strongest first. Low-rank structure also explains why fine-tuning large language models with low-rank weight updates (LoRA) works so well.">
+
+To understand a linear map between two spaces, ask what its singular values are, and how many of them matter.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The SVD $A = U\\Sigma V^\\top$ exists for...", options: ["Square matrices only", "Symmetric matrices only", "Every real matrix", "Invertible matrices only"], answer: 2, explain: "Any shape, any rank." },
+  { q: "In $A\\mathbf{v}_i = \\sigma_i\\mathbf{u}_i$, the vector $\\mathbf{v}_i$ lives in...", options: ["The output space", "The input space", "Both", "Neither"], answer: 1, explain: "Right singular vectors are input directions." },
+  { q: "Singular values are always...", options: ["Positive or negative", "Complex", "Real and non-negative", "Equal to the eigenvalues"], answer: 2, explain: "They are lengths of half-axes." },
+  { q: "The singular values of A are the square roots of the eigenvalues of...", options: ["A", "$A^\\top A$", "$A + A^\\top$", "$A^{-1}$"], answer: 1, explain: "$A^\\top A = V\\Sigma^2 V^\\top$." },
+  { q: "The rank of a matrix equals...", options: ["The number of rows", "The number of nonzero singular values", "The largest singular value", "The trace"], answer: 1, explain: "Each nonzero σ adds one dimension to the output." },
+  { q: "`np.linalg.svd` returns `Vt` whose rows are...", options: ["Left singular vectors", "Right singular vectors", "Eigenvalues", "Columns of A"], answer: 1, explain: "It returns $V^\\top$." },
+  { q: "A 20 by 30 matrix with two large singular values transmits...", options: ["All 30 input dimensions equally", "Mainly a two-dimensional slice of its input", "Nothing", "Only one neuron"], answer: 1, explain: "Inputs outside the top singular vectors are nearly ignored." },
+]} />
+
+<Flashcards cards={[
+  { front: "SVD?", back: "$A = U\\Sigma V^\\top = \\sum_i \\sigma_i\\mathbf{u}_i\\mathbf{v}_i^\\top$: rotate (Vᵀ), stretch (Σ), rotate (U)." },
+  { front: "Meaning of $A\\mathbf{v}_i = \\sigma_i\\mathbf{u}_i$?", back: "Input direction $\\mathbf{v}_i$ is sent to output direction $\\mathbf{u}_i$ with gain $\\sigma_i$." },
+  { front: "SVD and eigenvalues?", back: "σᵢ² are the eigenvalues of $A^\\top A$ (eigenvectors vᵢ) and of $AA^\\top$ (eigenvectors uᵢ)." },
+  { front: "Rank from the SVD?", back: "The number of nonzero singular values; in noisy data, the number well above the noise." },
+  { front: "Economy SVD shapes for m by n, m greater than n?", back: "U: m × n, s: n, Vᵀ: n × n." },
+]} />
+
+<Predict revisit question="Can a 20 by 30 matrix with every weight nonzero transmit only two patterns?" />
+
+<Key title="Before you go">
+<ul>
+<li>Every matrix is a rotation, a stretch along perpendicular axes, and a rotation: $A = U\Sigma V^\top$.</li>
+<li>$A\mathbf{v}_i = \sigma_i\mathbf{u}_i$: each input direction maps to an output direction with gain $\sigma_i$.</li>
+<li>Singular values are the square roots of the eigenvalues of $A^\top A$.</li>
+<li>A few large singular values mean a map transmits only a low-dimensional slice of its input.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Saxe, McClelland and Ganguli (2014), <em>Exact solutions to the nonlinear dynamics of learning in deep linear neural networks</em>. Read the introduction and the SVD section.</li>
+<li>Steve Brunton and Nathan Kutz, <em>Data-Driven Science and Engineering</em>, Chapter 1: the SVD (the authors provide a free PDF and videos).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If two brain areas communicate through only a few dimensions, what could the rest of the activity in the sending area be doing? Write one hypothesis and how you would test it." />

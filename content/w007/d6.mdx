@@ -1,0 +1,289 @@
+export const meta = {
+  title: "Forge: Week 7 challenge, quiz and deep read",
+  intro: "This week you learned to take any matrix apart with the SVD, to compress and denoise data by truncating it, and to use PCA to find the few dimensions where a population's activity moves. Today's challenge is the full analysis of a motor-cortex recording: find the population's dimensionality, choose the number of components honestly by cross-validation over trials, and show that projecting single trials onto those components makes reach direction easier to decode.",
+  goals: [
+    "Run a complete PCA analysis of a population recording",
+    "Choose the number of components by cross-validation over trials",
+    "Use a low-dimensional projection to denoise and decode single trials",
+    "Critique the use of dimensionality reduction in neuroscience",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "cunningham-2014",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. The singular values of $\begin{pmatrix} 3 & 0 \\ 0 & -2 \end{pmatrix}$?
+2. The rank of the outer product of $(1, 2, 3)$ and $(4, 5)$?
+3. Variances of 5, 3, 1 and 1: what is the participation ratio?
+
+<PyCell code={String.raw`
+  import numpy as np
+  print("1.", np.linalg.svd(np.array([[3.0, 0.0], [0.0, -2.0]]), compute_uv=False))
+  print("2.", np.linalg.matrix_rank(np.outer([1, 2, 3], [4, 5])))
+  lam = np.array([5.0, 3.0, 1.0, 1.0])
+  print("3.", lam.sum() ** 2 / np.sum(lam ** 2))
+`} />
+
+<Step n={2} title="Weekly challenge: a motor-cortex population" minutes={60} />
+
+**The experiment.** 80 neurons in motor cortex are recorded while a monkey reaches to 8 targets, 30 times each. Spike counts are collected in 20 ms bins over one second. As on Day 4, the neurons mix a small number of hidden signals, but now you do not know how many. Run the cell to build `counts` (neurons by conditions by time bins by trials).
+
+<PyCell code={String.raw`
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2014)
+  N, C, T, K, dt = 80, 8, 50, 30, 0.02
+  t = np.linspace(0, 1, T)
+  theta = np.arange(C) * 2 * np.pi / C
+  env = np.sin(np.pi * t)
+  z = np.zeros((3, C, T))
+  for c in range(C):
+      phase = 2 * np.pi * 0.8 * t + theta[c]
+      z[0, c], z[1, c], z[2, c] = env * np.cos(phase), env * np.sin(phase), t
+  mix = rng.normal(size=(N, 3))
+  gain = rng.uniform(0.3, 3, N)
+  rate = np.clip(gain[:, None, None] * (15 + 12 * np.einsum("nk,kct->nct", mix, z)), 0, None)
+  counts = rng.poisson(rate[..., None] * dt, size=(N, C, T, K))
+  del z, mix, rate                                  # in a real experiment you never see these
+
+  def to_matrix(R):
+      n, c, tt = R.shape
+      return R.transpose(1, 2, 0).reshape(c * tt, n)
+  print(counts.shape)
+`} />
+
+<PyCell id="partA" title="Part A: the population's spectrum" tests={String.raw`
+  import numpy as np
+  def test_psth():
+      "psth is the trial-averaged rate in Hz, shape (80, 8, 50)"
+      assert psth.shape == (N, C, T) and np.allclose(psth, counts.mean(axis=-1) / dt)
+
+  def test_X():
+      "X is the centred, soft-normalised data matrix"
+      span = psth.max(axis=(1, 2)) - psth.min(axis=(1, 2)) + 5
+      M = to_matrix(psth / span[:, None, None])
+      assert np.allclose(X, M - M.mean(axis=0))
+
+  def test_summaries():
+      "var_explained sums to 1, n90 is the components needed for 90%, pr is the participation ratio"
+      assert np.isclose(var_explained.sum(), 1)
+      assert n90 == int(np.searchsorted(np.cumsum(var_explained), 0.9) + 1)
+      assert np.isclose(pr, 1 / np.sum(var_explained ** 2))
+`} prompt="Average over trials to get `psth` in Hz, soft-normalise each neuron by its range plus 5 Hz, and build the centred data matrix `X`. From its SVD compute `var_explained`, the number of components needed for 90% (`n90`), and the participation ratio `pr`. Plot the scree plot. How many components would you guess carry signal?"
+code={String.raw`
+  psth = ...
+  span = ...
+  M = to_matrix(psth / span[:, None, None])
+  X = ...
+  U, s, Vt = np.linalg.svd(X, full_matrices=False)
+  var_explained = ...
+  n90 = ...
+  pr = ...
+
+  plt.figure(figsize=(5, 3)); plt.semilogy(np.arange(1, 31), var_explained[:30], "o")
+  plt.xlabel("component"); plt.ylabel("variance explained"); plt.show()
+  print("90% needs", n90, "components; participation ratio", round(pr, 2))
+`}
+hint="psth = counts.mean(axis=-1) / dt; span = psth.max(axis=(1, 2)) - psth.min(axis=(1, 2)) + 5; X = M - M.mean(axis=0); var_explained = s ** 2 / np.sum(s ** 2); n90 = int(np.searchsorted(np.cumsum(var_explained), 0.9) + 1). Because var_explained sums to 1, pr = 1 / np.sum(var_explained ** 2)."
+solution={String.raw`
+  psth = counts.mean(axis=-1) / dt
+  span = psth.max(axis=(1, 2)) - psth.min(axis=(1, 2)) + 5
+  M = to_matrix(psth / span[:, None, None])
+  X = M - M.mean(axis=0)
+  U, s, Vt = np.linalg.svd(X, full_matrices=False)
+  var_explained = s ** 2 / np.sum(s ** 2)
+  n90 = int(np.searchsorted(np.cumsum(var_explained), 0.9) + 1)
+  pr = 1 / np.sum(var_explained ** 2)
+
+  plt.figure(figsize=(5, 3)); plt.semilogy(np.arange(1, 31), var_explained[:30], "o")
+  plt.xlabel("component"); plt.ylabel("variance explained"); plt.show()
+  print("90% needs", n90, "components; participation ratio", round(pr, 2))
+`} />
+
+The 90% threshold asks for many components, because Poisson noise spreads a thin layer of variance over every direction. The scree plot shows a clear break after three. A threshold, a participation ratio and an eyeballed elbow give three different answers, so we need a principled way to choose.
+
+<PyCell id="partB" title="Part B: choose k by cross-validation over trials" tests={String.raw`
+  import numpy as np
+  def test_halves():
+      "A and B are soft-normalised data matrices from even and odd trials, both using A's spans"
+      spanA = psA.max(axis=(1, 2)) - psA.min(axis=(1, 2)) + 5
+      assert np.allclose(A, to_matrix(psA / spanA[:, None, None]))
+      assert np.allclose(B, to_matrix(psB / spanA[:, None, None]))
+
+  def test_err():
+      "cv_err[k-1] is the mean squared difference between A's rank-k reconstruction and B"
+      assert len(cv_err) == 20
+      muA = A.mean(axis=0)
+      UA, sA, VtA = np.linalg.svd(A - muA, full_matrices=False)
+      assert np.isclose(cv_err[4], np.mean((UA[:, :5] * sA[:5] @ VtA[:5] + muA - B) ** 2))
+
+  def test_k():
+      "the cross-validated choice is 3 components"
+      assert k_best == 3
+`} prompt="Split the trials into even (`psA`) and odd (`psB`) halves and average each. Soft-normalise both with the spans of half A, giving data matrices `A` and `B`. For k from 1 to 20, rebuild A from its top k components (adding its mean back) and record the mean squared difference from B in `cv_err`. The best k, `k_best`, is where the error is smallest. Why does this not keep falling as k grows?"
+code={String.raw`
+  psA = counts[..., ::2].mean(axis=-1) / dt
+  psB = counts[..., 1::2].mean(axis=-1) / dt
+  spanA = ...
+  A = ...
+  B = ...
+  muA = A.mean(axis=0)
+  UA, sA, VtA = np.linalg.svd(A - muA, full_matrices=False)
+  cv_err = []
+  for k in range(1, 21):
+      ...
+  k_best = ...
+
+  plt.figure(figsize=(5, 3)); plt.plot(np.arange(1, 21), cv_err, "o-"); plt.axvline(k_best, ls="--", color="0.5")
+  plt.xlabel("components kept from half A"); plt.ylabel("error against half B"); plt.show()
+  print("cross-validated choice: k =", k_best)
+`}
+hint="spanA = psA.max(axis=(1, 2)) - psA.min(axis=(1, 2)) + 5; A = to_matrix(psA / spanA[:, None, None]) and B likewise with psB. In the loop: cv_err.append(np.mean((UA[:, :k] * sA[:k] @ VtA[:k] + muA - B) ** 2)). k_best = int(np.argmin(cv_err)) + 1."
+solution={String.raw`
+  psA = counts[..., ::2].mean(axis=-1) / dt
+  psB = counts[..., 1::2].mean(axis=-1) / dt
+  spanA = psA.max(axis=(1, 2)) - psA.min(axis=(1, 2)) + 5
+  A = to_matrix(psA / spanA[:, None, None])
+  B = to_matrix(psB / spanA[:, None, None])
+  muA = A.mean(axis=0)
+  UA, sA, VtA = np.linalg.svd(A - muA, full_matrices=False)
+  cv_err = []
+  for k in range(1, 21):
+      cv_err.append(np.mean((UA[:, :k] * sA[:k] @ VtA[:k] + muA - B) ** 2))
+  k_best = int(np.argmin(cv_err)) + 1
+
+  plt.figure(figsize=(5, 3)); plt.plot(np.arange(1, 21), cv_err, "o-"); plt.axvline(k_best, ls="--", color="0.5")
+  plt.xlabel("components kept from half A"); plt.ylabel("error against half B"); plt.show()
+  print("cross-validated choice: k =", k_best)
+`} />
+
+Each extra component kept from half A brings in more of A's own noise, which half B does not share. Up to the true dimensionality the gain in signal outweighs that, and beyond it the noise wins, so the error turns upward. The minimum, at three components, is the same answer you would get from the hidden signals you deleted from the simulation. Cunningham and Yu describe this kind of held-out evaluation as the standard way to choose dimensionality.
+
+<PyCell id="partC" title="Part C: decode single trials" tests={String.raw`
+  import numpy as np
+  def test_centroids():
+      "centroids are mean counts per condition over the 20 training trials, shape (8, 80)"
+      assert cent_raw.shape == (C, N)
+      assert np.allclose(cent_raw, bin_counts[:, :, :20].mean(axis=-1).T)
+
+  def test_acc():
+      "accuracies are fractions between 0 and 1, from the 80 test trials"
+      assert 0 <= acc_raw <= 1 and 0 <= acc_pc <= 1
+      assert np.isclose(acc_raw * 80, round(acc_raw * 80))
+
+  def test_better():
+      "projecting onto the top 3 PCs decodes better than all 80 raw counts"
+      assert acc_pc > acc_raw
+`} prompt="Decode reach direction from the spike counts in one 20 ms bin (bin 25, mid-movement). Use trials 0 to 19 for training and 20 to 29 for testing. With a nearest-centroid decoder (assign each test trial to the condition whose mean training response is closest), compute the accuracy using all 80 raw counts (`acc_raw`) and using counts scaled by `span` and projected onto the top 3 PCs from Part A, `Vt[:3]` (`acc_pc`). Chance is 1 in 8."
+code={String.raw`
+  bin_counts = counts[:, :, 25, :]                    # (80, 8, 30)
+  train, test = np.arange(20), np.arange(20, 30)
+  cent_raw = ...                                      # (8, 80): mean training counts per condition
+
+  def nearest_centroid(cents, x):
+      return int(np.argmin(np.sum((cents - x) ** 2, axis=1)))
+
+  P = Vt[:3]                                          # (3, 80)
+  to_pc = lambda x: (x / span) @ P.T                  # scale like the PCA data, then project
+  cent_pc = to_pc(cent_raw)
+  hits_raw, hits_pc = 0, 0
+  for c in range(C):
+      for k in test:
+          x = bin_counts[:, c, k]
+          ...
+  acc_raw, acc_pc = hits_raw / 80, hits_pc / 80
+  print(f"accuracy: raw counts {acc_raw:.2f}, top 3 PCs {acc_pc:.2f}, chance {1 / C:.2f}")
+`}
+hint="cent_raw = bin_counts[:, :, train].mean(axis=-1).T. Inside the loop: hits_raw += nearest_centroid(cent_raw, x) == c and hits_pc += nearest_centroid(cent_pc, to_pc(x)) == c."
+solution={String.raw`
+  bin_counts = counts[:, :, 25, :]                    # (80, 8, 30)
+  train, test = np.arange(20), np.arange(20, 30)
+  cent_raw = bin_counts[:, :, train].mean(axis=-1).T  # (8, 80): mean training counts per condition
+
+  def nearest_centroid(cents, x):
+      return int(np.argmin(np.sum((cents - x) ** 2, axis=1)))
+
+  P = Vt[:3]                                          # (3, 80)
+  to_pc = lambda x: (x / span) @ P.T                  # scale like the PCA data, then project
+  cent_pc = to_pc(cent_raw)
+  hits_raw, hits_pc = 0, 0
+  for c in range(C):
+      for k in test:
+          x = bin_counts[:, c, k]
+          hits_raw += nearest_centroid(cent_raw, x) == c
+          hits_pc += nearest_centroid(cent_pc, to_pc(x)) == c
+  acc_raw, acc_pc = hits_raw / 80, hits_pc / 80
+  print(f"accuracy: raw counts {acc_raw:.2f}, top 3 PCs {acc_pc:.2f}, chance {1 / C:.2f}")
+`} />
+
+Throwing away 77 of 80 dimensions improves decoding. The raw decoder measures distance in all 80 directions, including the 77 that contain only noise, and that noise pushes test trials towards the wrong centroids. Projecting onto the signal subspace keeps the differences between conditions and discards most of the noise: the same lesson as Day 2's denoising and Week 5's ridge regression. (One caution: the components came from trial averages that included the test trials. For a fully honest estimate, compute the PCs from training trials only; try it and see how little changes.)
+
+**Part D (in your journal).** The three components you found are a basis for a subspace, not unique axes. If a colleague says "PC1 encodes reach speed", what would you ask them to show before you believed it?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. Scores and the SVD" task="For centred data $X_c = USV^\top$, show that the scores $X_cV$ equal $US$, that the scores on different components are uncorrelated, and that the variance of the scores on component i is $s_i^2/(T - 1)$.">
+
+$X_cV = USV^\top V = US$, since $V^\top V = I$.
+
+The covariance of the scores is $\frac{1}{T - 1}(US)^\top(US) = \frac{1}{T - 1}SU^\top US = \frac{S^2}{T - 1}$, a diagonal matrix (the scores are centred because $X_c$ is). Off-diagonal zeros mean scores on different components are uncorrelated; the diagonal gives the variances $s_i^2/(T - 1)$. PCA is a rotation of the data that removes all correlations between the new axes.
+
+</Prove>
+
+<Prove title="2. Rotations in the PC plane" task="Suppose the two leading latent signals are $z_1 = e(t)\cos(\omega t + \phi)$ and $z_2 = e(t)\sin(\omega t + \phi)$. Show that the vector $(z_1, z_2)$ evolves as a rotation scaled by $e(t)$, and give the linear dynamical system it would satisfy if $e$ were constant. Which eigenvalues does that system have?">
+
+$(z_1, z_2) = e(t)\,(\cos\psi, \sin\psi)$ with $\psi = \omega t + \phi$: a point at distance $e(t)$ from the origin at angle $\psi$, turning at rate $\omega$. So the trajectory rotates with a radius that grows and shrinks.
+
+With constant $e$, differentiate: $\dot{z}_1 = -\omega z_2$ and $\dot{z}_2 = \omega z_1$, that is $\dot{\mathbf{z}} = \begin{pmatrix} 0 & -\omega \\ \omega & 0 \end{pmatrix}\mathbf{z}$. This matrix has trace 0 and determinant $\omega^2$, so its eigenvalues are $\pm i\omega$ (Week 6, Day 2): a centre. Churchland and colleagues fitted exactly such antisymmetric dynamics to the top PCs of motor cortex with their jPCA method.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 7 quiz (15 questions)" questions={[
+  { q: "The SVD writes A as...", options: ["$V\\Lambda V^{-1}$", "$U\\Sigma V^\\top$ with orthogonal U, V and non-negative diagonal Σ", "$QR$", "$LU$"], answer: 1, explain: "Rotate, stretch, rotate." },
+  { q: "$A\\mathbf{v}_i$ equals...", options: ["$\\sigma_i\\mathbf{v}_i$", "$\\sigma_i\\mathbf{u}_i$", "$\\mathbf{u}_i$", "$\\lambda_i\\mathbf{v}_i$"], answer: 1, explain: "Input direction to output direction with gain σᵢ." },
+  { q: "The singular values of A are the square roots of the eigenvalues of...", options: ["A", "$A^\\top A$", "$A^{-1}$", "$A + I$"], answer: 1, explain: "$A^\\top A = V\\Sigma^2V^\\top$." },
+  { q: "The rank of A equals...", options: ["Its number of rows", "The number of nonzero singular values", "σ₁", "The trace"], answer: 1, explain: "Each nonzero σ is one output dimension." },
+  { q: "The best rank-k approximation of A is...", options: ["The first k rows", "The truncated SVD", "A random projection", "$A^k$"], answer: 1, explain: "Eckart-Young." },
+  { q: "With singular values 5, 2, 1, the rank-1 approximation error (Frobenius) is...", options: ["$\\sqrt{5}$", "3", "1", "5"], answer: 0, explain: "$\\sqrt{2^2 + 1^2}$." },
+  { q: "A separable receptive field has rank...", options: ["0", "1", "2", "Full"], answer: 1, explain: "$f(x)g(t)$." },
+  { q: "Before PCA you must...", options: ["Sort the data", "Centre each variable", "Square the data", "Invert the covariance"], answer: 1, explain: "Otherwise PC1 points at the mean." },
+  { q: "The principal components are the eigenvectors of...", options: ["The data matrix", "The covariance matrix", "The identity", "The mean"], answer: 1, explain: "And the right singular vectors of the centred data." },
+  { q: "Maximising variance along an axis is the same as...", options: ["Maximising residuals", "Minimising squared distances to the axis", "Whitening", "Clustering"], answer: 1, explain: "Pythagoras." },
+  { q: "For population PCA, the data matrix has one column per...", options: ["Time bin", "Neuron", "Condition", "Trial"], answer: 1, explain: "Neurons are the variables." },
+  { q: "Soft normalisation stops...", options: ["Silent neurons dominating", "A few high-variance neurons dominating, without inflating weak ones", "Noise", "Rotation"], answer: 1, explain: "Divide by range plus a constant." },
+  { q: "Independent noise makes ordinary PCA's dimensionality estimates...", options: ["Too low", "Too high", "Exact", "Negative"], answer: 1, explain: "It adds a floor to every eigenvalue." },
+  { q: "Cross-validated PCA measures reliable variance by...", options: ["Averaging neurons", "Multiplying projections of two independent repeats", "Removing PC1", "Using more neurons"], answer: 1, explain: "Independent noise does not correlate across repeats." },
+  { q: "Projecting single trials onto a few PCs can improve decoding because...", options: ["It adds information", "It removes noise in directions that carry no signal", "It increases spike counts", "It always does"], answer: 1, explain: "Distances are measured only where conditions differ." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Cunningham and Yu (2014) its third pass and write your critique under the five headings. Focus on one question: **when a dimensionality reduction method finds a few latent dimensions, are they a discovery about the brain or a property of the method and the experiment?** Consider trial averaging, task simplicity (Gao and Ganguli, 2015), noise models and the choice between PCA, factor analysis and methods with dynamics. Decide what a convincing claim of low-dimensional structure should include.
+
+<Callout kind="research">
+Many open questions sit here: how dimensionality changes with learning, whether it differs between areas in the same task, and whether trained networks match the brain's spectra. Write down one dataset you could analyse with this week's tools, and the dimensionality result that would surprise you most.
+</Callout>
+
+<Key title="Week 7 review checklist">
+<ul>
+<li>I can compute an SVD, interpret U, Σ and V, and relate singular values to eigenvalues of $A^\top A$.</li>
+<li>I can find what a connectivity matrix transmits from its singular values.</li>
+<li>I can build the best rank-k approximation and compute its error from the singular values.</li>
+<li>I can implement PCA from scratch and explain the variance and reconstruction views.</li>
+<li>I can arrange, normalise and reduce population data and plot neural trajectories.</li>
+<li>I can compute participation ratios, cross-validated spectra and power-law exponents.</li>
+<li>I can choose a number of components by cross-validation and use it to decode single trials.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part D: what would you need to see before believing that a single principal component encodes reach speed? Then describe the dataset you would analyse with this week's tools and the result that would surprise you." />

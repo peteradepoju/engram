@@ -1,0 +1,292 @@
+export const meta = {
+  title: "Forge: Week 6 challenge, quiz and deep read",
+  intro: "This week eigenvalues turned out to govern everything a linear circuit does: whether it settles, oscillates or explodes, which patterns it amplifies and how long it remembers. Today's challenge puts that to work on three circuits: a map of where an excitatory-inhibitory circuit oscillates, a 40-neuron integrator you tune into a line attractor, and a random network whose eigenvalues fill a disc.",
+  goals: [
+    "Map the stability of an E-I circuit across its parameters",
+    "Tune a large network into a line attractor and predict its drift",
+    "Predict the stability of random networks from the circular law",
+    "Critique the line-attractor model of the oculomotor integrator",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "seung-1996",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. The eigenvalues of $\begin{pmatrix} 3 & 1 \\ 0 & 2 \end{pmatrix}$?
+2. The eigenvalues of $\begin{pmatrix} 0 & -2 \\ 2 & 0 \end{pmatrix}$?
+3. A mode of $\tau\dot{\mathbf{x}} = -\mathbf{x} + W\mathbf{x}$ with $\tau = 20$ ms and $\lambda = 0.8$ has what time constant?
+
+<PyCell code={String.raw`
+  import numpy as np
+  print("1.", np.linalg.eigvals(np.array([[3.0, 1.0], [0.0, 2.0]])))
+  print("2.", np.linalg.eigvals(np.array([[0.0, -2.0], [2.0, 0.0]])))
+  print("3.", 20 / (1 - 0.8), "ms")
+`} />
+
+<Step n={2} title="Weekly challenge: three circuits" minutes={60} />
+
+<PyCell id="partA" title="Part A: where does an E-I circuit oscillate?" tests={String.raw`
+  import numpy as np
+  def test_shapes():
+      "max_re and is_complex are 41 by 41 (rows: w_EI, columns: w_EE)"
+      assert max_re.shape == (41, 41) and is_complex.shape == (41, 41)
+
+  def test_values():
+      "entries match the eigenvalues of J at sample points"
+      for i, j in [(0, 0), (10, 30), (40, 5), (25, 25)]:
+          lam = np.linalg.eigvals(J_ei(wEE[j], wEI[i]))
+          assert np.isclose(max_re[i, j], lam.real.max())
+          assert is_complex[i, j] == bool(np.abs(lam.imag).max() > 1e-12)
+
+  def test_regions():
+      "the map contains stable oscillation, stable non-oscillation and instability"
+      stable = max_re < 0
+      assert np.any(stable & is_complex) and np.any(stable & ~is_complex) and np.any(~stable)
+`} prompt="For the linearised E-I circuit $J = \begin{pmatrix} w_{EE} - 1 & -w_{EI} \\ w_{IE} & -1 - w_{II} \end{pmatrix}$ with $w_{IE} = 2$ and $w_{II} = 0.5$, fill `max_re[i, j]` with the largest real part of the eigenvalues at $w_{EI}$ = `wEI[i]` and $w_{EE}$ = `wEE[j]`, and `is_complex[i, j]` with whether they are complex. Then describe the three regions in the map."
+code={String.raw`
+  import matplotlib.pyplot as plt
+  def J_ei(wEE, wEI, wIE=2.0, wII=0.5):
+      return np.array([[wEE - 1, -wEI], [wIE, -1 - wII]])
+
+  wEE = np.linspace(0, 4, 41)
+  wEI = np.linspace(0, 4, 41)
+  max_re = np.zeros((41, 41))
+  is_complex = np.zeros((41, 41), dtype=bool)
+  for i in range(41):
+      for j in range(41):
+          ...
+
+  fig, ax = plt.subplots(figsize=(5, 4))
+  ax.imshow(np.where(max_re < 0, np.where(is_complex, 1, 0), 2), origin="lower", extent=[0, 4, 0, 4], cmap="viridis", aspect="auto")
+  ax.contour(wEE, wEI, max_re, levels=[0], colors="w")
+  ax.set_xlabel("recurrent excitation w_EE"); ax.set_ylabel("inhibition onto E, w_EI"); plt.show()
+  print("stable and oscillating:", np.mean((max_re < 0) & is_complex).round(2), " unstable:", np.mean(max_re >= 0).round(2))
+`}
+hint="Inside the loop: lam = np.linalg.eigvals(J_ei(wEE[j], wEI[i])); max_re[i, j] = lam.real.max(); is_complex[i, j] = np.abs(lam.imag).max() > 1e-12."
+solution={String.raw`
+  import matplotlib.pyplot as plt
+  def J_ei(wEE, wEI, wIE=2.0, wII=0.5):
+      return np.array([[wEE - 1, -wEI], [wIE, -1 - wII]])
+
+  wEE = np.linspace(0, 4, 41)
+  wEI = np.linspace(0, 4, 41)
+  max_re = np.zeros((41, 41))
+  is_complex = np.zeros((41, 41), dtype=bool)
+  for i in range(41):
+      for j in range(41):
+          lam = np.linalg.eigvals(J_ei(wEE[j], wEI[i]))
+          max_re[i, j] = lam.real.max()
+          is_complex[i, j] = np.abs(lam.imag).max() > 1e-12
+
+  fig, ax = plt.subplots(figsize=(5, 4))
+  ax.imshow(np.where(max_re < 0, np.where(is_complex, 1, 0), 2), origin="lower", extent=[0, 4, 0, 4], cmap="viridis", aspect="auto")
+  ax.contour(wEE, wEI, max_re, levels=[0], colors="w")
+  ax.set_xlabel("recurrent excitation w_EE"); ax.set_ylabel("inhibition onto E, w_EI"); plt.show()
+  print("stable and oscillating:", np.mean((max_re < 0) & is_complex).round(2), " unstable:", np.mean(max_re >= 0).round(2))
+`} />
+
+Weak excitation gives a quiet circuit. Adding inhibition onto the excitatory pool turns the decay into a damped oscillation, since the loop E to I to E acts like a spring. Strong recurrent excitation pushes the trace above zero and the circuit runs away, unless inhibition is strong enough to hold it.
+
+**Part B: a 40-neuron integrator.** Run the next cell to build a network of 40 neurons with a strong shared excitatory pattern plus random symmetric connections.
+
+<PyCell code={String.raw`
+  rng = np.random.default_rng(1996)
+  N = 40
+  m = rng.uniform(0.5, 1.5, N)
+  R = rng.normal(size=(N, N))
+  W0 = 0.9 * np.outer(m, m) / (m @ m) + 0.15 * (R + R.T) / np.sqrt(2 * N)
+  tau, dt = 0.1, 0.001
+
+  def run(W, x0, n_steps, readout):
+      """Euler simulation; returns the readout (dot product with a vector) at each step."""
+      x = x0.copy(); out = [readout @ x]
+      for _ in range(n_steps):
+          x = x + dt / tau * (-x + W @ x)
+          out.append(readout @ x)
+      return np.array(out)
+  print("symmetric:", np.allclose(W0, W0.T))
+`} />
+
+<PyCell id="partB" title="Part B: tune it into a line attractor" tests={String.raw`
+  import numpy as np
+  def test_top():
+      "lam1 and v1 are the top eigenvalue and unit eigenvector of W0, with v1 summing to a positive number"
+      assert np.isclose(lam1, np.linalg.eigvalsh(W0).max())
+      assert np.allclose(W0 @ v1, lam1 * v1) and v1.sum() > 0 and np.isclose(np.linalg.norm(v1), 1)
+
+  def test_tuned():
+      "W_tuned has top eigenvalue exactly 1 and holds activity along v1"
+      assert np.isclose(np.linalg.eigvalsh(W_tuned).max(), 1)
+      assert np.allclose(held, held[0], rtol=1e-6)
+
+  def test_drift():
+      "the measured time constant of the mistuned network matches the prediction within 5%"
+      assert np.isclose(tau_pred, tau / (1 - 0.98))
+      assert abs(tau_meas - tau_pred) / tau_pred < 0.05, f"measured {tau_meas:.2f} s"
+`} prompt="Find the top eigenvalue `lam1` and eigenvector `v1` of `W0` (flip `v1`'s sign if needed so it sums to a positive number). Scale the weights to make `W_tuned` with top eigenvalue exactly 1, and check that activity along `v1` is held: `held` is the readout over 2 s from a noisy start. Then mistune by 2% (`0.98 * W_tuned`), start exactly on `v1`, and estimate the time constant `tau_meas` from the slope of the log readout between 0.5 s and 3 s. Compare it with `tau_pred`."
+code={String.raw`
+  lams, Q = np.linalg.eigh(W0)
+  lam1, v1 = ..., ...
+  v1 = v1 * np.sign(v1.sum())
+  W_tuned = ...
+
+  held = run(W_tuned, v1 + 0.3 * rng.normal(size=N), 2000, v1)
+
+  decay = run(0.98 * W_tuned, v1, 3000, v1)
+  t = np.arange(3001) * dt
+  slope = ...                                 # fit log(decay) against t for t from 0.5 s on
+  tau_meas = ...
+  tau_pred = ...
+
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(lams, "o", ms=3); ax[0].axhline(1, ls="--", color="0.5"); ax[0].set_title("eigenvalues of W0"); ax[0].set_xlabel("index")
+  ax[1].plot(t[:2001], held, label="tuned"); ax[1].plot(t, decay, label="mistuned by 2%")
+  ax[1].set_xlabel("time (s)"); ax[1].set_ylabel("activity along v1"); ax[1].legend(frameon=False)
+  plt.tight_layout(); plt.show()
+  print(f"top eigenvalue {lam1:.3f}; predicted {tau_pred:.2f} s, measured {tau_meas:.2f} s")
+`}
+hint="eigh sorts ascending, so lam1, v1 = lams[-1], Q[:, -1]. W_tuned = W0 / lam1. slope = np.polyfit(t[500:], np.log(decay[500:]), 1)[0]; tau_meas = -1 / slope; tau_pred = tau / (1 - 0.98)."
+solution={String.raw`
+  lams, Q = np.linalg.eigh(W0)
+  lam1, v1 = lams[-1], Q[:, -1]
+  v1 = v1 * np.sign(v1.sum())
+  W_tuned = W0 / lam1
+
+  held = run(W_tuned, v1 + 0.3 * rng.normal(size=N), 2000, v1)
+
+  decay = run(0.98 * W_tuned, v1, 3000, v1)
+  t = np.arange(3001) * dt
+  slope = np.polyfit(t[500:], np.log(decay[500:]), 1)[0]
+  tau_meas = -1 / slope
+  tau_pred = tau / (1 - 0.98)
+
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(lams, "o", ms=3); ax[0].axhline(1, ls="--", color="0.5"); ax[0].set_title("eigenvalues of W0"); ax[0].set_xlabel("index")
+  ax[1].plot(t[:2001], held, label="tuned"); ax[1].plot(t, decay, label="mistuned by 2%")
+  ax[1].set_xlabel("time (s)"); ax[1].set_ylabel("activity along v1"); ax[1].legend(frameon=False)
+  plt.tight_layout(); plt.show()
+  print(f"top eigenvalue {lam1:.3f}; predicted {tau_pred:.2f} s, measured {tau_meas:.2f} s")
+`} />
+
+One eigenvalue sits apart from the rest. Tuning it to 1 makes the network hold activity along its eigenvector indefinitely, whatever noise is added along other directions, because those directions all have eigenvalues well below 1 and decay within a few hundred milliseconds. Mistune by 2% and the measured drift matches $\tau/(1 - \lambda)$ to the second decimal place: in 40 dimensions, as in 2, eigenvalues tell the whole story for a symmetric network.
+
+<PyCell id="partC" title="Part C: random networks and the circular law" tests={String.raw`
+  import numpy as np
+  def test_radius():
+      "radius[g] is the largest |eigenvalue| of g J for each g, close to g itself"
+      for g in gains:
+          assert np.isclose(radius[g], np.abs(np.linalg.eigvals(g * J)).max())
+          assert abs(radius[g] - g) / g < 0.1
+
+  def test_stable():
+      "stable[g] says whether every eigenvalue of g J has real part below 1"
+      assert stable[0.5] and stable[0.9] and not stable[1.2]
+`} prompt="`J` is a 300 by 300 matrix of independent random weights with variance 1/N. For each gain g in `gains`, compute the eigenvalues of `g * J`, store the largest absolute value in `radius[g]` and whether the rate network $\tau\dot{\mathbf{x}} = -\mathbf{x} + gJ\mathbf{x}$ is stable in `stable[g]`. Plot the eigenvalues in the complex plane."
+code={String.raw`
+  rng = np.random.default_rng(2006)
+  Nr = 300
+  J = rng.normal(size=(Nr, Nr)) / np.sqrt(Nr)
+  gains = [0.5, 0.9, 1.2]
+  radius, stable = {}, {}
+  fig, ax = plt.subplots(figsize=(4.5, 4.5))
+  for g in gains:
+      lam = ...
+      radius[g] = ...
+      stable[g] = ...
+      ax.plot(lam.real, lam.imag, ".", ms=3, label=f"g = {g}")
+  ax.axvline(1, color="r", ls="--", lw=1); ax.set_aspect("equal"); ax.set_xlabel("Re λ"); ax.set_ylabel("Im λ"); ax.legend(frameon=False)
+  plt.show()
+  print({g: round(radius[g], 3) for g in gains}, stable)
+`}
+hint="lam = np.linalg.eigvals(g * J); radius[g] = np.abs(lam).max(); stable[g] = bool(lam.real.max() < 1)."
+solution={String.raw`
+  rng = np.random.default_rng(2006)
+  Nr = 300
+  J = rng.normal(size=(Nr, Nr)) / np.sqrt(Nr)
+  gains = [0.5, 0.9, 1.2]
+  radius, stable = {}, {}
+  fig, ax = plt.subplots(figsize=(4.5, 4.5))
+  for g in gains:
+      lam = np.linalg.eigvals(g * J)
+      radius[g] = np.abs(lam).max()
+      stable[g] = bool(lam.real.max() < 1)
+      ax.plot(lam.real, lam.imag, ".", ms=3, label=f"g = {g}")
+  ax.axvline(1, color="r", ls="--", lw=1); ax.set_aspect("equal"); ax.set_xlabel("Re λ"); ax.set_ylabel("Im λ"); ax.legend(frameon=False)
+  plt.show()
+  print({g: round(radius[g], 3) for g in gains}, stable)
+`} />
+
+The eigenvalues of a large random matrix with independent entries of variance $g^2/N$ fill a disc of radius $g$ almost uniformly: the **circular law**. So the linear network loses stability exactly when the gain passes 1 and the disc crosses the red line. With a nonlinearity added, the same transition at $g = 1$ separates quiet networks from chaotic ones (Sompolinsky, Crisanti and Sommers, 1988, Week 107), and the edge of chaos is where reservoir computers work best. Rajan and Abbott (2006) worked out how the disc changes when excitatory and inhibitory neurons have different weight statistics.
+
+**Part D (in your journal).** In Part B the network holds whatever pattern lies along `v1`. Real oculomotor neurons each have their own threshold and slope relating firing to eye position. What would have to change in the model to capture that, and would it still be a line attractor?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The Rayleigh quotient" task="For symmetric $A$ with eigenvalues $\lambda_1 \geq \dots \geq \lambda_n$, show that $\lambda_n \leq \mathbf{u}^\top A\mathbf{u} \leq \lambda_1$ for every unit vector $\mathbf{u}$, with equality at the top and bottom eigenvectors.">
+
+Write $\mathbf{u}$ in the orthonormal eigenvector basis: $\mathbf{u} = \sum_i c_i\mathbf{q}_i$ with $\sum_i c_i^2 = \lVert\mathbf{u}\rVert^2 = 1$.
+
+Then $A\mathbf{u} = \sum_i c_i\lambda_i\mathbf{q}_i$ and, because the $\mathbf{q}_i$ are orthonormal, $\mathbf{u}^\top A\mathbf{u} = \sum_i \lambda_i c_i^2$.
+
+This is a weighted average of the eigenvalues with weights $c_i^2$ that sum to 1, so it lies between the smallest and largest eigenvalue. It equals $\lambda_1$ when all the weight is on $\mathbf{q}_1$ and $\lambda_n$ when it is all on $\mathbf{q}_n$. Next week this becomes the main argument for PCA.
+
+</Prove>
+
+<Prove title="2. Orthogonal matrices preserve memories" task="Show that every eigenvalue of an orthogonal matrix $Q$ ($Q^\top Q = I$) has $|\lambda| = 1$. Why do some recurrent neural networks initialise their recurrent weights as orthogonal matrices?">
+
+Let $Q\mathbf{v} = \lambda\mathbf{v}$ (allowing complex $\mathbf{v}$ and $\lambda$). Orthogonal matrices preserve length: $\lVert Q\mathbf{v}\rVert^2 = \mathbf{v}^* Q^\top Q\mathbf{v} = \lVert\mathbf{v}\rVert^2$, where $^*$ is the conjugate transpose. But $\lVert Q\mathbf{v}\rVert = |\lambda|\,\lVert\mathbf{v}\rVert$, so $|\lambda| = 1$.
+
+In a discrete-time network $\mathbf{x}_{t+1} = Q\mathbf{x}_t$, every mode neither grows nor shrinks, so information is carried forward without loss for many steps, and gradients flowing backwards through time do not explode or vanish. That is why orthogonal and identity initialisations help recurrent networks learn long dependencies (Week 86).
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 6 quiz (15 questions)" questions={[
+  { q: "An eigenvector of A is a nonzero vector that A...", options: ["Rotates by 90°", "Maps onto its own line", "Sends to zero always", "Reflects"], answer: 1, explain: "$A\\mathbf{v} = \\lambda\\mathbf{v}$." },
+  { q: "If $A\\mathbf{v} = 3\\mathbf{v}$, then $(A - I)\\mathbf{v}$ equals...", options: ["$3\\mathbf{v}$", "$2\\mathbf{v}$", "$\\mathbf{0}$", "$4\\mathbf{v}$"], answer: 1, explain: "Shifting by I shifts λ by 1." },
+  { q: "Repeated multiplication by W makes almost any activity pattern line up with...", options: ["The smallest eigenvector", "The eigenvector with the largest |λ|", "The first neuron", "Nothing in particular"], answer: 1, explain: "The power method." },
+  { q: "Eigenvalues are the roots of...", options: ["$\\det(A - \\lambda I)$", "$\\operatorname{tr}(A) - \\lambda$", "$A - \\lambda$", "$\\det(A) - \\lambda$"], answer: 0, explain: "The characteristic polynomial." },
+  { q: "A 2 by 2 matrix has trace 5 and determinant 6. Its eigenvalues are...", options: ["2 and 3", "1 and 6", "5 and 6", "−2 and −3"], answer: 0, explain: "Sum 5, product 6." },
+  { q: "Complex eigenvalues of a real 2 by 2 matrix mean...", options: ["It is singular", "It includes a rotation", "It is symmetric", "It is diagonal"], answer: 1, explain: "No real direction is preserved." },
+  { q: "$A = V\\Lambda V^{-1}$ requires...", options: ["A symmetric", "n independent eigenvectors", "A invertible", "Real eigenvalues"], answer: 1, explain: "To build an invertible V." },
+  { q: "$A^{50}$ is cheapest to compute as...", options: ["50 multiplications", "$V\\Lambda^{50}V^{-1}$", "$50A$", "$A^{-50}$"], answer: 1, explain: "Powers of a diagonal matrix are easy." },
+  { q: "A non-normal matrix with stable eigenvalues can...", options: ["Never amplify", "Amplify transiently", "Only oscillate", "Only grow"], answer: 1, explain: "Balanced amplification." },
+  { q: "$\\tau\\dot{\\mathbf{x}} = -\\mathbf{x} + W\\mathbf{x}$ is stable when the eigenvalues of W have...", options: ["Real part below 1", "Real part below 0", "Magnitude above 1", "Zero imaginary part"], answer: 0, explain: "W − I must have negative real parts." },
+  { q: "τ = 50 ms and λ = 0.95 give an effective time constant of...", options: ["52.6 ms", "1 s", "47.5 ms", "950 ms"], answer: 1, explain: "$50/0.05 = 1000$ ms." },
+  { q: "The oculomotor integrator is modelled as...", options: ["A saddle", "A line attractor with an eigenvalue of 1", "A chaotic network", "A feedforward chain only"], answer: 1, explain: "Seung (1996)." },
+  { q: "Eigenvectors of a symmetric matrix with different eigenvalues are...", options: ["Parallel", "Orthogonal", "Complex", "Equal"], answer: 1, explain: "The spectral theorem." },
+  { q: "The variance of data along unit vector u is largest when u is...", options: ["The top eigenvector of the covariance", "Any axis", "The mean", "The bottom eigenvector"], answer: 0, explain: "Rayleigh quotient." },
+  { q: "A random N by N matrix with entries of variance $g^2/N$ has eigenvalues filling...", options: ["A line", "A disc of radius g", "The unit square", "Only the real axis"], answer: 1, explain: "The circular law." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Seung (1996) its third pass and write your critique under the five headings. Focus on one question: **is the fine-tuning required by a line attractor a fatal flaw or a prediction?** Later work tested the idea directly: in the goldfish, Aksay and colleagues (2007) showed that inactivating part of the integrator on one side makes eye position drift, as a mistuned eigenvalue predicts. Other models reduce the need for tuning with bistable cells or synaptic mechanisms. Decide what evidence you would want before accepting the model.
+
+<Callout kind="research">
+Whether the brain relies on finely tuned continuous attractors, or on something more robust that looks like one, is still debated for working memory and navigation (Weeks 108 and 109). Write down one experiment, in any species, that could tell the two apart.
+</Callout>
+
+<Key title="Week 6 review checklist">
+<ul>
+<li>I can test whether a vector is an eigenvector, and find eigenvalues with NumPy and by hand.</li>
+<li>I can use the trace and determinant to classify a 2 by 2 linear system.</li>
+<li>I can diagonalise a matrix, compute its powers and read off each mode's lifetime.</li>
+<li>I can explain transient amplification in non-normal circuits.</li>
+<li>I can solve $\tau\dot{\mathbf{x}} = -\mathbf{x} + W\mathbf{x}$ with eigenvectors and state its stability condition.</li>
+<li>I can build and tune a line-attractor integrator and predict its drift.</li>
+<li>I can prove that symmetric matrices have orthogonal eigenvectors and use covariance eigenvectors as data axes.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part D: how would you extend the integrator model so each neuron has its own threshold and slope, and would it still be a line attractor? Then write the experiment you proposed for telling a tuned attractor from a robust mechanism." />

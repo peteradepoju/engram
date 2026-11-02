@@ -1,0 +1,271 @@
+export const meta = {
+  title: "Finding eigenvalues: the characteristic polynomial, trace and determinant",
+  intro: "Yesterday NumPy found the eigenvalues for you. Today you find them by hand. An eigenvector is a nonzero vector that a shifted matrix flattens to zero, so the shifted matrix must have determinant zero: that single condition gives a polynomial whose roots are the eigenvalues. For 2 by 2 matrices it reduces to two numbers you can read off at a glance, the trace and the determinant, and they are enough to say whether a circuit of excitatory and inhibitory neurons is stable or oscillates.",
+  goals: [
+    "Derive the characteristic equation from the eigen equation",
+    "Compute 2 by 2 eigenvalues from the trace and determinant",
+    "Explain when eigenvalues are complex and what that means",
+    "Classify the behaviour of a linearised E-I circuit from its matrix",
+  ],
+  plan: [
+    { label: "Predict and the characteristic equation", minutes: 25 },
+    { label: "Trace and determinant", minutes: 25 },
+    { label: "Complex eigenvalues", minutes: 20 },
+    { label: "An excitatory-inhibitory circuit", minutes: 35 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "wilson-1972",
+};
+
+<Predict question="A circuit of excitatory and inhibitory neurons has a linearised matrix with trace −0.4 and determinant 2. Without computing anything else, will a small disturbance die away smoothly, die away while oscillating, or grow?" />
+
+<Step n={1} title="The characteristic equation" minutes={25} />
+
+<Derivation title="Where eigenvalues come from">
+  <div>
+
+Rewrite $A\mathbf{v} = \lambda\mathbf{v}$ as $A\mathbf{v} - \lambda I\mathbf{v} = \mathbf{0}$, that is
+
+$$
+(A - \lambda I)\,\mathbf{v} = \mathbf{0}
+$$
+
+  </div>
+  <div>
+
+We want a **nonzero** $\mathbf{v}$ that $A - \lambda I$ sends to zero. An invertible matrix only sends $\mathbf{0}$ to $\mathbf{0}$, so $A - \lambda I$ must be singular (Week 5).
+
+  </div>
+  <div>
+
+A matrix is singular exactly when its determinant is zero. So the eigenvalues are the solutions of the **characteristic equation**
+
+$$
+\det(A - \lambda I) = 0
+$$
+
+  </div>
+  <div>
+
+For an $n \times n$ matrix, $\det(A - \lambda I)$ is a polynomial of degree $n$ in $\lambda$, the **characteristic polynomial**. It has exactly $n$ roots, counted with multiplicity, some possibly complex. Once you know an eigenvalue, the eigenvectors are the nonzero solutions of $(A - \lambda I)\mathbf{v} = \mathbf{0}$.
+
+  </div>
+</Derivation>
+
+For $A = \begin{pmatrix} 2 & 1 \\ 1 & 2 \end{pmatrix}$: $\det\begin{pmatrix} 2 - \lambda & 1 \\ 1 & 2 - \lambda \end{pmatrix} = (2 - \lambda)^2 - 1 = \lambda^2 - 4\lambda + 3 = (\lambda - 3)(\lambda - 1)$. The eigenvalues are 3 and 1, as you found yesterday. For $\lambda = 3$, $(A - 3I)\mathbf{v} = \mathbf{0}$ reads $-v_1 + v_2 = 0$, so $\mathbf{v} = (1, 1)$.
+
+<Step n={2} title="Trace and determinant" minutes={25} />
+
+For a general 2 by 2 matrix $A = \begin{pmatrix} a & b \\ c & d \end{pmatrix}$,
+
+$$
+\det(A - \lambda I) = (a - \lambda)(d - \lambda) - bc = \lambda^2 - (a + d)\lambda + (ad - bc)
+$$
+
+The middle coefficient is the **trace** $\tau = a + d$ (the sum of the diagonal) and the last is the **determinant** $\Delta = ad - bc$. The quadratic formula gives
+
+$$
+\lambda_{1,2} = \frac{\tau}{2} \pm \sqrt{\frac{\tau^2}{4} - \Delta}
+$$
+
+<Figure caption="The characteristic polynomial of a 2 by 2 matrix. Its roots, where it crosses zero, are the eigenvalues." credit="Interactive figure by Engram.">
+  <CharPoly />
+</Figure>
+
+<Prove title="Trace is the sum, determinant the product" task="Show that for any 2 by 2 matrix, $\lambda_1 + \lambda_2 = \tau$ and $\lambda_1\lambda_2 = \Delta$.">
+
+A monic quadratic with roots $\lambda_1$ and $\lambda_2$ factorises as $(\lambda - \lambda_1)(\lambda - \lambda_2) = \lambda^2 - (\lambda_1 + \lambda_2)\lambda + \lambda_1\lambda_2$.
+
+Compare coefficients with $\lambda^2 - \tau\lambda + \Delta$: the sum of the roots is $\tau$ and the product is $\Delta$. The same holds for $n \times n$ matrices: the trace is the sum of all $n$ eigenvalues and the determinant is their product. So a matrix is singular exactly when one of its eigenvalues is zero, linking today to Week 5.
+
+</Prove>
+
+<PyCell id="eig2" title="Eigenvalues from trace and determinant" tests={String.raw`
+  import numpy as np
+  def key(z):
+      return (round(z.real, 8), round(z.imag, 8))
+
+  def test_real():
+      "matches NumPy for real eigenvalues"
+      for A in [np.array([[2.0, 1.0], [1.0, 2.0]]), np.array([[1.0, 2.0], [3.0, -4.0]])]:
+          got = sorted(eig2(A), key=key); want = sorted(np.linalg.eigvals(A).astype(complex), key=key)
+          assert np.allclose(got, want)
+
+  def test_complex():
+      "matches NumPy when the eigenvalues are complex"
+      A = np.array([[0.0, -1.0], [1.0, 0.0]])
+      got = sorted(eig2(A), key=key)
+      assert np.allclose(got, [-1j, 1j])
+      B = np.array([[-0.2, -1.5], [1.5, -0.2]])
+      assert np.allclose(sorted(eig2(B), key=key), sorted(np.linalg.eigvals(B), key=key))
+`} prompt="Write `eig2(A)` that returns the two eigenvalues of a 2 by 2 matrix using only the trace and determinant and the formula above. Use `np.lib.scimath.sqrt`, which returns a complex number for a negative argument instead of `nan`. Return them as a tuple (largest real part first)."
+code={String.raw`
+  import numpy as np
+  def eig2(A):
+      tr = ...
+      det = ...
+      root = np.lib.scimath.sqrt(...)
+      return ...
+
+  print(eig2(np.array([[2.0, 1.0], [1.0, 2.0]])), eig2(np.array([[0.0, -1.0], [1.0, 0.0]])))
+`}
+hint="tr = A[0, 0] + A[1, 1] (or np.trace(A)); det = A[0, 0] * A[1, 1] - A[0, 1] * A[1, 0]; root = np.lib.scimath.sqrt(tr ** 2 / 4 - det); return tr / 2 + root, tr / 2 - root."
+solution={String.raw`
+  import numpy as np
+  def eig2(A):
+      tr = np.trace(A)
+      det = A[0, 0] * A[1, 1] - A[0, 1] * A[1, 0]
+      root = np.lib.scimath.sqrt(tr ** 2 / 4 - det)
+      return tr / 2 + root, tr / 2 - root
+
+  print(eig2(np.array([[2.0, 1.0], [1.0, 2.0]])), eig2(np.array([[0.0, -1.0], [1.0, 0.0]])))
+`} />
+
+<PyCell code={String.raw`
+  rng = np.random.default_rng(3)
+  M = rng.normal(size=(4, 4))
+  lam = np.linalg.eigvals(M)
+  print("trace:", np.trace(M).round(4), "  sum of eigenvalues:", lam.sum().round(4))
+  print("det:  ", np.linalg.det(M).round(4), "  product of eigenvalues:", np.prod(lam).round(4))
+  T = np.triu(M)
+  print("upper triangular matrix: eigenvalues", np.sort(np.linalg.eigvals(T).real).round(3), " diagonal", np.sort(np.diag(T)).round(3))
+`} />
+
+The last line shows a useful shortcut: a **triangular** matrix has its eigenvalues on the diagonal, because $\det(T - \lambda I)$ is the product of the diagonal entries $T_{ii} - \lambda$.
+
+<Video id="e50Bj7jn9IQ" title="A quick trick for computing eigenvalues | Chapter 15, Essence of linear algebra" by="3Blue1Brown (Grant Sanderson)" note="The mean of the eigenvalues is half the trace and their product is the determinant, so the eigenvalues are m ± √(m² − p)." />
+
+<Step n={3} title="Complex eigenvalues" minutes={20} />
+
+When $\tau^2/4 \lt \Delta$ the square root is of a negative number and the eigenvalues are a **complex conjugate pair**,
+
+$$
+\lambda = \alpha \pm i\omega, \qquad \alpha = \frac{\tau}{2}, \quad \omega = \sqrt{\Delta - \frac{\tau^2}{4}}
+$$
+
+There is then no real direction that the matrix maps onto its own line: every vector is turned. The real part $\alpha$ says whether things grow or shrink and the imaginary part $\omega$ says how fast they rotate. In a discrete map, $|\lambda| = \sqrt{\alpha^2 + \omega^2}$ is the stretch per step and the angle of $\lambda$ is the rotation per step. Rotations are the clearest case.
+
+<PyCell code={String.raw`
+  theta = np.radians(30)
+  for r in [0.9, 1.0]:
+      R = r * np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
+      lam = np.linalg.eigvals(R)
+      print(f"r = {r}: eigenvalues {lam.round(3)}, |λ| = {np.abs(lam).round(3)}, angle = {np.degrees(np.angle(lam)).round(1)} degrees")
+`} />
+
+A scaled rotation has eigenvalues $r e^{\pm i\theta}$: their size is the scaling and their angle is the rotation. On Day 4 the same numbers will describe neural oscillations.
+
+<Step n={4} title="An excitatory-inhibitory circuit" minutes={35} />
+
+Wilson and Cowan (1972), today's paper, described a local circuit with two numbers: the activity $E$ of an excitatory pool and $I$ of an inhibitory pool. Near a steady state, small deviations $\mathbf{x} = (\delta E, \delta I)$ obey a linear system $\frac{d\mathbf{x}}{dt} = J\mathbf{x}$, with
+
+$$
+J = \begin{pmatrix} w_{EE} - 1 & -w_{EI} \\ w_{IE} & -1 - w_{II} \end{pmatrix}
+$$
+
+in units where each pool's time constant is 1. The $-1$ terms are each pool's leak, $w_{EE}$ is recurrent excitation, $w_{EI}$ is inhibition onto the excitatory pool and $w_{IE}$ is excitation onto the inhibitory pool. On Day 4 you will show that for $\frac{d\mathbf{x}}{dt} = J\mathbf{x}$ a disturbance dies away when **both eigenvalues have negative real part**. For 2 by 2 matrices that is the same as $\tau \lt 0$ and $\Delta \gt 0$, and complex eigenvalues mean the decay or growth comes with **oscillation**.
+
+<PyCell id="classify" title="Classify a circuit from trace and determinant" tests={String.raw`
+  import numpy as np
+  def test_cases():
+      "labels the five basic behaviours"
+      assert classify(np.array([[-1.0, 0.0], [0.0, -2.0]])) == "stable node"
+      assert classify(np.array([[-0.2, -1.0], [1.0, -0.2]])) == "stable spiral"
+      assert classify(np.array([[0.2, -1.0], [1.0, 0.2]])) == "unstable spiral"
+      assert classify(np.array([[1.0, 0.0], [0.0, 2.0]])) == "unstable node"
+      assert classify(np.array([[1.0, 0.0], [0.0, -1.0]])) == "saddle"
+
+  def test_ei():
+      "the default E-I circuit oscillates as it settles, and strong excitation destabilises it"
+      assert classify(J_ei(1.5, 2.0, 2.0, 0.5)) == "stable spiral"
+      assert classify(J_ei(4.0, 0.5, 0.5, 0.0)) in ("unstable node", "saddle")
+`} prompt="Write `classify(J)` using only the trace τ and determinant Δ: a saddle if Δ is negative; otherwise stable if τ is negative and unstable if τ is positive; and a spiral if the eigenvalues are complex (τ²/4 less than Δ), a node if they are real. Return one of 'stable node', 'stable spiral', 'unstable node', 'unstable spiral', 'saddle'. Then write `J_ei(wEE, wEI, wIE, wII)` that builds the matrix above."
+code={String.raw`
+  def classify(J):
+      tr, det = np.trace(J), np.linalg.det(J)
+      ...
+
+  def J_ei(wEE, wEI, wIE, wII):
+      return ...
+
+  print(classify(J_ei(1.5, 2.0, 2.0, 0.5)), eig2(J_ei(1.5, 2.0, 2.0, 0.5)))
+`}
+hint="if det < 0: return 'saddle'. Then kind = 'spiral' if tr ** 2 / 4 < det else 'node', and return ('stable ' if tr < 0 else 'unstable ') + kind. J_ei returns np.array([[wEE - 1, -wEI], [wIE, -1 - wII]])."
+solution={String.raw`
+  def classify(J):
+      tr, det = np.trace(J), np.linalg.det(J)
+      if det < 0:
+          return "saddle"
+      kind = "spiral" if tr ** 2 / 4 < det else "node"
+      return ("stable " if tr < 0 else "unstable ") + kind
+
+  def J_ei(wEE, wEI, wIE, wII):
+      return np.array([[wEE - 1, -wEI], [wIE, -1 - wII]])
+
+  print(classify(J_ei(1.5, 2.0, 2.0, 0.5)), eig2(J_ei(1.5, 2.0, 2.0, 0.5)))
+`} />
+
+The default circuit has $\tau = 0.5 - 1.5 = -1$ and $\Delta = (0.5)(-1.5) + 4 = 3.25$: the trace is negative, the determinant positive and larger than $\tau^2/4 = 0.25$. A disturbance dies away while oscillating, as Wilson and Cowan found. The prediction's circuit (trace −0.4, determinant 2) behaves the same way. Now sweep recurrent excitation and watch the behaviour change.
+
+<PyCell code={String.raw`
+  import matplotlib.pyplot as plt
+  wEEs = np.linspace(0, 4, 81)
+  lams = np.array([eig2(J_ei(w, 2.0, 2.0, 0.5)) for w in wEEs])
+  labels = [classify(J_ei(w, 2.0, 2.0, 0.5)) for w in wEEs]
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(wEEs, lams[:, 0].real, label="real part"); ax[0].plot(wEEs, np.abs(lams[:, 0].imag), label="|imaginary part|")
+  ax[0].axhline(0, color="0.5", lw=0.8); ax[0].set_xlabel("recurrent excitation w_EE"); ax[0].legend(frameon=False)
+  ax[1].scatter(lams[:, 0].real, lams[:, 0].imag, c=wEEs, s=10); ax[1].scatter(lams[:, 1].real, lams[:, 1].imag, c=wEEs, s=10)
+  ax[1].axvline(0, color="0.5", lw=0.8); ax[1].set_xlabel("Re λ"); ax[1].set_ylabel("Im λ")
+  plt.tight_layout(); plt.show()
+  changes = [(round(wEEs[i], 2), labels[i]) for i in range(len(wEEs)) if i == 0 or labels[i] != labels[i - 1]]
+  print(changes)
+`} />
+
+As $w_{EE}$ grows the eigenvalues march to the right across the imaginary axis. At the crossing ($\tau = 0$, here $w_{EE} = 2.5$) the steady state loses stability and oscillations grow: in the full nonlinear model they settle into a sustained rhythm. This kind of crossing, a Hopf bifurcation, is one account of how cortical circuits generate gamma oscillations (Week 47).
+
+<Bridge title="Stability from two numbers"
+  neuro="Whether a local E-I circuit is quiet, oscillating or runaway can be judged from the trace and determinant of its linearisation. Inhibition that is strong enough and fast enough keeps the trace negative, the basis of inhibition-stabilised network models (Week 107)."
+  ai="Training recurrent networks is unstable when the eigenvalues of the recurrent weights drift outside the stable region, giving exploding gradients. Initialising recurrent weights with all eigenvalues near the edge of stability, such as orthogonal or identity matrices, helps networks remember for longer (Week 86).">
+
+Before simulating a circuit, compute its trace and determinant: they tell you what to expect.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Eigenvalues are the roots of...", options: ["$\\det(A) = 0$", "$\\det(A - \\lambda I) = 0$", "$A\\lambda = 0$", "$\\operatorname{tr}(A) = \\lambda$"], answer: 1, explain: "$A - \\lambda I$ must be singular." },
+  { q: "For $\\begin{pmatrix} 4 & 1 \\\\ 2 & 3 \\end{pmatrix}$, trace and determinant are...", options: ["7 and 10", "7 and 12", "12 and 7", "5 and 10"], answer: 0, explain: "$4 + 3 = 7$; $12 - 2 = 10$." },
+  { q: "So its eigenvalues are...", options: ["5 and 2", "7 and 0", "10 and 1", "3 and 4"], answer: 0, explain: "Sum 7, product 10." },
+  { q: "The eigenvalues are complex when...", options: ["$\\tau^2/4 \\gt \\Delta$", "$\\tau^2/4 \\lt \\Delta$", "$\\Delta \\lt 0$", "$\\tau = 0$"], answer: 1, explain: "The square root is of a negative number." },
+  { q: "A negative determinant (2 by 2) means...", options: ["Complex eigenvalues", "One positive and one negative eigenvalue: a saddle", "Both eigenvalues negative", "The matrix is singular"], answer: 1, explain: "The product of the eigenvalues is negative." },
+  { q: "The eigenvalues of an upper triangular matrix are...", options: ["Its diagonal entries", "Always zero", "Its first row", "Complex"], answer: 0, explain: "det(T − λI) is the product of $T_{ii} - \\lambda$." },
+  { q: "In the E-I circuit, increasing recurrent excitation past the critical point...", options: ["Makes it more stable", "Pushes the eigenvalues' real part above zero, so activity grows", "Removes the oscillation", "Makes the determinant negative always"], answer: 1, explain: "The trace becomes positive." },
+]} />
+
+<Flashcards cards={[
+  { front: "Characteristic equation?", back: "$\\det(A - \\lambda I) = 0$; its roots are the eigenvalues." },
+  { front: "2 by 2 eigenvalues from τ and Δ?", back: "$\\lambda = \\tau/2 \\pm \\sqrt{\\tau^2/4 - \\Delta}$." },
+  { front: "Trace and determinant in terms of eigenvalues?", back: "Trace is their sum; determinant is their product (any size)." },
+  { front: "Complex pair $\\alpha \\pm i\\omega$ means?", back: "Rotation (oscillation) at a rate set by ω, growth or decay set by α." },
+  { front: "Stability of $d\\mathbf{x}/dt = J\\mathbf{x}$ (2 by 2)?", back: "Stable if τ less than 0 and Δ greater than 0; a spiral if also $\\tau^2/4 \\lt \\Delta$; a saddle if Δ less than 0." },
+]} />
+
+<Predict revisit question="Trace −0.4, determinant 2: smooth decay, oscillating decay or growth?" />
+
+<Key title="Before you go">
+<ul>
+<li>Eigenvalues solve $\det(A - \lambda I) = 0$, a polynomial of degree n.</li>
+<li>For 2 by 2: $\lambda = \tau/2 \pm \sqrt{\tau^2/4 - \Delta}$; trace is the sum, determinant the product.</li>
+<li>Complex eigenvalues mean rotation, with size and angle giving growth and frequency.</li>
+<li>The trace and determinant of a linearised E-I circuit predict whether it settles, oscillates or runs away.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Wilson and Cowan (1972), <em>Excitatory and inhibitory interactions in localized populations of model neurons</em>.</li>
+<li>Steven Strogatz, <em>Nonlinear Dynamics and Chaos</em>, Chapter 5: linear systems and the trace-determinant classification.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Describe in words what each entry of the E-I matrix J does to a small disturbance, and predict which entry you would change to turn a quiet circuit into an oscillating one. Check your prediction with the classify function." />

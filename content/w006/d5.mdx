@@ -1,0 +1,306 @@
+export const meta = {
+  title: "Symmetric matrices: the spectral theorem, covariance and energy",
+  intro: "Some of the most important matrices in neuroscience are symmetric: covariance matrices of neural noise, connectivity in many classic network models, and the curvature of every loss function. Symmetric matrices are the best-behaved of all. Their eigenvalues are real, their eigenvectors are perpendicular, and they can always be diagonalised by a rotation. Today you prove this, use it to find the axes of correlated noise, and see why symmetric connections give a network an energy that can only go downhill.",
+  goals: [
+    "State the spectral theorem and prove that eigenvectors of a symmetric matrix are orthogonal",
+    "Compute a covariance matrix and read its eigenvectors as the axes of the data",
+    "Use the quadratic form to find the direction of greatest variance",
+    "Explain why symmetric connectivity gives a network an energy function",
+  ],
+  plan: [
+    { label: "Predict and the spectral theorem", minutes: 25 },
+    { label: "Covariance matrices", minutes: 30 },
+    { label: "Quadratic forms and the direction of greatest variance", minutes: 25 },
+    { label: "Energy in symmetric networks", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "hopfield-1982",
+};
+
+<Predict question="Two neurons have trial-to-trial noise with standard deviations 1.4 and 0.8 spikes and a correlation of 0.6. Is the direction in which their joint noise is largest exactly along neuron 1's axis, tilted towards the diagonal, or along the diagonal at 45 degrees?" />
+
+<Step n={1} title="The spectral theorem" minutes={25} />
+
+A matrix is **symmetric** if $A^\top = A$, that is $A_{ij} = A_{ji}$. The **spectral theorem** says that every real symmetric matrix can be written as
+
+$$
+A = Q\Lambda Q^\top
+$$
+
+where $\Lambda$ is diagonal with real eigenvalues and $Q$ is **orthogonal**: its columns are perpendicular unit eigenvectors, so $Q^\top Q = I$ and $Q^{-1} = Q^\top$. Compared with Day 3's $V\Lambda V^{-1}$, the change of basis is now a rotation (possibly with a reflection), so it preserves lengths and angles. No transient amplification, no defective cases.
+
+<Prove title="Eigenvectors of a symmetric matrix are orthogonal" task="Let $A = A^\top$, with $A\mathbf{v}_1 = \lambda_1\mathbf{v}_1$, $A\mathbf{v}_2 = \lambda_2\mathbf{v}_2$ and $\lambda_1 \neq \lambda_2$. Show that $\mathbf{v}_1 \cdot \mathbf{v}_2 = 0$.">
+
+Compute $\mathbf{v}_1^\top A\mathbf{v}_2$ in two ways.
+
+Using $A\mathbf{v}_2 = \lambda_2\mathbf{v}_2$: $\mathbf{v}_1^\top A\mathbf{v}_2 = \lambda_2\,\mathbf{v}_1^\top\mathbf{v}_2$.
+
+Using symmetry, $\mathbf{v}_1^\top A = (A^\top\mathbf{v}_1)^\top = (A\mathbf{v}_1)^\top = \lambda_1\mathbf{v}_1^\top$, so $\mathbf{v}_1^\top A\mathbf{v}_2 = \lambda_1\,\mathbf{v}_1^\top\mathbf{v}_2$.
+
+Subtract: $(\lambda_1 - \lambda_2)\,\mathbf{v}_1^\top\mathbf{v}_2 = 0$. Since $\lambda_1 \neq \lambda_2$, $\mathbf{v}_1 \cdot \mathbf{v}_2 = 0$. (When eigenvalues repeat, the eigenvectors can still be chosen orthogonal by Gram-Schmidt within their eigenspace, Week 4. A similar argument with complex numbers shows the eigenvalues are real.)
+
+</Prove>
+
+For symmetric matrices use `np.linalg.eigh` rather than `eig`: it is faster, guarantees real eigenvalues and orthonormal eigenvectors, and returns the eigenvalues in **ascending** order.
+
+<PyCell code={String.raw`
+  import numpy as np
+  A = np.array([[2.0, 1.0, 0.0],
+                [1.0, 3.0, 1.0],
+                [0.0, 1.0, 2.0]])
+  lam, Q = np.linalg.eigh(A)
+  print("eigenvalues:", lam.round(3))
+  print("Q^T Q =\n", (Q.T @ Q).round(10))
+  print("Q Λ Q^T equals A:", np.allclose(Q @ np.diag(lam) @ Q.T, A))
+`} />
+
+Writing $A = Q\Lambda Q^\top$ as a sum of columns gives a picture you will use all next week:
+
+$$
+A = \sum_i \lambda_i\,\mathbf{q}_i\mathbf{q}_i^\top
+$$
+
+Each term $\mathbf{q}_i\mathbf{q}_i^\top$ is the projection onto one eigenvector (Week 4). A symmetric matrix is a weighted sum of perpendicular projections.
+
+<Video id="UCc9q_cAhho" title="Lecture 25: Symmetric matrices and positive definiteness (MIT 18.06 Linear Algebra)" by="Gilbert Strang, MIT OpenCourseWare" note="Why symmetric matrices have real eigenvalues and orthogonal eigenvectors, and what positive definite means." />
+
+<Step n={2} title="Covariance matrices" minutes={30} />
+
+Record $n$ neurons over $T$ trials of the same stimulus and stack the responses in a $T \times n$ matrix $X$. Subtract each neuron's mean to get $X_c$. The **covariance matrix**
+
+$$
+\Sigma = \frac{1}{T - 1}X_c^\top X_c
+$$
+
+is $n \times n$, with each neuron's variance on the diagonal and the covariance of neurons $i$ and $j$ in entry $(i, j)$. It is symmetric because $\Sigma_{ij}$ and $\Sigma_{ji}$ are the same sum. Shared fluctuations between neurons on repeated trials are called **noise correlations**, and they matter for how much information a population carries (Week 119).
+
+<Figure caption="Two neurons' trial-to-trial noise. The ellipse and its axes come from the eigenvalues and eigenvectors of the covariance matrix." credit="Interactive figure by Engram.">
+  <CovEllipse />
+</Figure>
+
+<PyCell id="cov" title="Covariance and its eigenvectors" tests={String.raw`
+  import numpy as np
+  def test_cov():
+      "Sigma matches np.cov"
+      assert np.allclose(Sigma, np.cov(X, rowvar=False))
+
+  def test_eig():
+      "evals are sorted largest first and evecs has matching unit columns"
+      assert np.all(np.diff(evals) <= 1e-12)
+      assert np.allclose(Sigma @ evecs, evecs * evals)
+      assert np.allclose(evecs.T @ evecs, np.eye(2))
+
+  def test_angle():
+      "angle_deg is the direction of the top eigenvector, between 0 and 180 degrees"
+      v = evecs[:, 0]
+      assert 0 <= angle_deg < 180
+      assert np.isclose(np.degrees(np.arctan2(v[1], v[0])) % 180, angle_deg)
+`} prompt="`X` holds 500 trials of noise from two neurons. Compute `Sigma` from the centred data with the formula above (not `np.cov`), then its eigenvalues `evals` and eigenvectors `evecs` sorted largest first with `eigh`. Store the direction of the top eigenvector in degrees, between 0 and 180, in `angle_deg`."
+code={String.raw`
+  rng = np.random.default_rng(1)
+  s1, s2, rho = 1.4, 0.8, 0.6
+  C = np.array([[s1 ** 2, rho * s1 * s2], [rho * s1 * s2, s2 ** 2]])
+  X = rng.multivariate_normal([20, 12], C, size=500)     # 500 trials, spike counts of two neurons
+
+  Xc = ...
+  Sigma = ...
+  evals, evecs = np.linalg.eigh(Sigma)
+  evals, evecs = ...                                     # largest first
+  angle_deg = ...
+  print(Sigma.round(3)); print("eigenvalues", evals.round(3), " long axis at", round(angle_deg, 1), "degrees")
+`}
+hint="Xc = X - X.mean(axis=0); Sigma = Xc.T @ Xc / (len(X) - 1). Reverse both: evals[::-1], evecs[:, ::-1]. angle_deg = np.degrees(np.arctan2(evecs[1, 0], evecs[0, 0])) % 180."
+solution={String.raw`
+  rng = np.random.default_rng(1)
+  s1, s2, rho = 1.4, 0.8, 0.6
+  C = np.array([[s1 ** 2, rho * s1 * s2], [rho * s1 * s2, s2 ** 2]])
+  X = rng.multivariate_normal([20, 12], C, size=500)     # 500 trials, spike counts of two neurons
+
+  Xc = X - X.mean(axis=0)
+  Sigma = Xc.T @ Xc / (len(X) - 1)
+  evals, evecs = np.linalg.eigh(Sigma)
+  evals, evecs = evals[::-1], evecs[:, ::-1]             # largest first
+  angle_deg = np.degrees(np.arctan2(evecs[1, 0], evecs[0, 0])) % 180
+  print(Sigma.round(3)); print("eigenvalues", evals.round(3), " long axis at", round(angle_deg, 1), "degrees")
+`} />
+
+The long axis is tilted towards the diagonal, at about 25 degrees: the correlation pulls it off neuron 1's axis, but neuron 1's larger variance keeps it well short of 45 degrees. That answers the prediction. (It sits at exactly 45 degrees only when the two variances are equal.)
+
+<Step n={3} title="Quadratic forms and the direction of greatest variance" minutes={25} />
+
+Project the noise onto a unit vector $\mathbf{u}$: each trial gives the number $\mathbf{u}^\top\mathbf{x}_c$. The variance of these projections is
+
+$$
+\operatorname{Var}(\mathbf{u}^\top\mathbf{x}) = \frac{1}{T - 1}\sum_t(\mathbf{u}^\top\mathbf{x}_{c,t})^2 = \mathbf{u}^\top\Sigma\,\mathbf{u}
+$$
+
+An expression $\mathbf{u}^\top A\mathbf{u}$ is a **quadratic form**. Because a variance cannot be negative, $\mathbf{u}^\top\Sigma\mathbf{u} \geq 0$ for every $\mathbf{u}$: covariance matrices are **positive semidefinite**, and so all their eigenvalues are at least zero.
+
+<PyCell id="rayleigh" title="Search every direction" tests={String.raw`
+  import numpy as np
+  def test_var():
+      "var_u has one value per angle and equals u^T Sigma u"
+      assert var_u.shape == (360,)
+      u = np.array([np.cos(np.radians(37)), np.sin(np.radians(37))])
+      assert np.isclose(var_u[37], u @ Sigma @ u)
+
+  def test_max():
+      "the largest variance is the top eigenvalue, and the smallest the bottom one"
+      assert np.isclose(var_u.max(), evals[0], rtol=1e-3)
+      assert np.isclose(var_u.min(), evals[1], rtol=1e-2)
+
+  def test_best():
+      "best_angle is the angle (in whole degrees) of greatest variance"
+      assert abs(best_angle - angle_deg) <= 1
+`} prompt="For each whole-degree angle from 0 to 359, form the unit vector $\mathbf{u} = (\cos\theta, \sin\theta)$ and compute the variance along it, $\mathbf{u}^\top\Sigma\mathbf{u}$, storing the 360 values in `var_u`. Find the angle of the largest value, `best_angle`, between 0 and 179, and compare the extremes with the eigenvalues."
+code={String.raw`
+  import matplotlib.pyplot as plt
+  thetas = np.radians(np.arange(360))
+  U = np.column_stack([np.cos(thetas), np.sin(thetas)])   # (360, 2), one unit vector per row
+  var_u = ...
+  best_angle = ...
+
+  plt.figure(figsize=(5, 3)); plt.plot(np.degrees(thetas), var_u)
+  plt.axhline(evals[0], ls="--", color="C1"); plt.axhline(evals[1], ls="--", color="C2")
+  plt.xlabel("direction (degrees)"); plt.ylabel("variance along u"); plt.show()
+  print("max", var_u.max().round(4), "at", best_angle, "degrees;  top eigenvalue", evals[0].round(4))
+`}
+hint="Each row u gives u @ Sigma @ u, so var_u = np.sum((U @ Sigma) * U, axis=1). best_angle = int(np.argmax(var_u)) % 180."
+solution={String.raw`
+  import matplotlib.pyplot as plt
+  thetas = np.radians(np.arange(360))
+  U = np.column_stack([np.cos(thetas), np.sin(thetas)])   # (360, 2), one unit vector per row
+  var_u = np.sum((U @ Sigma) * U, axis=1)
+  best_angle = int(np.argmax(var_u)) % 180
+
+  plt.figure(figsize=(5, 3)); plt.plot(np.degrees(thetas), var_u)
+  plt.axhline(evals[0], ls="--", color="C1"); plt.axhline(evals[1], ls="--", color="C2")
+  plt.xlabel("direction (degrees)"); plt.ylabel("variance along u"); plt.show()
+  print("max", var_u.max().round(4), "at", best_angle, "degrees;  top eigenvalue", evals[0].round(4))
+`} />
+
+The variance along a direction swings between the two eigenvalues, reaching the top one exactly along the top eigenvector. This is a general fact (proved in the Forge): for symmetric $A$, the **Rayleigh quotient** $\mathbf{u}^\top A\mathbf{u}$ over unit vectors is largest at the top eigenvector and smallest at the bottom one. Finding the directions of greatest variance in data is principal component analysis, next week's main topic.
+
+<Step n={4} title="Energy in symmetric networks" minutes={25} />
+
+Symmetry also changes what a network can do. For the linear network $\tau\dot{\mathbf{x}} = -\mathbf{x} + W\mathbf{x} + \mathbf{b}$ with a constant input $\mathbf{b}$, define
+
+$$
+E(\mathbf{x}) = \tfrac{1}{2}\mathbf{x}^\top(I - W)\mathbf{x} - \mathbf{b}^\top\mathbf{x}
+$$
+
+When $W$ is symmetric, the rate of change is exactly downhill on this landscape: $\tau\dot{\mathbf{x}} = -\nabla E$ (gradients are Week 8; you can check this one entry by entry). So $E$ can only fall, and activity settles into a minimum. If every eigenvalue of $W$ is below 1, $I - W$ is positive definite and there is a single bowl-shaped minimum. Hopfield (1982), today's paper, used the same idea for binary neurons: with symmetric weights there is an energy, and memories are its valleys.
+
+<PyCell id="energy" title="Energy only goes downhill" tests={String.raw`
+  import numpy as np
+  def test_energy_fn():
+      "energy computes 0.5 x^T (I - W) x - b^T x"
+      Wt = np.array([[0.2, 0.1], [0.1, 0.3]]); bt = np.array([1.0, -1.0]); xt = np.array([2.0, 1.0])
+      assert np.isclose(energy(xt, Wt, bt), 0.5 * xt @ (np.eye(2) - Wt) @ xt - bt @ xt)
+
+  def test_monotone():
+      "E_sym never increases along the symmetric network's trajectory"
+      assert len(E_sym) == n_steps + 1
+      assert np.all(np.diff(E_sym) <= 1e-9)
+
+  def test_nonsym():
+      "for the non-symmetric network, the same formula is not always decreasing"
+      assert np.any(np.diff(E_non) > 1e-6)
+`} prompt="Write `energy(x, W, b)`. Then simulate both networks below with Euler steps (τ = 1, dt = 0.01, 600 steps) and record the energy at every step in `E_sym` and `E_non` (use each network's own W in the formula). Which one goes only downhill?"
+code={String.raw`
+  def energy(x, W, b):
+      return ...
+
+  rng = np.random.default_rng(5)
+  M = rng.normal(size=(5, 5))
+  W_sym = 0.25 * (M + M.T)                   # symmetric
+  W_non = 0.5 * (M - M.T) + 0.1 * np.eye(5)  # mostly antisymmetric: it rotates activity
+  b = rng.normal(size=5)
+  dt, n_steps = 0.01, 600
+
+  def run(W):
+      x = rng.normal(size=5) * 2
+      Es = [energy(x, W, b)]
+      for _ in range(n_steps):
+          x = ...
+          Es.append(energy(x, W, b))
+      return np.array(Es)
+
+  print("largest eigenvalue of W_sym:", np.linalg.eigvalsh(W_sym).max().round(3))
+  E_sym, E_non = run(W_sym), run(W_non)
+  plt.figure(figsize=(5, 3)); plt.plot(E_sym, label="symmetric W"); plt.plot(E_non, label="non-symmetric W")
+  plt.xlabel("step"); plt.ylabel("E"); plt.legend(frameon=False); plt.show()
+`}
+hint="energy returns 0.5 * x @ (np.eye(len(x)) - W) @ x - b @ x. The Euler step is x = x + dt * (-x + W @ x + b)."
+solution={String.raw`
+  def energy(x, W, b):
+      return 0.5 * x @ (np.eye(len(x)) - W) @ x - b @ x
+
+  rng = np.random.default_rng(5)
+  M = rng.normal(size=(5, 5))
+  W_sym = 0.25 * (M + M.T)                   # symmetric
+  W_non = 0.5 * (M - M.T) + 0.1 * np.eye(5)  # mostly antisymmetric: it rotates activity
+  b = rng.normal(size=5)
+  dt, n_steps = 0.01, 600
+
+  def run(W):
+      x = rng.normal(size=5) * 2
+      Es = [energy(x, W, b)]
+      for _ in range(n_steps):
+          x = x + dt * (-x + W @ x + b)
+          Es.append(energy(x, W, b))
+      return np.array(Es)
+
+  print("largest eigenvalue of W_sym:", np.linalg.eigvalsh(W_sym).max().round(3))
+  E_sym, E_non = run(W_sym), run(W_non)
+  plt.figure(figsize=(5, 3)); plt.plot(E_sym, label="symmetric W"); plt.plot(E_non, label="non-symmetric W")
+  plt.xlabel("step"); plt.ylabel("E"); plt.legend(frameon=False); plt.show()
+`} />
+
+With symmetric weights the energy falls steadily. Without symmetry the same formula rises and falls, because the antisymmetric part of $W$ pushes activity round in circles, which no landscape can describe. Real cortex is not symmetric (excitatory neurons only excite), so energy pictures are an idealisation; they remain the clearest way to think about attractor memories (Week 108).
+
+<Bridge title="Symmetric matrices everywhere"
+  neuro="Covariance matrices of population noise determine how much information the population carries about a stimulus: correlated noise along the direction that stimuli move the population is especially damaging (Week 119). Symmetric connectivity gives Hopfield networks their energy landscape."
+  ai="The Hessian of a loss (the matrix of second derivatives, Week 9) is symmetric. Its eigenvalues describe the curvature in each direction, and large ratios between them make gradient descent slow (Week 12). Covariance matrices of features drive PCA, whitening and batch normalisation.">
+
+Whenever a matrix is symmetric, reach for `eigh`: the eigenvectors are perpendicular axes, and the eigenvalues are real.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The spectral theorem says a real symmetric matrix is...", options: ["Always invertible", "$Q\\Lambda Q^\\top$ with orthogonal Q and real Λ", "Always diagonal", "Never diagonalisable"], answer: 1, explain: "Real eigenvalues, orthonormal eigenvectors." },
+  { q: "For an orthogonal matrix Q, $Q^{-1}$ equals...", options: ["Q", "$Q^\\top$", "$-Q$", "$Q^2$"], answer: 1, explain: "$Q^\\top Q = I$." },
+  { q: "`np.linalg.eigh` returns eigenvalues in...", options: ["Descending order", "Ascending order", "Random order", "Order of the diagonal"], answer: 1, explain: "Reverse them if you want largest first." },
+  { q: "A covariance matrix is always...", options: ["Diagonal", "Symmetric and positive semidefinite", "Orthogonal", "Invertible"], answer: 1, explain: "Variances cannot be negative." },
+  { q: "The variance of data along unit vector u is...", options: ["$\\mathbf{u}^\\top\\Sigma\\mathbf{u}$", "$\\Sigma\\mathbf{u}$", "$\\lVert\\mathbf{u}\\rVert$", "$\\operatorname{tr}\\Sigma$"], answer: 0, explain: "A quadratic form." },
+  { q: "The direction of greatest variance is...", options: ["The first neuron's axis", "The top eigenvector of Σ", "The diagonal", "Any direction"], answer: 1, explain: "It maximises the Rayleigh quotient." },
+  { q: "An energy that always decreases exists for the linear network when W is...", options: ["Antisymmetric", "Symmetric", "Triangular", "Random"], answer: 1, explain: "Then the dynamics are a gradient descent on E." },
+]} />
+
+<Flashcards cards={[
+  { front: "Spectral theorem?", back: "Real symmetric $A = Q\\Lambda Q^\\top = \\sum_i \\lambda_i\\mathbf{q}_i\\mathbf{q}_i^\\top$, with real eigenvalues and orthonormal eigenvectors." },
+  { front: "Why eigenvectors of symmetric matrices are orthogonal?", back: "$\\lambda_1\\mathbf{v}_1^\\top\\mathbf{v}_2 = \\mathbf{v}_1^\\top A\\mathbf{v}_2 = \\lambda_2\\mathbf{v}_1^\\top\\mathbf{v}_2$, so with distinct λ the dot product is 0." },
+  { front: "Covariance matrix?", back: "$\\Sigma = X_c^\\top X_c/(T - 1)$; symmetric, positive semidefinite; eigenvectors are the axes of the data cloud." },
+  { front: "Rayleigh quotient?", back: "$\\mathbf{u}^\\top A\\mathbf{u}$ for unit u; ranges from the smallest to the largest eigenvalue of symmetric A." },
+  { front: "Energy of a symmetric linear network?", back: "$E = \\frac{1}{2}\\mathbf{x}^\\top(I - W)\\mathbf{x} - \\mathbf{b}^\\top\\mathbf{x}$; the dynamics descend it." },
+]} />
+
+<Predict revisit question="Where does the joint noise of the two neurons point: along neuron 1, tilted, or at 45 degrees?" />
+
+<Key title="Before you go">
+<ul>
+<li>Symmetric matrices have real eigenvalues and perpendicular eigenvectors: $A = Q\Lambda Q^\top$.</li>
+<li>Covariance matrices are symmetric and positive semidefinite; their eigenvectors are the axes of the data.</li>
+<li>$\mathbf{u}^\top\Sigma\mathbf{u}$ is the variance along u, largest along the top eigenvector.</li>
+<li>Symmetric connectivity gives a network an energy that only decreases.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Hopfield (1982), <em>Neural networks and physical systems with emergent collective computational abilities</em>. Find where symmetry is used.</li>
+<li>Gilbert Strang, <em>Introduction to Linear Algebra</em>, Chapter 6.4 (symmetric matrices) and 6.5 (positive definite matrices).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Excitatory neurons only excite and inhibitory neurons only inhibit, so cortical connectivity cannot be symmetric. What does that cost a model like Hopfield's, and why might it still be a useful description?" />

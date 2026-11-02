@@ -1,0 +1,295 @@
+export const meta = {
+  title: "Low-rank approximation: keeping the structure, dropping the noise",
+  intro: "If a matrix is a sum of rank-one pieces ordered by importance, what happens if you keep only the first few? You get the best possible approximation of that rank, a fact proved by Eckart and Young in 1936. For neural data this is a superpower: a recording of many neurons over time is often a few shared signals plus noise, and truncating the SVD recovers the signals better than the raw recording does. Today you prove the error formula, denoise a population recording and test whether receptive fields are separable in space and time.",
+  goals: [
+    "Build the best rank-k approximation from the SVD",
+    "State the Eckart-Young theorem and compute the approximation error from singular values",
+    "Denoise a neurons-by-time matrix by truncating its SVD",
+    "Measure the space-time separability of a receptive field",
+  ],
+  plan: [
+    { label: "Predict and rank-k approximation", minutes: 25 },
+    { label: "The error formula", minutes: 20 },
+    { label: "Denoising population activity", minutes: 35 },
+    { label: "Separable receptive fields", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "eckart-1936",
+};
+
+<Predict question="You record 40 neurons over 60 time bins. Their activity is really driven by three shared signals, with independent noise added. You throw away all but the top three SVD components. Will the result be further from the true signals than the recording you started with, or closer?" />
+
+<Step n={1} title="Rank-k approximation" minutes={25} />
+
+Yesterday's sum of rank-one pieces, cut short after $k$ terms, gives
+
+$$
+A_k = \sum_{i=1}^{k} \sigma_i\,\mathbf{u}_i\mathbf{v}_i^\top = U_k\Sigma_kV_k^\top
+$$
+
+where $U_k$ and $V_k$ keep the first $k$ columns and $\Sigma_k$ the first $k$ singular values. $A_k$ has rank $k$. Storing it takes $k(m + n + 1)$ numbers instead of $mn$: for a 1000 by 1000 matrix with $k = 10$, about 2% of the original.
+
+**The Eckart-Young theorem.** Among all matrices of rank at most $k$, $A_k$ is the closest to $A$ in the sense of the sum of squared differences of entries. No other rank-$k$ matrix does better. This is today's paper.
+
+<Figure caption="A neurons-by-time activity matrix rebuilt from its top k components. Move k and the noise level, and compare the reconstruction error with the error of the raw recording." credit="Interactive figure by Engram.">
+  <LowRank />
+</Figure>
+
+<Step n={2} title="The error formula" minutes={20} />
+
+The size of a matrix as a whole is measured by the **Frobenius norm**, the square root of the sum of squared entries: $\lVert A\rVert_F = \sqrt{\sum_{ij}A_{ij}^2}$.
+
+<Derivation title="The error of truncating the SVD">
+  <div>
+
+The Frobenius norm does not change under orthogonal matrices: $\lVert QA\rVert_F = \lVert A\rVert_F$ and $\lVert AQ\rVert_F = \lVert A\rVert_F$, because multiplying by $Q$ rotates each column (or row) without changing its length.
+
+  </div>
+  <div>
+
+So $\lVert A\rVert_F = \lVert U\Sigma V^\top\rVert_F = \lVert\Sigma\rVert_F$, giving
+
+$$
+\lVert A\rVert_F^2 = \sum_i \sigma_i^2
+$$
+
+The squared singular values share out the total "energy" of the matrix.
+
+  </div>
+  <div>
+
+The leftover after truncating is $A - A_k = \sum_{i \gt k}\sigma_i\mathbf{u}_i\mathbf{v}_i^\top$, itself an SVD with singular values $\sigma_{k+1}, \sigma_{k+2}, \dots$. Hence
+
+$$
+\lVert A - A_k\rVert_F = \sqrt{\sum_{i \gt k}\sigma_i^2}
+$$
+
+The fraction of the matrix's energy kept is $\sum_{i \leq k}\sigma_i^2 / \sum_i\sigma_i^2$.
+
+  </div>
+</Derivation>
+
+<PyCell id="rankk" title="The best rank-k approximation" tests={String.raw`
+  import numpy as np
+  def test_rank():
+      "rank_k returns a matrix of the right shape and rank"
+      M = np.random.default_rng(1).normal(size=(8, 6))
+      Mk = rank_k(M, 2)
+      assert Mk.shape == (8, 6) and np.linalg.matrix_rank(Mk) == 2
+
+  def test_error():
+      "the Frobenius error equals the root sum of the discarded squared singular values"
+      M = np.random.default_rng(2).normal(size=(10, 7))
+      s = np.linalg.svd(M, compute_uv=False)
+      for k in [1, 3, 6]:
+          assert np.isclose(np.linalg.norm(M - rank_k(M, k)), np.sqrt(np.sum(s[k:] ** 2)))
+
+  def test_full():
+      "keeping every component gives back the matrix"
+      M = np.random.default_rng(3).normal(size=(5, 5))
+      assert np.allclose(rank_k(M, 5), M)
+`} prompt="Write `rank_k(A, k)` that returns the best rank-k approximation of `A` from its economy SVD. Then check the error formula for one example, and compare with a random rank-k matrix, which should do much worse."
+code={String.raw`
+  import numpy as np
+  def rank_k(A, k):
+      U, s, Vt = np.linalg.svd(A, full_matrices=False)
+      return ...
+
+  rng = np.random.default_rng(0)
+  A = rng.normal(size=(12, 8))
+  s = np.linalg.svd(A, compute_uv=False)
+  print("error:", np.linalg.norm(A - rank_k(A, 3)).round(4), "  formula:", np.sqrt(np.sum(s[3:] ** 2)).round(4))
+  R3 = rng.normal(size=(12, 3)) @ rng.normal(size=(3, 8)) * 0.3
+  print("a random rank-3 matrix:", np.linalg.norm(A - R3).round(4))
+`}
+hint="Multiply the first k columns of U by the first k singular values (broadcasting scales each column), then by the first k rows of Vt: return U[:, :k] * s[:k] @ Vt[:k]."
+solution={String.raw`
+  import numpy as np
+  def rank_k(A, k):
+      U, s, Vt = np.linalg.svd(A, full_matrices=False)
+      return U[:, :k] * s[:k] @ Vt[:k]
+
+  rng = np.random.default_rng(0)
+  A = rng.normal(size=(12, 8))
+  s = np.linalg.svd(A, compute_uv=False)
+  print("error:", np.linalg.norm(A - rank_k(A, 3)).round(4), "  formula:", np.sqrt(np.sum(s[3:] ** 2)).round(4))
+  R3 = rng.normal(size=(12, 3)) @ rng.normal(size=(3, 8)) * 0.3
+  print("a random rank-3 matrix:", np.linalg.norm(A - R3).round(4))
+`} />
+
+<Video id="xy3QyyhiuY4" title="Singular Value Decomposition (SVD): Matrix Approximation" by="Steve Brunton, University of Washington" note="Truncating the SVD, the Eckart-Young theorem, and how much of a matrix a few components can capture." />
+
+<Step n={3} title="Denoising population activity" minutes={35} />
+
+Here is a simulated recording: 40 neurons over 60 time bins. Each neuron's activity is a weighted mix of three shared time courses (a slow rise and fall, an oscillation and a late bump) plus independent noise. Because the true activity is exactly rank 3, its information sits in three singular components; the noise spreads thinly over all 40.
+
+<PyCell code={String.raw`
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(36)
+  N, T = 40, 60
+  t = np.linspace(0, 1, T)
+  latents = np.array([np.sin(np.pi * t), np.sin(2 * np.pi * t), np.exp(-(t - 0.7) ** 2 / 0.02)])   # (3, 60)
+  loadings = rng.normal(size=(N, 3)) * [1, 0.8, 0.8]                                               # (40, 3)
+  truth = loadings @ latents                     # rank 3
+  R = truth + 0.4 * rng.normal(size=(N, T))      # what we record
+  s_R = np.linalg.svd(R, compute_uv=False)
+  plt.figure(figsize=(5, 3)); plt.plot(s_R, "o"); plt.xlabel("component"); plt.ylabel("singular value"); plt.show()
+  print("top singular values:", s_R[:6].round(2))
+`} />
+
+<PyCell id="denoise" title="How many components should you keep?" tests={String.raw`
+  import numpy as np
+  def test_errs():
+      "errs holds the RMS error to the truth for k = 1 to 20"
+      assert len(errs) == 20
+      assert np.isclose(errs[2], np.sqrt(np.mean((rank_k(R, 3) - truth) ** 2)))
+
+  def test_best():
+      "best_k is the k with the smallest error, and it beats the raw recording"
+      assert best_k == int(np.argmin(errs)) + 1
+      assert best_k == 3
+      assert min(errs) < raw_err / 2
+`} prompt="For k from 1 to 20, compute the root-mean-square error between `rank_k(R, k)` and the true signal `truth`, storing the 20 values in `errs`. Store the best k in `best_k` and the raw recording's error in `raw_err`. Plot `errs` against k with `raw_err` as a horizontal line."
+code={String.raw`
+  ks = np.arange(1, 21)
+  errs = [...]
+  best_k = ...
+  raw_err = ...
+
+  plt.figure(figsize=(5, 3)); plt.plot(ks, errs, "o-"); plt.axhline(raw_err, ls="--", color="0.5", label="raw recording")
+  plt.xlabel("components kept, k"); plt.ylabel("RMS error to truth"); plt.legend(frameon=False); plt.show()
+  print("best k:", best_k, " error", round(min(errs), 3), " raw", round(raw_err, 3))
+`}
+hint="errs = [np.sqrt(np.mean((rank_k(R, k) - truth) ** 2)) for k in ks]. best_k = int(np.argmin(errs)) + 1, because ks starts at 1. raw_err = np.sqrt(np.mean((R - truth) ** 2))."
+solution={String.raw`
+  ks = np.arange(1, 21)
+  errs = [np.sqrt(np.mean((rank_k(R, k) - truth) ** 2)) for k in ks]
+  best_k = int(np.argmin(errs)) + 1
+  raw_err = np.sqrt(np.mean((R - truth) ** 2))
+
+  plt.figure(figsize=(5, 3)); plt.plot(ks, errs, "o-"); plt.axhline(raw_err, ls="--", color="0.5", label="raw recording")
+  plt.xlabel("components kept, k"); plt.ylabel("RMS error to truth"); plt.legend(frameon=False); plt.show()
+  print("best k:", best_k, " error", round(min(errs), 3), " raw", round(raw_err, 3))
+`} />
+
+Keeping three components gives an error well under half that of the raw recording. That answers the prediction: throwing information away made the data *more* accurate, because what was thrown away was mostly noise. Keep more components and the error climbs again as noise is let back in. In real data you do not know `truth`, so how to pick $k$ honestly is the subject of Day 5.
+
+<Step n={4} title="Separable receptive fields" minutes={25} />
+
+A visual neuron's **spatiotemporal receptive field** is a matrix: rows are positions along a line in the visual field and columns are time lags before a spike (the spike-triggered average of Week 5, extended in time). If it is **separable**, it is the product of a spatial profile and a temporal profile, $\text{RF}(x, t) = f(x)\,g(t)$, which is exactly a rank-one matrix $\mathbf{f}\mathbf{g}^\top$. Many neurons in the lateral geniculate nucleus and simple cells in V1 are close to separable. **Direction-selective** cells are not: their receptive fields are tilted in space-time, which is what makes them prefer motion one way. The SVD measures separability with one number, the fraction of energy in the first component, $\sigma_1^2 / \sum_i\sigma_i^2$.
+
+<PyCell id="separable" title="Is the receptive field separable?" tests={String.raw`
+  import numpy as np
+  def test_index():
+      "separability returns sigma_1 squared over the sum of squared singular values"
+      M = np.outer([1.0, 2.0, 3.0], [1.0, -1.0])
+      assert np.isclose(separability(M), 1.0)
+      assert np.isclose(separability(np.eye(4)), 0.25)
+
+  def test_cells():
+      "the simple cell is close to separable, the direction-selective cell is not"
+      assert sep_simple > 0.95 and sep_ds < 0.7
+
+  def test_fit():
+      "rf1 is the best rank-one approximation of the simple cell's receptive field"
+      assert np.allclose(rf1, rank_k(rf_simple, 1))
+`} prompt="Write `separability(M)`. Compute it for both receptive fields, store the results in `sep_simple` and `sep_ds`, and store the best rank-one approximation of the simple cell's receptive field in `rf1`. Plot all three."
+code={String.raw`
+  x = np.linspace(-2, 2, 20)
+  lag = np.arange(15)
+  X, L = np.meshgrid(x, lag, indexing="ij")
+  temporal = L * np.exp(-L / 3) * np.sin(L / 2)
+  rf_simple = np.exp(-X ** 2 / 0.5) * np.cos(3 * X) * temporal + 0.02 * rng.normal(size=X.shape)
+  rf_ds = np.exp(-X ** 2 / 0.8) * np.cos(3 * (X - 0.25 * L)) * L * np.exp(-L / 3)     # tilted in space-time
+
+  def separability(M):
+      s = np.linalg.svd(M, compute_uv=False)
+      return ...
+
+  sep_simple, sep_ds = ..., ...
+  rf1 = ...
+
+  fig, ax = plt.subplots(1, 3, figsize=(9, 3))
+  for a, M, title in zip(ax, [rf_simple, rf1, rf_ds], ["simple cell", "its rank-1 fit", "direction selective"]):
+      a.imshow(M, cmap="RdBu_r", aspect="auto"); a.set_title(title); a.set_xlabel("time lag"); a.set_ylabel("position")
+  plt.tight_layout(); plt.show()
+  print("separability: simple", round(sep_simple, 3), " direction selective", round(sep_ds, 3))
+`}
+hint="return s[0] ** 2 / np.sum(s ** 2). Then sep_simple, sep_ds = separability(rf_simple), separability(rf_ds), and rf1 = rank_k(rf_simple, 1)."
+solution={String.raw`
+  x = np.linspace(-2, 2, 20)
+  lag = np.arange(15)
+  X, L = np.meshgrid(x, lag, indexing="ij")
+  temporal = L * np.exp(-L / 3) * np.sin(L / 2)
+  rf_simple = np.exp(-X ** 2 / 0.5) * np.cos(3 * X) * temporal + 0.02 * rng.normal(size=X.shape)
+  rf_ds = np.exp(-X ** 2 / 0.8) * np.cos(3 * (X - 0.25 * L)) * L * np.exp(-L / 3)     # tilted in space-time
+
+  def separability(M):
+      s = np.linalg.svd(M, compute_uv=False)
+      return s[0] ** 2 / np.sum(s ** 2)
+
+  sep_simple, sep_ds = separability(rf_simple), separability(rf_ds)
+  rf1 = rank_k(rf_simple, 1)
+
+  fig, ax = plt.subplots(1, 3, figsize=(9, 3))
+  for a, M, title in zip(ax, [rf_simple, rf1, rf_ds], ["simple cell", "its rank-1 fit", "direction selective"]):
+      a.imshow(M, cmap="RdBu_r", aspect="auto"); a.set_title(title); a.set_xlabel("time lag"); a.set_ylabel("position")
+  plt.tight_layout(); plt.show()
+  print("separability: simple", round(sep_simple, 3), " direction selective", round(sep_ds, 3))
+`} />
+
+The tilted field needs at least two components: by a trigonometric identity, $\cos(a - b) = \cos a\cos b + \sin a\sin b$, a space-time tilt is a sum of two separable pieces. Adelson and Bergen (1985) built their motion-energy model of direction selectivity out of exactly such pairs, and they reappear in Week 38.
+
+<Bridge title="Low rank in brains and machines"
+  neuro="Low-rank structure is everywhere in neural data: trial-averaged population activity, receptive fields and connectivity. Mastrogiuseppe and Ostojic (2018) showed that recurrent networks with low-rank connectivity produce low-dimensional dynamics whose computations can be read off the singular vectors (Week 135)."
+  ai="Low-rank approximation compresses trained networks and speeds them up, and LoRA fine-tunes large models by learning only a low-rank change to each weight matrix. Matrix completion, which fills in missing entries by assuming low rank, powered recommendation systems such as the Netflix Prize entries.">
+
+When data look complicated, ask how many singular values you need. Often the answer is surprisingly few.
+
+</Bridge>
+
+<Prove title="Energy kept by one component" task="Show that the first singular value satisfies $\sigma_1 = \max_{\lVert\mathbf{v}\rVert = 1}\lVert A\mathbf{v}\rVert$. Then argue that $\sigma_1^2 / \sum_i\sigma_i^2 = 1$ exactly when A has rank one.">
+
+$\lVert A\mathbf{v}\rVert^2 = \mathbf{v}^\top A^\top A\mathbf{v}$ is a Rayleigh quotient of the symmetric matrix $A^\top A$, whose largest eigenvalue is $\sigma_1^2$ (Day 1). By last week's Forge it is at most $\sigma_1^2$, with equality at $\mathbf{v} = \mathbf{v}_1$. So $\sigma_1$ is the largest stretch $A$ applies to any unit vector, also called the **spectral norm** of A.
+
+$\sigma_1^2 / \sum_i\sigma_i^2 = 1$ means $\sigma_i = 0$ for every $i \gt 1$, so $A = \sigma_1\mathbf{u}_1\mathbf{v}_1^\top$, a rank-one matrix. Conversely a rank-one matrix has exactly one nonzero singular value.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "The best rank-k approximation of A is...", options: ["The first k columns of A", "$U_k\\Sigma_kV_k^\\top$", "A random rank-k matrix", "$A^k$"], answer: 1, explain: "Eckart-Young." },
+  { q: "$\\lVert A\\rVert_F^2$ equals...", options: ["$\\sigma_1^2$", "$\\sum_i\\sigma_i^2$", "$\\sum_i\\sigma_i$", "$\\det A$"], answer: 1, explain: "Orthogonal matrices do not change the Frobenius norm." },
+  { q: "If the singular values are 4, 3 and 0.5, the error of the rank-2 approximation is...", options: ["0.5", "0.25", "3.5", "7"], answer: 0, explain: "$\\sqrt{0.5^2}$." },
+  { q: "...and the fraction of energy kept is...", options: ["About 99%", "About 50%", "About 88%", "100%"], answer: 0, explain: "$25/25.25$." },
+  { q: "Truncating the SVD of noisy low-rank data can...", options: ["Only make it worse", "Bring it closer to the true signal", "Change its shape", "Increase its rank"], answer: 1, explain: "The discarded components are mostly noise." },
+  { q: "A separable receptive field is...", options: ["Rank one", "Full rank", "Diagonal", "Symmetric"], answer: 0, explain: "$f(x)g(t)$ is an outer product." },
+  { q: "Direction-selective receptive fields need at least...", options: ["One component", "Two components", "Zero components", "As many components as pixels"], answer: 1, explain: "A tilt is a sum of two separable pieces." },
+]} />
+
+<Flashcards cards={[
+  { front: "Rank-k truncation?", back: "$A_k = \\sum_{i \\leq k}\\sigma_i\\mathbf{u}_i\\mathbf{v}_i^\\top$; stores $k(m + n + 1)$ numbers." },
+  { front: "Eckart-Young theorem?", back: "$A_k$ is the closest rank-k matrix to A in Frobenius norm, with error $\\sqrt{\\sum_{i \\gt k}\\sigma_i^2}$." },
+  { front: "Frobenius norm via SVD?", back: "$\\lVert A\\rVert_F = \\sqrt{\\sum_i\\sigma_i^2}$." },
+  { front: "Spectral norm?", back: "$\\sigma_1 = \\max\\lVert A\\mathbf{v}\\rVert$ over unit v." },
+  { front: "Separability index?", back: "$\\sigma_1^2/\\sum\\sigma_i^2$; 1 for a perfectly separable (rank-one) receptive field." },
+]} />
+
+<Predict revisit question="Is the rank-3 reconstruction closer to the true signals than the raw recording?" />
+
+<Key title="Before you go">
+<ul>
+<li>Keeping the top k singular components gives the best rank-k approximation.</li>
+<li>The error is the root sum of the discarded squared singular values.</li>
+<li>For low-rank signals plus noise, truncation denoises; too many components let noise back.</li>
+<li>Separable receptive fields are rank one; direction-selective ones need two or more.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Eckart and Young (1936), <em>The approximation of one matrix by another of lower rank</em>. It is short.</li>
+<li>Adelson and Bergen (1985), <em>Spatiotemporal energy models for the perception of motion</em>, Journal of the Optical Society of America A, for the space-time view of motion.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="You have a matrix of 300 neurons by 2000 time bins from a real experiment. Describe how you would decide how many components carry signal, and what could go wrong if you used today's method of comparing with the truth." />

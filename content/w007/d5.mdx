@@ -1,0 +1,285 @@
+export const meta = {
+  title: "How many dimensions? Spectra, noise and cross-validation",
+  intro: "How many dimensions does a population code use? It sounds like a simple question, and the answer has become one of the central debates in systems neuroscience: motor cortex looks low-dimensional, visual cortex looks high-dimensional, and both answers depend on how you treat noise. Today you see how noise inflates ordinary PCA, implement the cross-validated PCA of Stringer and colleagues, which uses repeated stimuli to measure only the reliable variance, and fit the power law that describes the spectrum of mouse visual cortex.",
+  goals: [
+    "Explain why noise inflates the spectrum and dimensionality from ordinary PCA",
+    "Implement cross-validated PCA using repeated presentations",
+    "Fit a power-law exponent to an eigenvalue spectrum",
+    "Compare dimensionality estimates and say what each measures",
+  ],
+  plan: [
+    { label: "Predict and the spectrum", minutes: 20 },
+    { label: "Noise inflates dimensionality", minutes: 25 },
+    { label: "Cross-validated PCA", minutes: 35 },
+    { label: "Power laws", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "stringer-2019",
+};
+
+<Predict question="You record 100 neurons responding to 600 images, twice each. The true stimulus-driven signal has a participation ratio of about 16. Ordinary PCA of one repeat, with modest independent noise in every neuron, gives a participation ratio closer to 16, to 30, or to 50?" />
+
+<Step n={1} title="The spectrum" minutes={20} />
+
+The **eigenspectrum** of a population is the list of covariance eigenvalues from largest to smallest: the variance along PC1, PC2, and so on. It contains everything PCA knows about dimensionality. Plotted on log-log axes, a power law $\lambda_n \propto n^{-\alpha}$ is a straight line with slope $-\alpha$. Large $\alpha$ means a few dimensions dominate; small $\alpha$ means variance is spread over many.
+
+<Figure caption="An eigenspectrum on log-log axes. Change the decay exponent and the noise floor and watch both dimensionality estimates." credit="Interactive figure by Engram, after Stringer and colleagues (2019).">
+  <Spectrum />
+</Figure>
+
+<Step n={2} title="Noise inflates dimensionality" minutes={25} />
+
+Suppose each recorded response is signal plus independent noise, $\mathbf{r} = \mathbf{s} + \boldsymbol\epsilon$, with noise variance $\sigma^2$ in every neuron and no noise correlations. Because signal and noise are independent, the covariances add:
+
+$$
+\Sigma_r = \Sigma_s + \sigma^2 I
+$$
+
+Adding $\sigma^2 I$ adds $\sigma^2$ to every eigenvalue (Week 6, Day 1). Large eigenvalues hardly change, but the small ones, which should fall towards zero, are lifted onto a floor at $\sigma^2$. With 100 neurons, a floor of 100 small components can hold more total variance than the signal itself, and every dimensionality estimate goes up. Real noise is also correlated and finite samples add their own errors, so the effect in data is messier but just as real.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2019)
+  N, S = 100, 600                              # neurons, stimuli
+  n = np.arange(1, N + 1)
+  true_spec = n ** -1.0                         # a power law with exponent 1
+  Q = np.linalg.qr(rng.normal(size=(N, N)))[0]  # random orthogonal axes in neural space
+  signal = (rng.normal(size=(S, N)) * np.sqrt(true_spec)) @ Q.T
+  R1 = signal + 0.3 * rng.normal(size=(S, N))   # first presentation of every stimulus
+  R2 = signal + 0.3 * rng.normal(size=(S, N))   # second presentation: same signal, new noise
+  print("total signal variance", true_spec.sum().round(2), "  total noise variance", round(N * 0.3 ** 2, 2))
+`} />
+
+<PyCell id="naive" title="Ordinary PCA of one repeat" tests={String.raw`
+  import numpy as np
+  def test_naive():
+      "lam_naive holds the covariance eigenvalues of R1, largest first"
+      assert np.allclose(lam_naive, np.sort(np.linalg.eigvalsh(np.cov(R1, rowvar=False)))[::-1])
+
+  def test_pr():
+      "participation_ratio is defined, and the naive PR is far above the true one"
+      assert np.isclose(participation_ratio(np.ones(4)), 4)
+      assert pr_naive > 2 * pr_true
+`} prompt="Compute the eigenvalues of the covariance of `R1`, largest first, in `lam_naive`. Define `participation_ratio` (yesterday's formula) and compute it for the true spectrum (`pr_true`) and for the naive one (`pr_naive`). Plot both spectra on log-log axes."
+code={String.raw`
+  def participation_ratio(lam):
+      return ...
+
+  lam_naive = ...
+  pr_true, pr_naive = ..., ...
+
+  plt.figure(figsize=(5, 3.2))
+  plt.loglog(n, true_spec, label="true signal"); plt.loglog(n, lam_naive, label="ordinary PCA, one repeat")
+  plt.axhline(0.3 ** 2, ls="--", color="0.5", label="noise variance"); plt.xlabel("component"); plt.ylabel("variance"); plt.legend(frameon=False); plt.show()
+  print("participation ratio: true", round(pr_true, 1), " ordinary PCA", round(pr_naive, 1))
+`}
+hint="participation_ratio returns np.sum(lam) ** 2 / np.sum(lam ** 2). lam_naive = np.linalg.eigvalsh(np.cov(R1, rowvar=False))[::-1]."
+solution={String.raw`
+  def participation_ratio(lam):
+      return np.sum(lam) ** 2 / np.sum(lam ** 2)
+
+  lam_naive = np.linalg.eigvalsh(np.cov(R1, rowvar=False))[::-1]
+  pr_true, pr_naive = participation_ratio(true_spec), participation_ratio(lam_naive)
+
+  plt.figure(figsize=(5, 3.2))
+  plt.loglog(n, true_spec, label="true signal"); plt.loglog(n, lam_naive, label="ordinary PCA, one repeat")
+  plt.axhline(0.3 ** 2, ls="--", color="0.5", label="noise variance"); plt.xlabel("component"); plt.ylabel("variance"); plt.legend(frameon=False); plt.show()
+  print("participation ratio: true", round(pr_true, 1), " ordinary PCA", round(pr_naive, 1))
+`} />
+
+The noise flattens the tail of the spectrum, and the participation ratio more than triples, to about 50. That answers the prediction. Nothing about the code has changed; the extra "dimensions" are noise.
+
+<Video id="fkf4IBRSeEc" title="Principal Component Analysis (PCA)" by="Steve Brunton, University of Washington" note="PCA through the SVD, with attention to how many components to keep." />
+
+<Step n={3} title="Cross-validated PCA" minutes={35} />
+
+If you show every stimulus twice, the signal is the same on both presentations but the noise is independent. Stringer and colleagues (2019), today's paper, used this to measure only the reliable, stimulus-driven variance along each direction.
+
+<Derivation title="Why the cross-covariance removes noise">
+  <div>
+
+Project both presentations onto a unit vector $\mathbf{u}$: $a = \mathbf{u}^\top(\mathbf{s} + \boldsymbol\epsilon_1)$ and $b = \mathbf{u}^\top(\mathbf{s} + \boldsymbol\epsilon_2)$, all centred.
+
+  </div>
+  <div>
+
+Average their product over stimuli. The signal-signal term gives the signal variance along $\mathbf{u}$. Every term involving noise averages to zero, because each noise is independent of the signal and the two noises are independent of each other:
+
+$$
+\mathbb{E}[ab] = \mathbb{E}[(\mathbf{u}^\top\mathbf{s})^2] + 0 + 0 + 0 = \mathbf{u}^\top\Sigma_s\mathbf{u}
+$$
+
+  </div>
+  <div>
+
+Compare $\mathbb{E}[a^2] = \mathbf{u}^\top\Sigma_s\mathbf{u} + \sigma^2$ from one presentation alone: squaring one presentation keeps the noise, multiplying two different presentations cancels it.
+
+  </div>
+  <div>
+
+To avoid fitting the directions $\mathbf{u}$ to the same noise you then measure, find them on one half of the stimuli (from the first presentation) and evaluate the cross-covariance on the other half.
+
+  </div>
+</Derivation>
+
+<PyCell id="cvpca" title="Implement cross-validated PCA" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "cvpca returns one value per neuron"
+      assert cv_spec.shape == (N,)
+
+  def test_close():
+      "the cumulative cross-validated variance of the first 20 components is within 20% of the truth"
+      ratio = np.cumsum(cv_spec)[:20] / np.cumsum(true_spec)[:20]
+      assert np.all(np.abs(ratio - 1) < 0.2), ratio.round(2)
+
+  def test_no_floor():
+      "the cross-validated tail has no noise floor: components 40 to 100 average below 0.04"
+      assert np.mean(cv_spec[40:]) < 0.04 and np.mean(lam_naive[40:]) > 0.08
+
+  def test_pr():
+      "the cross-validated participation ratio is within 25% of the true one"
+      assert abs(pr_cv - pr_true) / pr_true < 0.25
+`} prompt="Write `cvpca(R1, R2, train, test)`: take the PCs (rows of `Vt`) of the centred first presentation of the training stimuli, then project the centred first and second presentations of the test stimuli onto them and return the mean product of the two projections for each component. Compute `cv_spec` with a random half split and its participation ratio `pr_cv` (clip negative values to zero first, since noise can make them slightly negative)."
+code={String.raw`
+  def cvpca(R1, R2, train, test):
+      A = R1[train] - R1[train].mean(axis=0)
+      Vt = np.linalg.svd(A, full_matrices=False)[2]
+      B1 = ...
+      B2 = ...
+      return ...
+
+  order = rng.permutation(S)
+  train, test = order[: S // 2], order[S // 2 :]
+  cv_spec = cvpca(R1, R2, train, test)
+  pr_cv = ...
+
+  plt.figure(figsize=(5, 3.2))
+  plt.loglog(n, true_spec, label="true signal"); plt.loglog(n, lam_naive, label="ordinary PCA")
+  plt.loglog(n, np.clip(cv_spec, 1e-4, None), "o", ms=3, label="cross-validated PCA")
+  plt.xlabel("component"); plt.ylabel("variance"); plt.legend(frameon=False); plt.show()
+  print("participation ratio: true", round(pr_true, 1), " ordinary", round(pr_naive, 1), " cross-validated", round(pr_cv, 1))
+`}
+hint="Centre each test block by its own mean: B1 = R1[test] - R1[test].mean(axis=0), and the same for R2. Return np.mean((B1 @ Vt.T) * (B2 @ Vt.T), axis=0). pr_cv = participation_ratio(np.clip(cv_spec, 0, None))."
+solution={String.raw`
+  def cvpca(R1, R2, train, test):
+      A = R1[train] - R1[train].mean(axis=0)
+      Vt = np.linalg.svd(A, full_matrices=False)[2]
+      B1 = R1[test] - R1[test].mean(axis=0)
+      B2 = R2[test] - R2[test].mean(axis=0)
+      return np.mean((B1 @ Vt.T) * (B2 @ Vt.T), axis=0)
+
+  order = rng.permutation(S)
+  train, test = order[: S // 2], order[S // 2 :]
+  cv_spec = cvpca(R1, R2, train, test)
+  pr_cv = participation_ratio(np.clip(cv_spec, 0, None))
+
+  plt.figure(figsize=(5, 3.2))
+  plt.loglog(n, true_spec, label="true signal"); plt.loglog(n, lam_naive, label="ordinary PCA")
+  plt.loglog(n, np.clip(cv_spec, 1e-4, None), "o", ms=3, label="cross-validated PCA")
+  plt.xlabel("component"); plt.ylabel("variance"); plt.legend(frameon=False); plt.show()
+  print("participation ratio: true", round(pr_true, 1), " ordinary", round(pr_naive, 1), " cross-validated", round(pr_cv, 1))
+`} />
+
+The cross-validated spectrum follows the true one and has no noise floor. Its tail is scattered, since with 300 test stimuli the small variances are estimated with error, but it scatters around the truth rather than sitting above it. The participation ratio is back close to the true value.
+
+<Step n={4} title="Power laws" minutes={25} />
+
+Stringer and colleagues recorded about 10,000 neurons in mouse V1 and found that the cross-validated spectrum for natural images followed a power law with exponent close to 1. They then proved a striking result: for a representation of a $d$-dimensional set of stimuli to be smooth (nearby stimuli giving nearby responses), the exponent must exceed $1 + 2/d$. For natural images $d$ is large, so the threshold is just above 1. Their interpretation: visual cortex is as high-dimensional as it can be without becoming so sensitive to tiny input changes that it falls apart, a property they linked to the vulnerability of deep networks to adversarial examples.
+
+<PyCell id="alpha" title="Fit the exponent" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "fit_alpha recovers the exponent of an exact power law"
+      k = np.arange(1, 101)
+      assert np.isclose(fit_alpha(k ** -1.5, 2, 40), 1.5)
+
+  def test_estimates():
+      "the cross-validated exponent is near 1 and the naive one far below"
+      assert abs(alpha_cv - 1) < 0.25, alpha_cv
+      assert alpha_naive < 0.7
+`} prompt="Write `fit_alpha(spec, lo, hi)` that fits a straight line to log variance against log component number for components `lo` to `hi` (1-based, inclusive of `lo`, exclusive of `hi`), using only positive values, and returns minus the slope. Fit components 2 to 40 of the cross-validated and naive spectra."
+code={String.raw`
+  def fit_alpha(spec, lo, hi):
+      k = np.arange(lo, hi)              # component numbers, 1-based
+      y = spec[k - 1]
+      keep = y > 0
+      slope = ...
+      return -slope
+
+  alpha_cv = fit_alpha(cv_spec, 2, 40)
+  alpha_naive = fit_alpha(lam_naive, 2, 40)
+  print("exponent: cross-validated", round(alpha_cv, 2), " naive", round(alpha_naive, 2), " true 1.0")
+`}
+hint="slope = np.polyfit(np.log(k[keep]), np.log(y[keep]), 1)[0]. polyfit with degree 1 returns the slope first."
+solution={String.raw`
+  def fit_alpha(spec, lo, hi):
+      k = np.arange(lo, hi)              # component numbers, 1-based
+      y = spec[k - 1]
+      keep = y > 0
+      slope = np.polyfit(np.log(k[keep]), np.log(y[keep]), 1)[0]
+      return -slope
+
+  alpha_cv = fit_alpha(cv_spec, 2, 40)
+  alpha_naive = fit_alpha(lam_naive, 2, 40)
+  print("exponent: cross-validated", round(alpha_cv, 2), " naive", round(alpha_naive, 2), " true 1.0")
+`} />
+
+Ordinary PCA would have reported an exponent around 0.5, a much flatter and higher-dimensional code than the truth. Cross-validation recovers a value close to 1. When you read a dimensionality claim in a paper, ask three questions: was noise separated from signal, was the spectrum or the participation ratio or a variance threshold used, and was it trial-averaged? The answers can change "3 dimensions" into "hundreds".
+
+<Bridge title="Low or high dimensional?"
+  neuro="Motor and prefrontal cortex in simple tasks appear low-dimensional, while visual cortex responding to many natural images appears high-dimensional with a power-law spectrum. The two are compatible: dimensionality reflects both the circuit and the richness of the stimuli or task (Week 116)."
+  ai="Power-law spectra appear in deep networks too: Stringer and colleagues found exponents near 1 in networks made robust to adversarial perturbations, and the spectra of learned representations are used to predict how well they transfer to new tasks (Week 134).">
+
+"How many dimensions?" has no single answer. Report the spectrum, say how you handled noise, and say which summary you used.
+
+</Bridge>
+
+<Prove title="Squared projections keep the noise" task="With $a = x + \epsilon_1$ and $b = x + \epsilon_2$, where x, $\epsilon_1$ and $\epsilon_2$ are independent with mean zero and $\operatorname{Var}(\epsilon_i) = \sigma^2$, compute $\mathbb{E}[a^2]$ and $\mathbb{E}[ab]$. Why is the cross-validated estimate unbiased but noisier?">
+
+$\mathbb{E}[a^2] = \mathbb{E}[x^2] + 2\mathbb{E}[x\epsilon_1] + \mathbb{E}[\epsilon_1^2] = \operatorname{Var}(x) + \sigma^2$, since $\mathbb{E}[x\epsilon_1] = \mathbb{E}[x]\mathbb{E}[\epsilon_1] = 0$.
+
+$\mathbb{E}[ab] = \mathbb{E}[x^2] + \mathbb{E}[x\epsilon_2] + \mathbb{E}[\epsilon_1 x] + \mathbb{E}[\epsilon_1\epsilon_2] = \operatorname{Var}(x)$, since all three cross terms factor into products of zero means.
+
+So the average of $ab$ is an unbiased estimate of the signal variance. But each product $ab$ still contains the random terms $x\epsilon_2$, $\epsilon_1 x$ and $\epsilon_1\epsilon_2$; they average to zero only over many stimuli, so with finite data the estimate scatters, and can even come out negative for components with little signal. That is the scatter you saw in the tail.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "An eigenspectrum is...", options: ["The list of covariance eigenvalues in decreasing order", "The Fourier transform of a spike train", "The list of neurons", "The first PC"], answer: 0, explain: "Variance along PC1, PC2, and so on." },
+  { q: "Independent noise of variance σ² in every neuron changes the covariance eigenvalues by...", options: ["Multiplying by σ²", "Adding σ² to each", "Nothing", "Removing the smallest"], answer: 1, explain: "$\\Sigma_s + \\sigma^2 I$." },
+  { q: "Noise makes the participation ratio...", options: ["Smaller", "Larger", "Exactly n", "Exactly 1"], answer: 1, explain: "It lifts the tail." },
+  { q: "Cross-validated PCA removes noise by...", options: ["Smoothing", "Multiplying projections of two independent presentations", "Dropping neurons", "Averaging neurons"], answer: 1, explain: "Independent noises do not correlate." },
+  { q: "Why find the PCs on different stimuli from those used to measure variance?", options: ["Speed", "So the directions are not fitted to the same noise being measured", "To get more PCs", "It is not needed"], answer: 1, explain: "Another case of honest held-out evaluation." },
+  { q: "A power law $\\lambda_n \\propto n^{-\\alpha}$ on log-log axes is...", options: ["A parabola", "A straight line with slope −α", "Flat", "Exponential"], answer: 1, explain: "$\\log\\lambda = -\\alpha\\log n + c$." },
+  { q: "Stringer and colleagues found the exponent in mouse V1 to be close to...", options: ["0.1", "1", "3", "10"], answer: 1, explain: "Just above the smoothness threshold." },
+]} />
+
+<Flashcards cards={[
+  { front: "Eigenspectrum?", back: "Covariance eigenvalues sorted largest first; its shape describes dimensionality." },
+  { front: "Effect of independent noise on the spectrum?", back: "Adds σ² to every eigenvalue, creating a floor and inflating dimensionality." },
+  { front: "Cross-validated PCA?", back: "PCs from repeat 1 of training stimuli; variance = mean product of repeat 1 and repeat 2 projections on test stimuli." },
+  { front: "Why the cross product removes noise?", back: "$\\mathbb{E}[(x + \\epsilon_1)(x + \\epsilon_2)] = \\operatorname{Var}(x)$ when the noises are independent." },
+  { front: "Stringer et al. 2019?", back: "Mouse V1 spectrum for natural images follows $n^{-\\alpha}$ with α close to 1, near the threshold $1 + 2/d$ for a smooth code." },
+]} />
+
+<Predict revisit question="Ordinary PCA's participation ratio: closer to 16, 30 or 50?" />
+
+<Key title="Before you go">
+<ul>
+<li>Noise adds a floor to the spectrum and inflates every dimensionality estimate.</li>
+<li>Cross-validated PCA multiplies projections of independent repeats, keeping only reliable variance.</li>
+<li>Fit power laws on log-log axes; the exponent says how fast variance falls off.</li>
+<li>Always ask how a dimensionality estimate handled noise, averaging and the choice of summary.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Stringer, Pachitariu, Steinmetz, Carandini and Harris (2019), <em>High-dimensional geometry of population responses in visual cortex</em>.</li>
+<li>Cunningham and Yu (2014), section on choosing dimensionality, for the second pass of this week's deep read.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Motor cortex during reaching looks low-dimensional; visual cortex viewing natural images looks high-dimensional. Write a paragraph arguing that this difference comes from the experiments rather than the areas, and then one arguing the opposite." />

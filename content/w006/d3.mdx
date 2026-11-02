@@ -1,0 +1,290 @@
+export const meta = {
+  title: "Diagonalisation and matrix powers: what repeated connectivity does",
+  intro: "In the right coordinates, most matrices are just stretches along axes. Diagonalisation finds those coordinates: change to the eigenvector basis, scale each axis by its eigenvalue, change back. With it, a hundred steps of a recurrent circuit cost no more than one, and you can read off how long each activity pattern lasts. You will also meet the catch that shapes real cortex: when eigenvectors are far from perpendicular, eigenvalues alone can badly mislead.",
+  goals: [
+    "Write a diagonalisable matrix as $V\\Lambda V^{-1}$ and explain each factor",
+    "Compute matrix powers through the eigen-decomposition",
+    "Predict how long each activity mode lasts from its eigenvalue",
+    "Recognise transient amplification in non-normal circuits",
+  ],
+  plan: [
+    { label: "Predict and change of basis", minutes: 25 },
+    { label: "Diagonalisation", minutes: 25 },
+    { label: "Modes and their lifetimes", minutes: 30 },
+    { label: "When eigenvalues mislead", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "murphy-2009",
+};
+
+<Predict question="A two-population circuit has eigenvalues 0.9 and 0.8, both below 1. You give it a small kick. Could its total activity ever become larger than the kick before it dies away?" />
+
+<Step n={1} title="Change of basis" minutes={25} />
+
+A vector's coordinates depend on the basis you describe it in. If the columns of $V$ are a basis, the coordinates $\mathbf{c}$ of $\mathbf{x}$ in that basis satisfy $\mathbf{x} = V\mathbf{c}$ (Week 4), so
+
+$$
+\mathbf{c} = V^{-1}\mathbf{x}, \qquad \mathbf{x} = V\mathbf{c}
+$$
+
+$V^{-1}$ translates from standard coordinates into the new ones, and $V$ translates back.
+
+<Video id="P2LTAfO9m3U" title="Change of basis | Chapter 13, Essence of linear algebra" by="3Blue1Brown (Grant Sanderson)" note="How the same transformation looks in a different coordinate system: the key to diagonalisation." />
+
+<Step n={2} title="Diagonalisation" minutes={25} />
+
+Suppose an $n \times n$ matrix $A$ has $n$ linearly independent eigenvectors. Put them in the columns of $V$ and the eigenvalues on the diagonal of $\Lambda$. Yesterday's equation $AV = V\Lambda$ can be multiplied on the right by $V^{-1}$:
+
+$$
+A = V\Lambda V^{-1}
+$$
+
+Read it right to left as three moves: $V^{-1}$ converts $\mathbf{x}$ into eigen-coordinates, $\Lambda$ stretches each coordinate by its eigenvalue, and $V$ converts back. **In the eigenvector basis, $A$ is just a diagonal matrix.**
+
+<Derivation title="Powers come for free">
+  <div>
+
+Square it: $A^2 = V\Lambda V^{-1}V\Lambda V^{-1} = V\Lambda^2V^{-1}$, because $V^{-1}V = I$ in the middle.
+
+  </div>
+  <div>
+
+The same cancellation happens $k - 1$ times in $A^k$, so
+
+$$
+A^k = V\Lambda^kV^{-1}
+$$
+
+  </div>
+  <div>
+
+$\Lambda^k$ is diagonal with entries $\lambda_i^k$, which costs nothing to compute. A hundred steps of a recurrent circuit need one eigen-decomposition and $n$ powers of numbers.
+
+  </div>
+</Derivation>
+
+<PyCell code={String.raw`
+  import numpy as np
+  A = np.array([[0.7, 0.3],
+                [0.2, 0.6]])
+  lam, V = np.linalg.eig(A)
+  print("eigenvalues:", lam.round(3))
+  print("V Λ V⁻¹ =\n", (V @ np.diag(lam) @ np.linalg.inv(V)).round(3))
+`} />
+
+<PyCell id="power" title="Matrix powers through eigenvalues" tests={String.raw`
+  import numpy as np
+  import dis
+  def test_match():
+      "matches np.linalg.matrix_power for several k"
+      M = np.array([[0.7, 0.3], [0.2, 0.6]])
+      for k in [0, 1, 5, 40]:
+          assert np.allclose(eig_power(M, k), np.linalg.matrix_power(M, k))
+
+  def test_3d():
+      "works for a 3 by 3 matrix"
+      M = np.array([[0.5, 0.3, 0.0], [0.3, 0.4, 0.2], [0.0, 0.2, 0.6]])
+      assert np.allclose(eig_power(M, 12), np.linalg.matrix_power(M, 12))
+
+  def test_no_matrix_power():
+      "does not call matrix_power"
+      names = {i.argval for i in dis.get_instructions(eig_power)}
+      assert "matrix_power" not in names
+`} prompt="Write `eig_power(A, k)` that computes $A^k$ as $V\Lambda^kV^{-1}$ using `np.linalg.eig`, without calling `matrix_power`. Return the real part (tiny imaginary rounding errors can appear)."
+code={String.raw`
+  def eig_power(A, k):
+      lam, V = np.linalg.eig(A)
+      ...
+
+  print(eig_power(A, 10).round(4))
+  print(np.linalg.matrix_power(A, 10).round(4))
+`}
+hint="return (V @ np.diag(lam ** k) @ np.linalg.inv(V)).real"
+solution={String.raw`
+  def eig_power(A, k):
+      lam, V = np.linalg.eig(A)
+      return (V @ np.diag(lam ** k) @ np.linalg.inv(V)).real
+
+  print(eig_power(A, 10).round(4))
+  print(np.linalg.matrix_power(A, 10).round(4))
+`} />
+
+Not every matrix can be diagonalised. The shear $\begin{pmatrix} 1 & 1 \\ 0 & 1 \end{pmatrix}$ has the eigenvalue 1 twice but only one eigen-direction, so there are not enough eigenvectors to fill $V$. Such defective matrices are rare in practice (a tiny random perturbation fixes them) but they mark the boundary where today's tools stop working. Every **symmetric** matrix can be diagonalised, with perpendicular eigenvectors (Day 5).
+
+<Step n={3} title="Modes and their lifetimes" minutes={30} />
+
+For the circuit $\mathbf{x}_{t+1} = A\mathbf{x}_t$, diagonalisation splits activity into **modes**. Write $\mathbf{c}_0 = V^{-1}\mathbf{x}_0$. Then
+
+$$
+\mathbf{x}_t = A^t\mathbf{x}_0 = V\Lambda^t\mathbf{c}_0 = \sum_i c_{0,i}\,\lambda_i^t\,\mathbf{v}_i
+$$
+
+Each mode evolves on its own, multiplied by $\lambda_i$ every step. A mode with $0 \lt \lambda \lt 1$ halves after $t_{1/2}$ steps, where $\lambda^{t_{1/2}} = \frac{1}{2}$:
+
+$$
+t_{1/2} = \frac{\ln(1/2)}{\ln\lambda}
+$$
+
+An eigenvalue of 0.99 gives a half-life of about 69 steps; 0.5 gives one step. Eigenvalues close to 1 make memories.
+
+<Figure caption="Repeatedly applying A. Drag the start point: the trajectory turns towards the eigenvector of the largest eigenvalue. Try the line attractor and the spiral." credit="Interactive figure by Engram.">
+  <MatrixPowers />
+</Figure>
+
+<PyCell id="modes" title="Simulate through modes" tests={String.raw`
+  import numpy as np
+  def test_coords():
+      "c0 holds the eigen-coordinates of x0"
+      assert np.allclose(V @ c0, x0)
+
+  def test_traj():
+      "traj from the modes matches direct simulation"
+      x = x0.copy(); direct = [x]
+      for t in range(30):
+          x = A @ x; direct.append(x)
+      assert traj.shape == (31, 2) and np.allclose(traj, np.array(direct))
+
+  def test_half():
+      "half_lives matches ln(1/2) / ln(lambda) for each mode"
+      assert np.allclose(np.sort(half_lives), np.sort(np.log(0.5) / np.log(lam)))
+`} prompt="Starting from `x0`, compute the eigen-coordinates `c0`, then build `traj` (31 by 2) whose row `t` is $\sum_i c_{0,i}\lambda_i^t\mathbf{v}_i$, using no loop over matrix multiplications (a loop over t is fine, or use broadcasting). Finally compute each mode's half-life in steps."
+code={String.raw`
+  import matplotlib.pyplot as plt
+  x0 = np.array([1.0, -0.5])
+  c0 = ...
+  ts = np.arange(31)
+  traj = ...                      # shape (31, 2)
+  half_lives = ...
+
+  plt.figure(figsize=(5, 3))
+  plt.plot(ts, traj[:, 0], label="population 1"); plt.plot(ts, traj[:, 1], label="population 2")
+  plt.xlabel("step"); plt.legend(frameon=False); plt.show()
+  print("eigenvalues", lam.round(3), " half-lives", np.round(half_lives, 2))
+`}
+hint="c0 = np.linalg.solve(V, x0). Broadcast: traj = ((lam[None, :] ** ts[:, None]) * c0[None, :]) @ V.T, because row t should be V @ (lam ** t * c0). half_lives = np.log(0.5) / np.log(lam)."
+solution={String.raw`
+  import matplotlib.pyplot as plt
+  x0 = np.array([1.0, -0.5])
+  c0 = np.linalg.solve(V, x0)
+  ts = np.arange(31)
+  traj = ((lam[None, :] ** ts[:, None]) * c0[None, :]) @ V.T
+  half_lives = np.log(0.5) / np.log(lam)
+
+  plt.figure(figsize=(5, 3))
+  plt.plot(ts, traj[:, 0], label="population 1"); plt.plot(ts, traj[:, 1], label="population 2")
+  plt.xlabel("step"); plt.legend(frameon=False); plt.show()
+  print("eigenvalues", lam.round(3), " half-lives", np.round(half_lives, 2))
+`} />
+
+<Step n={4} title="When eigenvalues mislead" minutes={25} />
+
+The mode picture suggests that if every $|\lambda| \lt 1$, activity simply shrinks. That is true eventually, but not necessarily at first. Consider a circuit where population 1 is driven strongly by population 2 but not the other way round:
+
+$$
+B = \begin{pmatrix} 0.9 & 2 \\ 0 & 0.8 \end{pmatrix}
+$$
+
+It is triangular, so its eigenvalues are 0.9 and 0.8. Yet its eigenvectors, $(1, 0)$ and about $(1, -0.05)$, are almost parallel. To express a vector like $(0, 1)$ in such a basis you need two huge coefficients of opposite sign that nearly cancel. As the modes decay at different rates the cancellation fails and the activity swells before it fades.
+
+<PyCell id="transient" title="Transient amplification" tests={String.raw`
+  import numpy as np
+  def test_norms():
+      "norms_B and norms_S have 41 values each, starting at 1"
+      assert len(norms_B) == 41 and len(norms_S) == 41
+      assert np.isclose(norms_B[0], 1) and np.isclose(norms_S[0], 1)
+
+  def test_amplify():
+      "the non-normal circuit grows to more than 3 times the kick before decaying"
+      assert max(norms_B) > 3 and norms_B[-1] < max(norms_B)
+
+  def test_symmetric():
+      "the symmetric circuit with the same eigenvalues never grows"
+      assert np.all(np.diff(norms_S) <= 1e-12)
+`} prompt="Kick each circuit with the unit vector `x0 = (0, 1)` and record the length of the activity $\lVert B^t\mathbf{x}_0 \rVert$ for t = 0 to 40 in `norms_B`. Do the same for `S`, a diagonal matrix with the same eigenvalues, in `norms_S`. Plot both."
+code={String.raw`
+  B = np.array([[0.9, 2.0], [0.0, 0.8]])
+  S = np.diag([0.9, 0.8])
+  x0 = np.array([0.0, 1.0])
+  norms_B, norms_S = [], []
+  xb, xs = x0.copy(), x0.copy()
+  for t in range(41):
+      ...
+
+  plt.figure(figsize=(5, 3))
+  plt.plot(norms_B, label="non-normal B"); plt.plot(norms_S, label="symmetric, same eigenvalues")
+  plt.xlabel("step"); plt.ylabel("|x_t|"); plt.legend(frameon=False); plt.show()
+  print("peak", round(max(norms_B), 2), "at step", int(np.argmax(norms_B)))
+`}
+hint="In the loop: norms_B.append(np.linalg.norm(xb)); norms_S.append(np.linalg.norm(xs)); xb = B @ xb; xs = S @ xs."
+solution={String.raw`
+  B = np.array([[0.9, 2.0], [0.0, 0.8]])
+  S = np.diag([0.9, 0.8])
+  x0 = np.array([0.0, 1.0])
+  norms_B, norms_S = [], []
+  xb, xs = x0.copy(), x0.copy()
+  for t in range(41):
+      norms_B.append(np.linalg.norm(xb)); norms_S.append(np.linalg.norm(xs))
+      xb = B @ xb; xs = S @ xs
+
+  plt.figure(figsize=(5, 3))
+  plt.plot(norms_B, label="non-normal B"); plt.plot(norms_S, label="symmetric, same eigenvalues")
+  plt.xlabel("step"); plt.ylabel("|x_t|"); plt.legend(frameon=False); plt.show()
+  print("peak", round(max(norms_B), 2), "at step", int(np.argmax(norms_B)))
+`} />
+
+The kick of size 1 grows more than fivefold before decaying, even though both eigenvalues are below 1. That answers the prediction. A matrix whose eigenvectors are not perpendicular is called **non-normal** (formally, $A^\top A \neq AA^\top$). Murphy and Miller (2009), today's paper, showed that circuits with strong excitation balanced by strong inhibition are strongly non-normal: a small difference between excitatory and inhibitory activity is fed forward into a large, shared response. They called this **balanced amplification** and argued that it shapes activity in visual cortex.
+
+<Bridge title="Hidden feedforward structure"
+  neuro="Excitatory neurons excite everyone and inhibitory neurons inhibit everyone, so connectivity in cortex is far from symmetric. Its eigenvalues can all be stable while patterns are amplified transiently; the motor cortex rotations you will meet in Week 7 have been modelled this way too."
+  ai="Deep feedforward networks are extreme non-normal systems: each layer feeds the next and nothing feeds back, so every eigenvalue of the full connectivity is zero, yet signals can grow or shrink enormously across layers. This is why initialisation is about singular values (next week), not eigenvalues.">
+
+Eigenvalues tell you what happens in the long run. For the short run with non-normal matrices, look at the geometry of the eigenvectors, or at the singular values.
+
+</Bridge>
+
+<Prove title="A defective matrix" task="Show that $N = \begin{pmatrix} 1 & 1 \\ 0 & 1 \end{pmatrix}$ has only one independent eigenvector, and compute $N^k$ directly. Does the size of $N^k\mathbf{x}$ stay bounded for every $\mathbf{x}$, as the eigenvalue 1 might suggest?">
+
+The characteristic polynomial is $(1 - \lambda)^2$, so $\lambda = 1$ twice. $(N - I)\mathbf{v} = \mathbf{0}$ reads $v_2 = 0$, so every eigenvector is a multiple of $(1, 0)$: only one direction, too few to diagonalise.
+
+Multiply out: $N^2 = \begin{pmatrix} 1 & 2 \\ 0 & 1 \end{pmatrix}$, and by induction $N^k = \begin{pmatrix} 1 & k \\ 0 & 1 \end{pmatrix}$. Then $N^k(0, 1) = (k, 1)$, which grows without bound, linearly in $k$. So an eigenvalue of size 1 does not guarantee bounded activity when the matrix is defective: the missing eigenvector shows up as growth like $k\lambda^k$.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "In $A = V\\Lambda V^{-1}$, the columns of V are...", options: ["The rows of A", "The eigenvectors of A", "The eigenvalues", "Random vectors"], answer: 1, explain: "Λ holds the eigenvalues." },
+  { q: "$V^{-1}\\mathbf{x}$ gives...", options: ["The eigenvalues", "The coordinates of x in the eigenvector basis", "$A\\mathbf{x}$", "The length of x"], answer: 1, explain: "It translates into eigen-coordinates." },
+  { q: "$A^{10}$ equals...", options: ["$V\\Lambda^{10}V^{-1}$", "$V^{10}\\Lambda V^{-10}$", "$10V\\Lambda V^{-1}$", "$\\Lambda^{10}$"], answer: 0, explain: "The inner $V^{-1}V$ pairs cancel." },
+  { q: "A mode with eigenvalue 0.5 has a half-life of...", options: ["0.5 steps", "1 step", "2 steps", "69 steps"], answer: 1, explain: "$0.5^1 = 0.5$." },
+  { q: "Which matrix cannot be diagonalised?", options: ["$\\begin{pmatrix} 2 & 0 \\\\ 0 & 3 \\end{pmatrix}$", "$\\begin{pmatrix} 1 & 1 \\\\ 0 & 1 \\end{pmatrix}$", "$\\begin{pmatrix} 2 & 1 \\\\ 1 & 2 \\end{pmatrix}$", "The identity"], answer: 1, explain: "A repeated eigenvalue with only one eigenvector." },
+  { q: "A non-normal circuit with all |λ| less than 1 can...", options: ["Never exceed its initial activity", "Amplify activity transiently before it decays", "Oscillate for ever", "Have a negative determinant only"], answer: 1, explain: "Nearly parallel eigenvectors allow transient growth." },
+  { q: "Balanced amplification (Murphy and Miller) relies on...", options: ["Eigenvalues above 1", "Non-normal E-I connectivity", "Symmetric weights", "Noise"], answer: 1, explain: "Differences are fed forward into sums." },
+]} />
+
+<Flashcards cards={[
+  { front: "Diagonalisation?", back: "$A = V\\Lambda V^{-1}$: change to eigen-coordinates, stretch each by its eigenvalue, change back. Needs n independent eigenvectors." },
+  { front: "Matrix power via eigenvalues?", back: "$A^k = V\\Lambda^kV^{-1}$." },
+  { front: "Mode decomposition of $\\mathbf{x}_t$?", back: "$\\mathbf{x}_t = \\sum_i c_i\\lambda_i^t\\mathbf{v}_i$ with $\\mathbf{c} = V^{-1}\\mathbf{x}_0$." },
+  { front: "Half-life of a mode?", back: "$t_{1/2} = \\ln(1/2) / \\ln\\lambda$ steps." },
+  { front: "Non-normal matrix?", back: "$A^\\top A \\neq AA^\\top$; eigenvectors not orthogonal. Stable eigenvalues can still allow large transient growth." },
+  { front: "Defective matrix?", back: "Too few eigenvectors to diagonalise, e.g. a shear; produces growth like $k\\lambda^k$." },
+]} />
+
+<Predict revisit question="Eigenvalues 0.9 and 0.8: can a kick grow before it fades?" />
+
+<Key title="Before you go">
+<ul>
+<li>In its eigenvector basis a diagonalisable matrix is just a set of stretches: $A = V\Lambda V^{-1}$.</li>
+<li>Powers are cheap: $A^k = V\Lambda^kV^{-1}$, and each mode lasts according to its eigenvalue.</li>
+<li>Eigenvalues near 1 give long-lived modes, the basis of memory in linear circuits.</li>
+<li>Non-normal circuits can amplify transiently despite stable eigenvalues.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Murphy and Miller (2009), <em>Balanced amplification</em>. Focus on the two-population example.</li>
+<li>Lloyd Trefethen and Mark Embree, <em>Spectra and Pseudospectra</em>, Chapter 1, for the mathematics of non-normal behaviour (advanced, optional).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Explain balanced amplification to a friend using the matrix B from today: which population drives which, and why does a small kick to population 2 produce a large response in population 1?" />

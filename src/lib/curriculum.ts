@@ -87,6 +87,22 @@ export const DAY_TITLES: Record<number, string[]> = {
     "Linear decoding, overfitting and ridge regression",
     "Forge: Week 5 challenge, quiz and deep read",
   ],
+  6: [
+    "Eigenvectors: the directions a matrix only stretches",
+    "Finding eigenvalues: the characteristic polynomial, trace and determinant",
+    "Diagonalisation and matrix powers: what repeated connectivity does",
+    "Linear dynamics: stability, oscillation and the line attractor",
+    "Symmetric matrices: the spectral theorem, covariance and energy",
+    "Forge: Week 6 challenge, quiz and deep read",
+  ],
+  7: [
+    "The singular value decomposition: rotate, stretch, rotate",
+    "Low-rank approximation: keeping the structure, dropping the noise",
+    "Principal component analysis: directions of greatest variance",
+    "PCA on neural populations: trajectories and dimensionality reduction",
+    "How many dimensions? Spectra, noise and cross-validation",
+    "Forge: Week 7 challenge, quiz and deep read",
+  ],
 };
 
 export const DAYS_PER_WEEK = 6;
@@ -115,7 +131,7 @@ export function dayTitle(w: number, d: number): string {
 }
 
 /** Weeks whose lesson files exist. Kept in sync by hand as content is written. */
-export const WRITTEN_WEEKS = [1, 2, 3, 4, 5];
+export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7];
 export const isWritten = (w: number) => WRITTEN_WEEKS.includes(w);
 
 /** Every lesson that is published, in order. */
