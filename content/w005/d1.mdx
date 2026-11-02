@@ -1,0 +1,272 @@
+export const meta = {
+  title: "Matrices as transformations: what a layer of neurons does",
+  intro: "Last week each neuron was one dot product. A layer of neurons does many dot products at once, and that is a matrix times a vector. Today you learn to read a matrix three ways (a table of weights, a stack of rows, a set of columns) and to see it as a transformation that moves every point of a space, which is what each layer of a neural network, and each stage of a sensory pathway, does to its input.",
+  goals: [
+    "Compute a matrix-vector product by rows and by columns",
+    "Read a 2 by 2 matrix as a transformation of the plane",
+    "Recognise rotations, scalings, shears and projections from their matrices",
+    "Write a layer of linear-nonlinear neurons as r = f(Wx + b)",
+  ],
+  plan: [
+    { label: "Predict and what a matrix is", minutes: 15 },
+    { label: "Two ways to multiply", minutes: 25 },
+    { label: "Matrices move space", minutes: 30 },
+    { label: "A layer of neurons", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 20 },
+  ],
+  paper: "lecun-2015",
+};
+
+<Predict question="A matrix W connects 1,000 input neurons to 200 output neurons. How many numbers does W contain, and what shape is it?" />
+
+<Step n={1} title="What a matrix is" minutes={15} />
+
+A **matrix** is a rectangular table of numbers. A matrix with $m$ rows and $n$ columns has **shape** $m \times n$; its entry in row $i$ and column $j$ is $W_{ij}$.
+
+In neuroscience the most useful matrix is a **weight matrix**: $W_{ij}$ is the strength of the connection from input neuron $j$ to output neuron $i$. Row $i$ lists everything that output neuron $i$ listens to (its receptive field, last week's weight vector). Column $j$ lists where input neuron $j$ sends its signal. For today's prediction: 200 rows, 1,000 columns, 200,000 numbers.
+
+$$
+W = \begin{pmatrix} W_{11} & W_{12} & \cdots & W_{1n} \\ \vdots & & & \vdots \\ W_{m1} & W_{m2} & \cdots & W_{mn} \end{pmatrix}
+$$
+
+<Video id="kYB8IZa5AuE" title="Linear transformations and matrices | Chapter 3, Essence of linear algebra" by="3Blue1Brown (Grant Sanderson)" note="The single best explanation of a matrix as a transformation. Watch it before Step 3." />
+
+<Step n={2} title="Two ways to multiply" minutes={25} />
+
+The product $\mathbf{y} = W\mathbf{x}$ of an $m \times n$ matrix with a vector of length $n$ is a vector of length $m$. There are two equally true ways to compute it.
+
+**Row view.** Entry $i$ of the output is the dot product of row $i$ with $\mathbf{x}$:
+
+$$
+y_i = \sum_{j=1}^{n} W_{ij} x_j
+$$
+
+Each output neuron takes a weighted sum of all its inputs, exactly last week's linear neuron.
+
+**Column view.** The output is a linear combination of the columns, weighted by the entries of $\mathbf{x}$ (Week 4, Day 4):
+
+$$
+W\mathbf{x} = x_1\,\mathbf{w}_{:,1} + x_2\,\mathbf{w}_{:,2} + \dots + x_n\,\mathbf{w}_{:,n}
+$$
+
+Each input neuron adds its column (its pattern of outgoing connections) into the output, scaled by how active it is.
+
+<PyCell id="matvec" title="Row view and column view" tests={String.raw`
+  import numpy as np
+  def test_rows():
+      "matvec_rows matches W @ x"
+      W = np.random.default_rng(0).normal(size=(4, 3)); x = np.array([1.0, -2.0, 0.5])
+      assert np.allclose(matvec_rows(W, x), W @ x)
+
+  def test_cols():
+      "matvec_cols matches W @ x"
+      W = np.random.default_rng(1).normal(size=(3, 5)); x = np.arange(5.0)
+      assert np.allclose(matvec_cols(W, x), W @ x)
+`} prompt="Write `matvec_rows(W, x)` that builds the output from dot products of rows with `x`, and `matvec_cols(W, x)` that builds it as a sum of columns scaled by the entries of `x`. Both should match `W @ x`."
+code={String.raw`
+  import numpy as np
+
+  def matvec_rows(W, x):
+      return np.array([...])
+
+  def matvec_cols(W, x):
+      y = np.zeros(W.shape[0])
+      for j in range(W.shape[1]):
+          ...
+      return y
+
+  W = np.array([[1.0, 2.0], [0.0, 1.0], [3.0, -1.0]])
+  x = np.array([2.0, 1.0])
+  print(matvec_rows(W, x), matvec_cols(W, x), W @ x)
+`}
+hint="Rows: np.array([W[i] @ x for i in range(W.shape[0])]). Columns: inside the loop, y = y + x[j] * W[:, j]."
+solution={String.raw`
+  import numpy as np
+
+  def matvec_rows(W, x):
+      return np.array([W[i] @ x for i in range(W.shape[0])])
+
+  def matvec_cols(W, x):
+      y = np.zeros(W.shape[0])
+      for j in range(W.shape[1]):
+          y = y + x[j] * W[:, j]
+      return y
+
+  W = np.array([[1.0, 2.0], [0.0, 1.0], [3.0, -1.0]])
+  x = np.array([2.0, 1.0])
+  print(matvec_rows(W, x), matvec_cols(W, x), W @ x)
+`} />
+
+The shapes must line up: an $m \times n$ matrix needs a vector of length $n$, and gives one of length $m$. When a NumPy `@` raises a shape error, write the shapes next to each other and check that the inner numbers match.
+
+<Step n={3} title="Matrices move space" minutes={30} />
+
+A matrix sends every input vector to an output vector, so it moves every point of a space. These moves are **linear**: they keep the origin fixed and keep lines straight, parallel and evenly spaced. Formally, $W(a\mathbf{x} + b\mathbf{y}) = aW\mathbf{x} + bW\mathbf{y}$.
+
+The column view gives the key fact: **the columns of a matrix are where the basis vectors land.** $W\mathbf{e}_1$ is the first column, $W\mathbf{e}_2$ the second. Know where the basis vectors go and you know where everything goes.
+
+<Figure caption="A 2 by 2 matrix transforms the whole plane. The coloured arrows are the columns: the images of (1, 0) and (0, 1)." credit="Interactive figure by Engram, after 3Blue1Brown's Essence of linear algebra.">
+  <MatrixTransform />
+</Figure>
+
+| Matrix | What it does |
+| --- | --- |
+| $\begin{pmatrix} 2 & 0 \\ 0 & 2 \end{pmatrix}$ | Scales everything by 2 |
+| $\begin{pmatrix} \cos\theta & -\sin\theta \\ \sin\theta & \cos\theta \end{pmatrix}$ | Rotates by $\theta$ anticlockwise |
+| $\begin{pmatrix} 1 & k \\ 0 & 1 \end{pmatrix}$ | Shears: pushes points sideways in proportion to their height |
+| $\begin{pmatrix} 1 & 0 \\ 0 & 0 \end{pmatrix}$ | Projects onto the x axis, flattening the plane |
+
+<PyCell id="rotation" title="Rotations keep lengths and angles" tests={String.raw`
+  import numpy as np
+  def test_rotation():
+      "rotation(theta) rotates (1, 0) to (cos, sin)"
+      R = rotation(np.pi / 3)
+      assert np.allclose(R @ np.array([1.0, 0.0]), [np.cos(np.pi / 3), np.sin(np.pi / 3)])
+
+  def test_lengths():
+      "rotated points keep their lengths"
+      assert np.allclose(np.linalg.norm(rotated, axis=0), np.linalg.norm(points, axis=0))
+
+  def test_orthonormal():
+      "a rotation matrix has orthonormal columns"
+      R = rotation(1.234)
+      assert np.allclose(R.T @ R, np.eye(2))
+`} prompt="Write `rotation(theta)` that returns the 2 by 2 rotation matrix. Rotate all 50 points in `points` (shape 2 by 50, one point per column) by 40° with a single `@`, store them in `rotated`, and plot both."
+code={String.raw`
+  import matplotlib.pyplot as plt
+
+  def rotation(theta):
+      return np.array(...)
+
+  rng = np.random.default_rng(0)
+  points = rng.normal(size=(2, 50)) * np.array([[2.0], [0.5]])    # an elongated cloud
+  rotated = ...
+  plt.figure(figsize=(4, 4))
+  plt.scatter(*points, s=10, label="original"); plt.scatter(*rotated, s=10, label="rotated 40°")
+  plt.axis("equal"); plt.legend(frameon=False); plt.show()
+`}
+hint="np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]). Then rotated = rotation(np.radians(40)) @ points: multiplying a matrix by a 2 by 50 array transforms all 50 columns at once."
+solution={String.raw`
+  import matplotlib.pyplot as plt
+
+  def rotation(theta):
+      return np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
+
+  rng = np.random.default_rng(0)
+  points = rng.normal(size=(2, 50)) * np.array([[2.0], [0.5]])
+  rotated = rotation(np.radians(40)) @ points
+  plt.figure(figsize=(4, 4))
+  plt.scatter(*points, s=10, label="original"); plt.scatter(*rotated, s=10, label="rotated 40°")
+  plt.axis("equal"); plt.legend(frameon=False); plt.show()
+`} />
+
+A rotation's columns are orthonormal (Week 4, Day 5), which is why it preserves every length and angle. Matrices with orthonormal columns are called **orthogonal** matrices; you will see them again as the "rotation" part of every matrix in Week 7 (SVD).
+
+<Step n={4} title="A layer of neurons" minutes={30} />
+
+Put last week's linear-nonlinear neuron in a row, many times over, and you have a layer:
+
+$$
+\mathbf{r} = f(W\mathbf{x} + \mathbf{b})
+$$
+
+where $\mathbf{x}$ holds the input rates, $W$ the weights, $\mathbf{b}$ each neuron's bias and $f$ is applied to every entry. This one line describes a population of model V1 cells receiving input from the LGN, and also every layer of a deep network.
+
+<PyCell id="layer" title="A layer of rectified linear neurons" tests={String.raw`
+  import numpy as np
+  def test_single():
+      "layer computes relu(W x + b) for one input"
+      W = np.array([[1.0, -1.0], [2.0, 0.5]]); b = np.array([0.0, -1.0]); x = np.array([1.0, 3.0])
+      assert np.allclose(layer(W, b, x), np.maximum(0, W @ x + b))
+
+  def test_batch():
+      "layer_batch handles many trials at once (rows are trials)"
+      rng = np.random.default_rng(1)
+      W = rng.normal(size=(5, 3)); b = rng.normal(size=5); X = rng.normal(size=(10, 3))
+      out = layer_batch(W, b, X)
+      assert out.shape == (10, 5)
+      assert np.allclose(out[4], layer(W, b, X[4]))
+`} prompt="Write `layer(W, b, x)`: the rectified output $\max(0, W\mathbf{x} + \mathbf{b})$ for one input vector. Then write `layer_batch(W, b, X)` for a whole matrix of inputs, one trial per row (shape trials by inputs), returning one row of outputs per trial. Use one matrix product, no loop."
+code={String.raw`
+  def layer(W, b, x):
+      ...
+
+  def layer_batch(W, b, X):
+      ...
+
+  rng = np.random.default_rng(2)
+  W = rng.normal(size=(5, 3)); b = np.zeros(5)
+  X = rng.normal(size=(1000, 3))
+  print(layer_batch(W, b, X).shape)
+`}
+hint="layer: np.maximum(0, W @ x + b). For a batch with trials in rows, each row x becomes W @ x; stacked, that is X @ W.T. So layer_batch: np.maximum(0, X @ W.T + b) (b broadcasts across rows)."
+solution={String.raw`
+  def layer(W, b, x):
+      return np.maximum(0, W @ x + b)
+
+  def layer_batch(W, b, X):
+      return np.maximum(0, X @ W.T + b)
+
+  rng = np.random.default_rng(2)
+  W = rng.normal(size=(5, 3)); b = np.zeros(5)
+  X = rng.normal(size=(1000, 3))
+  print(layer_batch(W, b, X).shape)
+`} />
+
+The batch version used the **transpose** $W^\top$ (rows and columns swapped) so that trials could sit in rows. Machine learning code almost always stores data with one example per row, which is why you will write `X @ W.T` far more often than `W @ x`. Tomorrow you will meet transposes properly.
+
+<Bridge title="Layers in brains and machines"
+  neuro="Sensory pathways are chains of populations: retina to thalamus to V1 to V2 and onwards. Each stage receives a weighted combination of the previous stage's activity, passes it through nonlinear neurons and sends it on. The weights are synapses, shaped by development and learning."
+  ai="A deep network is the same chain: each layer applies a learned weight matrix, adds a bias and a nonlinearity. This week's AI paper (LeCun, Bengio and Hinton, 2015) explains how stacking such layers builds increasingly abstract representations.">
+
+The analogy is not exact: real pathways have feedback, recurrence and many cell types. But the matrix is the shared language, and it lets you compare the two.
+
+</Bridge>
+
+<Prove title="Columns determine the matrix" task="Show that if you know $W\mathbf{e}_1, \dots, W\mathbf{e}_n$ for the standard basis vectors, you know $W\mathbf{x}$ for every $\mathbf{x}$. Use this to write down the matrix that sends (1, 0) to (0, 1) and (0, 1) to (−1, 0). Which transformation is it?">
+
+Any $\mathbf{x}$ is $x_1\mathbf{e}_1 + \dots + x_n\mathbf{e}_n$. Linearity gives $W\mathbf{x} = x_1 W\mathbf{e}_1 + \dots + x_n W\mathbf{e}_n$, so the images of the basis vectors fix everything.
+
+Those images are the columns: $W = \begin{pmatrix} 0 & -1 \\ 1 & 0 \end{pmatrix}$. It sends (1, 0) up to (0, 1) and (0, 1) to (−1, 0): a rotation by 90° anticlockwise. Check it against the rotation formula with $\theta = 90°$.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "A weight matrix from 300 inputs to 50 outputs has shape...", options: ["300 × 50", "50 × 300", "50 × 50", "350"], answer: 1, explain: "Rows are outputs, columns are inputs." },
+  { q: "In $\\mathbf{y} = W\\mathbf{x}$, entry $y_i$ is...", options: ["The sum of column i", "The dot product of row i of W with x", "$W_{ii} x_i$", "The norm of x"], answer: 1, explain: "The row view." },
+  { q: "The first column of W is...", options: ["Where (1, 0, ..., 0) lands", "The largest row", "The bias", "Always a unit vector"], answer: 0, explain: "$W\\mathbf{e}_1$ is column 1." },
+  { q: "Which matrix rotates by 90° anticlockwise?", options: ["$\\begin{pmatrix} 0 & -1 \\\\ 1 & 0 \\end{pmatrix}$", "$\\begin{pmatrix} 1 & 0 \\\\ 0 & -1 \\end{pmatrix}$", "$\\begin{pmatrix} 2 & 0 \\\\ 0 & 2 \\end{pmatrix}$", "$\\begin{pmatrix} 1 & 1 \\\\ 0 & 1 \\end{pmatrix}$"], answer: 0, explain: "Its columns are (0, 1) and (−1, 0)." },
+  { q: "A linear transformation always...", options: ["Moves the origin", "Keeps the origin fixed and lines straight", "Preserves lengths", "Is a rotation"], answer: 1, explain: "Only special ones (orthogonal matrices) preserve lengths." },
+  { q: "With trials in the rows of X (trials × inputs), a layer's linear outputs are...", options: ["W @ X", "X @ W.T", "X @ W", "W.T @ X.T @ W"], answer: 1, explain: "Each row x becomes Wx; stacked, that is X Wᵀ." },
+  { q: "A layer of neurons in one line is...", options: ["$\\mathbf{r} = W + \\mathbf{x}$", "$\\mathbf{r} = f(W\\mathbf{x} + \\mathbf{b})$", "$\\mathbf{r} = \\mathbf{x} \\cdot \\mathbf{x}$", "$\\mathbf{r} = \\lVert W \\rVert$"], answer: 1, explain: "Many LN neurons at once." },
+]} />
+
+<Flashcards cards={[
+  { front: "Shape rule for $W\\mathbf{x}$?", back: "An m × n matrix times a length-n vector gives a length-m vector." },
+  { front: "Row view of $W\\mathbf{x}$?", back: "$y_i = \\sum_j W_{ij} x_j$: each output is a dot product of a row with x." },
+  { front: "Column view of $W\\mathbf{x}$?", back: "A linear combination of the columns of W with coefficients from x." },
+  { front: "What are the columns of a matrix, geometrically?", back: "The images of the standard basis vectors." },
+  { front: "2D rotation matrix?", back: "$\\begin{pmatrix} \\cos\\theta & -\\sin\\theta \\\\ \\sin\\theta & \\cos\\theta \\end{pmatrix}$" },
+  { front: "A layer of neurons for a batch of trials in rows?", back: "`np.maximum(0, X @ W.T + b)`" },
+]} />
+
+<Predict revisit question="What shape is a weight matrix from 1,000 inputs to 200 outputs?" />
+
+<Key title="Before you go">
+<ul>
+<li>A matrix is a table of weights; rows are outputs' receptive fields, columns are inputs' projections.</li>
+<li>$W\mathbf{x}$ is dot products with rows, or a combination of columns.</li>
+<li>A matrix is a linear transformation; its columns are where the basis vectors go.</li>
+<li>A layer of neurons is $f(W\mathbf{x} + \mathbf{b})$, in brains and networks alike.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: LeCun, Bengio and Hinton (2015), <em>Deep learning</em>.</li>
+<li>Deisenroth, Faisal and Ong, <em>Mathematics for Machine Learning</em>, Chapter 2.2 and 2.7: matrices and linear mappings.</li>
+<li>Gilbert Strang, <em>Introduction to Linear Algebra</em>, Chapter 1 and 2 (or MIT 18.06 Lectures 1 and 2).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A layer computes f(Wx + b). Real neurons also receive feedback from later layers and input from their own neighbours. How would you write that with matrices, and what might it add?" />

@@ -19,3 +19,8 @@ export { CosineTuning } from "./cosine-tuning";
 export { PopulationVector } from "./population-vector";
 export { SpanBasis } from "./span-basis";
 export { SimilarityMatrix } from "./similarity-matrix";
+export { MatrixTransform } from "./matrix-transform";
+export { Compose } from "./compose";
+export { LinearSystem } from "./linear-system";
+export { LeastSquares } from "./least-squares";
+export { RidgeOverfit } from "./ridge-overfit";

@@ -1,0 +1,285 @@
+export const meta = {
+  title: "Linear systems and inverses: recovering causes from effects",
+  intro: "Much of science runs a model backwards: given the effects, find the causes. If the effects are a linear mix of the causes, that means solving a linear system. Today you solve systems by elimination, meet the inverse matrix and the null space (inputs a system cannot see), and learn why some systems turn tiny measurement noise into huge errors.",
+  goals: [
+    "Solve a linear system by Gaussian elimination and with NumPy",
+    "Explain when a square matrix has an inverse",
+    "Find and interpret a null space",
+    "Use the condition number to judge how much noise a system amplifies",
+  ],
+  plan: [
+    { label: "Predict and two pictures of a system", minutes: 20 },
+    { label: "Elimination", minutes: 25 },
+    { label: "Inverses and unmixing", minutes: 25 },
+    { label: "Null spaces", minutes: 20 },
+    { label: "Ill-conditioning", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "ringach-2004",
+};
+
+<Predict question="Three electrodes each record a different weighted mix of the same three neurons. If you know the mixing weights exactly, can you always recover the three neurons' signals? What could stop you?" />
+
+<Step n={1} title="Two pictures of a system" minutes={20} />
+
+A **linear system** is a set of equations like
+
+$$
+\begin{aligned} 2x_1 + x_2 &= 4 \\ x_1 + 3x_2 &= 7 \end{aligned}
+\qquad\Longleftrightarrow\qquad
+\begin{pmatrix} 2 & 1 \\ 1 & 3 \end{pmatrix}\begin{pmatrix} x_1 \\ x_2 \end{pmatrix} = \begin{pmatrix} 4 \\ 7 \end{pmatrix}
+$$
+
+written compactly as $A\mathbf{x} = \mathbf{b}$. As with matrix-vector products, there are two ways to see it:
+
+- **Row picture.** Each equation is a line (a plane, in 3D). The solution is where they all meet.
+- **Column picture.** Find the combination of $A$'s columns that equals $\mathbf{b}$. A solution exists exactly when $\mathbf{b}$ is in the span of the columns.
+
+<Figure caption="The same system in the row picture and the column picture. Change the matrix and make the lines parallel." credit="Interactive figure by Engram, after Gilbert Strang's two pictures of a linear system.">
+  <LinearSystem />
+</Figure>
+
+<Step n={2} title="Elimination" minutes={25} />
+
+**Gaussian elimination** solves a system by subtracting multiples of one equation from the others until the system is triangular, then solving from the bottom up (**back substitution**).
+
+<Derivation title="Elimination on the example">
+  <div>
+
+Start: $2x_1 + x_2 = 4$ and $x_1 + 3x_2 = 7$.
+
+  </div>
+  <div>
+
+Remove $x_1$ from the second equation by subtracting $\tfrac{1}{2}$ times the first: $(3 - \tfrac{1}{2})x_2 = 7 - 2$, so $\tfrac{5}{2}x_2 = 5$.
+
+  </div>
+  <div>
+
+Back substitute: $x_2 = 2$, then $2x_1 + 2 = 4$ gives $x_1 = 1$.
+
+  </div>
+  <div>
+
+The numbers we divided by (2, then $\tfrac{5}{2}$) are the **pivots**. If a pivot is zero and no row swap fixes it, the matrix is singular: no unique solution exists.
+
+  </div>
+</Derivation>
+
+<PyCell id="elim" title="Gaussian elimination" tests={String.raw`
+  import numpy as np
+  def test_small():
+      "solves the worked example"
+      assert np.allclose(eliminate(np.array([[2.0, 1.0], [1.0, 3.0]]), np.array([4.0, 7.0])), [1.0, 2.0])
+
+  def test_random():
+      "matches np.linalg.solve on random systems"
+      rng = np.random.default_rng(0)
+      for _ in range(5):
+          A = rng.normal(size=(4, 4)); b = rng.normal(size=4)
+          assert np.allclose(eliminate(A, b), np.linalg.solve(A, b))
+
+  def test_swap():
+      "handles a zero in the first pivot position by swapping rows"
+      A = np.array([[0.0, 1.0], [1.0, 1.0]]); b = np.array([2.0, 3.0])
+      assert np.allclose(eliminate(A, b), [1.0, 2.0])
+`} prompt="Complete `eliminate(A, b)`. For each column, swap up the row with the largest entry in that column (partial pivoting), then subtract multiples of the pivot row from the rows below. Finish with back substitution."
+code={String.raw`
+  import numpy as np
+
+  def eliminate(A, b):
+      M = np.column_stack([A.astype(float), b.astype(float)])   # augmented matrix [A | b]
+      n = len(b)
+      for c in range(n):
+          p = c + np.argmax(np.abs(M[c:, c]))                    # pivot row
+          M[[c, p]] = M[[p, c]]                                  # swap
+          for r in range(c + 1, n):
+              ...                                                # subtract a multiple of row c
+      x = np.zeros(n)
+      for r in range(n - 1, -1, -1):
+          x[r] = ...                                             # back substitution
+      return x
+
+  print(eliminate(np.array([[2.0, 1.0], [1.0, 3.0]]), np.array([4.0, 7.0])))
+`}
+hint="Elimination: M[r] = M[r] - (M[r, c] / M[c, c]) * M[c]. Back substitution: x[r] = (M[r, n] - M[r, r + 1:n] @ x[r + 1:]) / M[r, r]."
+solution={String.raw`
+  import numpy as np
+
+  def eliminate(A, b):
+      M = np.column_stack([A.astype(float), b.astype(float)])
+      n = len(b)
+      for c in range(n):
+          p = c + np.argmax(np.abs(M[c:, c]))
+          M[[c, p]] = M[[p, c]]
+          for r in range(c + 1, n):
+              M[r] = M[r] - (M[r, c] / M[c, c]) * M[c]
+      x = np.zeros(n)
+      for r in range(n - 1, -1, -1):
+          x[r] = (M[r, n] - M[r, r + 1:n] @ x[r + 1:]) / M[r, r]
+      return x
+
+  print(eliminate(np.array([[2.0, 1.0], [1.0, 3.0]]), np.array([4.0, 7.0])))
+`} />
+
+<Step n={3} title="Inverses and unmixing" minutes={25} />
+
+If a square matrix $A$ can be undone, its **inverse** $A^{-1}$ satisfies $A^{-1}A = AA^{-1} = I$, and the solution of $A\mathbf{x} = \mathbf{b}$ is $\mathbf{x} = A^{-1}\mathbf{b}$. An inverse exists exactly when $A$ is **invertible** (non-singular), and these all say the same thing:
+
+- the columns are independent (rank $n$);
+- the determinant is not zero;
+- $A\mathbf{x} = \mathbf{0}$ only for $\mathbf{x} = \mathbf{0}$;
+- every $\mathbf{b}$ has exactly one solution.
+
+In practice, never compute an inverse just to solve a system: `np.linalg.solve(A, b)` is faster and more accurate than `np.linalg.inv(A) @ b`.
+
+<Video id="uQhTuRlWMxw" title="Inverse matrices, column space and null space | Chapter 7, Essence of linear algebra" by="3Blue1Brown (Grant Sanderson)" note="What an inverse undoes, and what happens when a transformation squashes space and cannot be undone." />
+
+<PyCell id="unmix" title="Unmix three neurons from three electrodes" tests={String.raw`
+  import numpy as np
+  def test_recovered():
+      "S_hat recovers the source signals"
+      assert S_hat.shape == S.shape
+      assert np.allclose(S_hat, S, atol=1e-8)
+`} prompt="Three neurons produce signals `S` (3 by 1000 time points). Three electrodes record `Y = M @ S`, where the mixing matrix `M` says how strongly each electrode picks up each neuron. Recover the sources `S_hat` from `Y` using `np.linalg.solve` (it accepts a matrix of right-hand sides)."
+code={String.raw`
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1)
+  t = np.linspace(0, 1, 1000)
+  S = np.vstack([np.sin(2 * np.pi * 7 * t), np.sign(np.sin(2 * np.pi * 3 * t)), (t * 5) % 1 - 0.5])
+  M = np.array([[1.0, 0.6, 0.3], [0.4, 1.0, 0.5], [0.2, 0.5, 1.0]])
+  Y = M @ S
+
+  S_hat = ...
+  fig, axes = plt.subplots(2, 1, figsize=(7, 4), sharex=True)
+  axes[0].plot(t, Y.T); axes[0].set_title("what the electrodes record")
+  axes[1].plot(t, S_hat.T); axes[1].set_title("recovered sources"); axes[1].set_xlabel("time (s)")
+  plt.tight_layout(); plt.show()
+`}
+hint="S_hat = np.linalg.solve(M, Y) solves M @ S_hat = Y for all 1000 columns at once."
+solution={String.raw`
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1)
+  t = np.linspace(0, 1, 1000)
+  S = np.vstack([np.sin(2 * np.pi * 7 * t), np.sign(np.sin(2 * np.pi * 3 * t)), (t * 5) % 1 - 0.5])
+  M = np.array([[1.0, 0.6, 0.3], [0.4, 1.0, 0.5], [0.2, 0.5, 1.0]])
+  Y = M @ S
+
+  S_hat = np.linalg.solve(M, Y)
+  fig, axes = plt.subplots(2, 1, figsize=(7, 4), sharex=True)
+  axes[0].plot(t, Y.T); axes[0].set_title("what the electrodes record")
+  axes[1].plot(t, S_hat.T); axes[1].set_title("recovered sources"); axes[1].set_xlabel("time (s)")
+  plt.tight_layout(); plt.show()
+`} />
+
+In real recordings you rarely know the mixing matrix. Estimating it from the data, assuming the sources are independent, is **independent component analysis** (ICA, Week 61), used to separate brain signals from eye-blink and muscle artefacts in EEG.
+
+<Step n={4} title="Null spaces" minutes={20} />
+
+When a matrix is not invertible, some non-zero inputs produce zero output. The set of all such $\mathbf{x}$ with $A\mathbf{x} = \mathbf{0}$ is the **null space**. Anything in it is invisible: adding it to an input does not change the output at all, because $A(\mathbf{x} + \mathbf{n}) = A\mathbf{x} + A\mathbf{n} = A\mathbf{x}$.
+
+This is exactly last week's **output-null** idea: if muscles read motor cortex through a matrix $A$, preparatory activity in $A$'s null space moves nothing.
+
+<PyCell id="null" title="Invisible activity" tests={String.raw`
+  import numpy as np
+  def test_null():
+      "n is a non-zero vector in the null space of A"
+      assert np.linalg.norm(n) > 1e-6 and np.allclose(A @ n, 0)
+
+  def test_invisible():
+      "adding the null vector leaves the readout unchanged"
+      assert np.allclose(A @ (x + 5 * n), A @ x)
+      assert np.linalg.norm((x + 5 * n) - x) > 1
+`} prompt="Two muscles read three motor-cortex neurons through the 2 by 3 matrix `A`. Find a non-zero vector `n` with $A\mathbf{n} = \mathbf{0}$. In three dimensions, the cross product of the two rows (`np.cross`) is orthogonal to both, so each row's dot product with it is zero. Then show that adding `5 * n` to the activity `x` changes the neurons but not the muscles."
+code={String.raw`
+  A = np.array([[1.0, 2.0, 0.5], [0.0, 1.0, -1.0]])
+  x = np.array([3.0, 1.0, 2.0])
+  n = ...
+  print("A @ n =", np.round(A @ n, 10))
+  print("muscles before:", A @ x, " after adding 5n:", A @ (x + 5 * n))
+  print("neurons before:", x, " after:", x + 5 * n)
+`}
+hint="n = np.cross(A[0], A[1])"
+solution={String.raw`
+  A = np.array([[1.0, 2.0, 0.5], [0.0, 1.0, -1.0]])
+  x = np.array([3.0, 1.0, 2.0])
+  n = np.cross(A[0], A[1])
+  print("A @ n =", np.round(A @ n, 10))
+  print("muscles before:", A @ x, " after adding 5n:", A @ (x + 5 * n))
+  print("neurons before:", x, " after:", x + 5 * n)
+`} />
+
+A wide matrix (fewer outputs than inputs) always has a null space. That matters when you try to recover inputs from outputs: with 3 unknowns and 2 measurements, infinitely many inputs fit, and you need extra assumptions to choose one. That is the setting of tomorrow's least squares and Day 5's regularisation.
+
+<Step n={5} title="Ill-conditioning" minutes={15} />
+
+A matrix can be invertible and still dangerous. If its columns are nearly parallel, a tiny change in $\mathbf{b}$ (measurement noise) causes a huge change in the solution. The **condition number** (`np.linalg.cond`) measures this: roughly, relative errors in $\mathbf{b}$ can be multiplied by up to this factor in $\mathbf{x}$.
+
+<PyCell code={String.raw`
+  for eps in [1.0, 0.1, 0.01]:
+      A = np.array([[1.0, 1.0], [1.0, 1.0 + eps]])      # columns become nearly parallel as eps shrinks
+      b = np.array([2.0, 2.0 + eps])
+      x = np.linalg.solve(A, b)
+      x_noisy = np.linalg.solve(A, b + np.array([0.0, 0.001]))   # 0.1 per cent noise in one measurement
+      print(f"eps={eps:5}: cond = {np.linalg.cond(A):8.1f}   x = {np.round(x, 3)}   with tiny noise: {np.round(x_noisy, 3)}")
+`} />
+
+When electrodes record nearly the same mixture, or when two neurons in an encoding model carry nearly the same signal, the system is ill-conditioned and the solution is unreliable. Regularisation, on Day 5, is the standard cure.
+
+<Bridge title="Inverse problems in brains and machines"
+  neuro="Much of neuroscience is an inverse problem: infer spikes from blurry calcium signals, sources from EEG on the scalp, receptive fields from responses (today's paper on reverse correlation). The brain itself solves inverse problems: perception infers the causes of sensory signals."
+  ai="Generative models and many learning problems are inverse problems too: infer the latent causes (Week 63) or the weights that explain the data. Ill-conditioning shows up as unstable training, cured by regularisation and good initialisation.">
+
+Whenever you work backwards from measurements, ask: is the system invertible, what is its null space, and how well conditioned is it?
+
+</Bridge>
+
+<Prove title="The inverse of a 2 by 2 matrix" task="For $A = \begin{pmatrix} a & b \\ c & d \end{pmatrix}$ with $ad - bc \neq 0$, verify that $A^{-1} = \dfrac{1}{ad - bc}\begin{pmatrix} d & -b \\ -c & a \end{pmatrix}$ by multiplying it with $A$. Use it to solve the worked example.">
+
+Multiply: $\begin{pmatrix} d & -b \\ -c & a \end{pmatrix}\begin{pmatrix} a & b \\ c & d \end{pmatrix} = \begin{pmatrix} da - bc & db - bd \\ -ca + ac & -cb + ad \end{pmatrix} = (ad - bc)\,I$. Dividing by $ad - bc$ gives $I$.
+
+For the example, $ad - bc = 2 \times 3 - 1 \times 1 = 5$, so $A^{-1} = \tfrac{1}{5}\begin{pmatrix} 3 & -1 \\ -1 & 2 \end{pmatrix}$ and $\mathbf{x} = A^{-1}(4, 7) = \tfrac{1}{5}(12 - 7, -4 + 14) = (1, 2)$, matching elimination.
+
+The factor $1/(ad - bc)$ shows directly why a zero determinant means no inverse, and why a small one amplifies errors.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "In the row picture, the solution of a 2 by 2 system is...", options: ["The origin", "Where the two lines cross", "The longest column", "Always unique"], answer: 1, explain: "Each equation is a line." },
+  { q: "$A\\mathbf{x} = \\mathbf{b}$ has a solution exactly when...", options: ["A is square", "b is in the span of A's columns", "b is a unit vector", "A is symmetric"], answer: 1, explain: "The column picture." },
+  { q: "A zero pivot that no row swap can fix means...", options: ["The solution is zero", "The matrix is singular", "The system is easy", "You must transpose A"], answer: 1, explain: "No unique solution." },
+  { q: "Which is preferred for solving $A\\mathbf{x} = \\mathbf{b}$?", options: ["np.linalg.inv(A) @ b", "np.linalg.solve(A, b)", "A @ b", "b / A"], answer: 1, explain: "Faster and more accurate." },
+  { q: "The null space of A is...", options: ["The inputs that give zero output", "The zero matrix", "The diagonal of A", "The columns of A"], answer: 0, explain: "Activity there is invisible to the readout." },
+  { q: "A 2 × 3 matrix always has...", options: ["An inverse", "A non-trivial null space", "Determinant zero", "Orthonormal columns"], answer: 1, explain: "Three unknowns, two equations." },
+  { q: "A large condition number means...", options: ["The matrix is diagonal", "Small noise in b can cause large errors in x", "The matrix is orthogonal", "The solution is exact"], answer: 1, explain: "The system is ill-conditioned." },
+]} />
+
+<Flashcards cards={[
+  { front: "Two pictures of $A\\mathbf{x} = \\mathbf{b}$?", back: "Row picture: lines or planes meeting. Column picture: combining columns to reach b." },
+  { front: "Gaussian elimination?", back: "Subtract multiples of rows to make the system triangular, then back substitute; pivot rows are swapped for stability." },
+  { front: "Four equivalent conditions for an invertible square matrix?", back: "Independent columns (full rank); det ≠ 0; Ax = 0 only for x = 0; every b has one solution." },
+  { front: "Null space?", back: "All x with Ax = 0. Adding a null vector to the input leaves the output unchanged." },
+  { front: "Condition number?", back: "How much a matrix can amplify relative errors when solving; large means ill-conditioned." },
+  { front: "2 × 2 inverse?", back: "$\\frac{1}{ad - bc}\\begin{pmatrix} d & -b \\\\ -c & a \\end{pmatrix}$" },
+]} />
+
+<Predict revisit question="Can you always unmix three neurons from three electrodes?" />
+
+<Key title="Before you go">
+<ul>
+<li>A linear system is lines meeting (rows) or columns combining (columns).</li>
+<li>Elimination solves it; a square matrix is invertible when its columns are independent.</li>
+<li>The null space holds inputs a readout cannot see.</li>
+<li>Ill-conditioned systems amplify noise: check the condition number before trusting a solution.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Ringach and Shapley (2004), <em>Reverse correlation in neurophysiology</em>.</li>
+<li>Gilbert Strang, MIT 18.06, Lectures 2 and 3: elimination and inverses.</li>
+<li>Deisenroth, Faisal and Ong, <em>Mathematics for Machine Learning</em>, Chapter 2.3: solving systems of linear equations.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Perception is often described as solving an inverse problem: inferring the world from the senses. What is the null space of vision, the things about the world that the retina cannot see, and how might the brain fill it in?" />

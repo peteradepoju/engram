@@ -1,0 +1,304 @@
+export const meta = {
+  title: "Linear decoding, overfitting and ridge regression",
+  intro: "Modern recordings give you hundreds of neurons but often only a few hundred trials. Fit a decoder by least squares and it will predict the training trials perfectly and new trials badly: it has memorised the noise. Today you watch this happen, derive ridge regression, the standard cure, and choose its penalty honestly with cross-validation.",
+  goals: [
+    "Fit a linear decoder that predicts a stimulus from population activity",
+    "Recognise overfitting by comparing training and test performance",
+    "Derive ridge regression and explain why it stabilises the solution",
+    "Choose the ridge penalty with k-fold cross-validation",
+  ],
+  plan: [
+    { label: "Predict and linear decoding", minutes: 20 },
+    { label: "Overfitting", minutes: 25 },
+    { label: "Ridge regression", minutes: 30 },
+    { label: "Cross-validation", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "hoerl-1970",
+};
+
+<Predict question="You decode a stimulus from 95 neurons using 100 training trials with least squares. On the training trials the decoder is almost perfect. On new trials, will it be about as good, a bit worse, or much worse than a decoder that uses only 10 of the neurons?" />
+
+<Step n={1} title="Linear decoding" minutes={20} />
+
+A **linear decoder** predicts a stimulus variable $s$ (contrast, orientation, reach direction) from the population's rates on each trial:
+
+$$
+\hat{s}_t = \beta_0 + \sum_{i=1}^{N} \beta_i r_{ti} \qquad\Longleftrightarrow\qquad \hat{\mathbf{s}} = R\boldsymbol{\beta}
+$$
+
+$R$ has one row per trial and one column per neuron (plus a column of ones). It is yesterday's least squares with the roles reversed: the neurons are the features and the stimulus is the target. The population vector (Week 4) was a linear decoder with weights fixed in advance; regression learns the best weights from data, which is the **optimal linear estimator** of Salinas and Abbott (1994).
+
+<Step n={2} title="Overfitting" minutes={25} />
+
+With $N$ neurons and $n$ trials, least squares has $N + 1$ weights to fit to $n$ numbers. As $N$ approaches $n$, it can fit almost anything, including the noise. Training error falls towards zero while error on new trials grows.
+
+<Figure caption="Decoding error on the 60 training trials (blue) and on 200 new trials (pink) as more neurons are added. Raise the ridge penalty to tame overfitting." credit="Interactive figure by Engram.">
+  <RidgeOverfit />
+</Figure>
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(0)
+
+  def make_trials(n, N=95, rng=rng):
+      """Each neuron's rate is weakly tuned to the stimulus s, plus independent noise."""
+      s = rng.normal(size=n)
+      tuning = np.linspace(-0.4, 0.4, N)
+      R = 10 + np.outer(s, tuning) + rng.normal(0, 1, (n, N))
+      return R, s
+
+  R_train, s_train = make_trials(100)
+  R_test, s_test = make_trials(1000)
+  def r2(s, s_hat):
+      return 1 - np.sum((s - s_hat) ** 2) / np.sum((s - s.mean()) ** 2)
+  print(R_train.shape, R_test.shape)
+`} />
+
+<PyCell id="overfit" title="Watch the decoder overfit" tests={String.raw`
+  import numpy as np
+  def test_lengths():
+      "one train and one test R2 per population size"
+      assert len(train_r2) == len(sizes) == len(new_r2)
+
+  def test_overfit():
+      "train R2 rises towards 1 while test R2 falls for the largest population"
+      assert train_r2[-1] > 0.95
+      assert new_r2[-1] < max(new_r2) - 0.2, f"test R2: {np.round(new_r2, 2)}"
+`} prompt="For each population size in `sizes`, fit least squares using the first `k` neurons (plus an intercept) on the training trials, and record R² on the training and the test trials. Plot both against `k`. At which size is the decoder best on new trials?"
+code={String.raw`
+  sizes = [5, 10, 20, 40, 60, 80, 95]
+  train_r2, new_r2 = [], []
+  for k in sizes:
+      Xtr = np.column_stack([np.ones(len(s_train)), R_train[:, :k]])
+      Xte = np.column_stack([np.ones(len(s_test)), R_test[:, :k]])
+      beta = ...
+      train_r2.append(...)
+      new_r2.append(...)
+
+  plt.figure(figsize=(5, 3))
+  plt.plot(sizes, train_r2, "o-", label="training trials"); plt.plot(sizes, new_r2, "o-", label="new trials")
+  plt.axhline(0, color="0.6", lw=0.8); plt.xlabel("neurons used"); plt.ylabel("R2"); plt.legend(frameon=False); plt.show()
+  print(np.round(train_r2, 2), np.round(new_r2, 2))
+`}
+hint="beta = np.linalg.lstsq(Xtr, s_train, rcond=None)[0]. Then train_r2.append(r2(s_train, Xtr @ beta)) and new_r2.append(r2(s_test, Xte @ beta))."
+solution={String.raw`
+  sizes = [5, 10, 20, 40, 60, 80, 95]
+  train_r2, new_r2 = [], []
+  for k in sizes:
+      Xtr = np.column_stack([np.ones(len(s_train)), R_train[:, :k]])
+      Xte = np.column_stack([np.ones(len(s_test)), R_test[:, :k]])
+      beta = np.linalg.lstsq(Xtr, s_train, rcond=None)[0]
+      train_r2.append(r2(s_train, Xtr @ beta))
+      new_r2.append(r2(s_test, Xte @ beta))
+
+  plt.figure(figsize=(5, 3))
+  plt.plot(sizes, train_r2, "o-", label="training trials"); plt.plot(sizes, new_r2, "o-", label="new trials")
+  plt.axhline(0, color="0.6", lw=0.8); plt.xlabel("neurons used"); plt.ylabel("R2"); plt.legend(frameon=False); plt.show()
+  print(np.round(train_r2, 2), np.round(new_r2, 2))
+`} />
+
+With 95 neurons and 100 trials the training fit is nearly perfect and the test fit collapses. That answers today's prediction: more neurons made the decoder **worse** on new data. The information is there (every neuron is tuned); least squares just cannot use it with so few trials.
+
+<Step n={3} title="Ridge regression" minutes={30} />
+
+Overfit weights are typically huge, with large positive and negative values cancelling to fit the noise. **Ridge regression** adds a penalty on the squared size of the weights:
+
+$$
+\hat{\boldsymbol\beta}_\lambda = \arg\min_{\boldsymbol\beta}\ \lVert \mathbf{s} - R\boldsymbol\beta \rVert^2 + \lambda \lVert \boldsymbol\beta \rVert^2
+$$
+
+<Derivation title="The ridge solution">
+  <div>
+
+Expand the objective: $\mathbf{s}^\top\mathbf{s} - 2\boldsymbol\beta^\top R^\top \mathbf{s} + \boldsymbol\beta^\top R^\top R\,\boldsymbol\beta + \lambda\,\boldsymbol\beta^\top\boldsymbol\beta$.
+
+  </div>
+  <div>
+
+Setting the gradient with respect to $\boldsymbol\beta$ to zero (you will learn to take such gradients in Week 9) gives
+
+$$
+-2R^\top \mathbf{s} + 2R^\top R\,\boldsymbol\beta + 2\lambda\boldsymbol\beta = \mathbf{0}
+$$
+
+  </div>
+  <div>
+
+So the ridge weights solve
+
+$$
+(R^\top R + \lambda I)\,\hat{\boldsymbol\beta}_\lambda = R^\top \mathbf{s}
+$$
+
+which is the normal equations with $\lambda$ added to the diagonal: Hoerl and Kennard's 1970 idea, this week's classic paper.
+
+  </div>
+  <div>
+
+$R^\top R$ can be singular or ill-conditioned when neurons are many or correlated. Adding $\lambda I$ with $\lambda \gt 0$ makes it always invertible and well conditioned. With $\lambda = 0$ you get least squares; as $\lambda \to \infty$ the weights shrink to zero.
+
+  </div>
+</Derivation>
+
+<PyCell id="ridge" title="Ridge from the formula" tests={String.raw`
+  import numpy as np
+  def test_zero():
+      "ridge with lambda 0 matches least squares"
+      X = np.random.default_rng(1).normal(size=(50, 5)); y = np.random.default_rng(2).normal(size=50)
+      assert np.allclose(ridge(X, y, 0.0), np.linalg.lstsq(X, y, rcond=None)[0])
+
+  def test_shrink():
+      "larger penalties give smaller weights"
+      X = np.random.default_rng(3).normal(size=(30, 8)); y = np.random.default_rng(4).normal(size=30)
+      norms = [np.linalg.norm(ridge(X, y, lam)) for lam in [0.1, 1, 10, 100]]
+      assert all(b < a for a, b in zip(norms, norms[1:]))
+
+  def test_singular():
+      "ridge works even with more neurons than trials"
+      X = np.random.default_rng(5).normal(size=(20, 50)); y = np.random.default_rng(6).normal(size=20)
+      b = ridge(X, y, 1.0)
+      assert b.shape == (50,) and np.all(np.isfinite(b))
+`} prompt="Write `ridge(X, y, lam)` that solves $(X^\top X + \lambda I)\boldsymbol\beta = X^\top \mathbf{y}$ with `np.linalg.solve`. For simplicity it penalises every column, so centre the data before using it on real problems (next exercise)."
+code={String.raw`
+  def ridge(X, y, lam):
+      ...
+
+  print(np.round(ridge(np.eye(3), np.array([1.0, 2.0, 3.0]), 1.0), 3))
+`}
+hint="return np.linalg.solve(X.T @ X + lam * np.eye(X.shape[1]), X.T @ y)"
+solution={String.raw`
+  def ridge(X, y, lam):
+      return np.linalg.solve(X.T @ X + lam * np.eye(X.shape[1]), X.T @ y)
+
+  print(np.round(ridge(np.eye(3), np.array([1.0, 2.0, 3.0]), 1.0), 3))
+`} />
+
+Penalising the intercept would pull predictions towards zero for no good reason. The usual fix is to **centre** first: subtract each neuron's training mean from its column and the training mean of $\mathbf{s}$ from the target, fit ridge without an intercept, then add the mean of $\mathbf{s}$ back to predictions.
+
+<Video id="Q81RR3yKn30" title="Regularization Part 1: Ridge (L2) Regression" by="StatQuest with Josh Starmer" note="A clear, gentle explanation of why adding a penalty helps when data are scarce." />
+
+<Step n={4} title="Cross-validation" minutes={30} />
+
+How large should $\lambda$ be? Not too small (overfitting), not too large (all weights crushed). You cannot choose it by looking at test performance, because then the test set is no longer a fair test. **k-fold cross-validation** uses only the training data: split it into $k$ folds; for each fold, fit on the other $k - 1$ and measure error on this one; average over folds; pick the $\lambda$ with the lowest average error. Then refit on all the training data and report performance once on the untouched test set.
+
+<PyCell id="cv" title="Choose the penalty by cross-validation" tests={String.raw`
+  import numpy as np
+  def test_cv_scores():
+      "cv_r2 has one mean cross-validated R2 per lambda"
+      assert len(cv_r2) == len(lams)
+
+  def test_choice():
+      "best_lam is the lambda with the highest cross-validated R2"
+      assert best_lam == lams[int(np.argmax(cv_r2))]
+      assert best_lam > 0
+
+  def test_final():
+      "the ridge decoder beats least squares on the test trials"
+      assert final_test_r2 > new_r2[-1] + 0.2, f"ridge {final_test_r2:.2f} vs least squares {new_r2[-1]:.2f}"
+`} prompt="Using all 95 neurons and only the training trials, run 5-fold cross-validation for each penalty in `lams`. Within each fold centre with the fold's training means, fit `ridge`, predict the held-out fold, and score R². Store the mean scores in `cv_r2`, the best penalty in `best_lam`, then refit on all training trials and store the test R² in `final_test_r2`."
+code={String.raw`
+  def fit_predict(Rtr, s_tr, Rte, lam):
+      mu_R, mu_s = Rtr.mean(axis=0), s_tr.mean()
+      beta = ridge(Rtr - mu_R, s_tr - mu_s, lam)
+      return (Rte - mu_R) @ beta + mu_s
+
+  lams = [0.1, 1, 10, 30, 100, 300, 1000, 3000]
+  folds = np.array_split(rng.permutation(len(s_train)), 5)
+  cv_r2 = []
+  for lam in lams:
+      scores = []
+      for f in folds:
+          tr = np.setdiff1d(np.arange(len(s_train)), f)
+          ...
+      cv_r2.append(np.mean(scores))
+  best_lam = ...
+  final_test_r2 = ...
+
+  plt.figure(figsize=(5, 3)); plt.semilogx(lams, cv_r2, "o-"); plt.axvline(best_lam, ls="--", color="0.5")
+  plt.xlabel("ridge penalty λ"); plt.ylabel("cross-validated R2"); plt.show()
+  print("best lambda:", best_lam, " test R2 with ridge:", round(final_test_r2, 3), " with least squares:", round(new_r2[-1], 3))
+`}
+hint="Inside the fold loop: s_hat = fit_predict(R_train[tr], s_train[tr], R_train[f], lam); scores.append(r2(s_train[f], s_hat)). Then best_lam = lams[int(np.argmax(cv_r2))] and final_test_r2 = r2(s_test, fit_predict(R_train, s_train, R_test, best_lam))."
+solution={String.raw`
+  def fit_predict(Rtr, s_tr, Rte, lam):
+      mu_R, mu_s = Rtr.mean(axis=0), s_tr.mean()
+      beta = ridge(Rtr - mu_R, s_tr - mu_s, lam)
+      return (Rte - mu_R) @ beta + mu_s
+
+  lams = [0.1, 1, 10, 30, 100, 300, 1000, 3000]
+  folds = np.array_split(rng.permutation(len(s_train)), 5)
+  cv_r2 = []
+  for lam in lams:
+      scores = []
+      for f in folds:
+          tr = np.setdiff1d(np.arange(len(s_train)), f)
+          s_hat = fit_predict(R_train[tr], s_train[tr], R_train[f], lam)
+          scores.append(r2(s_train[f], s_hat))
+      cv_r2.append(np.mean(scores))
+  best_lam = lams[int(np.argmax(cv_r2))]
+  final_test_r2 = r2(s_test, fit_predict(R_train, s_train, R_test, best_lam))
+
+  plt.figure(figsize=(5, 3)); plt.semilogx(lams, cv_r2, "o-"); plt.axvline(best_lam, ls="--", color="0.5")
+  plt.xlabel("ridge penalty λ"); plt.ylabel("cross-validated R2"); plt.show()
+  print("best lambda:", best_lam, " test R2 with ridge:", round(final_test_r2, 3), " with least squares:", round(new_r2[-1], 3))
+`} />
+
+With the right penalty, using all 95 neurons now beats using any subset with least squares. Regularisation lets the decoder pool weak signals from many neurons without chasing their noise.
+
+<Bridge title="Regularisation in brains and machines"
+  neuro="Synapses cannot grow without limit: homeostatic plasticity and metabolic cost keep weights in check, which acts like a penalty on their size. Some theories propose that this helps the brain generalise from limited experience (Week 42)."
+  ai="Weight decay, the standard regulariser in deep learning, is exactly ridge's penalty $\lambda\lVert\mathbf{w}\rVert^2$. Dropout, early stopping and data augmentation are other ways to stop a network memorising its training set (Week 83).">
+
+Every model fitted to limited data, in the brain or on a computer, faces the same trade-off between fitting and generalising.
+
+</Bridge>
+
+<Prove title="Ridge shrinks along each direction" task="Suppose the columns of $R$ are orthonormal, so $R^\top R = I$. Show that the ridge weights are the least-squares weights scaled by $1/(1 + \lambda)$. What happens when the columns are not orthonormal? (Think about directions where $R^\top R$ is small.)">
+
+With $R^\top R = I$, least squares gives $\hat{\boldsymbol\beta}_0 = R^\top\mathbf{s}$ and ridge gives $(I + \lambda I)\hat{\boldsymbol\beta}_\lambda = R^\top\mathbf{s}$, so $\hat{\boldsymbol\beta}_\lambda = \dfrac{1}{1 + \lambda}\hat{\boldsymbol\beta}_0$. Every weight shrinks by the same factor.
+
+In general, along a direction where $R^\top R$ has size $d$ (an eigenvalue, Week 6), least squares divides by $d$ and ridge divides by $d + \lambda$. Where the data are rich ($d$ large) ridge barely changes anything; where the data are thin ($d$ small, the ill-conditioned directions) ridge stops the division blowing up the noise. That is why it helps exactly where least squares fails.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "A linear decoder predicts...", options: ["Neural rates from the stimulus", "The stimulus from neural rates", "Spike times", "The noise"], answer: 1, explain: "Decoding goes from activity to the stimulus." },
+  { q: "Overfitting shows up as...", options: ["Bad training and bad test performance", "Good training performance but poor test performance", "Equal performance on both", "Negative weights"], answer: 1, explain: "The model memorises noise in the training data." },
+  { q: "The ridge solution solves...", options: ["$R^\\top R\\boldsymbol\\beta = R^\\top \\mathbf{s}$", "$(R^\\top R + \\lambda I)\\boldsymbol\\beta = R^\\top \\mathbf{s}$", "$R\\boldsymbol\\beta = \\lambda\\mathbf{s}$", "$\\boldsymbol\\beta = \\lambda R$"], answer: 1, explain: "λ is added to the diagonal." },
+  { q: "As λ grows very large, ridge weights...", options: ["Grow without limit", "Shrink towards zero", "Equal least squares", "Become random"], answer: 1, explain: "The penalty dominates." },
+  { q: "Why centre the data before ridge?", options: ["To avoid penalising the intercept", "To make it faster", "Because ridge needs positive numbers", "To remove outliers"], answer: 0, explain: "Then the mean is handled separately and not shrunk." },
+  { q: "How should λ be chosen?", options: ["By the best test-set score", "By cross-validation on the training data", "Always λ = 1", "By the number of neurons"], answer: 1, explain: "The test set must stay untouched until the end." },
+  { q: "Weight decay in deep learning is...", options: ["Unrelated to ridge", "The same penalty as ridge, on network weights", "A kind of dropout", "A learning rate"], answer: 1, explain: "λ‖w‖² added to the loss." },
+]} />
+
+<Flashcards cards={[
+  { front: "Linear decoder?", back: "$\\hat{\\mathbf{s}} = R\\boldsymbol\\beta$: the stimulus predicted as a weighted sum of neurons' rates (plus an intercept)." },
+  { front: "Overfitting?", back: "Fitting the noise in training data: training error low, test error high. Worst when parameters approach the number of trials." },
+  { front: "Ridge objective and solution?", back: "$\\lVert \\mathbf{s} - R\\boldsymbol\\beta \\rVert^2 + \\lambda\\lVert\\boldsymbol\\beta\\rVert^2$; $(R^\\top R + \\lambda I)\\hat{\\boldsymbol\\beta} = R^\\top\\mathbf{s}$." },
+  { front: "Why ridge stabilises solutions?", back: "Adding λI makes $R^\\top R$ invertible and well conditioned, shrinking weights most along poorly sampled directions." },
+  { front: "k-fold cross-validation?", back: "Split training data into k folds; fit on k − 1, score on the held-out fold; average; choose the hyperparameter with the best average." },
+  { front: "Ridge with orthonormal features?", back: "Least-squares weights scaled by $1/(1+\\lambda)$." },
+]} />
+
+<Predict revisit question="Is a 95-neuron least-squares decoder better than a 10-neuron one on new trials?" />
+
+<Key title="Before you go">
+<ul>
+<li>A linear decoder is least squares from neurons to stimulus.</li>
+<li>With many neurons and few trials, least squares overfits: judge models only on held-out data.</li>
+<li>Ridge adds λ to the diagonal, shrinking weights and stabilising the fit.</li>
+<li>Choose λ by cross-validation on training data, then test once.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Hoerl and Kennard (1970), <em>Ridge regression: biased estimation for nonorthogonal problems</em>.</li>
+<li>Hastie, Tibshirani and Friedman, <em>The Elements of Statistical Learning</em>, Chapter 3.4: shrinkage methods (free online).</li>
+<li>Salinas and Abbott (1994), <em>Vector reconstruction from firing rates</em>: optimal linear decoding of populations.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If downstream brain areas read out a population with something like a linear decoder, how could they avoid overfitting with limited experience? Write two mechanisms the brain might use." />

@@ -79,6 +79,14 @@ export const DAY_TITLES: Record<number, string[]> = {
     "Orthogonality, projection and representational similarity",
     "Forge: Week 4 challenge, quiz and deep read",
   ],
+  5: [
+    "Matrices as transformations: what a layer of neurons does",
+    "Matrix multiplication: composing transformations and layers",
+    "Linear systems and inverses: recovering causes from effects",
+    "Least squares: fitting linear encoding models",
+    "Linear decoding, overfitting and ridge regression",
+    "Forge: Week 5 challenge, quiz and deep read",
+  ],
 };
 
 export const DAYS_PER_WEEK = 6;
@@ -107,7 +115,7 @@ export function dayTitle(w: number, d: number): string {
 }
 
 /** Weeks whose lesson files exist. Kept in sync by hand as content is written. */
-export const WRITTEN_WEEKS = [1, 2, 3, 4];
+export const WRITTEN_WEEKS = [1, 2, 3, 4, 5];
 export const isWritten = (w: number) => WRITTEN_WEEKS.includes(w);
 
 /** Every lesson that is published, in order. */

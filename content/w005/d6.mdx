@@ -1,0 +1,262 @@
+export const meta = {
+  title: "Forge: Week 5 challenge, quiz and deep read",
+  intro: "This week matrices became transformations, layers and models you can fit. Today's challenge is a small fMRI study of visual cortex, built the way Naselaris and colleagues describe: fit a regularised linear encoding model for every voxel at once, choose its penalty honestly, measure how well it predicts new images, and then turn it round to identify which image a person was looking at.",
+  goals: [
+    "Fit encoding models for many voxels with one matrix equation",
+    "Choose a ridge penalty by cross-validation and report held-out accuracy",
+    "Use an encoding model to identify stimuli from brain activity",
+    "Critique the encoding and decoding framework",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "naselaris-2011",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. The shape of $AB$ when $A$ is 3 by 4 and $B$ is 4 by 2?
+2. The determinant of $\begin{pmatrix} 2 & 4 \\ 1 & 2 \end{pmatrix}$, and does it have an inverse?
+3. The least-squares line through $(0, 1)$, $(1, 2)$ and $(2, 4)$?
+
+<PyCell code={String.raw`
+  import numpy as np
+  print("1.", (np.ones((3, 4)) @ np.ones((4, 2))).shape)
+  M = np.array([[2, 4], [1, 2.0]])
+  print("2.", round(np.linalg.det(M), 6), "so no inverse: the second column is twice the first")
+  X = np.column_stack([np.ones(3), [0, 1, 2]])
+  print("3. intercept and slope:", np.linalg.lstsq(X, np.array([1, 2, 4.0]), rcond=None)[0].round(3))
+`} />
+
+<Step n={2} title="Weekly challenge: an encoding model of visual cortex" minutes={60} />
+
+**The experiment.** A participant views 160 natural images in an fMRI scanner: 120 for training and 40 held out for testing. Each image is described by 150 features (think of the outputs of a bank of oriented filters, Week 4), and these features are correlated with each other, as real image features are. We record 30 voxels in visual cortex. Each voxel responds to a weighted sum of a few features plus a lot of noise. There are more features than training images, so ordinary least squares cannot even be solved uniquely. Run the cell to build the data.
+
+<PyCell code={String.raw`
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2011)
+  n_train, n_test, p, V = 120, 40, 150, 30
+  mix = rng.normal(size=(p, p)) * 0.5 + np.eye(p)                  # makes the features correlated
+  F_train = rng.normal(size=(n_train, p)) @ mix / np.sqrt(p) * 3     # (120, 150) image features
+  F_test = rng.normal(size=(n_test, p)) @ mix / np.sqrt(p) * 3       # (40, 150)
+  W_true = rng.normal(size=(p, V)) * (rng.random((p, V)) < 0.2)      # each voxel uses about 30 features
+  scale = (F_train @ W_true).std(axis=0)
+  Y_train = F_train @ W_true + rng.normal(0, 1, (n_train, V)) * scale  # (120, 30) voxel responses
+  Y_test = F_test @ W_true + rng.normal(0, 1, (n_test, V)) * scale     # (40, 30)
+
+  def voxel_r(Y, P):
+      """Correlation between measured and predicted responses, one value per voxel (column)."""
+      Yc, Pc = Y - Y.mean(axis=0), P - P.mean(axis=0)
+      return (Yc * Pc).sum(axis=0) / np.sqrt((Yc ** 2).sum(axis=0) * (Pc ** 2).sum(axis=0))
+
+  print(F_train.shape, Y_train.shape, "rank of F_train:", np.linalg.matrix_rank(F_train))
+`} />
+
+<PyCell id="partA" title="Part A: every voxel in one equation" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "ridge returns one column of weights per voxel"
+      assert ridge(np.ones((5, 3)), np.ones((5, 4)), 1.0).shape == (3, 4)
+
+  def test_columns():
+      "fitting all voxels at once matches fitting each voxel on its own"
+      X = np.random.default_rng(1).normal(size=(40, 6)); Y = np.random.default_rng(2).normal(size=(40, 3))
+      B = ridge(X, Y, 2.0)
+      for v in range(3):
+          b = np.linalg.solve(X.T @ X + 2.0 * np.eye(6), X.T @ Y[:, v])
+          assert np.allclose(B[:, v], b)
+
+  def test_fit_predict():
+      "fit_predict centres with the training means and returns predictions for the new rows"
+      P = fit_predict(F_train, Y_train, F_test, 100.0)
+      assert P.shape == (40, 30)
+      assert np.allclose(fit_predict(F_train, Y_train, F_train[:1] * 0 + F_train.mean(axis=0), 100.0), Y_train.mean(axis=0))
+`} prompt="Write `ridge(X, Y, lam)` that solves $(X^\top X + \lambda I)B = X^\top Y$ for a whole matrix of targets at once (one column per voxel). Then write `fit_predict(Ftr, Ytr, Fte, lam)`: centre features and responses with the training means, fit ridge, and return predictions for `Fte` with the response means added back."
+code={String.raw`
+  def ridge(X, Y, lam):
+      ...
+
+  def fit_predict(Ftr, Ytr, Fte, lam):
+      ...
+
+  print(fit_predict(F_train, Y_train, F_test, 100.0).shape)
+`}
+hint="np.linalg.solve accepts a matrix right-hand side: return np.linalg.solve(X.T @ X + lam * np.eye(X.shape[1]), X.T @ Y). For fit_predict: mf, my = Ftr.mean(axis=0), Ytr.mean(axis=0); return (Fte - mf) @ ridge(Ftr - mf, Ytr - my, lam) + my."
+solution={String.raw`
+  def ridge(X, Y, lam):
+      return np.linalg.solve(X.T @ X + lam * np.eye(X.shape[1]), X.T @ Y)
+
+  def fit_predict(Ftr, Ytr, Fte, lam):
+      mf, my = Ftr.mean(axis=0), Ytr.mean(axis=0)
+      return (Fte - mf) @ ridge(Ftr - mf, Ytr - my, lam) + my
+
+  print(fit_predict(F_train, Y_train, F_test, 100.0).shape)
+`} />
+
+Solving for all 30 voxels at once is just matrix multiplication doing its job: each column of $B$ is a separate ridge regression, but they share the same $X^\top X + \lambda I$, so one solve handles them all. Real studies fit tens of thousands of voxels this way.
+
+<PyCell id="partB" title="Part B: choose the penalty, then test once" tests={String.raw`
+  import numpy as np
+  def test_cv():
+      "cv_score has one mean cross-validated correlation per penalty"
+      assert len(cv_score) == len(lams)
+
+  def test_best():
+      "best_lam maximises the cross-validated score"
+      assert best_lam == lams[int(np.argmax(cv_score))]
+
+  def test_accuracy():
+      "held-out prediction accuracy r_test has one value per voxel and averages above 0.35"
+      assert r_test.shape == (30,)
+      assert r_test.mean() > 0.35, f"mean r = {r_test.mean():.2f}"
+`} prompt="Run 5-fold cross-validation on the training images for each penalty in `lams`, scoring each fold by the mean over voxels of `voxel_r`. Store the averages in `cv_score` and the winner in `best_lam`. Then refit on all 120 training images, predict the 40 test images, and store each voxel's held-out correlation in `r_test`. Compare with a near-zero penalty."
+code={String.raw`
+  lams = [1, 10, 100, 1000, 10000, 100000]
+  folds = np.array_split(np.random.default_rng(0).permutation(n_train), 5)
+  cv_score = []
+  for lam in lams:
+      scores = []
+      for f in folds:
+          tr = np.setdiff1d(np.arange(n_train), f)
+          ...
+      cv_score.append(np.mean(scores))
+  best_lam = ...
+  P_test = ...
+  r_test = ...
+
+  r_small = voxel_r(Y_test, fit_predict(F_train, Y_train, F_test, 1e-6))
+  fig, ax = plt.subplots(1, 2, figsize=(8, 3))
+  ax[0].semilogx(lams, cv_score, "o-"); ax[0].axvline(best_lam, ls="--", color="0.5")
+  ax[0].set_xlabel("ridge penalty λ"); ax[0].set_ylabel("cross-validated mean r")
+  ax[1].hist(r_small, bins=12, alpha=0.6, label="λ near 0"); ax[1].hist(r_test, bins=12, alpha=0.6, label=f"λ = {best_lam}")
+  ax[1].set_xlabel("held-out r per voxel"); ax[1].legend(frameon=False); plt.tight_layout(); plt.show()
+  print(f"best lambda {best_lam}: mean held-out r = {r_test.mean():.2f} (near-zero penalty: {r_small.mean():.2f})")
+`}
+hint="Inside the fold loop: scores.append(voxel_r(Y_train[f], fit_predict(F_train[tr], Y_train[tr], F_train[f], lam)).mean()). Then best_lam = lams[int(np.argmax(cv_score))], P_test = fit_predict(F_train, Y_train, F_test, best_lam) and r_test = voxel_r(Y_test, P_test)."
+solution={String.raw`
+  lams = [1, 10, 100, 1000, 10000, 100000]
+  folds = np.array_split(np.random.default_rng(0).permutation(n_train), 5)
+  cv_score = []
+  for lam in lams:
+      scores = []
+      for f in folds:
+          tr = np.setdiff1d(np.arange(n_train), f)
+          scores.append(voxel_r(Y_train[f], fit_predict(F_train[tr], Y_train[tr], F_train[f], lam)).mean())
+      cv_score.append(np.mean(scores))
+  best_lam = lams[int(np.argmax(cv_score))]
+  P_test = fit_predict(F_train, Y_train, F_test, best_lam)
+  r_test = voxel_r(Y_test, P_test)
+
+  r_small = voxel_r(Y_test, fit_predict(F_train, Y_train, F_test, 1e-6))
+  fig, ax = plt.subplots(1, 2, figsize=(8, 3))
+  ax[0].semilogx(lams, cv_score, "o-"); ax[0].axvline(best_lam, ls="--", color="0.5")
+  ax[0].set_xlabel("ridge penalty λ"); ax[0].set_ylabel("cross-validated mean r")
+  ax[1].hist(r_small, bins=12, alpha=0.6, label="λ near 0"); ax[1].hist(r_test, bins=12, alpha=0.6, label=f"λ = {best_lam}")
+  ax[1].set_xlabel("held-out r per voxel"); ax[1].legend(frameon=False); plt.tight_layout(); plt.show()
+  print(f"best lambda {best_lam}: mean held-out r = {r_test.mean():.2f} (near-zero penalty: {r_small.mean():.2f})")
+`} />
+
+The ridge model predicts brain responses to images it has never seen, at more than twice the accuracy of the unregularised fit. Notice that even the true model would not reach $r = 1$, because of the noise: real studies compare accuracy with a **noise ceiling**, the best any model could do given trial-to-trial variability (Week 133).
+
+<PyCell id="partC" title="Part C: which image was it?" tests={String.raw`
+  import numpy as np
+  def test_C():
+      "C is the 40 by 40 matrix of correlations between measured and predicted patterns"
+      assert C.shape == (40, 40)
+      assert np.isclose(C[3, 7], np.corrcoef(Y_test[3], P_test[7])[0, 1])
+
+  def test_identified():
+      "identified holds the best-matching predicted image for each measured pattern"
+      assert np.array_equal(identified, C.argmax(axis=1))
+
+  def test_accuracy():
+      "identification is far above chance (1 in 40)"
+      assert accuracy > 0.4, f"accuracy {accuracy:.2f}"
+`} prompt="Identification, as in Kay and colleagues (2008): for each test image `j`, compare the measured pattern across the 30 voxels, `Y_test[j]`, with the predicted pattern for every test image `k`, `P_test[k]`. Fill `C[j, k]` with their correlation, pick `identified[j]` as the best match, and compute `accuracy`, the fraction identified correctly. Chance is 1 in 40."
+code={String.raw`
+  C = ...
+  identified = ...
+  accuracy = ...
+
+  plt.figure(figsize=(3.8, 3.2)); plt.imshow(C, cmap="viridis"); plt.colorbar(label="r")
+  plt.xlabel("predicted image k"); plt.ylabel("measured image j"); plt.show()
+  print(f"identified {accuracy:.0%} of the test images correctly (chance {1 / n_test:.1%})")
+`}
+hint="np.corrcoef stacks its two inputs as rows, so np.corrcoef(Y_test, P_test) is 80 by 80; the block you want is [:n_test, n_test:]. identified = C.argmax(axis=1); accuracy = np.mean(identified == np.arange(n_test))."
+solution={String.raw`
+  C = np.corrcoef(Y_test, P_test)[:n_test, n_test:]
+  identified = C.argmax(axis=1)
+  accuracy = np.mean(identified == np.arange(n_test))
+
+  plt.figure(figsize=(3.8, 3.2)); plt.imshow(C, cmap="viridis"); plt.colorbar(label="r")
+  plt.xlabel("predicted image k"); plt.ylabel("measured image j"); plt.show()
+  print(f"identified {accuracy:.0%} of the test images correctly (chance {1 / n_test:.1%})")
+`} />
+
+The bright diagonal is the encoding model being used as a decoder. No decoder was trained: identification only needed a model of how the brain responds, which is Naselaris and colleagues' central argument for starting with encoding models.
+
+**Part D (in your journal).** Replace the 150 features with 150 random numbers per image that have nothing to do with the voxels. What would happen to `r_test` and to identification? What does this tell you about what a good encoding model claims about a brain region?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The dual form of ridge" task="Show that $(X^\top X + \lambda I)^{-1}X^\top = X^\top(XX^\top + \lambda I)^{-1}$ for $\lambda \gt 0$. Why is the right-hand side cheaper to compute when there are far more features than images?">
+
+Start from the identity $X^\top(XX^\top + \lambda I) = X^\top X X^\top + \lambda X^\top = (X^\top X + \lambda I)X^\top$. Both bracketed matrices are invertible for $\lambda \gt 0$. Multiply on the left by $(X^\top X + \lambda I)^{-1}$ and on the right by $(XX^\top + \lambda I)^{-1}$ to get the result.
+
+With $n$ images and $p$ features, the left side inverts a $p \times p$ matrix and the right side an $n \times n$ matrix. When $p$ is much larger than $n$ (deep-network features often number in the hundreds of thousands), the dual form is far cheaper. It is also the doorway to kernel methods (Week 57).
+
+</Prove>
+
+<Prove title="2. Composition of linear layers" task="A two-layer network computes $\mathbf{y} = W_2(W_1\mathbf{x})$ with no nonlinearity. Show that it is equivalent to a single layer, and give the rank bound on the combined matrix when $W_1$ is 3 by 100 and $W_2$ is 100 by 3.">
+
+By associativity, $W_2(W_1\mathbf{x}) = (W_2W_1)\mathbf{x}$, a single matrix. The rank of a product is at most the smallest rank of its factors, and $W_1$ has rank at most 3, so $W_2W_1$, a 100 by 100 matrix, has rank at most 3. Stacking linear layers adds no expressive power; it can only squeeze information through the narrowest layer. That is why deep networks need nonlinearities (Week 80).
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 5 quiz (15 questions)" questions={[
+  { q: "The columns of a matrix A tell you...", options: ["Its determinant", "Where A sends the basis vectors", "Its eigenvalues", "Nothing about the transformation"], answer: 1, explain: "Column j is $A\\mathbf{e}_j$." },
+  { q: "A layer of 20 neurons receiving 50 inputs has a weight matrix of shape...", options: ["50 by 20", "20 by 50", "20 by 20", "70 by 1"], answer: 1, explain: "One row per output neuron, one column per input." },
+  { q: "The determinant of a 2 by 2 matrix measures...", options: ["Its rank", "The factor by which it scales area (with sign for orientation)", "Its largest entry", "Its trace"], answer: 1, explain: "A unit square maps to a parallelogram of area |det|." },
+  { q: "If A is 3 by 4 and B is 4 by 5, AB is...", options: ["3 by 5", "4 by 4", "5 by 3", "Undefined"], answer: 0, explain: "Inner sizes match and cancel." },
+  { q: "In general, AB and BA are...", options: ["Always equal", "Different", "Both zero", "Inverses"], answer: 1, explain: "Matrix multiplication is not commutative." },
+  { q: "Two linear layers with no nonlinearity are equivalent to...", options: ["A deeper network", "A single linear layer", "A recurrent network", "Nothing"], answer: 1, explain: "$W_2W_1$ is one matrix." },
+  { q: "A square matrix has no inverse exactly when...", options: ["Its determinant is 0", "It has a negative entry", "It is symmetric", "Its trace is 0"], answer: 0, explain: "It squashes space into a lower dimension." },
+  { q: "An ill-conditioned system...", options: ["Has no solution", "Amplifies small changes in the data into large changes in the answer", "Is always 1 by 1", "Is solved exactly by ridge"], answer: 1, explain: "Large condition number." },
+  { q: "The normal equations are...", options: ["$X\\boldsymbol\\beta = \\mathbf{y}$", "$X^\\top X\\boldsymbol\\beta = X^\\top\\mathbf{y}$", "$XX^\\top = I$", "$\\boldsymbol\\beta = X\\mathbf{y}$"], answer: 1, explain: "The residual is orthogonal to every column of X." },
+  { q: "Geometrically, least squares finds...", options: ["The longest residual", "The projection of y onto the column space of X", "The determinant of X", "A random fit"], answer: 1, explain: "The closest point Xβ to y." },
+  { q: "Why is the spike-triggered average biased with correlated stimuli?", options: ["It is never biased", "It mixes in the stimulus correlations: it estimates $C\\mathbf{w}$, not $\\mathbf{w}$", "Spikes are random", "It ignores the mean"], answer: 1, explain: "Least squares undoes C; the STA does not." },
+  { q: "An encoding model predicts...", options: ["The stimulus from activity", "Activity from the stimulus", "The noise ceiling", "The decoder weights"], answer: 1, explain: "Encoding: stimulus to brain. Decoding: brain to stimulus." },
+  { q: "Training error near zero but test error large means...", options: ["A perfect model", "Overfitting", "Underfitting", "A bug in NumPy"], answer: 1, explain: "The model learned the noise." },
+  { q: "Ridge regression adds to $X^\\top X$...", options: ["$\\lambda I$", "$\\lambda X$", "$\\lambda \\mathbf{y}$", "Nothing"], answer: 0, explain: "A penalty on the squared weights." },
+  { q: "The ridge penalty should be chosen using...", options: ["The test set", "Cross-validation on the training set", "The largest value tried", "The number of voxels"], answer: 1, explain: "Keep the test set untouched until the end." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Naselaris, Kay, Nishimoto and Gallant (2011) its third pass and write your critique under the five headings. Focus on one question: **when an encoding model built on some feature space predicts a voxel well, what has been learned about the brain?** A model can predict well because its features capture what the region computes, or because they happen to correlate with what it computes. Think about how comparing several feature spaces on the same data, as the authors recommend, helps to separate the two.
+
+<Callout kind="research">
+This is exactly how deep networks are compared with the brain today: their layer activations are used as the feature space of an encoding model, fitted with ridge and scored on held-out data (Weeks 133 and 134). Write down one feature space you would want to compare against a deep network's for a brain region you care about, and what result would surprise you.
+</Callout>
+
+<Key title="Week 5 review checklist">
+<ul>
+<li>I can read a matrix as a transformation and say where it sends the basis vectors.</li>
+<li>I can multiply matrices, check shapes and explain why linear layers compose into one.</li>
+<li>I can solve linear systems, compute inverses and determinants, and recognise ill conditioning.</li>
+<li>I can derive the normal equations and fit a linear encoding model by least squares.</li>
+<li>I can explain why the STA is biased for correlated stimuli and how least squares fixes it.</li>
+<li>I can fit ridge, choose its penalty by cross-validation and report held-out accuracy.</li>
+<li>I can use an encoding model to identify stimuli from brain activity.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part D: what happens to prediction and identification with random features, and what does a good encoding model claim about a brain region? Then name one feature space you would test against a deep network." />

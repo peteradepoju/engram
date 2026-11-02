@@ -1,0 +1,269 @@
+export const meta = {
+  title: "Matrix multiplication: composing transformations and layers",
+  intro: "Applying one transformation after another is itself a transformation, and its matrix is the product of the two. Today you learn matrix multiplication from that idea, why order matters, what the transpose is, and a result with deep consequences for neuroscience and AI: a stack of purely linear layers is no more powerful than a single layer.",
+  goals: [
+    "Multiply matrices and check that the shapes are compatible",
+    "Explain matrix multiplication as composition, and why AB is usually not BA",
+    "Use the transpose and the rule (AB)ᵀ = BᵀAᵀ",
+    "Show that linear layers collapse into one, and why nonlinearities matter",
+  ],
+  plan: [
+    { label: "Predict and composition", minutes: 20 },
+    { label: "Computing products", minutes: 30 },
+    { label: "Order and the transpose", minutes: 25 },
+    { label: "Why depth needs nonlinearity", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "rumelhart-1986",
+};
+
+<Predict question="A network has two layers with no nonlinearity: 100 inputs to 50 hidden units to 10 outputs. Could a single layer of weights from 100 inputs straight to 10 outputs compute exactly the same function?" />
+
+<Step n={1} title="Composition" minutes={20} />
+
+Suppose $B$ transforms $\mathbf{x}$ into $B\mathbf{x}$, and then $A$ transforms the result. The combined effect $A(B\mathbf{x})$ is also linear, so it has a matrix. We define the **product** $AB$ to be that matrix:
+
+$$
+(AB)\mathbf{x} = A(B\mathbf{x})
+$$
+
+Read products from right to left: in $AB$, $B$ acts first. In network terms, if $W_1$ maps inputs to hidden units and $W_2$ maps hidden units to outputs, the combined linear map is $W_2 W_1$.
+
+<Video id="XkY2DOUCWMU" title="Matrix multiplication as composition | Chapter 4, Essence of linear algebra" by="3Blue1Brown (Grant Sanderson)" note="Why the multiplication rule is what it is, and why order matters." />
+
+<Step n={2} title="Computing products" minutes={30} />
+
+Where does column $j$ of $AB$ come from? Column $j$ of $AB$ is $(AB)\mathbf{e}_j = A(B\mathbf{e}_j) = A\,\mathbf{b}_{:,j}$: just $A$ times column $j$ of $B$. Written out entry by entry:
+
+$$
+(AB)_{ij} = \sum_{k} A_{ik} B_{kj}
+$$
+
+Entry $(i, j)$ is the dot product of row $i$ of $A$ with column $j$ of $B$. So the inner dimensions must match: an $m \times k$ matrix times a $k \times n$ matrix gives an $m \times n$ matrix.
+
+<PyCell id="matmul" title="Matrix multiplication from scratch" tests={String.raw`
+  import numpy as np
+  def test_matmul():
+      "my_matmul matches A @ B"
+      rng = np.random.default_rng(0)
+      A, B = rng.normal(size=(3, 4)), rng.normal(size=(4, 2))
+      assert np.allclose(my_matmul(A, B), A @ B)
+
+  def test_shape_error():
+      "my_matmul refuses incompatible shapes"
+      try:
+          my_matmul(np.ones((2, 3)), np.ones((2, 3)))
+      except ValueError:
+          return
+      assert False, "Raise ValueError when the inner dimensions differ."
+`} prompt="Write `my_matmul(A, B)` that raises `ValueError` if the inner dimensions do not match, and otherwise builds the product entry by entry as row-times-column dot products."
+code={String.raw`
+  import numpy as np
+
+  def my_matmul(A, B):
+      m, k = A.shape
+      k2, n = B.shape
+      ...
+      C = np.zeros((m, n))
+      for i in range(m):
+          for j in range(n):
+              C[i, j] = ...
+      return C
+
+  A = np.array([[1.0, 2.0], [3.0, 4.0]]); B = np.array([[0.0, 1.0], [1.0, 0.0]])
+  print(my_matmul(A, B)); print(A @ B)
+`}
+hint="if k != k2: raise ValueError('inner dimensions differ'). Then C[i, j] = A[i, :] @ B[:, j]."
+solution={String.raw`
+  import numpy as np
+
+  def my_matmul(A, B):
+      m, k = A.shape
+      k2, n = B.shape
+      if k != k2:
+          raise ValueError("inner dimensions differ")
+      C = np.zeros((m, n))
+      for i in range(m):
+          for j in range(n):
+              C[i, j] = A[i, :] @ B[:, j]
+      return C
+
+  A = np.array([[1.0, 2.0], [3.0, 4.0]]); B = np.array([[0.0, 1.0], [1.0, 0.0]])
+  print(my_matmul(A, B)); print(A @ B)
+`} />
+
+Multiplying an $m \times k$ by a $k \times n$ matrix takes $mkn$ multiplications. GPUs are fast because they do thousands of these at once, and training a large network is mostly matrix multiplication.
+
+<Step n={3} title="Order and the transpose" minutes={25} />
+
+Rotating then stretching is not the same as stretching then rotating. In general $AB \neq BA$.
+
+<Figure caption="Apply A then B, or B then A. The two composite transformations usually differ." credit="Interactive figure by Engram.">
+  <Compose />
+</Figure>
+
+The **transpose** $A^\top$ swaps rows and columns: $(A^\top)_{ij} = A_{ji}$. An $m \times n$ matrix becomes $n \times m$. Two rules you will use constantly:
+
+- A dot product is a product with a transpose: $\mathbf{a} \cdot \mathbf{b} = \mathbf{a}^\top \mathbf{b}$, treating vectors as columns.
+- The transpose of a product reverses the order: $(AB)^\top = B^\top A^\top$.
+
+<Derivation title="Why (AB)ᵀ = BᵀAᵀ">
+  <div>
+
+Entry $(i, j)$ of $(AB)^\top$ is entry $(j, i)$ of $AB$: $\sum_k A_{jk} B_{ki}$.
+
+  </div>
+  <div>
+
+Entry $(i, j)$ of $B^\top A^\top$ is $\sum_k (B^\top)_{ik}(A^\top)_{kj} = \sum_k B_{ki} A_{jk}$.
+
+  </div>
+  <div>
+
+The two sums are the same products in a different order, so the matrices are equal. The order reverses because transposing swaps which matrix supplies the rows.
+
+  </div>
+</Derivation>
+
+Two products with the transpose appear everywhere in data analysis. For a data matrix $X$ with trials in rows and neurons in columns:
+
+- $XX^\top$ (trials by trials) holds the dot product between every pair of trials: how similar their population patterns are.
+- $X^\top X$ (neurons by neurons) holds the dot product between every pair of neurons across trials: how much they fire together. After centring each neuron, it is proportional to the covariance matrix, the heart of PCA (Week 7).
+
+<PyCell id="gram" title="Two ways to multiply a data matrix by itself" tests={String.raw`
+  import numpy as np
+  def test_trials():
+      "trial_sim holds the dot product of every pair of trials"
+      assert trial_sim.shape == (X.shape[0], X.shape[0])
+      assert abs(trial_sim[3, 7] - X[3] @ X[7]) < 1e-9
+
+  def test_neurons():
+      "cov is the neuron-by-neuron covariance matrix"
+      assert cov.shape == (X.shape[1], X.shape[1])
+      assert np.allclose(cov, np.cov(X, rowvar=False))
+`} prompt="`X` has 40 trials by 6 neurons. Compute `trial_sim` (every pair of trials' dot product) and `cov` (the covariance between every pair of neurons): centre each neuron's column, compute $X_c^\top X_c$ and divide by the number of trials minus one. Check against `np.cov`."
+code={String.raw`
+  rng = np.random.default_rng(3)
+  shared = rng.normal(size=(40, 1))
+  X = shared @ np.array([[1.0, 0.8, 0.6, 0.0, 0.0, -0.5]]) + rng.normal(0, 0.5, (40, 6))
+
+  trial_sim = ...
+  Xc = ...
+  cov = ...
+  print(np.round(cov, 2))
+`}
+hint="trial_sim = X @ X.T. Xc = X - X.mean(axis=0). cov = Xc.T @ Xc / (X.shape[0] - 1)."
+solution={String.raw`
+  rng = np.random.default_rng(3)
+  shared = rng.normal(size=(40, 1))
+  X = shared @ np.array([[1.0, 0.8, 0.6, 0.0, 0.0, -0.5]]) + rng.normal(0, 0.5, (40, 6))
+
+  trial_sim = X @ X.T
+  Xc = X - X.mean(axis=0)
+  cov = Xc.T @ Xc / (X.shape[0] - 1)
+  print(np.round(cov, 2))
+`} />
+
+Look at the covariance matrix: the first three neurons rise and fall together, the sixth moves against them, and neurons four and five are independent of the rest. One matrix product summarised the whole population's co-activity.
+
+<Step n={4} title="Why depth needs nonlinearity" minutes={30} />
+
+Because $(W_2 W_1)\mathbf{x} = W_2(W_1\mathbf{x})$, two linear layers are exactly one linear layer with weights $W = W_2 W_1$. So are a hundred. Stacking linear layers adds nothing; that answers today's prediction. Depth only helps when there is a **nonlinearity** between the layers.
+
+<PyCell id="collapse" title="Linear layers collapse; nonlinear ones do not" tests={String.raw`
+  import numpy as np
+  def test_collapse():
+      "W_single reproduces the two linear layers exactly"
+      assert W_single.shape == (10, 100)
+      assert np.allclose(X @ W_single.T, (X @ W1.T) @ W2.T)
+
+  def test_nonlinear():
+      "with a ReLU in between, no single matrix fits exactly"
+      assert gap > 1e-3, f"gap was {gap}"
+`} prompt="Compute `W_single`, the one matrix equal to layer `W1` (100 to 50) followed by `W2` (50 to 10), and check it on the inputs `X`. Then insert a ReLU between the layers: fit the best single linear map from `X` to those outputs with `np.linalg.lstsq` (tomorrow's tool), and store the leftover mean squared error in `gap`."
+code={String.raw`
+  rng = np.random.default_rng(4)
+  W1 = rng.normal(size=(50, 100)) / 10
+  W2 = rng.normal(size=(10, 50)) / 7
+  X = rng.normal(size=(500, 100))                 # 500 inputs, one per row
+
+  W_single = ...
+  print("linear stack reproduced:", np.allclose(X @ W_single.T, (X @ W1.T) @ W2.T))
+
+  Y = np.maximum(0, X @ W1.T) @ W2.T              # with a ReLU between the layers
+  B, *_ = np.linalg.lstsq(X, Y, rcond=None)       # best linear map, shape (100, 10)
+  gap = ...
+  print("error of the best single linear layer:", round(gap, 4))
+`}
+hint="W_single = W2 @ W1 (W1 acts first, so it goes on the right). gap = np.mean((X @ B - Y) ** 2)."
+solution={String.raw`
+  rng = np.random.default_rng(4)
+  W1 = rng.normal(size=(50, 100)) / 10
+  W2 = rng.normal(size=(10, 50)) / 7
+  X = rng.normal(size=(500, 100))
+
+  W_single = W2 @ W1
+  print("linear stack reproduced:", np.allclose(X @ W_single.T, (X @ W1.T) @ W2.T))
+
+  Y = np.maximum(0, X @ W1.T) @ W2.T
+  B, *_ = np.linalg.lstsq(X, Y, rcond=None)
+  gap = np.mean((X @ B - Y) ** 2)
+  print("error of the best single linear layer:", round(gap, 4))
+`} />
+
+This is why every neural network puts a nonlinearity (ReLU, sigmoid, tanh) between layers. Combined with Week 1's result that a single layer cannot compute XOR, it explains why this week's classic paper (Rumelhart, Hinton and Williams, 1986) mattered so much: it showed how to train the hidden layers of nonlinear networks.
+
+<Bridge title="Composition in brains and machines"
+  neuro="Real neurons are strongly nonlinear: thresholds, saturation, dendritic spikes. A chain of brain areas therefore composes nonlinear transformations, which is why deep pathways such as the ventral visual stream can build representations no single stage could."
+  ai="A deep network's power comes entirely from composing linear maps with nonlinearities. Remove the nonlinearities and a 100-layer network is a single matrix. Interestingly, deep linear networks still learn in rich ways, and their learning dynamics are solvable exactly (Saxe and colleagues, Week 97).">
+
+When a model is compared with a brain pathway, both are compositions of layers; the question is whether their intermediate representations match (Week 133).
+
+</Bridge>
+
+<Prove title="Matrix products as sums of outer products" task="The outer product of a column vector $\mathbf{u}$ ($m$ entries) and a row vector $\mathbf{v}^\top$ ($n$ entries) is the $m \times n$ matrix $\mathbf{u}\mathbf{v}^\top$ with entries $u_i v_j$. Show that $AB = \sum_k \mathbf{a}_{:,k}\,\mathbf{b}_{k,:}$: the sum, over $k$, of column $k$ of $A$ times row $k$ of $B$.">
+
+Entry $(i, j)$ of the sum is $\sum_k (\mathbf{a}_{:,k}\,\mathbf{b}_{k,:})_{ij} = \sum_k A_{ik} B_{kj}$, which is exactly $(AB)_{ij}$.
+
+So a product is a sum of rank-one pieces, one per inner index. If only a few pieces matter, the product is approximately low rank. That is the idea behind the SVD and PCA (Week 7) and behind low-rank models of neural connectivity.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "In $AB\\mathbf{x}$, which matrix acts on x first?", options: ["A", "B", "Both at once", "Neither"], answer: 1, explain: "Read right to left: $A(B\\mathbf{x})$." },
+  { q: "A 3 × 4 matrix times a 4 × 7 matrix has shape...", options: ["3 × 7", "4 × 4", "7 × 3", "Undefined"], answer: 0, explain: "Inner dimensions (4) match and disappear." },
+  { q: "Entry (i, j) of AB is...", options: ["$A_{ij}B_{ij}$", "Row i of A dotted with column j of B", "Column i of A dotted with row j of B", "$A_{ji}B_{ij}$"], answer: 1, explain: "$\\sum_k A_{ik}B_{kj}$." },
+  { q: "$(AB)^\\top$ equals...", options: ["$A^\\top B^\\top$", "$B^\\top A^\\top$", "$AB$", "$BA$"], answer: 1, explain: "The order reverses." },
+  { q: "Is matrix multiplication commutative?", options: ["Always", "Usually not", "Only for square matrices", "Never"], answer: 1, explain: "Some pairs commute (for example two rotations), but most do not." },
+  { q: "Two linear layers with no nonlinearity are equivalent to...", options: ["Nothing", "One linear layer with weights W₂W₁", "An XOR solver", "A ReLU"], answer: 1, explain: "Composition of linear maps is linear." },
+  { q: "For X with trials in rows, $X^\\top X$ (after centring) describes...", options: ["Trial-to-trial similarity", "How neurons co-vary", "The mean of each trial", "Nothing useful"], answer: 1, explain: "Neuron-by-neuron covariance (up to the factor n − 1)." },
+]} />
+
+<Flashcards cards={[
+  { front: "Definition of AB as composition?", back: "$(AB)\\mathbf{x} = A(B\\mathbf{x})$: B acts first." },
+  { front: "Entry formula for a matrix product?", back: "$(AB)_{ij} = \\sum_k A_{ik}B_{kj}$" },
+  { front: "Shape rule for AB?", back: "(m × k)(k × n) = m × n; inner dimensions must match." },
+  { front: "Transpose of a product?", back: "$(AB)^\\top = B^\\top A^\\top$" },
+  { front: "Why do networks need nonlinearities?", back: "Linear layers compose into one linear layer, so depth adds nothing without them." },
+  { front: "Covariance matrix from a data matrix?", back: "Centre columns, then $X_c^\\top X_c/(n-1)$ (neurons × neurons)." },
+]} />
+
+<Predict revisit question="Can one linear layer replace two stacked linear layers?" />
+
+<Key title="Before you go">
+<ul>
+<li>AB means B then A; entries are row-times-column dot products; inner dimensions must match.</li>
+<li>Order matters: AB and BA usually differ.</li>
+<li>The transpose swaps rows and columns, and reverses products.</li>
+<li>Linear layers collapse into one; depth needs nonlinearity.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Rumelhart, Hinton and Williams (1986), <em>Learning representations by back-propagating errors</em>.</li>
+<li>Deisenroth, Faisal and Ong, <em>Mathematics for Machine Learning</em>, Chapter 2.2: matrix multiplication and transposes.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Deep linear networks compute only linear functions, yet researchers study them closely. What could you learn about learning, or about the brain, from a model that is linear but deep?" />
