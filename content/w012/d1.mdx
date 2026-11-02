@@ -1,0 +1,249 @@
+export const meta = {
+  title: "Optimisation problems: losses, minima and landscapes",
+  intro: "Fitting a model, training a network and, some argue, learning in the brain are all the same kind of problem: choose parameters to make some measure of error as small as possible. This week is about how to do that. Today you learn to set problems up: what a loss function is, why squared error and negative log-likelihood are the standard choices, what the landscape of a loss looks like, and why some landscapes are easy and others are full of traps, using two problems from neuroscience: fitting a tuning curve and estimating the frequency of a rhythm.",
+  goals: [
+    "Write fitting problems as the minimisation of a loss function",
+    "Explain the link between squared error, Poisson likelihood and noise models",
+    "Distinguish global minima, local minima and plateaus, and visualise a loss landscape",
+    "Show why grid search fails in many dimensions and local search can get trapped",
+  ],
+  plan: [
+    { label: "Predict and loss functions", minutes: 25 },
+    { label: "Landscapes and minima", minutes: 20 },
+    { label: "Fitting a tuning curve", minutes: 30 },
+    { label: "A landscape full of traps", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "li-2018",
+};
+
+<Predict question="You want to estimate the frequency of a rhythm in one second of noisy data by minimising the squared error of a fitted sinusoid. You start a local search (follow the slope downhill) from 18 different starting frequencies between 2 and 19 Hz. How many of them will find the true frequency of 7.3 Hz: nearly all, about half, or only a few?" />
+
+<Step n={1} title="Loss functions" minutes={25} />
+
+An **optimisation problem** has parameters $\boldsymbol\theta$ and an objective, the **loss** $L(\boldsymbol\theta)$, to be minimised:
+
+$$
+\boldsymbol\theta^* = \arg\min_{\boldsymbol\theta} L(\boldsymbol\theta)
+$$
+
+For fitting a model $f(x;\boldsymbol\theta)$ to data $(x_t, y_t)$, the two standard losses come from assumptions about the noise.
+
+- **Mean squared error**, $L = \frac{1}{T}\sum_t(y_t - f(x_t;\boldsymbol\theta))^2$. Minimising it is the same as maximising the likelihood if the noise is Gaussian with constant variance (Week 16).
+- **Negative log-likelihood**, $L = -\frac{1}{T}\sum_t\log p(y_t \mid x_t, \boldsymbol\theta)$. For spike counts with a Poisson model of rate $\lambda_t$, this is $\frac{1}{T}\sum_t(\lambda_t - y_t\log\lambda_t)$ plus a constant (Week 9's GLM). It weights errors according to the variance a Poisson neuron really has: large where the rate is high, small where it is low.
+
+The choice of loss is a modelling decision: it says what kinds of error you care about and what noise you believe in.
+
+<Video id="HumajfjJ37E" title="Linear Regression and Mean Squared Error" by="Neuromatch Academy" note="Neuromatch's introduction to fitting a model by minimising mean squared error, with neural data." />
+
+<Step n={2} title="Landscapes and minima" minutes={20} />
+
+The loss as a function of the parameters is a **landscape**. A **global minimum** is the lowest point anywhere; a **local minimum** is lower than everything nearby but not necessarily lowest overall; a **plateau** is a flat region where the slope gives no guidance; and in many dimensions there are also saddles (Week 9). A **local** method, which only looks at the slope where it stands, can stop in any local minimum.
+
+<Figure caption="Gradient descent on three one-dimensional landscapes. Drag the blue start and change the learning rate." credit="Interactive figure by Engram.">
+  <Descent1D />
+</Figure>
+
+For one or two parameters you can simply evaluate the loss on a grid and look. With $d$ parameters and 20 grid values each, that is $20^d$ evaluations: 400 for two, eight thousand for three, and more than $10^{13}$ for ten. A network with a million weights is out of the question. Li and colleagues (2018), today's paper, showed how to take honest two-dimensional slices through such enormous landscapes, and found that architectural choices change them from chaotic to smooth.
+
+<Step n={3} title="Fitting a tuning curve" minutes={30} />
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(12)
+  theta = np.repeat(np.linspace(0, 2 * np.pi, 16, endpoint=False), 10)        # 16 directions, 10 trials each
+  def von_mises(theta, mu, kappa, b=5.0, A=30.0):
+      return b + A * np.exp(kappa * (np.cos(theta - mu) - 1))
+  counts = rng.poisson(von_mises(theta, 1.0, 2.0))                             # true preferred direction 1 rad, width 2
+  plt.figure(figsize=(5, 3)); plt.plot(np.degrees(theta), counts, ".", alpha=0.4); plt.xlabel("direction (deg)"); plt.ylabel("spike count"); plt.show()
+`} />
+
+<PyCell id="tuning" title="Two losses on a grid" tests={String.raw`
+  import numpy as np
+  def test_losses():
+      "mse and poisson_nll compute the two losses"
+      lam = von_mises(theta, 0.5, 1.5)
+      assert np.isclose(mse(0.5, 1.5), np.mean((counts - lam) ** 2))
+      assert np.isclose(poisson_nll(0.5, 1.5), np.mean(lam - counts * np.log(lam)))
+
+  def test_grid():
+      "both grid minima are close to the true parameters"
+      for m, k in [best_mse, best_nll]:
+          assert abs(m - 1.0) < 0.1 and abs(k - 2.0) < 0.5
+`} prompt="Write `mse(mu, kappa)` and `poisson_nll(mu, kappa)` for the von Mises model. Evaluate both on a grid of preferred directions (0 to 2π, 91 values) and widths (0.5 to 5, 46 values), and store the best (mu, kappa) pair of each as `best_mse` and `best_nll`. Plot the squared-error landscape."
+code={String.raw`
+  def mse(mu, kappa):
+      return ...
+
+  def poisson_nll(mu, kappa):
+      lam = von_mises(theta, mu, kappa)
+      return ...
+
+  mus = np.linspace(0, 2 * np.pi, 91)
+  kappas = np.linspace(0.5, 5, 46)
+  L_mse = np.array([[mse(m, k) for m in mus] for k in kappas])
+  L_nll = np.array([[poisson_nll(m, k) for m in mus] for k in kappas])
+  i, j = np.unravel_index(np.argmin(L_mse), L_mse.shape); best_mse = (mus[j], kappas[i])
+  i, j = np.unravel_index(np.argmin(L_nll), L_nll.shape); best_nll = (mus[j], kappas[i])
+
+  plt.figure(figsize=(5, 3.2)); plt.contourf(np.degrees(mus), kappas, np.log(L_mse), 30); plt.colorbar(label="log MSE")
+  plt.plot(np.degrees(best_mse[0]), best_mse[1], "w*", ms=12); plt.xlabel("preferred direction (deg)"); plt.ylabel("width κ"); plt.show()
+  print("best by MSE:", np.round(best_mse, 3), "  best by Poisson NLL:", np.round(best_nll, 3), "  truth: (1.0, 2.0)")
+`}
+hint="mse returns np.mean((counts - von_mises(theta, mu, kappa)) ** 2). poisson_nll returns np.mean(lam - counts * np.log(lam))."
+solution={String.raw`
+  def mse(mu, kappa):
+      return np.mean((counts - von_mises(theta, mu, kappa)) ** 2)
+
+  def poisson_nll(mu, kappa):
+      lam = von_mises(theta, mu, kappa)
+      return np.mean(lam - counts * np.log(lam))
+
+  mus = np.linspace(0, 2 * np.pi, 91)
+  kappas = np.linspace(0.5, 5, 46)
+  L_mse = np.array([[mse(m, k) for m in mus] for k in kappas])
+  L_nll = np.array([[poisson_nll(m, k) for m in mus] for k in kappas])
+  i, j = np.unravel_index(np.argmin(L_mse), L_mse.shape); best_mse = (mus[j], kappas[i])
+  i, j = np.unravel_index(np.argmin(L_nll), L_nll.shape); best_nll = (mus[j], kappas[i])
+
+  plt.figure(figsize=(5, 3.2)); plt.contourf(np.degrees(mus), kappas, np.log(L_mse), 30); plt.colorbar(label="log MSE")
+  plt.plot(np.degrees(best_mse[0]), best_mse[1], "w*", ms=12); plt.xlabel("preferred direction (deg)"); plt.ylabel("width κ"); plt.show()
+  print("best by MSE:", np.round(best_mse, 3), "  best by Poisson NLL:", np.round(best_nll, 3), "  truth: (1.0, 2.0)")
+`} />
+
+This landscape is benign: a single valley around the truth, and both losses find it. The grid needed 4,186 evaluations for two parameters; fitting the baseline and amplitude too, on the same grid, would need nearly nine million. Fortunately this landscape is well enough behaved that following the slope from almost anywhere would reach the bottom.
+
+<Step n={4} title="A landscape full of traps" minutes={30} />
+
+Now estimate the frequency of a rhythm. For each candidate frequency $f$, the best amplitude and phase are found by projecting onto $\cos 2\pi ft$ and $\sin 2\pi ft$ (Week 11), so the loss is a function of $f$ alone: the error left after the best fit at that frequency.
+
+<PyCell id="frequency" title="Local search on a rugged landscape" tests={String.raw`
+  import numpy as np
+  def test_loss():
+      "freq_loss is the mean squared residual after the best cosine-sine fit at f"
+      B = np.column_stack([np.cos(2 * np.pi * 5 * tt), np.sin(2 * np.pi * 5 * tt)])
+      c = np.linalg.lstsq(B, xx, rcond=None)[0]
+      assert np.isclose(freq_loss(5.0), np.mean((xx - B @ c) ** 2))
+
+  def test_minima():
+      "the landscape has many local minima, and the grid minimum is the true frequency"
+      assert n_local_minima > 8 and abs(f_grid - 7.3) < 0.1
+
+  def test_local_search():
+      "fewer than a third of the 18 local searches find the true frequency"
+      assert success < 1 / 3
+`} prompt="Write `freq_loss(f)`. Evaluate it on a fine grid from 1 to 20 Hz, count the local minima (`n_local_minima`) and find the grid minimum (`f_grid`). Then run a simple local search from 18 starts between 2 and 19 Hz (500 steps of f ← f − 0.5 × numerical slope) and store the fraction that end within 0.2 Hz of 7.3 Hz in `success`."
+code={String.raw`
+  fs = 200
+  tt = np.arange(0, 1, 1 / fs)
+  xx = np.cos(2 * np.pi * 7.3 * tt + 0.5) + 0.5 * rng.normal(size=len(tt))
+
+  def freq_loss(f):
+      B = np.column_stack([np.cos(2 * np.pi * f * tt), np.sin(2 * np.pi * f * tt)])
+      coef = np.linalg.lstsq(B, xx, rcond=None)[0]
+      return ...
+
+  fgrid = np.linspace(1, 20, 1901)
+  Lf = np.array([freq_loss(f) for f in fgrid])
+  n_local_minima = int(np.sum((Lf[1:-1] < Lf[:-2]) & (Lf[1:-1] < Lf[2:])))
+  f_grid = ...
+
+  ends = []
+  for f in np.linspace(2, 19, 18):
+      for _ in range(500):
+          slope = (freq_loss(f + 1e-4) - freq_loss(f - 1e-4)) / 2e-4
+          f = ...
+      ends.append(f)
+  success = np.mean(np.abs(np.array(ends) - 7.3) < 0.2)
+
+  plt.figure(figsize=(6, 3)); plt.plot(fgrid, Lf); plt.plot(ends, [freq_loss(f) for f in ends], "ro", ms=4)
+  plt.xlabel("candidate frequency (Hz)"); plt.ylabel("loss"); plt.show()
+  print(n_local_minima, "local minima; grid minimum at", f_grid, "Hz;  local searches that succeeded:", round(success, 2))
+`}
+hint="freq_loss returns np.mean((xx - B @ coef) ** 2). f_grid = fgrid[np.argmin(Lf)]. The local search step is f = f - 0.5 * slope."
+solution={String.raw`
+  fs = 200
+  tt = np.arange(0, 1, 1 / fs)
+  xx = np.cos(2 * np.pi * 7.3 * tt + 0.5) + 0.5 * rng.normal(size=len(tt))
+
+  def freq_loss(f):
+      B = np.column_stack([np.cos(2 * np.pi * f * tt), np.sin(2 * np.pi * f * tt)])
+      coef = np.linalg.lstsq(B, xx, rcond=None)[0]
+      return np.mean((xx - B @ coef) ** 2)
+
+  fgrid = np.linspace(1, 20, 1901)
+  Lf = np.array([freq_loss(f) for f in fgrid])
+  n_local_minima = int(np.sum((Lf[1:-1] < Lf[:-2]) & (Lf[1:-1] < Lf[2:])))
+  f_grid = fgrid[np.argmin(Lf)]
+
+  ends = []
+  for f in np.linspace(2, 19, 18):
+      for _ in range(500):
+          slope = (freq_loss(f + 1e-4) - freq_loss(f - 1e-4)) / 2e-4
+          f = f - 0.5 * slope
+      ends.append(f)
+  success = np.mean(np.abs(np.array(ends) - 7.3) < 0.2)
+
+  plt.figure(figsize=(6, 3)); plt.plot(fgrid, Lf); plt.plot(ends, [freq_loss(f) for f in ends], "ro", ms=4)
+  plt.xlabel("candidate frequency (Hz)"); plt.ylabel("loss"); plt.show()
+  print(n_local_minima, "local minima; grid minimum at", f_grid, "Hz;  local searches that succeeded:", round(success, 2))
+`} />
+
+The landscape has a deep valley at 7.3 Hz surrounded by many shallow dips, about one per hertz. Each is a frequency where a sinusoid happens to line up with a stretch of the data, spaced by the recording's frequency resolution of 1/T = 1 Hz (Week 11). Only the searches that started next to the true frequency found it. That answers the prediction. The remedy is to use what you know about the problem: here, look at the power spectrum first and start the search at its peak, which is exactly what spectral analysis is for.
+
+<Bridge title="Landscapes in brains and machines"
+  neuro="Fitting neural models usually means minimising a loss, and whether the landscape has traps depends on the model: generalised linear models are convex (Day 3), while biophysical models with many conductances can have many parameter sets that fit equally well, a 'degenerate' landscape that real neurons may exploit (Week 30)."
+  ai="Training a network minimises a loss over millions of weights. Its landscape is not convex, yet gradient descent works remarkably well, partly because high-dimensional landscapes have more saddles than bad minima (Week 9) and partly because overparameterised networks have wide, connected valleys of good solutions (Li and colleagues, today's paper; Week 97).">
+
+Before minimising, ask what the loss assumes about your data and what its landscape looks like; often the second question decides how to solve the problem.
+
+</Bridge>
+
+<Prove title="Squared error is Gaussian likelihood" task="Suppose $y_t = f(x_t;\boldsymbol\theta) + \epsilon_t$ with independent Gaussian noise of mean 0 and fixed variance $\sigma^2$. Show that maximising the likelihood of the data over $\boldsymbol\theta$ is the same as minimising the sum of squared errors.">
+
+Each $y_t$ has density $\frac{1}{\sqrt{2\pi\sigma^2}}\exp\left(-\frac{(y_t - f(x_t;\boldsymbol\theta))^2}{2\sigma^2}\right)$. By independence the likelihood is the product, so the log-likelihood is
+
+$\ell(\boldsymbol\theta) = -\frac{T}{2}\log(2\pi\sigma^2) - \frac{1}{2\sigma^2}\sum_t(y_t - f(x_t;\boldsymbol\theta))^2$.
+
+The first term does not depend on $\boldsymbol\theta$, and $\frac{1}{2\sigma^2}$ is a positive constant. So maximising $\ell$ means minimising $\sum_t(y_t - f(x_t;\boldsymbol\theta))^2$. Least squares is maximum likelihood under constant-variance Gaussian noise, which is why it is the wrong choice for spike counts, whose variance grows with their mean.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "An optimisation problem asks for...", options: ["The value of the loss", "The parameters that minimise the loss", "The gradient", "The data"], answer: 1, explain: "$\\arg\\min_\\theta L(\\theta)$." },
+  { q: "Minimising squared error corresponds to maximum likelihood under...", options: ["Poisson noise", "Gaussian noise with constant variance", "No noise", "Any noise"], answer: 1, explain: "The log of a Gaussian density." },
+  { q: "The Poisson negative log-likelihood (up to a constant) is...", options: ["$\\sum(y - \\lambda)^2$", "$\\sum(\\lambda - y\\log\\lambda)$", "$\\sum\\log y$", "$\\sum\\lambda^2$"], answer: 1, explain: "From $p(y) = \\lambda^ye^{-\\lambda}/y!$." },
+  { q: "A local minimum is...", options: ["Always the global minimum", "Lower than nearby points but maybe not the lowest", "A saddle", "Where the loss is zero"], answer: 1, explain: "A trap for local methods." },
+  { q: "A grid of 20 values for each of 6 parameters needs...", options: ["120 evaluations", "64 million evaluations", "6,000", "20"], answer: 1, explain: "$20^6$." },
+  { q: "Fitting a rhythm's frequency by least squares has many local minima because...", options: ["The data are Poisson", "Sinusoids at many frequencies partly line up with the data", "The loss is convex", "There is no noise"], answer: 1, explain: "Ripples spaced by 1/T." },
+  { q: "A good strategy on a rugged landscape is...", options: ["A single random start", "Use problem knowledge (or many starts) to begin near the right valley", "A larger learning rate", "Fewer data"], answer: 1, explain: "Here, start at the spectral peak." },
+]} />
+
+<Flashcards cards={[
+  { front: "Optimisation problem?", back: "Find $\\boldsymbol\\theta^* = \\arg\\min L(\\boldsymbol\\theta)$ for a loss L." },
+  { front: "MSE and Poisson NLL?", back: "MSE = Gaussian likelihood with constant variance. Poisson NLL $\\frac{1}{T}\\sum(\\lambda - y\\log\\lambda)$ for spike counts." },
+  { front: "Global versus local minimum?", back: "Lowest anywhere versus lowest nearby; local methods can stop at either." },
+  { front: "Curse of dimensionality for grid search?", back: "$k^d$ evaluations for k values in each of d dimensions." },
+  { front: "Why frequency fitting is rugged?", back: "The loss has dips roughly every 1/T Hz where a sinusoid partly matches the data." },
+]} />
+
+<Predict revisit question="How many of 18 local searches find the true frequency?" />
+
+<Key title="Before you go">
+<ul>
+<li>Fitting is optimisation: choose parameters to minimise a loss.</li>
+<li>Squared error assumes Gaussian noise; Poisson likelihood suits spike counts.</li>
+<li>Grid search is hopeless in many dimensions; local search follows the slope and can be trapped.</li>
+<li>Knowing the problem, as with starting a frequency fit at the spectral peak, beats blind search.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Li, Xu, Taylor, Studer and Goldstein (2018), <em>Visualizing the loss landscape of neural nets</em>.</li>
+<li>Boyd and Vandenberghe, <em>Convex Optimization</em> (free online), Chapter 1: what optimisation problems look like.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If synaptic plasticity in the brain is minimising some loss, what might that loss be? Propose one for a sensory area and one for a motor area, and say what each would predict about learning." />

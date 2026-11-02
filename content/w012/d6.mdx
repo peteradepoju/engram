@@ -1,0 +1,282 @@
+export const meta = {
+  title: "Forge: Week 12 challenge, quiz and deep read",
+  intro: "This week you learned to see fitting and learning as optimisation: losses and landscapes, gradient descent and its speed limit, convexity, stochastic gradients and the learning rules of single neurons. Today's challenge trains a decoder of a fine orientation judgement from 50 neurons and makes every idea concrete: how input scaling sets the condition number and the speed of gradient descent, why minibatches win for a fixed budget, and how a small network on a non-linearly-separable task lands in different minima from different starts.",
+  goals: [
+    "Show how normalising inputs changes the condition number and the speed of gradient descent",
+    "Compare full-batch and minibatch training for a fixed amount of computation",
+    "Show that a non-convex network reaches different solutions from different starts",
+    "Critique the theory of stochastic gradient methods",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "bottou-2018",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. The largest stable learning rate for gradient descent on $L = 3w_1^2 + w_2^2$?
+2. Is $f(x) = x^4 - x^2$ convex?
+3. The standard deviation of a minibatch gradient with B = 64 compared with B = 16?
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  print("1. the Hessian is diag(6, 2), so eta must stay below 2 / 6 =", round(2 / 6, 4))
+  x = np.linspace(-1, 1, 5); print("2. f'' = 12x^2 - 2 at x = 0 is", 12 * 0 - 2, "so no")
+  print("3. it is sqrt(16 / 64) =", np.sqrt(16 / 64), "times as large")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**The task.** Fifty orientation-tuned neurons respond to gratings at random orientations, and the decoder must report whether each grating is within 45° of the 45° diagonal. Spike counts are recorded in 200 ms windows on 2,000 trials; the first 1,500 are for training. The decoder is logistic regression, trained by gradient descent.
+
+<PyCell code={String.raw`
+  rng = np.random.default_rng(2018)
+  N, T = 50, 2000
+  prefs = np.linspace(0, np.pi, N, endpoint=False)
+  theta = rng.uniform(0, np.pi, T)
+  labels = (np.cos(2 * (theta - np.pi / 4)) > 0).astype(float)
+  counts = rng.poisson((10 + 20 * np.exp(2 * (np.cos(2 * (theta[:, None] - prefs[None])) - 1))) * 0.2)
+  train, test = np.arange(1500), np.arange(1500, T)
+  def sigmoid(u): return 1 / (1 + np.exp(-u))
+  def xent(w, Z, y):
+      p = np.clip(sigmoid(Z @ w), 1e-12, 1 - 1e-12)
+      return -np.mean(y * np.log(p) + (1 - y) * np.log(1 - p))
+  def grad(w, Z, y): return Z.T @ (sigmoid(Z @ w) - y) / len(y)
+  Z_raw = np.column_stack([counts, np.ones(T)])                    # raw spike counts plus a bias input
+  print("mean count", counts.mean().round(2), "  largest count", counts.max())
+`} />
+
+<PyCell id="partA" title="Part A: scaling, conditioning and speed" tests={String.raw`
+  import numpy as np
+  def test_cond():
+      "z-scoring reduces the condition number by more than a factor of 1,000"
+      assert cond_raw > 1000 * cond_z
+
+  def test_faster():
+      "with each design's own best step, the z-scored decoder reaches a lower training loss in 200 steps"
+      assert loss_z < loss_raw - 0.01
+`} prompt="Build `Z_z`, the counts z-scored with the training trials' mean and standard deviation, plus a bias column. For each design, compute the condition number of $Z^\top Z/(4T)$ on the training trials (the Hessian of the loss at w = 0), set the learning rate to 1.9 divided by its largest eigenvalue, run 200 steps of gradient descent from zero, and record the final training loss (`loss_raw`, `loss_z`) and condition numbers (`cond_raw`, `cond_z`)."
+code={String.raw`
+  mu, sd = counts[train].mean(axis=0), counts[train].std(axis=0) + 1e-9
+  Z_z = ...
+
+  def run_gd(Z, steps=200):
+      Zt, yt = Z[train], labels[train]
+      ev = np.linalg.eigvalsh(Zt.T @ Zt / (4 * len(yt)))
+      lr = 1.9 / ev.max()
+      w = np.zeros(Z.shape[1]); hist = []
+      for _ in range(steps):
+          w = ...
+          hist.append(xent(w, Zt, yt))
+      return w, hist, ev.max() / ev.min()
+
+  w_raw, h_raw, cond_raw = run_gd(Z_raw)
+  w_z, h_z, cond_z = run_gd(Z_z)
+  loss_raw, loss_z = h_raw[-1], h_z[-1]
+
+  plt.figure(figsize=(5, 3)); plt.plot(h_raw, label=f"raw counts (condition number {cond_raw:.0f})"); plt.plot(h_z, label=f"z-scored ({cond_z:.0f})")
+  plt.xlabel("step"); plt.ylabel("training loss"); plt.legend(frameon=False); plt.show()
+  print(f"after 200 steps: raw {loss_raw:.4f}, z-scored {loss_z:.4f}")
+`}
+hint="Z_z = np.column_stack([(counts - mu) / sd, np.ones(T)]). The gradient step is w = w - lr * grad(w, Zt, yt)."
+solution={String.raw`
+  mu, sd = counts[train].mean(axis=0), counts[train].std(axis=0) + 1e-9
+  Z_z = np.column_stack([(counts - mu) / sd, np.ones(T)])
+
+  def run_gd(Z, steps=200):
+      Zt, yt = Z[train], labels[train]
+      ev = np.linalg.eigvalsh(Zt.T @ Zt / (4 * len(yt)))
+      lr = 1.9 / ev.max()
+      w = np.zeros(Z.shape[1]); hist = []
+      for _ in range(steps):
+          w = w - lr * grad(w, Zt, yt)
+          hist.append(xent(w, Zt, yt))
+      return w, hist, ev.max() / ev.min()
+
+  w_raw, h_raw, cond_raw = run_gd(Z_raw)
+  w_z, h_z, cond_z = run_gd(Z_z)
+  loss_raw, loss_z = h_raw[-1], h_z[-1]
+
+  plt.figure(figsize=(5, 3)); plt.plot(h_raw, label=f"raw counts (condition number {cond_raw:.0f})"); plt.plot(h_z, label=f"z-scored ({cond_z:.0f})")
+  plt.xlabel("step"); plt.ylabel("training loss"); plt.legend(frameon=False); plt.show()
+  print(f"after 200 steps: raw {loss_raw:.4f}, z-scored {loss_z:.4f}")
+`} />
+
+Raw spike counts share a large common mean that dwarfs their differences, so one direction of the Hessian (all weights moving together against the bias) is enormously steeper than the rest: a condition number in the tens of thousands. That direction caps the learning rate, and everything else crawls. Z-scoring removes the shared offset and equalises the scales, and the same 200 steps get noticeably further. It is the cheapest optimisation trick there is.
+
+<PyCell id="partB" title="Part B: one pass through the data" tests={String.raw`
+  import numpy as np
+  def test_budget():
+      "both runs use exactly one pass through the training trials"
+      assert n_examples_gd == 1500 and n_examples_sgd == 1500
+
+  def test_sgd_wins():
+      "after one epoch, minibatch SGD has a clearly lower training loss than one full-batch step"
+      assert loss_sgd < loss_gd - 0.02
+`} prompt="With the z-scored design and learning rate 1, compare one full-batch gradient step (`loss_gd`) with one epoch of minibatch SGD with batches of 20 in a random order (`loss_sgd`). Both see every training example once; record how many examples each processed (`n_examples_gd`, `n_examples_sgd`). Report test accuracy too."
+code={String.raw`
+  Zt, yt = Z_z[train], labels[train]
+  w = np.zeros(N + 1)
+  w = w - 1.0 * grad(w, Zt, yt)
+  loss_gd, n_examples_gd = xent(w, Zt, yt), len(yt)
+  acc_gd = np.mean((sigmoid(Z_z[test] @ w) > 0.5) == labels[test])
+
+  w = np.zeros(N + 1); n_examples_sgd = 0
+  order = np.random.default_rng(0).permutation(len(yt))
+  for start in range(0, len(yt), 20):
+      b = order[start:start + 20]
+      ...
+  loss_sgd = xent(w, Zt, yt)
+  acc_sgd = np.mean((sigmoid(Z_z[test] @ w) > 0.5) == labels[test])
+  print(f"one full-batch step: loss {loss_gd:.4f}, test accuracy {acc_gd:.3f};  one epoch of SGD: loss {loss_sgd:.4f}, test accuracy {acc_sgd:.3f}")
+`}
+hint="Inside the loop: w = w - 1.0 * grad(w, Zt[b], yt[b]); n_examples_sgd += len(b)."
+solution={String.raw`
+  Zt, yt = Z_z[train], labels[train]
+  w = np.zeros(N + 1)
+  w = w - 1.0 * grad(w, Zt, yt)
+  loss_gd, n_examples_gd = xent(w, Zt, yt), len(yt)
+  acc_gd = np.mean((sigmoid(Z_z[test] @ w) > 0.5) == labels[test])
+
+  w = np.zeros(N + 1); n_examples_sgd = 0
+  order = np.random.default_rng(0).permutation(len(yt))
+  for start in range(0, len(yt), 20):
+      b = order[start:start + 20]
+      w = w - 1.0 * grad(w, Zt[b], yt[b])
+      n_examples_sgd += len(b)
+  loss_sgd = xent(w, Zt, yt)
+  acc_sgd = np.mean((sigmoid(Z_z[test] @ w) > 0.5) == labels[test])
+  print(f"one full-batch step: loss {loss_gd:.4f}, test accuracy {acc_gd:.3f};  one epoch of SGD: loss {loss_sgd:.4f}, test accuracy {acc_sgd:.3f}")
+`} />
+
+For the same pass through the data, 75 minibatch steps get much further down the loss than one exact step. Test accuracy is high for both here because the task is easy for 50 neurons; on harder problems, and with millions of examples, the gap is what makes training possible at all.
+
+**Part C: a non-convex problem.** Now a different decoding task: two neurons' responses, and a label that is positive when exactly one of them is above its mean (an XOR). No straight line separates the classes, so logistic regression, which is convex, cannot solve it. A network with three tanh hidden units can, but its loss is not convex.
+
+<PyCell code={String.raw`
+  X2 = rng.normal(size=(400, 2))
+  y2 = ((X2[:, 0] > 0) ^ (X2[:, 1] > 0)).astype(float)
+
+  def train_net(seed, H=3, steps=3000, lr=0.5):
+      r = np.random.default_rng(seed)
+      W1, b1, w2, b2 = r.normal(size=(2, H)), np.zeros(H), r.normal(size=H) * 0.5, 0.0
+      for _ in range(steps):
+          h = np.tanh(X2 @ W1 + b1); p = sigmoid(h @ w2 + b2); d = (p - y2) / len(y2)
+          dh = np.outer(d, w2) * (1 - h ** 2)
+          W1 -= lr * X2.T @ dh; b1 -= lr * dh.sum(axis=0); w2 -= lr * h.T @ d; b2 -= lr * d.sum()
+      p = sigmoid(np.tanh(X2 @ W1 + b1) @ w2 + b2)
+      return np.mean((p > 0.5) == y2)
+  print("one network's accuracy:", train_net(0))
+`} />
+
+<PyCell id="partC" title="Part C: different starts, different answers" tests={String.raw`
+  import numpy as np
+  def test_logistic():
+      "logistic regression cannot solve the XOR task (accuracy below 0.65)"
+      assert acc_logistic < 0.65
+
+  def test_spread():
+      "20 networks from different random starts reach clearly different accuracies"
+      assert len(accs) == 20 and max(accs) - min(accs) > 0.1 and max(accs) > 0.88
+`} prompt="Fit logistic regression to the XOR task (2000 gradient steps with learning rate 0.5 on the two inputs plus a bias) and store its accuracy in `acc_logistic`. Then train 20 networks with seeds 0 to 19 using `train_net` and store their accuracies in `accs`. Plot the spread."
+code={String.raw`
+  Zx = np.column_stack([X2, np.ones(len(y2))])
+  wl = np.zeros(3)
+  for _ in range(2000):
+      wl = ...
+  acc_logistic = np.mean((sigmoid(Zx @ wl) > 0.5) == y2)
+  accs = ...
+
+  plt.figure(figsize=(5, 3)); plt.plot(sorted(accs), "o"); plt.axhline(acc_logistic, ls="--", color="0.5", label="logistic regression")
+  plt.xlabel("network (sorted)"); plt.ylabel("training accuracy"); plt.legend(frameon=False); plt.show()
+  print("logistic regression:", round(acc_logistic, 3), "  networks: from", min(accs), "to", max(accs))
+`}
+hint="wl = wl - 0.5 * Zx.T @ (sigmoid(Zx @ wl) - y2) / len(y2); accs = [train_net(s) for s in range(20)]."
+solution={String.raw`
+  Zx = np.column_stack([X2, np.ones(len(y2))])
+  wl = np.zeros(3)
+  for _ in range(2000):
+      wl = wl - 0.5 * Zx.T @ (sigmoid(Zx @ wl) - y2) / len(y2)
+  acc_logistic = np.mean((sigmoid(Zx @ wl) > 0.5) == y2)
+  accs = [train_net(s) for s in range(20)]
+
+  plt.figure(figsize=(5, 3)); plt.plot(sorted(accs), "o"); plt.axhline(acc_logistic, ls="--", color="0.5", label="logistic regression")
+  plt.xlabel("network (sorted)"); plt.ylabel("training accuracy"); plt.legend(frameon=False); plt.show()
+  print("logistic regression:", round(acc_logistic, 3), "  networks: from", min(accs), "to", max(accs))
+`} />
+
+Logistic regression is stuck near chance: convexity guarantees it finds the best line, but no line is good. The networks solve the task, but not equally: some starts end at about 92% and others in poorer solutions near 75%, having settled into different local minima or plateaus. That is the price of non-convexity, and why deep learning practice runs several seeds and reports the spread.
+
+**Part D (in your journal).** Bottou and colleagues prove convergence for SGD under assumptions such as smoothness and, often, convexity. Which of today's three parts satisfied those assumptions, and which did not? What does the theory still tell you about Part C?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The descent lemma" task="Suppose the gradient of L is Lipschitz with constant $\Lambda$: $\lVert\nabla L(\mathbf{a}) - \nabla L(\mathbf{b})\rVert \leq \Lambda\lVert\mathbf{a} - \mathbf{b}\rVert$, which implies $L(\mathbf{b}) \leq L(\mathbf{a}) + \nabla L(\mathbf{a})\cdot(\mathbf{b} - \mathbf{a}) + \frac{\Lambda}{2}\lVert\mathbf{b} - \mathbf{a}\rVert^2$. Show that one gradient step with $\eta = 1/\Lambda$ lowers the loss by at least $\frac{1}{2\Lambda}\lVert\nabla L\rVert^2$.">
+
+Put $\mathbf{b} = \mathbf{a} - \eta\nabla L(\mathbf{a})$, so $\mathbf{b} - \mathbf{a} = -\eta\nabla L$. The inequality gives
+
+$L(\mathbf{b}) \leq L(\mathbf{a}) - \eta\lVert\nabla L\rVert^2 + \frac{\Lambda\eta^2}{2}\lVert\nabla L\rVert^2 = L(\mathbf{a}) - \eta\left(1 - \frac{\Lambda\eta}{2}\right)\lVert\nabla L\rVert^2$.
+
+With $\eta = 1/\Lambda$ the bracket is $\frac{1}{2}$, so $L(\mathbf{b}) \leq L(\mathbf{a}) - \frac{1}{2\Lambda}\lVert\nabla L\rVert^2$. Any $0 \lt \eta \lt 2/\Lambda$ makes the bracket positive, so the loss decreases: the general version of the quadratic stability condition. Summing over steps also shows the gradient must eventually become small, even without convexity.
+
+</Prove>
+
+<Prove title="2. The noise floor of SGD" task="For $L(w) = \frac{\lambda}{2}w^2$ with noisy gradients $g_k = \lambda w_k + \epsilon_k$ (independent noise of mean 0 and variance $\sigma^2$), show that the variance of $w_k$ settles at $v = \dfrac{\eta\sigma^2}{\lambda(2 - \eta\lambda)} \approx \dfrac{\eta\sigma^2}{2\lambda}$ for small η.">
+
+The update is $w_{k+1} = (1 - \eta\lambda)w_k - \eta\epsilon_k$. Since $\epsilon_k$ is independent of $w_k$, variances add: $\operatorname{Var}(w_{k+1}) = (1 - \eta\lambda)^2\operatorname{Var}(w_k) + \eta^2\sigma^2$.
+
+At the steady state $v = (1 - \eta\lambda)^2v + \eta^2\sigma^2$, so $v(1 - (1 - \eta\lambda)^2) = \eta^2\sigma^2$, and $1 - (1 - \eta\lambda)^2 = \eta\lambda(2 - \eta\lambda)$. Dividing gives $v = \eta\sigma^2/(\lambda(2 - \eta\lambda))$.
+
+The floor is proportional to the learning rate and to the gradient noise variance (which falls as 1/B with minibatches), as you measured on Day 4. A decaying learning rate drives it to zero.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 12 quiz (15 questions)" questions={[
+  { q: "Least squares corresponds to maximum likelihood under...", options: ["Poisson noise", "Gaussian noise with constant variance", "No noise", "Binary labels"], answer: 1, explain: "The log of a Gaussian." },
+  { q: "For spike counts a better loss is usually...", options: ["Squared error", "The Poisson negative log-likelihood", "Absolute error", "Accuracy"], answer: 1, explain: "Variance grows with the mean." },
+  { q: "A grid search over 8 parameters with 10 values each needs...", options: ["80 evaluations", "$10^8$ evaluations", "800", "18"], answer: 1, explain: "The curse of dimensionality." },
+  { q: "Gradient descent on a quadratic is stable when η is below...", options: ["$1/\\mu$", "$2/\\Lambda$", "Λ", "1"], answer: 1, explain: "Λ is the largest curvature." },
+  { q: "The best contraction per step with condition number κ is...", options: ["1/κ", "(κ − 1)/(κ + 1)", "κ", "1/2"], answer: 1, explain: "Balancing the extreme directions." },
+  { q: "Z-scoring inputs usually...", options: ["Raises the condition number", "Lowers the condition number and speeds descent", "Makes the loss non-convex", "Has no effect"], answer: 1, explain: "Equalises scales, removes shared offsets." },
+  { q: "A convex function's local minimum is...", options: ["Possibly not global", "Always global", "A saddle", "A maximum"], answer: 1, explain: "No false valleys." },
+  { q: "Which loss is convex?", options: ["A two-layer network's", "The Poisson GLM negative log-likelihood", "Fitting a sinusoid's frequency", "The double well"], answer: 1, explain: "Its Hessian is positive semidefinite." },
+  { q: "Hidden-unit permutation symmetry shows that network losses are...", options: ["Convex", "Not convex", "Quadratic", "Linear"], answer: 1, explain: "Equal minima with a worse midpoint." },
+  { q: "A minibatch gradient is...", options: ["Biased", "Unbiased with variance proportional to 1/B", "Exact", "Always zero at the minimum"], answer: 1, explain: "An average of random terms." },
+  { q: "Constant-step SGD ends...", options: ["At the minimum exactly", "Jittering at a noise floor proportional to η", "Diverging", "At a maximum"], answer: 1, explain: "Individual gradients are nonzero at the minimum." },
+  { q: "The Robbins-Monro conditions on step sizes are...", options: ["Constant steps", "$\\sum\\eta_k = \\infty$ and $\\sum\\eta_k^2 \\lt \\infty$", "$\\sum\\eta_k \\lt \\infty$", "Increasing steps"], answer: 1, explain: "Travel far, but let noise average out." },
+  { q: "The perceptron updates...", options: ["On every example", "Only on mistakes, by $\\eta y\\mathbf{x}$", "Only at the end", "By the squared error"], answer: 1, explain: "SGD on the perceptron loss." },
+  { q: "The delta rule converges to...", options: ["A random line", "The least-squares solution", "The perceptron solution", "Zero"], answer: 1, explain: "SGD on squared error." },
+  { q: "The tempotron learns from...", options: ["Firing rates", "Spike timing, via PSPs at the moment of peak voltage", "Labels only", "Weight decay"], answer: 1, explain: "Coincidences sum to threshold." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Bottou, Curtis and Nocedal (2018) its third pass and write your critique under the five headings. Focus on one question: **the convergence theory of SGD rests on smoothness and often convexity, yet SGD trains non-convex deep networks well; how much does the theory explain?** Consider which results survive without convexity (the descent lemma, today), what they guarantee (small gradients, not good minima), and what Part C suggests is missing.
+
+<Callout kind="research">
+Why gradient descent finds good solutions in non-convex networks, and whether the brain's learning rules share that property, are open questions (Weeks 97 and 136). Write down one experiment with small networks, of the kind you ran today, that would tell you something about it.
+</Callout>
+
+<Key title="Week 12 review checklist">
+<ul>
+<li>I can set up fitting as minimising a loss, and justify squared error or Poisson likelihood.</li>
+<li>I can explain local minima, plateaus and the curse of dimensionality for grid search.</li>
+<li>I can implement gradient descent and derive its stability limit and convergence rate.</li>
+<li>I can explain how the condition number and input scaling set the speed of descent.</li>
+<li>I can test convexity three ways and explain why network losses are not convex.</li>
+<li>I can implement minibatch SGD, explain its noise floor and use a decaying learning rate.</li>
+<li>I can relate the perceptron, delta rule and tempotron to gradient descent, and prove perceptron convergence.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part D: which of today's parts satisfied the assumptions of SGD theory, and what does the theory still say about Part C? Then describe the small-network experiment you proposed." />

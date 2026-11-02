@@ -1,0 +1,336 @@
+export const meta = {
+  title: "Forge: Week 11 challenge, quiz and deep read",
+  intro: "This week you learned to take signals apart into frequencies: sinusoids and phasors, Fourier series, the DFT and FFT, power spectra and filters. Today's challenge is a small hippocampal recording, analysed the way a real study would be. Find the theta rhythm above the aperiodic background, show that gamma activity is coupled to the phase of theta, and measure the phase precession of a place cell as an animal runs through its field. Then implement the FFT yourself.",
+  goals: [
+    "Separate a rhythm from the aperiodic background in a Welch spectrum",
+    "Measure phase-amplitude coupling between theta and gamma with a proper control",
+    "Measure phase precession by circular-linear regression",
+    "Implement the radix-2 FFT recursively",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "donoghue-2020",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. The amplitude and phase of $\cos t - \sin t$?
+2. The frequency resolution of a 4-second recording sampled at 1 kHz, and its Nyquist frequency?
+3. The membrane gain at its cut-off frequency?
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  print("1. amplitude", round(np.hypot(1, -1), 4), " phase", round(np.arctan2(-1, 1), 4), "rad: cos t - sin t = sqrt(2) cos(t + pi/4)")
+  print("2. resolution", 1 / 4, "Hz, Nyquist", 1000 / 2, "Hz")
+  print("3. gain", round(1 / np.sqrt(2), 4), "(and a phase lag of 45 degrees)")
+`} />
+
+<Step n={2} title="Weekly challenge: a hippocampal recording" minutes={60} />
+
+**The recording.** Twenty seconds of local field potential from rat hippocampus, sampled at 1 kHz, while the animal runs laps of a track, one lap every 4 s. The LFP has a 1/f² background, a theta rhythm whose frequency wanders between about 6 and 10 Hz, and gamma activity at 60 Hz whose strength waxes and wanes. A place cell with a field in the middle of the track was recorded at the same time. Run the cell to make the data and the tools from this week.
+
+<PyCell code={String.raw`
+  rng = np.random.default_rng(1993)
+  fs, T = 1000, 20
+  N = fs * T
+  t = np.arange(N) / fs
+
+  def aperiodic(n, chi):
+      X = np.fft.rfft(rng.normal(size=n)); f = np.fft.rfftfreq(n, 1 / fs)
+      s = np.zeros_like(f); s[1:] = f[1:] ** (-chi / 2)
+      y = np.fft.irfft(X * s, n); return y / y.std()
+
+  _f_inst = 8 + np.convolve(rng.normal(size=N), np.ones(500) / 500, "same") * 15      # wandering theta frequency
+  _theta_phase = np.angle(np.exp(1j * np.cumsum(2 * np.pi * _f_inst / fs)))
+  _gamma = 0.25 * (1 + 0.8 * np.cos(_theta_phase)) * np.cos(2 * np.pi * 60 * t)
+  lfp = np.cos(_theta_phase) + _gamma + 0.8 * aperiodic(N, 2.0)
+
+  position = (t % 4) / 4                                   # 0 to 1 along the track on each lap
+  _field = np.exp(-(position - 0.5) ** 2 / (2 * 0.12 ** 2))
+  _through = np.clip((position - 0.2) / 0.6, 0, 1)
+  _pref = 2 * np.pi * (0.9 - 0.7 * _through)               # hidden: phase falls by 0.7 cycles across the field
+  spikes = np.nonzero(rng.random(N) < 0.04 * _field * np.exp(2 * np.cos(_theta_phase - _pref)) / 2.3)[0]
+
+  def welch(x, fs, nperseg):
+      w = np.hanning(nperseg); out = []
+      for s in range(0, len(x) - nperseg + 1, nperseg // 2):
+          seg = x[s:s + nperseg] - x[s:s + nperseg].mean()
+          p = np.abs(np.fft.rfft(w * seg)) ** 2 / (fs * np.sum(w ** 2)); p[1:-1] *= 2; out.append(p)
+      return np.fft.rfftfreq(nperseg, 1 / fs), np.mean(out, axis=0)
+
+  def bandpass(x, fs, lo, hi, edge=1.0):
+      X = np.fft.rfft(x); f = np.fft.rfftfreq(len(x), 1 / fs)
+      d = np.maximum(lo - f, 0) + np.maximum(f - hi, 0)
+      return np.fft.irfft(X * np.exp(-d ** 2 / (2 * edge ** 2)), len(x))
+
+  def analytic_signal(x):
+      X = np.fft.fft(x); h = np.zeros(len(x)); h[0] = 1; h[1:len(x) // 2] = 2
+      if len(x) % 2 == 0: h[len(x) // 2] = 1
+      return np.fft.ifft(X * h)
+
+  print(len(spikes), "spikes from the place cell")
+  plt.figure(figsize=(7, 2.5)); plt.plot(t[:2000], lfp[:2000], lw=0.7); plt.xlabel("time (s)"); plt.title("two seconds of LFP"); plt.show()
+`} />
+
+<PyCell id="partA" title="Part A: theta above the background" tests={String.raw`
+  import numpy as np
+  def test_exponent():
+      "chi is within 0.3 of the true exponent 2"
+      assert abs(chi - 2.0) < 0.3
+
+  def test_peak():
+      "theta_peak is the frequency between 4 and 12 Hz with the largest excess over the fit, between 7 and 9 Hz"
+      assert 7 <= theta_peak <= 9
+
+  def test_excess():
+      "theta rises more than 0.5 log10 units above the background"
+      assert theta_excess > 0.5
+`} prompt="Compute the Welch spectrum with 2048-sample segments. Fit the aperiodic background as a line on log-log axes over 2 to 100 Hz, excluding 4 to 12 Hz and 50 to 70 Hz, and store its exponent in `chi`. Find the frequency between 4 and 12 Hz where log10 PSD rises furthest above the fit (`theta_peak`) and the height there (`theta_excess`)."
+code={String.raw`
+  f, p = welch(lfp, fs, 2048)
+  sel = (f >= 2) & (f <= 100) & ~((f >= 4) & (f <= 12)) & ~((f >= 50) & (f <= 70))
+  slope, icpt = ...
+  chi = -slope
+  excess = np.log10(p[1:]) - (icpt + slope * np.log10(f[1:]))
+  band = (f[1:] >= 4) & (f[1:] <= 12)
+  theta_peak = ...
+  theta_excess = ...
+
+  plt.figure(figsize=(5, 3.2)); plt.loglog(f[1:], p[1:]); plt.loglog(f[1:], 10 ** (icpt + slope * np.log10(f[1:])), "--")
+  plt.xlim(1, 200); plt.xlabel("frequency (Hz)"); plt.ylabel("PSD"); plt.show()
+  print(f"aperiodic exponent {chi:.2f}; theta peak at {theta_peak:.2f} Hz, {theta_excess:.2f} log10 units above the background")
+`}
+hint="slope, icpt = np.polyfit(np.log10(f[sel]), np.log10(p[sel]), 1). Then theta_peak = f[1:][band][np.argmax(excess[band])] and theta_excess = excess[band].max()."
+solution={String.raw`
+  f, p = welch(lfp, fs, 2048)
+  sel = (f >= 2) & (f <= 100) & ~((f >= 4) & (f <= 12)) & ~((f >= 50) & (f <= 70))
+  slope, icpt = np.polyfit(np.log10(f[sel]), np.log10(p[sel]), 1)
+  chi = -slope
+  excess = np.log10(p[1:]) - (icpt + slope * np.log10(f[1:]))
+  band = (f[1:] >= 4) & (f[1:] <= 12)
+  theta_peak = f[1:][band][np.argmax(excess[band])]
+  theta_excess = excess[band].max()
+
+  plt.figure(figsize=(5, 3.2)); plt.loglog(f[1:], p[1:]); plt.loglog(f[1:], 10 ** (icpt + slope * np.log10(f[1:])), "--")
+  plt.xlim(1, 200); plt.xlabel("frequency (Hz)"); plt.ylabel("PSD"); plt.show()
+  print(f"aperiodic exponent {chi:.2f}; theta peak at {theta_peak:.2f} Hz, {theta_excess:.2f} log10 units above the background")
+`} />
+
+**Part B: does gamma ride on theta?** Phase-amplitude coupling asks whether the amplitude of a fast rhythm depends on the phase of a slow one. A standard measure, the **modulation index** of Tort and colleagues (2010), bins theta phase into 18 bins, averages the gamma envelope in each, normalises the averages into a distribution $P$ over bins, and measures how far it is from uniform: $\text{MI} = (\ln 18 - H(P))/\ln 18$, where $H(P) = -\sum P\ln P$ is the entropy (Week 20). MI is 0 for a flat distribution and grows as gamma concentrates at particular phases.
+
+<PyCell id="partB" title="Part B: phase-amplitude coupling" tests={String.raw`
+  import numpy as np
+  def test_mi():
+      "modulation_index is 0 for a flat profile and positive otherwise"
+      ph = np.linspace(-np.pi, np.pi, 1800, endpoint=False)
+      assert np.isclose(modulation_index(ph, np.ones(1800)), 0, atol=1e-12)
+      assert modulation_index(ph, 1 + 0.5 * np.cos(ph)) > 0.01
+
+  def test_coupling():
+      "the real MI exceeds every one of 50 shifted controls"
+      assert mi_real > max(mi_null)
+
+  def test_phase():
+      "gamma is strongest near theta phase 0 (the theta peak)"
+      assert abs(np.angle(np.exp(1j * peak_phase))) < 0.6
+`} prompt="Get theta phase (band-pass 6 to 10 Hz, analytic signal) and the gamma envelope (band-pass 50 to 70 Hz with 3 Hz edges, magnitude of the analytic signal). Write `modulation_index(phase, amp, nbins=18)`, compute `mi_real`, and build a null distribution `mi_null` from 50 circular shifts of the envelope by random offsets of at least one second. Store the centre of the theta-phase bin with the largest mean gamma in `peak_phase`."
+code={String.raw`
+  theta_phase = np.angle(analytic_signal(bandpass(lfp, fs, 6, 10)))
+  gamma_amp = np.abs(analytic_signal(bandpass(lfp, fs, 50, 70, edge=3.0)))
+
+  def modulation_index(phase, amp, nbins=18):
+      bins = np.clip(((phase + np.pi) / (2 * np.pi) * nbins).astype(int), 0, nbins - 1)
+      mean_amp = np.array([amp[bins == b].mean() for b in range(nbins)])
+      P = mean_amp / mean_amp.sum()
+      return ...
+
+  mi_real = modulation_index(theta_phase, gamma_amp)
+  mi_null = [...]
+  centres = -np.pi + (np.arange(18) + 0.5) * 2 * np.pi / 18
+  bins = np.clip(((theta_phase + np.pi) / (2 * np.pi) * 18).astype(int), 0, 17)
+  profile = np.array([gamma_amp[bins == b].mean() for b in range(18)])
+  peak_phase = ...
+
+  plt.figure(figsize=(5, 3)); plt.bar(np.degrees(centres), profile, width=18); plt.xlabel("theta phase (deg)"); plt.ylabel("mean gamma envelope"); plt.show()
+  print(f"MI = {mi_real:.4f};  largest of 50 shifted controls = {max(mi_null):.4f};  gamma peaks at theta phase {np.degrees(peak_phase):.0f} deg")
+`}
+hint="modulation_index returns (np.log(nbins) + np.sum(P * np.log(P))) / np.log(nbins), since H = -sum P ln P. For the null: mi_null = [modulation_index(theta_phase, np.roll(gamma_amp, rng.integers(fs, N - fs))) for _ in range(50)]. peak_phase = centres[np.argmax(profile)]."
+solution={String.raw`
+  theta_phase = np.angle(analytic_signal(bandpass(lfp, fs, 6, 10)))
+  gamma_amp = np.abs(analytic_signal(bandpass(lfp, fs, 50, 70, edge=3.0)))
+
+  def modulation_index(phase, amp, nbins=18):
+      bins = np.clip(((phase + np.pi) / (2 * np.pi) * nbins).astype(int), 0, nbins - 1)
+      mean_amp = np.array([amp[bins == b].mean() for b in range(nbins)])
+      P = mean_amp / mean_amp.sum()
+      return (np.log(nbins) + np.sum(P * np.log(P))) / np.log(nbins)
+
+  mi_real = modulation_index(theta_phase, gamma_amp)
+  mi_null = [modulation_index(theta_phase, np.roll(gamma_amp, rng.integers(fs, N - fs))) for _ in range(50)]
+  centres = -np.pi + (np.arange(18) + 0.5) * 2 * np.pi / 18
+  bins = np.clip(((theta_phase + np.pi) / (2 * np.pi) * 18).astype(int), 0, 17)
+  profile = np.array([gamma_amp[bins == b].mean() for b in range(18)])
+  peak_phase = centres[np.argmax(profile)]
+
+  plt.figure(figsize=(5, 3)); plt.bar(np.degrees(centres), profile, width=18); plt.xlabel("theta phase (deg)"); plt.ylabel("mean gamma envelope"); plt.show()
+  print(f"MI = {mi_real:.4f};  largest of 50 shifted controls = {max(mi_null):.4f};  gamma peaks at theta phase {np.degrees(peak_phase):.0f} deg")
+`} />
+
+Gamma is strongest at the peak of theta, and the real coupling is far above every shifted control. Here the circular shift works as a control because the theta rhythm wanders in frequency, so shifting the envelope by a second or more breaks its relation to theta phase. Phase-amplitude coupling is easy to produce artefactually (sharp, non-sinusoidal waveforms create harmonics that mimic it), so real studies check waveform shape too.
+
+<PyCell id="partC" title="Part C: phase precession" tests={String.raw`
+  import numpy as np
+  def test_inputs():
+      "spike_phase and spike_pos hold the theta phase and normalised field position of in-field spikes"
+      assert len(spike_phase) == len(spike_pos) > 100
+      assert np.all((spike_pos >= 0) & (spike_pos <= 1))
+
+  def test_slope():
+      "the fitted precession slope is within 0.15 cycles of the true -0.7 cycles per field"
+      assert abs(best_slope + 0.7) < 0.15
+`} prompt="Keep spikes with position between 0.2 and 0.8 (the field), and store their theta phases in `spike_phase` and their position within the field, rescaled to 0 to 1, in `spike_pos`. Fit the circular-linear relation phase = 2π·slope·position + offset by searching slopes from −1.5 to 1.5 cycles per field for the one that maximises the mean resultant length of the residual phases (Kempter and colleagues, 2012). Store it in `best_slope`."
+code={String.raw`
+  in_field = spikes[(position[spikes] > 0.2) & (position[spikes] < 0.8)]
+  spike_phase = ...
+  spike_pos = ...
+
+  slopes = np.linspace(-1.5, 1.5, 301)
+  fit_R = [np.abs(np.mean(np.exp(1j * (spike_phase - 2 * np.pi * s * spike_pos)))) for s in slopes]
+  best_slope = ...
+
+  plt.figure(figsize=(5, 3.5))
+  for shift in [0, 360]:
+      plt.plot(spike_pos, np.degrees(spike_phase) % 360 + shift, "k.", ms=3)
+  plt.xlabel("position through the field"); plt.ylabel("theta phase (deg), plotted twice"); plt.show()
+  print(f"{len(spike_phase)} spikes in the field;  precession slope {best_slope:.2f} cycles per field")
+`}
+hint="spike_phase = theta_phase[in_field]; spike_pos = (position[in_field] - 0.2) / 0.6. best_slope = slopes[int(np.argmax(fit_R))]."
+solution={String.raw`
+  in_field = spikes[(position[spikes] > 0.2) & (position[spikes] < 0.8)]
+  spike_phase = theta_phase[in_field]
+  spike_pos = (position[in_field] - 0.2) / 0.6
+
+  slopes = np.linspace(-1.5, 1.5, 301)
+  fit_R = [np.abs(np.mean(np.exp(1j * (spike_phase - 2 * np.pi * s * spike_pos)))) for s in slopes]
+  best_slope = slopes[int(np.argmax(fit_R))]
+
+  plt.figure(figsize=(5, 3.5))
+  for shift in [0, 360]:
+      plt.plot(spike_pos, np.degrees(spike_phase) % 360 + shift, "k.", ms=3)
+  plt.xlabel("position through the field"); plt.ylabel("theta phase (deg), plotted twice"); plt.show()
+  print(f"{len(spike_phase)} spikes in the field;  precession slope {best_slope:.2f} cycles per field")
+`} />
+
+The spikes start late in the theta cycle as the animal enters the field and move earlier as it crosses, by about 0.7 of a cycle in total, O'Keefe and Recce's phase precession. Plotting the phases twice, stacked, is the standard way to show a circular variable without the wrap-around hiding the trend. Ordinary linear regression would fail here, because phase wraps from 360° back to 0°; the circular fit is immune to where the wrap falls.
+
+<PyCell id="partD" title="Part D: write the FFT" tests={String.raw`
+  import numpy as np
+  def test_match():
+      "my_fft matches np.fft.fft for powers of two"
+      for n in [1, 2, 8, 64, 256]:
+          x = np.random.default_rng(n).normal(size=n) + 1j * np.random.default_rng(n + 1).normal(size=n)
+          assert np.allclose(my_fft(x), np.fft.fft(x))
+`} prompt="Implement the radix-2 FFT recursively. For length 1 return the input. Otherwise transform the even-indexed and odd-indexed samples separately (E and O), and combine them with the twiddle factors $w_k = e^{-i2\pi k/N}$: $X_k = E_k + w_kO_k$ and $X_{k + N/2} = E_k - w_kO_k$ for k from 0 to N/2 − 1. The derivation set shows why."
+code={String.raw`
+  def my_fft(x):
+      x = np.asarray(x, dtype=complex)
+      N = len(x)
+      if N == 1:
+          return x
+      E = my_fft(x[0::2])
+      O = my_fft(x[1::2])
+      w = np.exp(-2j * np.pi * np.arange(N // 2) / N)
+      return ...
+
+  x = np.random.default_rng(0).normal(size=1024)
+  print("matches numpy:", np.allclose(my_fft(x), np.fft.fft(x)))
+`}
+hint="return np.concatenate([E + w * O, E - w * O])"
+solution={String.raw`
+  def my_fft(x):
+      x = np.asarray(x, dtype=complex)
+      N = len(x)
+      if N == 1:
+          return x
+      E = my_fft(x[0::2])
+      O = my_fft(x[1::2])
+      w = np.exp(-2j * np.pi * np.arange(N // 2) / N)
+      return np.concatenate([E + w * O, E - w * O])
+
+  x = np.random.default_rng(0).normal(size=1024)
+  print("matches numpy:", np.allclose(my_fft(x), np.fft.fft(x)))
+`} />
+
+**Part E (in your journal).** Real hippocampal theta is often sawtooth-shaped rather than sinusoidal. Which of today's three results could a non-sinusoidal theta waveform distort, and how?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. Why the FFT works" task="For even N, split the DFT sum $X_k = \sum_{n=0}^{N-1}x_ne^{-i2\pi kn/N}$ into even and odd n, and show that $X_k = E_k + w_kO_k$ and $X_{k + N/2} = E_k - w_kO_k$, where E and O are the DFTs of length N/2 of the even and odd samples and $w_k = e^{-i2\pi k/N}$. Count the operations.">
+
+Write $n = 2m$ for even and $n = 2m + 1$ for odd indices:
+
+$X_k = \sum_m x_{2m}e^{-i2\pi k(2m)/N} + \sum_m x_{2m+1}e^{-i2\pi k(2m + 1)/N} = \sum_m x_{2m}e^{-i2\pi km/(N/2)} + w_k\sum_m x_{2m+1}e^{-i2\pi km/(N/2)} = E_k + w_kO_k$.
+
+E and O have period N/2 in k, and $w_{k + N/2} = e^{-i\pi}w_k = -w_k$, so $X_{k + N/2} = E_k - w_kO_k$.
+
+Each level of splitting costs about N operations to combine, and halving N repeatedly takes $\log_2N$ levels, giving about $N\log_2N$ in total instead of $N^2$.
+
+</Prove>
+
+<Prove title="2. The membrane at its cut-off" task="For $H(\omega) = 1/(1 + i\omega\tau)$, show that at the cut-off $\omega = 1/\tau$ the gain is $1/\sqrt{2}$ and the phase lag is 45°, and that far above it the gain falls by a factor of 2 for every doubling of frequency.">
+
+At $\omega\tau = 1$, $H = 1/(1 + i)$, with $|1 + i| = \sqrt{2}$ and angle 45°, so $|H| = 1/\sqrt{2}$ and $\arg H = -45°$. The power gain $|H|^2$ is one half, which is why the cut-off is also called the half-power point.
+
+For $\omega\tau \gg 1$, $|H| \approx 1/(\omega\tau)$: doubling $\omega$ halves the gain, and the lag approaches 90°. On log-log axes the gain curve is flat below the cut-off and a line of slope −1 above it.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 11 quiz (15 questions)" questions={[
+  { q: "A 25 Hz oscillation has a period of...", options: ["25 ms", "40 ms", "4 ms", "250 ms"], answer: 1, explain: "1/25 s." },
+  { q: "$e^{i\\pi/2}$ equals...", options: ["1", "i", "−1", "0"], answer: 1, explain: "Angle 90° on the unit circle." },
+  { q: "The amplitude of $5\\cos\\omega t + 12\\sin\\omega t$ is...", options: ["17", "13", "7", "60"], answer: 1, explain: "$\\sqrt{25 + 144}$." },
+  { q: "Harmonics of a 10 Hz periodic signal are at...", options: ["Any frequency", "10, 20, 30 Hz and so on", "Only 10 Hz", "0.1 Hz steps"], answer: 1, explain: "Whole-number multiples." },
+  { q: "A square wave has power...", options: ["At all harmonics", "Only at odd harmonics", "Only at even harmonics", "Only at the fundamental"], answer: 1, explain: "Falling as 1/k in amplitude." },
+  { q: "Parseval's theorem relates...", options: ["Phase and amplitude", "Total power in time and in frequency", "Sampling rate and resolution", "Filters and windows"], answer: 1, explain: "Energy is shared among frequencies." },
+  { q: "The frequency resolution of 5 s of data is...", options: ["5 Hz", "0.2 Hz", "0.5 Hz", "1 Hz"], answer: 1, explain: "1/T." },
+  { q: "Sampling at 1 kHz, the Nyquist frequency is...", options: ["1 kHz", "500 Hz", "2 kHz", "100 Hz"], answer: 1, explain: "$f_s/2$." },
+  { q: "A 180 Hz signal sampled at 200 Hz appears at...", options: ["180 Hz", "20 Hz", "380 Hz", "100 Hz"], answer: 1, explain: "Aliasing." },
+  { q: "Longer recordings make each periodogram bin...", options: ["Less noisy", "Just as noisy", "Noisier", "Exact"], answer: 1, explain: "Average segments instead (Welch)." },
+  { q: "Windowing a segment before the FFT reduces...", options: ["Aliasing", "Spectral leakage", "Resolution", "Variance of the signal"], answer: 1, explain: "No sharp edges." },
+  { q: "The 1/f background on log-log axes is...", options: ["A peak", "A line of slope −χ", "Flat", "Curved upwards"], answer: 1, explain: "Fit it before measuring rhythms." },
+  { q: "Convolution in time corresponds in frequency to...", options: ["Addition", "Multiplication", "Differentiation", "Nothing"], answer: 1, explain: "The convolution theorem." },
+  { q: "The membrane's gain at its cut-off frequency is...", options: ["1", "$1/\\sqrt{2}$", "1/2", "0"], answer: 1, explain: "Half power." },
+  { q: "The instantaneous phase of a rhythm comes from...", options: ["The PSD", "The angle of the analytic signal of the band-passed signal", "The mean", "The aperiodic fit"], answer: 1, explain: "Delete negative frequencies." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Donoghue and colleagues (2020) its third pass and write your critique under the five headings. Focus on one question: **when a study reports a change in power in a frequency band, what must be shown before concluding that an oscillation changed?** Consider the aperiodic background, the presence of a genuine peak, waveform shape and harmonics, and how today's Part A would mislead you if the background's exponent had also changed between conditions.
+
+<Callout kind="research">
+Whether the aperiodic exponent tracks the balance of excitation and inhibition, and how it relates to the rhythms riding on it, is an open question (Weeks 47 and 107). Write down one dataset where you could test it, and the result that would count against it.
+</Callout>
+
+<Key title="Week 11 review checklist">
+<ul>
+<li>I can describe sinusoids by frequency, amplitude and phase, and use complex exponentials and phasors.</li>
+<li>I can compute Fourier series coefficients by projection and explain orthogonality, Gibbs and Parseval.</li>
+<li>I can compute and interpret a DFT in hertz, and explain resolution, Nyquist and aliasing.</li>
+<li>I can compute a properly scaled PSD, use Welch's method and windows, and fit the aperiodic background.</li>
+<li>I can explain the convolution theorem and the membrane's frequency response.</li>
+<li>I can band-pass filter, compute instantaneous phase and measure phase locking with a valid control.</li>
+<li>I can measure phase-amplitude coupling and phase precession, and implement the FFT.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part E: which of today's results could a sawtooth-shaped theta distort, and how? Then describe the dataset and the result you proposed for testing the aperiodic exponent." />

@@ -1,0 +1,267 @@
+export const meta = {
+  title: "The discrete Fourier transform, the FFT and sampling",
+  intro: "Real recordings are not infinite periodic signals: they are N samples taken at a fixed rate. The discrete Fourier transform projects those samples onto N complex sinusoids at once, and is nothing more than a change of basis by an orthogonal matrix, exactly the kind of matrix you met in Weeks 5 and 6. Today you build it as a matrix, check it against NumPy's FFT, learn to read its output in hertz, see what the sampling rate does to which frequencies you can see, and meet aliasing, the trap of sampling too slowly.",
+  goals: [
+    "Write the DFT as a matrix and show that its columns are orthogonal",
+    "Use np.fft to compute amplitude spectra in physical units",
+    "Explain frequency resolution and the Nyquist frequency",
+    "Recognise and predict aliasing",
+  ],
+  plan: [
+    { label: "Predict and the DFT", minutes: 25 },
+    { label: "The DFT as a matrix", minutes: 25 },
+    { label: "Reading a spectrum", minutes: 30 },
+    { label: "Sampling and aliasing", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "cooley-1965",
+};
+
+<Predict question="A neuron's membrane potential contains a 90 Hz oscillation. Your amplifier samples at 100 Hz with no filtering. In the spectrum of the recording, where will the oscillation appear: at 90 Hz, at 10 Hz, or nowhere?" />
+
+<Step n={1} title="The discrete Fourier transform" minutes={25} />
+
+Given $N$ samples $x_0, \dots, x_{N-1}$, the **discrete Fourier transform** (DFT) is
+
+$$
+X_k = \sum_{n=0}^{N-1}x_n\,e^{-i2\pi kn/N}, \qquad k = 0, 1, \dots, N - 1
+$$
+
+Each $X_k$ is the projection of the signal onto a complex sinusoid that completes $k$ cycles in the $N$ samples: yesterday's cosine and sine projections combined into one complex number, $X_k = \frac{N}{2}(a_k - ib_k)$ for $0 \lt k \lt N/2$. The inverse transform rebuilds the signal exactly:
+
+$$
+x_n = \frac{1}{N}\sum_{k=0}^{N-1}X_k\,e^{i2\pi kn/N}
+$$
+
+If the samples are taken $\Delta t$ apart (sampling rate $f_s = 1/\Delta t$), the recording lasts $T = N\Delta t$, and index $k$ corresponds to frequency $f_k = k/T = kf_s/N$.
+
+<Video id="spUNpyF58BY" title="But what is the Fourier Transform? A visual introduction" by="3Blue1Brown (Grant Sanderson)" note="Winding a signal around a circle at different speeds, and why its centre of mass lights up at the frequencies the signal contains." />
+
+<Step n={2} title="The DFT as a matrix" minutes={25} />
+
+Collect the complex sinusoids as the columns of an $N \times N$ matrix $F$ with entries $F_{nk} = e^{i2\pi nk/N}$. Then the DFT is $X = F^*x$ (with $^*$ the conjugate transpose) and the inverse is $x = \frac{1}{N}FX$. The DFT is a **change of basis** into the basis of sinusoids.
+
+<Prove title="The Fourier basis is orthogonal" task="Show that for $0 \leq j, k \lt N$, $\sum_{n=0}^{N-1}e^{i2\pi jn/N}\,\overline{e^{i2\pi kn/N}}$ is N if j = k and 0 otherwise, so $F^*F = NI$.">
+
+The product of the two terms is $e^{i2\pi(j - k)n/N} = r^n$ with $r = e^{i2\pi(j - k)/N}$.
+
+If $j = k$, $r = 1$ and the sum is $N$.
+
+Otherwise $r \neq 1$ (because $|j - k| \lt N$) but $r^N = e^{i2\pi(j - k)} = 1$, so the geometric series gives $\sum_{n=0}^{N-1}r^n = \frac{1 - r^N}{1 - r} = 0$. Geometrically, the $N$ points $r^n$ are equally spaced around the unit circle and their vectors cancel.
+
+So the columns of $F$ are orthogonal with squared length $N$; $F/\sqrt{N}$ is a unitary matrix (the complex version of orthogonal, Week 6), and the DFT preserves lengths up to that factor. This is Parseval's theorem again: $\sum|x_n|^2 = \frac{1}{N}\sum|X_k|^2$.
+
+</Prove>
+
+<PyCell id="dft" title="The DFT as a matrix product" tests={String.raw`
+  import numpy as np
+  def test_matrix():
+      "dft_matrix has entries exp(-2 pi i n k / N)"
+      F = dft_matrix(4)
+      assert np.allclose(F, np.exp(-2j * np.pi * np.outer(np.arange(4), np.arange(4)) / 4))
+
+  def test_match():
+      "the matrix DFT matches np.fft.fft"
+      x = np.random.default_rng(0).normal(size=64)
+      assert np.allclose(dft_matrix(64) @ x, np.fft.fft(x))
+
+  def test_parseval():
+      "Parseval holds: sum |x|^2 equals sum |X|^2 / N"
+      assert np.isclose(lhs, rhs)
+`} prompt="Write `dft_matrix(N)`, the matrix whose (k, n) entry is $e^{-i2\pi kn/N}$, so that the DFT is a matrix-vector product. Check it against `np.fft.fft` and check Parseval's theorem for a random signal (`lhs` and `rhs`). Then time both methods for N = 1024."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  import time
+
+  def dft_matrix(N):
+      n = np.arange(N)
+      return ...
+
+  x = np.random.default_rng(1).normal(size=256)
+  X = dft_matrix(256) @ x
+  lhs, rhs = np.sum(np.abs(x) ** 2), np.sum(np.abs(X) ** 2) / 256
+
+  big = np.random.default_rng(2).normal(size=1024)
+  t0 = time.perf_counter(); dft_matrix(1024) @ big; t_mat = time.perf_counter() - t0
+  t0 = time.perf_counter()
+  for _ in range(100):
+      np.fft.fft(big)
+  t_fft = (time.perf_counter() - t0) / 100
+  print("Parseval:", round(lhs, 4), round(rhs, 4), f"   matrix {1000 * t_mat:.2f} ms, FFT {1000 * t_fft:.3f} ms")
+`}
+hint="return np.exp(-2j * np.pi * np.outer(n, n) / N). np.outer(n, n) gives the matrix of products k n."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  import time
+
+  def dft_matrix(N):
+      n = np.arange(N)
+      return np.exp(-2j * np.pi * np.outer(n, n) / N)
+
+  x = np.random.default_rng(1).normal(size=256)
+  X = dft_matrix(256) @ x
+  lhs, rhs = np.sum(np.abs(x) ** 2), np.sum(np.abs(X) ** 2) / 256
+
+  big = np.random.default_rng(2).normal(size=1024)
+  t0 = time.perf_counter(); dft_matrix(1024) @ big; t_mat = time.perf_counter() - t0
+  t0 = time.perf_counter()
+  for _ in range(100):
+      np.fft.fft(big)
+  t_fft = (time.perf_counter() - t0) / 100
+  print("Parseval:", round(lhs, 4), round(rhs, 4), f"   matrix {1000 * t_mat:.2f} ms, FFT {1000 * t_fft:.3f} ms")
+`} />
+
+The matrix product needs about $N^2$ multiplications. The **fast Fourier transform** (FFT) computes exactly the same numbers in about $N\log_2 N$, by splitting the sum into even- and odd-numbered samples, each of which is a DFT of half the size, and repeating. For an hour of data sampled at 1 kHz, $N \approx 3.6$ million, that is the difference between about $10^{13}$ and $10^8$ operations. Cooley and Tukey (1965), today's paper, made the method widely known; you will implement it in the Forge.
+
+<Step n={3} title="Reading a spectrum" minutes={30} />
+
+For a real signal, $X_{N-k}$ is the complex conjugate of $X_k$: negative frequencies mirror positive ones and carry no new information. So `np.fft.rfft` returns only $k = 0, \dots, N/2$, and `np.fft.rfftfreq(N, d=1/fs)` gives the matching frequencies in hertz. To convert to the amplitude of a sinusoid, multiply $|X_k|$ by $2/N$ (except at $k = 0$, the mean, and $k = N/2$).
+
+The spacing between frequencies, the **frequency resolution**, is $\Delta f = 1/T$: one hertz for one second of data, 0.1 Hz for ten seconds. Two rhythms closer together than this cannot be separated, however fast you sample.
+
+<PyCell id="freqs" title="Find two rhythms in hertz" tests={String.raw`
+  import numpy as np
+  def test_axes():
+      "freqs and amps come from rfft and rfftfreq, with amplitude scaling 2/N"
+      assert np.allclose(freqs, np.fft.rfftfreq(len(x), 1 / fs))
+      assert np.allclose(amps, 2 * np.abs(np.fft.rfft(x)) / len(x))
+
+  def test_peaks():
+      "the two largest peaks are at 6 and 40 Hz with amplitudes near 1.0 and 0.4"
+      top = np.argsort(amps)[-2:]
+      assert sorted(np.round(freqs[top])) == [6.0, 40.0]
+      assert abs(amps[np.argmin(np.abs(freqs - 6))] - 1.0) < 0.1 and abs(amps[np.argmin(np.abs(freqs - 40))] - 0.4) < 0.1
+
+  def test_resolution():
+      "df is the frequency resolution for this recording"
+      assert np.isclose(df, 0.5)
+`} prompt="A 2-second field potential sampled at 250 Hz contains a 6 Hz theta rhythm of amplitude 1 and a 40 Hz gamma rhythm of amplitude 0.4, plus noise. Compute `freqs` with `rfftfreq` and `amps`, the amplitude spectrum, and plot it. Store the frequency resolution in `df`."
+code={String.raw`
+  rng = np.random.default_rng(1965)
+  fs = 250
+  t = np.arange(0, 2, 1 / fs)
+  x = 1.0 * np.sin(2 * np.pi * 6 * t) + 0.4 * np.sin(2 * np.pi * 40 * t + 1.0) + 0.3 * rng.normal(size=len(t))
+
+  freqs = ...
+  amps = ...
+  df = ...
+
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(t, x, lw=0.8); ax[0].set_xlim(0, 0.5); ax[0].set_xlabel("time (s)")
+  ax[1].plot(freqs, amps); ax[1].set_xlabel("frequency (Hz)"); ax[1].set_ylabel("amplitude"); ax[1].set_xlim(0, 80)
+  plt.tight_layout(); plt.show()
+  print("frequency resolution", df, "Hz;  Nyquist", fs / 2, "Hz")
+`}
+hint="freqs = np.fft.rfftfreq(len(x), 1 / fs); amps = 2 * np.abs(np.fft.rfft(x)) / len(x); df = 1 / (len(x) / fs), one over the duration."
+solution={String.raw`
+  rng = np.random.default_rng(1965)
+  fs = 250
+  t = np.arange(0, 2, 1 / fs)
+  x = 1.0 * np.sin(2 * np.pi * 6 * t) + 0.4 * np.sin(2 * np.pi * 40 * t + 1.0) + 0.3 * rng.normal(size=len(t))
+
+  freqs = np.fft.rfftfreq(len(x), 1 / fs)
+  amps = 2 * np.abs(np.fft.rfft(x)) / len(x)
+  df = 1 / (len(x) / fs)
+
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(t, x, lw=0.8); ax[0].set_xlim(0, 0.5); ax[0].set_xlabel("time (s)")
+  ax[1].plot(freqs, amps); ax[1].set_xlabel("frequency (Hz)"); ax[1].set_ylabel("amplitude"); ax[1].set_xlim(0, 80)
+  plt.tight_layout(); plt.show()
+  print("frequency resolution", df, "Hz;  Nyquist", fs / 2, "Hz")
+`} />
+
+Both rhythms appear as sharp peaks with the right amplitudes, because each completes a whole number of cycles in 2 s and so falls exactly on a frequency bin. A rhythm at 6.25 Hz would fall between bins and its power would leak into its neighbours (spectral leakage, tomorrow).
+
+<Step n={4} title="Sampling and aliasing" minutes={25} />
+
+The highest frequency a sampled signal can represent is the **Nyquist frequency**, $f_s/2$: at that rate you get two samples per cycle. A sinusoid at a higher frequency $f$ produces exactly the same samples as one at an **alias** frequency $|f - mf_s|$ for the nearest whole number $m$. The samples cannot tell them apart.
+
+<Figure caption="A sinusoid sampled at a chosen rate. When the signal is faster than half the sampling rate, the samples are matched by a slower alias (red)." credit="Interactive figure by Engram.">
+  <Aliasing />
+</Figure>
+
+<PyCell id="alias" title="Catch an alias" tests={String.raw`
+  import numpy as np
+  def test_peak():
+      "the 90 Hz oscillation sampled at 100 Hz appears at 10 Hz"
+      assert np.isclose(apparent, 10.0)
+
+  def test_formula():
+      "alias_freq gives |f - m fs| for the nearest whole m"
+      assert np.isclose(alias_freq(90, 100), 10) and np.isclose(alias_freq(130, 100), 30) and np.isclose(alias_freq(40, 100), 40)
+`} prompt="Sample a 90 Hz sinusoid at 100 Hz for 2 s and find the frequency of the largest peak in its spectrum (`apparent`). Then write `alias_freq(f, fs)` that predicts where any frequency will appear."
+code={String.raw`
+  fs_low = 100
+  t_low = np.arange(0, 2, 1 / fs_low)
+  y = np.sin(2 * np.pi * 90 * t_low)
+  f_low = np.fft.rfftfreq(len(y), 1 / fs_low)
+  apparent = ...
+
+  def alias_freq(f, fs):
+      return ...
+
+  print("90 Hz sampled at 100 Hz appears at", apparent, "Hz;  predictions:", [alias_freq(f, 100) for f in [40, 60, 90, 130]])
+`}
+hint="apparent = f_low[np.argmax(np.abs(np.fft.rfft(y)))]. For the alias: return abs(f - fs * round(f / fs))."
+solution={String.raw`
+  fs_low = 100
+  t_low = np.arange(0, 2, 1 / fs_low)
+  y = np.sin(2 * np.pi * 90 * t_low)
+  f_low = np.fft.rfftfreq(len(y), 1 / fs_low)
+  apparent = f_low[np.argmax(np.abs(np.fft.rfft(y)))]
+
+  def alias_freq(f, fs):
+      return abs(f - fs * round(f / fs))
+
+  print("90 Hz sampled at 100 Hz appears at", apparent, "Hz;  predictions:", [alias_freq(f, 100) for f in [40, 60, 90, 130]])
+`} />
+
+The 90 Hz oscillation shows up as a perfectly convincing 10 Hz rhythm: an alpha-band artefact that does not exist. That answers the prediction. Once the signal is sampled the damage is permanent, so recording systems apply an analogue **anti-aliasing filter** that removes frequencies above the Nyquist frequency before sampling, and downsampling a recording in software must also filter first.
+
+<Bridge title="Spectra in brains and machines"
+  neuro="Choose sampling rates with the Nyquist frequency in mind: field potentials are usually sampled at 1 kHz or more, spikes at 20 to 30 kHz so that their fast waveform is captured (Week 7's spike sorting), and fMRI at about one sample per second, which aliases cardiac and breathing rhythms into the slow signals of interest."
+  ai="Convolutional networks downsample their feature maps by striding, which can alias high-frequency patterns; adding a blur before downsampling, as signal processing prescribes, makes networks more robust to small shifts. The FFT also speeds up long convolutions in some sequence models (Week 87).">
+
+The DFT is a change of basis; the sampling rate decides which basis vectors exist, and anything faster folds back.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The DFT coefficient $X_k$ is...", options: ["The kth sample", "The projection of the signal onto a sinusoid with k cycles in the record", "The derivative", "The mean"], answer: 1, explain: "A change of basis into sinusoids." },
+  { q: "The columns of the DFT matrix are...", options: ["Random", "Orthogonal, each with squared length N", "Equal", "Real"], answer: 1, explain: "Roots of unity cancel." },
+  { q: "The FFT needs about how many operations for N samples?", options: ["N", "$N\\log_2 N$", "$N^2$", "$N^3$"], answer: 1, explain: "Repeated halving." },
+  { q: "Ten seconds of data gives a frequency resolution of...", options: ["10 Hz", "1 Hz", "0.1 Hz", "0.01 Hz"], answer: 2, explain: "$\\Delta f = 1/T$." },
+  { q: "Sampling at 500 Hz, the Nyquist frequency is...", options: ["500 Hz", "250 Hz", "1000 Hz", "50 Hz"], answer: 1, explain: "$f_s/2$." },
+  { q: "A 70 Hz signal sampled at 100 Hz appears at...", options: ["70 Hz", "30 Hz", "170 Hz", "Nowhere"], answer: 1, explain: "$|70 - 100|$." },
+  { q: "To convert $|X_k|$ to a sinusoid's amplitude, multiply by...", options: ["N", "2/N", "1/2", "$\\sqrt{N}$"], answer: 1, explain: "Positive and negative frequencies each carry half." },
+]} />
+
+<Flashcards cards={[
+  { front: "DFT and inverse?", back: "$X_k = \\sum_n x_ne^{-i2\\pi kn/N}$; $x_n = \\frac{1}{N}\\sum_k X_ke^{i2\\pi kn/N}$." },
+  { front: "Frequency of index k?", back: "$f_k = kf_s/N = k/T$; resolution $\\Delta f = 1/T$." },
+  { front: "Nyquist frequency?", back: "$f_s/2$: the highest frequency the samples can represent." },
+  { front: "Alias of frequency f?", back: "$|f - mf_s|$ for the nearest whole m; prevented by filtering before sampling." },
+  { front: "FFT?", back: "Computes the DFT in about $N\\log_2N$ operations by splitting even and odd samples (Cooley and Tukey, 1965)." },
+]} />
+
+<Predict revisit question="Where does a 90 Hz oscillation sampled at 100 Hz appear?" />
+
+<Key title="Before you go">
+<ul>
+<li>The DFT projects N samples onto N orthogonal complex sinusoids: a change of basis.</li>
+<li>The FFT computes it in about N log N operations.</li>
+<li>Index k means $kf_s/N$ hertz; resolution is 1/T and the highest frequency is $f_s/2$.</li>
+<li>Frequencies above Nyquist alias to lower ones and must be filtered out before sampling.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Cooley and Tukey (1965), <em>An algorithm for the machine calculation of complex Fourier series</em>. Five pages.</li>
+<li>Steven W. Smith, <em>The Scientist and Engineer's Guide to Digital Signal Processing</em> (free online), Chapters 3 and 8: sampling and the DFT.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="You are given a recording sampled at 200 Hz and asked about 80 Hz gamma activity. List what you would check before trusting any result, and what could masquerade as gamma." />

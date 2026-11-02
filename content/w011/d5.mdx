@@ -1,0 +1,344 @@
+export const meta = {
+  title: "Filtering and the convolution theorem",
+  intro: "Week 10 showed that a membrane, a synapse and a smoothing kernel all convolve their input with an impulse response. The convolution theorem says that in the frequency domain that same convolution is simply multiplication: each frequency is scaled and shifted by the filter's transfer function. Today you prove the theorem, measure the membrane's frequency response, build band-pass filters, and use the analytic signal to read the phase of the hippocampal theta rhythm at the moment each spike fires, the measurement behind phase precession.",
+  goals: [
+    "State and prove the convolution theorem for the DFT",
+    "Derive and measure the frequency response of the leaky membrane",
+    "Band-pass filter a signal and recognise the trade-offs of sharp filters",
+    "Use the analytic signal to measure instantaneous phase and the phase locking of spikes",
+  ],
+  plan: [
+    { label: "Predict and the convolution theorem", minutes: 25 },
+    { label: "The membrane as a low-pass filter", minutes: 25 },
+    { label: "Band-pass filters", minutes: 25 },
+    { label: "Phase and spike locking", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "okeefe-1993",
+};
+
+<Predict question="A neuron's membrane time constant is 20 ms. You inject sinusoidal currents of equal amplitude at 2 Hz and at 100 Hz. Roughly how much smaller will the voltage oscillation be at 100 Hz: about the same, about 3 times smaller, or about 12 times smaller?" />
+
+<Step n={1} title="The convolution theorem" minutes={25} />
+
+For sequences of length $N$, define **circular** convolution, $(x \circledast h)_n = \sum_m x_m\,h_{(n - m) \bmod N}$, which wraps around the ends. The convolution theorem says
+
+$$
+\text{DFT}(x \circledast h)_k = X_k\,H_k
+$$
+
+Convolution in time is multiplication in frequency. Each complex sinusoid passes through a linear, shift-invariant system unchanged in shape, merely multiplied by the complex number $H_k$: scaled by $|H_k|$ and shifted in phase by $\arg H_k$. That function of frequency is the system's **transfer function** or **frequency response**.
+
+<Prove title="The convolution theorem" task="Starting from $Y_k = \sum_n(x \circledast h)_n e^{-i2\pi kn/N}$, show that $Y_k = X_kH_k$.">
+
+Substitute the definition and swap the order of summation:
+
+$Y_k = \sum_m x_m\sum_n h_{(n - m) \bmod N}\,e^{-i2\pi kn/N}$.
+
+In the inner sum put $j = (n - m) \bmod N$. As $n$ runs over a full period, so does $j$, and because $e^{-i2\pi k\cdot/N}$ has period $N$, $e^{-i2\pi kn/N} = e^{-i2\pi km/N}e^{-i2\pi kj/N}$. So the inner sum is $e^{-i2\pi km/N}\sum_j h_je^{-i2\pi kj/N} = e^{-i2\pi km/N}H_k$.
+
+Then $Y_k = H_k\sum_m x_me^{-i2\pi km/N} = H_kX_k$. Ordinary (non-circular) convolution can be computed the same way after padding both sequences with zeros to at least the length of the full result, which is how fast convolution works.
+
+</Prove>
+
+<PyCell id="convthm" title="Check the theorem" tests={String.raw`
+  import numpy as np
+  def test_circ():
+      "circular_convolve wraps around the ends"
+      assert np.allclose(circular_convolve(np.array([1.0, 2, 3, 4]), np.array([0.0, 1, 0, 0])), [4, 1, 2, 3])
+
+  def test_theorem():
+      "the DFT route gives the same answer"
+      r = np.random.default_rng(3); a, b = r.normal(size=32), r.normal(size=32)
+      assert np.allclose(circular_convolve(a, b), via_fft(a, b))
+
+  def test_linear():
+      "zero padding turns the FFT route into ordinary convolution"
+      r = np.random.default_rng(4); a, b = r.normal(size=20), r.normal(size=7)
+      assert np.allclose(fast_convolve(a, b), np.convolve(a, b))
+`} prompt="Write `circular_convolve(x, h)` with a double loop, `via_fft(x, h)` using the theorem, and `fast_convolve(x, h)` that pads both to length len(x) + len(h) − 1 and uses the FFT route to reproduce `np.convolve`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def circular_convolve(x, h):
+      N = len(x)
+      return np.array([sum(x[m] * h[(n - m) % N] for m in range(N)) for n in range(N)])
+
+  def via_fft(x, h):
+      return ...
+
+  def fast_convolve(x, h):
+      L = len(x) + len(h) - 1
+      return ...
+
+  r = np.random.default_rng(0); a, b = r.normal(size=8), r.normal(size=8)
+  print(np.round(circular_convolve(a, b), 4)); print(np.round(via_fft(a, b), 4))
+`}
+hint="via_fft: return np.real(np.fft.ifft(np.fft.fft(x) * np.fft.fft(h))). fast_convolve: np.fft.fft accepts a length n and pads with zeros, so return np.real(np.fft.ifft(np.fft.fft(x, L) * np.fft.fft(h, L)))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def circular_convolve(x, h):
+      N = len(x)
+      return np.array([sum(x[m] * h[(n - m) % N] for m in range(N)) for n in range(N)])
+
+  def via_fft(x, h):
+      return np.real(np.fft.ifft(np.fft.fft(x) * np.fft.fft(h)))
+
+  def fast_convolve(x, h):
+      L = len(x) + len(h) - 1
+      return np.real(np.fft.ifft(np.fft.fft(x, L) * np.fft.fft(h, L)))
+
+  r = np.random.default_rng(0); a, b = r.normal(size=8), r.normal(size=8)
+  print(np.round(circular_convolve(a, b), 4)); print(np.round(via_fft(a, b), 4))
+`} />
+
+<Video id="glXz1tlayiA" title="The theory behind filtering" by="Neuromatch Academy" note="Neuromatch's account of filters in the time and frequency domains, and why convolution becomes multiplication." />
+
+<Step n={2} title="The membrane as a low-pass filter" minutes={25} />
+
+For $\tau\dot{V} = -V + RI$, try a complex sinusoidal input $RI = e^{i\omega t}$ and a response of the same form, $V = H\,e^{i\omega t}$. Substituting, $i\omega\tau H = -H + 1$, so
+
+$$
+H(\omega) = \frac{1}{1 + i\omega\tau}, \qquad |H| = \frac{1}{\sqrt{1 + (\omega\tau)^2}}, \qquad \arg H = -\arctan(\omega\tau)
+$$
+
+Below the **cut-off** frequency $f_c = 1/(2\pi\tau)$ (8 Hz for $\tau$ = 20 ms) the gain is close to 1; above it, the gain falls in proportion to $1/f$ and the output lags by up to a quarter cycle. This is the Fourier transform of Week 10's exponential kernel.
+
+<Figure caption="A sinusoidal current and the membrane's voltage response, with the gain curve. Change τ and the input frequency." credit="Interactive figure by Engram.">
+  <FilterResponse />
+</Figure>
+
+<PyCell id="lowpass" title="Measure the membrane's frequency response" tests={String.raw`
+  import numpy as np
+  def test_gain():
+      "measured gains match the formula within 5%"
+      for f, g in zip(test_freqs, gains):
+          assert abs(g - 1 / np.sqrt(1 + (2 * np.pi * f * tau) ** 2)) < 0.05 * max(g, 0.02), (f, g)
+`} prompt="Simulate the membrane (τ = 20 ms, Euler steps of 0.05 ms) driven by a unit-amplitude sinusoidal input at each frequency in `test_freqs` for 1 s, and measure the output amplitude as half the range of V over the last 0.5 s. Store the gains in `gains` and compare with the formula."
+code={String.raw`
+  tau, dt = 0.020, 0.00005
+  test_freqs = [2, 8, 32, 100]
+  gains = []
+  for f in test_freqs:
+      t = np.arange(0, 1, dt)
+      V = np.zeros(len(t))
+      for k in range(len(t) - 1):
+          V[k + 1] = ...
+      late = V[len(t) // 2:]
+      gains.append(...)
+
+  fgrid = np.logspace(0, 2.5, 100)
+  plt.figure(figsize=(5, 3)); plt.loglog(fgrid, 1 / np.sqrt(1 + (2 * np.pi * fgrid * tau) ** 2), label="formula"); plt.loglog(test_freqs, gains, "o", label="simulation")
+  plt.xlabel("frequency (Hz)"); plt.ylabel("gain"); plt.legend(frameon=False); plt.show()
+  print("gains:", np.round(gains, 3), "  ratio of 2 Hz to 100 Hz:", round(gains[0] / gains[3], 1))
+`}
+hint="V[k + 1] = V[k] + dt / tau * (-V[k] + np.sin(2 * np.pi * f * t[k])); gains.append((late.max() - late.min()) / 2)."
+solution={String.raw`
+  tau, dt = 0.020, 0.00005
+  test_freqs = [2, 8, 32, 100]
+  gains = []
+  for f in test_freqs:
+      t = np.arange(0, 1, dt)
+      V = np.zeros(len(t))
+      for k in range(len(t) - 1):
+          V[k + 1] = V[k] + dt / tau * (-V[k] + np.sin(2 * np.pi * f * t[k]))
+      late = V[len(t) // 2:]
+      gains.append((late.max() - late.min()) / 2)
+
+  fgrid = np.logspace(0, 2.5, 100)
+  plt.figure(figsize=(5, 3)); plt.loglog(fgrid, 1 / np.sqrt(1 + (2 * np.pi * fgrid * tau) ** 2), label="formula"); plt.loglog(test_freqs, gains, "o", label="simulation")
+  plt.xlabel("frequency (Hz)"); plt.ylabel("gain"); plt.legend(frameon=False); plt.show()
+  print("gains:", np.round(gains, 3), "  ratio of 2 Hz to 100 Hz:", round(gains[0] / gains[3], 1))
+`} />
+
+At 2 Hz the membrane passes almost the whole input; at 100 Hz the oscillation is about 12 times smaller. That answers the prediction. Neurons are low-pass filters of their input currents, which is one reason fast gamma-band input is attenuated unless it is strong or synchronised.
+
+<Step n={3} title="Band-pass filters" minutes={25} />
+
+To isolate a rhythm, keep only a band of frequencies. The simplest band-pass filter multiplies the DFT by a mask that is 1 inside the band and 0 outside, then transforms back. Sharp edges in the frequency domain are themselves a Gibbs problem: the filter's impulse response becomes long and oscillatory, so the filtered signal rings, and any burst of activity is smeared in time. Smooth edges trade a less sharp band for a shorter, better-behaved filter. Filtering also makes *anything* in the band look like an oscillation: white noise filtered at 6 to 10 Hz looks exactly like a theta rhythm, so filtering cannot tell you whether a rhythm is present. Check the power spectrum (Day 4) first.
+
+<PyCell id="bandpass" title="A band-pass filter in the frequency domain" tests={String.raw`
+  import numpy as np
+  def test_pass():
+      "a sinusoid inside the band passes almost unchanged"
+      t = np.arange(4 * 1000) / 1000
+      s = np.sin(2 * np.pi * 8 * t)
+      assert np.allclose(bandpass(s, 1000, 6, 10), s, atol=0.02)
+
+  def test_stop():
+      "a sinusoid far outside the band is removed"
+      t = np.arange(4 * 1000) / 1000
+      assert np.max(np.abs(bandpass(np.sin(2 * np.pi * 40 * t), 1000, 6, 10))) < 0.01
+`} prompt="Write `bandpass(x, fs, lo, hi, edge=1.0)`: take `rfft`, build a mask that is 1 between lo and hi and falls off outside as a Gaussian of width `edge` Hz, multiply, and transform back with `irfft`. Apply it to a noisy theta signal and to pure white noise, and compare."
+code={String.raw`
+  def bandpass(x, fs, lo, hi, edge=1.0):
+      X = np.fft.rfft(x)
+      f = np.fft.rfftfreq(len(x), 1 / fs)
+      dist = np.maximum(lo - f, 0) + np.maximum(f - hi, 0)    # how far each frequency lies outside the band
+      mask = ...
+      return ...
+
+  rng = np.random.default_rng(1993)
+  fs = 1000
+  t = np.arange(0, 4, 1 / fs)
+  lfp = np.sin(2 * np.pi * 8 * t) + 1.5 * rng.normal(size=len(t))
+  noise = 1.5 * rng.normal(size=len(t))
+  fig, ax = plt.subplots(2, 1, figsize=(7, 3.6), sharex=True)
+  ax[0].plot(t, lfp, color="0.75", lw=0.5); ax[0].plot(t, bandpass(lfp, fs, 6, 10), lw=1.5); ax[0].set_title("theta plus noise, filtered 6 to 10 Hz")
+  ax[1].plot(t, noise, color="0.75", lw=0.5); ax[1].plot(t, bandpass(noise, fs, 6, 10), lw=1.5); ax[1].set_title("pure noise, filtered 6 to 10 Hz")
+  ax[1].set_xlim(0, 1.5); ax[1].set_xlabel("time (s)"); plt.tight_layout(); plt.show()
+`}
+hint="mask = np.exp(-dist ** 2 / (2 * edge ** 2)) is 1 inside the band (where dist is 0). Return np.fft.irfft(X * mask, len(x))."
+solution={String.raw`
+  def bandpass(x, fs, lo, hi, edge=1.0):
+      X = np.fft.rfft(x)
+      f = np.fft.rfftfreq(len(x), 1 / fs)
+      dist = np.maximum(lo - f, 0) + np.maximum(f - hi, 0)    # how far each frequency lies outside the band
+      mask = np.exp(-dist ** 2 / (2 * edge ** 2))
+      return np.fft.irfft(X * mask, len(x))
+
+  rng = np.random.default_rng(1993)
+  fs = 1000
+  t = np.arange(0, 4, 1 / fs)
+  lfp = np.sin(2 * np.pi * 8 * t) + 1.5 * rng.normal(size=len(t))
+  noise = 1.5 * rng.normal(size=len(t))
+  fig, ax = plt.subplots(2, 1, figsize=(7, 3.6), sharex=True)
+  ax[0].plot(t, lfp, color="0.75", lw=0.5); ax[0].plot(t, bandpass(lfp, fs, 6, 10), lw=1.5); ax[0].set_title("theta plus noise, filtered 6 to 10 Hz")
+  ax[1].plot(t, noise, color="0.75", lw=0.5); ax[1].plot(t, bandpass(noise, fs, 6, 10), lw=1.5); ax[1].set_title("pure noise, filtered 6 to 10 Hz")
+  ax[1].set_xlim(0, 1.5); ax[1].set_xlabel("time (s)"); plt.tight_layout(); plt.show()
+`} />
+
+Look at the lower panel: filtered noise looks like a waxing and waning theta rhythm. The upper panel has a genuine rhythm, steadier in amplitude. Only the spectrum, or a statistical test, can tell them apart reliably.
+
+<Step n={4} title="Phase and spike locking" minutes={30} />
+
+To ask *when* within a rhythm something happens, you need the **instantaneous phase** at every moment. The **analytic signal** $z(t) = x(t) + i\,\mathcal{H}[x](t)$ pairs each sinusoidal component with its quarter-cycle-shifted partner, so that a cosine $\cos\omega t$ becomes the rotating phasor $e^{i\omega t}$. It is computed with the DFT by deleting the negative frequencies and doubling the positive ones. Its angle is the instantaneous phase and its magnitude the instantaneous amplitude (the envelope).
+
+For a neuron's spikes, collect the phase $\phi_j$ of the rhythm at each spike. If spikes prefer a phase, the unit vectors $e^{i\phi_j}$ point mostly one way. Their average,
+
+$$
+\bar{z} = \frac{1}{n}\sum_j e^{i\phi_j}
+$$
+
+has length $R$ between 0 (no locking) and 1 (perfect locking) and angle equal to the preferred phase. O'Keefe and Recce (1993), today's paper, used theta phase measured this way to discover that hippocampal place cells fire at progressively earlier phases as an animal crosses each place field.
+
+<PyCell id="phase" title="Which phase of theta does this neuron prefer?" tests={String.raw`
+  import numpy as np
+  def test_analytic():
+      "analytic_signal turns cos into exp(i omega t)"
+      t = np.arange(1000) / 1000
+      z = analytic_signal(np.cos(2 * np.pi * 10 * t))
+      assert np.allclose(z, np.exp(2j * np.pi * 10 * t), atol=1e-9)
+
+  def test_locking():
+      "the neuron is locked near the theta trough (pi), with R above 0.3"
+      assert abs(np.angle(np.exp(1j * (pref - np.pi)))) < 0.4 and R > 0.3
+
+  def test_control():
+      "spikes jittered independently by up to one cycle show far weaker locking"
+      assert R_shuffled < R / 3
+`} prompt="Write `analytic_signal(x)` via the FFT (keep bin 0, double bins 1 to N/2 − 1, keep bin N/2 for even N, zero the rest). Compute theta phase from the band-passed LFP, take the phase at each spike, and store the mean resultant length `R` and preferred phase `pref`. As a control, jitter each spike independently by a random amount up to one theta cycle (125 ms) and recompute `R_shuffled`."
+code={String.raw`
+  def analytic_signal(x):
+      N = len(x)
+      X = np.fft.fft(x)
+      h = np.zeros(N)
+      h[0] = 1
+      h[1:N // 2] = 2
+      if N % 2 == 0:
+          h[N // 2] = 1
+      return ...
+
+  theta = bandpass(lfp, fs, 6, 10)
+  phase = np.angle(analytic_signal(theta))
+  true_phase = np.angle(np.exp(1j * (2 * np.pi * 8 * t - np.pi / 2)))   # phase of the clean 8 Hz sine
+  # a neuron that fires most near the theta trough (phase pi), about 30 spikes per second
+  p_spike = 0.03 * np.exp(1.5 * np.cos(true_phase - np.pi)) / 1.65
+  spike_idx = np.nonzero(rng.random(len(t)) < p_spike)[0]
+
+  zbar = ...
+  R, pref = np.abs(zbar), np.angle(zbar)
+  shifted = (spike_idx + rng.integers(0, 125, size=len(spike_idx))) % len(t)   # jitter each spike by up to one theta cycle
+  R_shuffled = ...
+
+  plt.figure(figsize=(4, 3)); plt.hist(np.degrees(phase[spike_idx]) % 360, bins=18); plt.xlabel("theta phase at spike (deg)"); plt.ylabel("spikes"); plt.show()
+  print(f"{len(spike_idx)} spikes;  R = {R:.2f}, preferred phase {np.degrees(pref) % 360:.0f} deg;  shifted control R = {R_shuffled:.3f}")
+`}
+hint="Return np.fft.ifft(X * h). zbar = np.mean(np.exp(1j * phase[spike_idx])); R_shuffled = np.abs(np.mean(np.exp(1j * phase[shifted])))."
+solution={String.raw`
+  def analytic_signal(x):
+      N = len(x)
+      X = np.fft.fft(x)
+      h = np.zeros(N)
+      h[0] = 1
+      h[1:N // 2] = 2
+      if N % 2 == 0:
+          h[N // 2] = 1
+      return np.fft.ifft(X * h)
+
+  theta = bandpass(lfp, fs, 6, 10)
+  phase = np.angle(analytic_signal(theta))
+  true_phase = np.angle(np.exp(1j * (2 * np.pi * 8 * t - np.pi / 2)))   # phase of the clean 8 Hz sine
+  # a neuron that fires most near the theta trough (phase pi), about 30 spikes per second
+  p_spike = 0.03 * np.exp(1.5 * np.cos(true_phase - np.pi)) / 1.65
+  spike_idx = np.nonzero(rng.random(len(t)) < p_spike)[0]
+
+  zbar = np.mean(np.exp(1j * phase[spike_idx]))
+  R, pref = np.abs(zbar), np.angle(zbar)
+  shifted = (spike_idx + rng.integers(0, 125, size=len(spike_idx))) % len(t)   # jitter each spike by up to one theta cycle
+  R_shuffled = np.abs(np.mean(np.exp(1j * phase[shifted])))
+
+  plt.figure(figsize=(4, 3)); plt.hist(np.degrees(phase[spike_idx]) % 360, bins=18); plt.xlabel("theta phase at spike (deg)"); plt.ylabel("spikes"); plt.show()
+  print(f"{len(spike_idx)} spikes;  R = {R:.2f}, preferred phase {np.degrees(pref) % 360:.0f} deg;  shifted control R = {R_shuffled:.3f}")
+`} />
+
+The spikes cluster near the trough, and the locking disappears when each spike is jittered independently by up to a cycle, which keeps the number of spikes and their rough timing but destroys their relation to the rhythm. A control like this is much better than comparing $R$ with zero, because a finite number of spikes always gives some $R$ by chance. (Shifting the whole spike train by one random offset would not work here: this simulated theta is perfectly regular, so a shift just moves every spike to a new phase together. With real, irregular rhythms a large circular shift is the standard control.)
+
+<Bridge title="Filters, phases and timing"
+  neuro="Phase locking of spikes to theta, gamma and other rhythms is reported throughout the brain, and phase codes such as theta phase precession may carry information that rates alone do not (Week 43). Every claim depends on filtering and phase estimation done carefully, because filters can create apparent rhythms and distort phase near sharp events."
+  ai="Convolutional layers are learned filters, and the convolution theorem is why long convolutions can be computed quickly with FFTs. Some sequence models parameterise their convolution kernels directly in the frequency domain, and audio networks often start from a spectrogram, a sequence of short-time spectra.">
+
+Every linear filter is a convolution in time and a multiplication in frequency: choose whichever view makes the problem simple.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The convolution theorem says the DFT of $x \\circledast h$ is...", options: ["$X + H$", "$X_kH_k$", "$X_k/H_k$", "$X_k^2$"], answer: 1, explain: "Convolution becomes multiplication." },
+  { q: "A linear, shift-invariant system changes a sinusoid's...", options: ["Frequency", "Amplitude and phase only", "Shape", "Nothing"], answer: 1, explain: "Multiplication by $H(\\omega)$." },
+  { q: "The membrane's transfer function is...", options: ["$1 + i\\omega\\tau$", "$1/(1 + i\\omega\\tau)$", "$e^{-\\omega\\tau}$", "$\\omega\\tau$"], answer: 1, explain: "From $\\tau\\dot{V} = -V + RI$." },
+  { q: "For τ = 20 ms the cut-off frequency is about...", options: ["50 Hz", "8 Hz", "20 Hz", "1 Hz"], answer: 1, explain: "$1/(2\\pi \\times 0.02)$." },
+  { q: "Filtering white noise into the theta band produces...", options: ["Nothing", "A signal that looks like a theta rhythm", "Pure silence", "A spike train"], answer: 1, explain: "Filters cannot prove a rhythm exists." },
+  { q: "The analytic signal's angle gives...", options: ["The amplitude", "The instantaneous phase", "The frequency resolution", "The mean"], answer: 1, explain: "Its magnitude gives the envelope." },
+  { q: "A good control for spike-phase locking is...", options: ["Comparing R with 0", "Shifting spike times relative to the LFP", "Using more spikes", "Filtering more"], answer: 1, explain: "It keeps everything except the relationship." },
+]} />
+
+<Flashcards cards={[
+  { front: "Convolution theorem?", back: "DFT$(x \\circledast h) = X\\cdot H$; zero-pad for ordinary convolution." },
+  { front: "Membrane transfer function?", back: "$H = 1/(1 + i\\omega\\tau)$; gain $1/\\sqrt{1 + (\\omega\\tau)^2}$, lag $\\arctan\\omega\\tau$, cut-off $1/(2\\pi\\tau)$." },
+  { front: "Pitfalls of band-pass filtering?", back: "Sharp edges cause ringing and temporal smearing; filtered noise looks rhythmic." },
+  { front: "Analytic signal?", back: "Delete negative frequencies, double positive ones: angle = instantaneous phase, magnitude = envelope." },
+  { front: "Mean resultant length?", back: "$R = |\\frac{1}{n}\\sum e^{i\\phi_j}|$: 0 for no phase locking, 1 for perfect; its angle is the preferred phase." },
+]} />
+
+<Predict revisit question="How much smaller is the membrane's response at 100 Hz than at 2 Hz?" />
+
+<Key title="Before you go">
+<ul>
+<li>Convolution in time is multiplication in frequency; filters are described by their transfer functions.</li>
+<li>The membrane is a low-pass filter with cut-off $1/(2\pi\tau)$.</li>
+<li>Band-pass filters isolate rhythms but can ring and can make noise look rhythmic.</li>
+<li>The analytic signal gives instantaneous phase; the mean resultant vector measures spike locking.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: O'Keefe and Recce (1993), <em>Phase relationship between hippocampal place units and the EEG theta rhythm</em>.</li>
+<li>Mike X Cohen, <em>Analyzing Neural Time Series Data</em>, Chapters 14 and 15: filtering and the Hilbert transform.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Phase precession means spike phase changes with the animal's position. If you averaged spike phases over the whole place field, what would you find, and what would you miss?" />

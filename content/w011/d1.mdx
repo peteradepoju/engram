@@ -1,0 +1,267 @@
+export const meta = {
+  title: "Sines, cosines and complex exponentials: describing rhythms",
+  intro: "The brain is full of rhythms: the alpha wave Berger saw in 1929, the theta rhythm of the hippocampus, the gamma oscillations of active cortex. The language for describing any rhythm is the sinusoid, fixed by three numbers: frequency, amplitude and phase. This week builds Fourier analysis, the method of taking any signal apart into sinusoids. Today you learn to describe one sinusoid, to combine them with complex exponentials, and to measure the amplitude and phase of a rhythm buried in noise using nothing more than dot products.",
+  goals: [
+    "Describe a sinusoid by its frequency, amplitude and phase, and name the classical brain rhythms",
+    "Use complex exponentials and Euler's formula to represent and combine sinusoids",
+    "Convert between the cosine-sine form and the amplitude-phase form",
+    "Measure the amplitude and phase of a rhythm in a noisy signal by projection",
+  ],
+  plan: [
+    { label: "Predict and sinusoids", minutes: 25 },
+    { label: "Complex exponentials", minutes: 30 },
+    { label: "Amplitude and phase", minutes: 20 },
+    { label: "Measuring a buried rhythm", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "berger-1929",
+};
+
+<Predict question="An EEG electrode records 8 seconds of signal: a 10 Hz alpha rhythm of amplitude 1 µV hidden in random noise with a standard deviation of 5 µV, so you cannot see the rhythm at all by eye. Can you still measure its amplitude to within about 20%, using only the recording?" />
+
+<Step n={1} title="Sinusoids" minutes={25} />
+
+A sinusoid is
+
+$$
+x(t) = A\cos(2\pi ft + \phi)
+$$
+
+- $A$ is the **amplitude**, half the distance from trough to peak;
+- $f$ is the **frequency** in cycles per second (hertz); the **period** is $1/f$ and the **angular frequency** is $\omega = 2\pi f$ radians per second;
+- $\phi$ is the **phase**, which shifts the wave in time: a phase of $\phi$ moves the peaks earlier by $\phi/(2\pi f)$ seconds.
+
+Brain rhythms are named by frequency band. The boundaries vary between papers, but typical ones are delta (1 to 4 Hz), theta (4 to 8), alpha (8 to 12), beta (13 to 30) and gamma (30 to 100). Berger (1929), today's paper, discovered the alpha rhythm in the human EEG: it is strongest with the eyes closed and is suppressed when they open.
+
+<Figure caption="Four sinusoids at the frequencies of classical brain rhythms, and their sum. Change the amplitudes, and the phase of the alpha component." credit="Interactive figure by Engram.">
+  <SineSum />
+</Figure>
+
+<PyCell id="sine" title="Make and measure sinusoids" tests={String.raw`
+  import numpy as np
+  def test_sine():
+      "sinusoid returns A cos(2 pi f t + phi)"
+      t = np.linspace(0, 1, 11)
+      assert np.allclose(sinusoid(t, 3.0, 2.0, 0.5), 2.0 * np.cos(2 * np.pi * 3.0 * t + 0.5))
+
+  def test_peaks():
+      "a 10 Hz sinusoid has 10 peaks per second"
+      assert n_peaks == 10
+
+  def test_shift():
+      "a phase of pi/2 at 10 Hz moves the peaks 25 ms earlier"
+      assert np.isclose(shift_ms, 25.0)
+`} prompt="Write `sinusoid(t, f, A, phi)`. Sample one second of a 10 Hz sinusoid at 1 kHz and count its peaks (samples larger than both neighbours) in `n_peaks`. Then compute how many milliseconds earlier the peaks of a 10 Hz wave occur when its phase is π/2 (`shift_ms`)."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def sinusoid(t, f, A, phi):
+      return ...
+
+  t = np.arange(0, 1, 0.001)
+  x = sinusoid(t, 10.0, 1.0, -np.pi / 2)            # a sine, so no peak falls on the first sample
+  n_peaks = int(np.sum((x[1:-1] > x[:-2]) & (x[1:-1] > x[2:])))
+  shift_ms = ...
+
+  plt.figure(figsize=(6, 2.5)); plt.plot(t[:300] * 1000, x[:300], label="phase 0"); plt.plot(t[:300] * 1000, sinusoid(t, 10, 1, np.pi / 2)[:300], label="phase π/2")
+  plt.xlabel("time (ms)"); plt.legend(frameon=False); plt.show()
+  print(n_peaks, "peaks;  shift", shift_ms, "ms")
+`}
+hint="return A * np.cos(2 * np.pi * f * t + phi). The shift in seconds is phi / (2 * pi * f), so shift_ms = (np.pi / 2) / (2 * np.pi * 10) * 1000."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def sinusoid(t, f, A, phi):
+      return A * np.cos(2 * np.pi * f * t + phi)
+
+  t = np.arange(0, 1, 0.001)
+  x = sinusoid(t, 10.0, 1.0, -np.pi / 2)            # a sine, so no peak falls on the first sample
+  n_peaks = int(np.sum((x[1:-1] > x[:-2]) & (x[1:-1] > x[2:])))
+  shift_ms = (np.pi / 2) / (2 * np.pi * 10) * 1000
+
+  plt.figure(figsize=(6, 2.5)); plt.plot(t[:300] * 1000, x[:300], label="phase 0"); plt.plot(t[:300] * 1000, sinusoid(t, 10, 1, np.pi / 2)[:300], label="phase π/2")
+  plt.xlabel("time (ms)"); plt.legend(frameon=False); plt.show()
+  print(n_peaks, "peaks;  shift", shift_ms, "ms")
+`} />
+
+<Step n={2} title="Complex exponentials" minutes={30} />
+
+Sines and cosines are awkward to multiply and shift. Complex numbers make them easy. **Euler's formula** says
+
+$$
+e^{i\theta} = \cos\theta + i\sin\theta
+$$
+
+so $e^{i\theta}$ is the point at angle $\theta$ on the unit circle in the complex plane. A rotating point $e^{i2\pi ft}$ goes round the circle $f$ times per second, and its real part is the cosine. A sinusoid is the real part of a rotating complex number,
+
+$$
+A\cos(2\pi ft + \phi) = \operatorname{Re}\left[A e^{i\phi}\,e^{i2\pi ft}\right]
+$$
+
+and the fixed complex number $c = Ae^{i\phi}$, called a **phasor**, holds both the amplitude (its length) and the phase (its angle). Multiplying complex numbers multiplies lengths and adds angles, so scaling and delaying a sinusoid is a single multiplication. That is why the Fourier transform is written with complex numbers.
+
+<Video id="v0YEaeIClKY" title="e^(iπ) in 3.14 minutes, using dynamics" by="3Blue1Brown (Grant Sanderson)" note="Why e to an imaginary power walks around the unit circle, explained by thinking of the exponential as motion." />
+
+<PyCell code={String.raw`
+  theta = np.linspace(0, 2 * np.pi, 9)
+  z = np.exp(1j * theta)
+  print("e^(i theta) for 9 angles:", np.round(z, 3))
+  print("lengths all 1:", np.allclose(np.abs(z), 1), "  angles:", np.round(np.angle(z), 3))
+  a, b = 2 * np.exp(1j * 0.3), 1.5 * np.exp(1j * 1.1)
+  print("product: length", round(abs(a * b), 3), "= 2 x 1.5;  angle", round(np.angle(a * b), 3), "= 0.3 + 1.1")
+`} />
+
+<Step n={3} title="Amplitude and phase" minutes={20} />
+
+A sinusoid can also be written as a cosine plus a sine at the same frequency, $a\cos\omega t + b\sin\omega t$. The two forms describe the same thing:
+
+<Prove title="From cosine and sine to amplitude and phase" task="Show that $a\cos\omega t + b\sin\omega t = A\cos(\omega t - \phi)$ with $A = \sqrt{a^2 + b^2}$ and $\phi = \operatorname{atan2}(b, a)$, using the complex number $a + ib$.">
+
+Write $a + ib$ in polar form: $a + ib = Ae^{i\phi}$ with $A = \sqrt{a^2 + b^2}$ and $\phi$ its angle, so $a = A\cos\phi$ and $b = A\sin\phi$.
+
+Then $a\cos\omega t + b\sin\omega t = A(\cos\phi\cos\omega t + \sin\phi\sin\omega t) = A\cos(\omega t - \phi)$, by the cosine difference formula.
+
+Equivalently, $\operatorname{Re}[(a - ib)e^{i\omega t}] = \operatorname{Re}[(a - ib)(\cos\omega t + i\sin\omega t)] = a\cos\omega t + b\sin\omega t$: the coefficients of the cosine and sine are the real and (negated) imaginary parts of one phasor. The function `atan2` picks the correct quadrant, which plain `arctan(b/a)` does not.
+
+</Prove>
+
+<PyCell id="ampphase" title="Convert between the two forms" tests={String.raw`
+  import numpy as np
+  def test_values():
+      "amp_phase returns the amplitude and phase"
+      A, phi = amp_phase(3.0, 4.0)
+      assert np.isclose(A, 5.0) and np.isclose(phi, np.arctan2(4, 3))
+
+  def test_quadrant():
+      "it handles negative cosine coefficients correctly"
+      A, phi = amp_phase(-1.0, 1.0)
+      t = np.linspace(0, 1, 50)
+      assert np.allclose(-np.cos(5 * t) + np.sin(5 * t), A * np.cos(5 * t - phi))
+`} prompt="Write `amp_phase(a, b)` returning the amplitude and phase of $a\cos\omega t + b\sin\omega t$. Check by plotting both forms for a = −1, b = 1."
+code={String.raw`
+  def amp_phase(a, b):
+      return ...
+
+  A, phi = amp_phase(-1.0, 1.0)
+  t = np.linspace(0, 1, 200)
+  plt.figure(figsize=(5, 2.5)); plt.plot(t, -np.cos(5 * t) + np.sin(5 * t), lw=3, alpha=0.5, label="a cos + b sin"); plt.plot(t, A * np.cos(5 * t - phi), "--", label="A cos(ωt − φ)")
+  plt.legend(frameon=False); plt.show()
+  print("A =", round(A, 4), " phi =", round(phi, 4), "rad")
+`}
+hint="return np.hypot(a, b), np.arctan2(b, a)"
+solution={String.raw`
+  def amp_phase(a, b):
+      return np.hypot(a, b), np.arctan2(b, a)
+
+  A, phi = amp_phase(-1.0, 1.0)
+  t = np.linspace(0, 1, 200)
+  plt.figure(figsize=(5, 2.5)); plt.plot(t, -np.cos(5 * t) + np.sin(5 * t), lw=3, alpha=0.5, label="a cos + b sin"); plt.plot(t, A * np.cos(5 * t - phi), "--", label="A cos(ωt − φ)")
+  plt.legend(frameon=False); plt.show()
+  print("A =", round(A, 4), " phi =", round(phi, 4), "rad")
+`} />
+
+<Step n={4} title="Measuring a buried rhythm" minutes={30} />
+
+Here is the key idea of the whole week. Sample a signal at $N$ times $t_n$ covering a whole number of cycles. Then $\cos\omega t_n$ and $\sin\omega t_n$ are **orthogonal** vectors (their dot product is zero) and each has squared length $N/2$ (tomorrow's proof). So, as for any orthogonal basis (Week 4), the coefficients of a signal along them are found by **projection**:
+
+$$
+a = \frac{2}{N}\sum_n x(t_n)\cos\omega t_n, \qquad b = \frac{2}{N}\sum_n x(t_n)\sin\omega t_n
+$$
+
+Noise at other frequencies, and random noise, is nearly orthogonal to both, so it contributes little to these sums: projecting onto a frequency averages away everything else. The error shrinks like $\sigma\sqrt{2/N}$.
+
+<PyCell id="project" title="Find the alpha rhythm in the noise" tests={String.raw`
+  import numpy as np
+  def test_coeffs():
+      "a_hat and b_hat are the projections of the signal on cos and sin at 10 Hz"
+      c, s = np.cos(2 * np.pi * 10 * t2), np.sin(2 * np.pi * 10 * t2)
+      assert np.isclose(a_hat, 2 / len(t2) * x2 @ c) and np.isclose(b_hat, 2 / len(t2) * x2 @ s)
+
+  def test_amp():
+      "the estimated amplitude is within 20% of the true 1 microvolt"
+      assert abs(A_hat - 1.0) < 0.2
+
+  def test_phase():
+      "the estimated phase is within 0.3 rad of the true 0.8 rad"
+      assert abs(np.angle(np.exp(1j * (phi_hat - 0.8)))) < 0.3
+`} prompt="The signal is a 10 Hz rhythm of amplitude 1 and phase 0.8 rad (as $A\cos(\omega t - \phi)$) plus noise of standard deviation 5, sampled at 500 Hz for 8 s. Project onto the cosine and sine at 10 Hz to get `a_hat` and `b_hat`, convert to `A_hat` and `phi_hat`, and compare. How large is the expected error, $5\sqrt{2/N}$?"
+code={String.raw`
+  rng = np.random.default_rng(1929)
+  fs = 500
+  t2 = np.arange(0, 8, 1 / fs)
+  x2 = 1.0 * np.cos(2 * np.pi * 10 * t2 - 0.8) + 5 * rng.normal(size=len(t2))
+
+  a_hat = ...
+  b_hat = ...
+  A_hat, phi_hat = amp_phase(a_hat, b_hat)
+
+  plt.figure(figsize=(6, 2.5)); plt.plot(t2, x2, color="0.6", lw=0.6); plt.plot(t2, A_hat * np.cos(2 * np.pi * 10 * t2 - phi_hat), lw=2)
+  plt.xlim(0, 0.5); plt.xlabel("time (s)"); plt.ylabel("µV"); plt.show()
+  print(f"amplitude {A_hat:.3f} (true 1.0), phase {phi_hat:.3f} (true 0.8);  expected error about {5 * np.sqrt(2 / len(t2)):.3f}")
+`}
+hint="a_hat = 2 / len(t2) * x2 @ np.cos(2 * np.pi * 10 * t2) and b_hat = 2 / len(t2) * x2 @ np.sin(2 * np.pi * 10 * t2)."
+solution={String.raw`
+  rng = np.random.default_rng(1929)
+  fs = 500
+  t2 = np.arange(0, 8, 1 / fs)
+  x2 = 1.0 * np.cos(2 * np.pi * 10 * t2 - 0.8) + 5 * rng.normal(size=len(t2))
+
+  a_hat = 2 / len(t2) * x2 @ np.cos(2 * np.pi * 10 * t2)
+  b_hat = 2 / len(t2) * x2 @ np.sin(2 * np.pi * 10 * t2)
+  A_hat, phi_hat = amp_phase(a_hat, b_hat)
+
+  plt.figure(figsize=(6, 2.5)); plt.plot(t2, x2, color="0.6", lw=0.6); plt.plot(t2, A_hat * np.cos(2 * np.pi * 10 * t2 - phi_hat), lw=2)
+  plt.xlim(0, 0.5); plt.xlabel("time (s)"); plt.ylabel("µV"); plt.show()
+  print(f"amplitude {A_hat:.3f} (true 1.0), phase {phi_hat:.3f} (true 0.8);  expected error about {5 * np.sqrt(2 / len(t2)):.3f}")
+`} />
+
+A rhythm five times smaller than the noise, invisible by eye, comes out with its amplitude and phase close to the truth, because 4000 samples average the noise down by a factor of about 45 (the expected error, $5\sqrt{2/4000} \approx 0.11$). That answers the prediction. Doing this projection at every frequency at once is the discrete Fourier transform (Day 3).
+
+<Bridge title="Rhythms and their phases"
+  neuro="The amplitude of a rhythm tells you how synchronised a population is; its phase tells you where in the cycle you are, which can matter for spike timing, as in hippocampal phase precession (Day 5). Measuring both from noisy field potentials, as you did today, is the first step of nearly every analysis of brain oscillations."
+  ai="Transformers encode the position of each token with sinusoids of many frequencies, so that relative positions become phase differences (Week 87), and rotary position embeddings rotate query and key vectors by position-dependent angles, multiplying by complex exponentials exactly as phasors do.">
+
+Any rhythm is a rotating arrow: its length is the amplitude and its angle the phase.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A 40 Hz oscillation has a period of...", options: ["40 ms", "25 ms", "4 ms", "250 ms"], answer: 1, explain: "1/40 s." },
+  { q: "Alpha rhythms are typically in the band...", options: ["1 to 4 Hz", "8 to 12 Hz", "30 to 100 Hz", "13 to 30 Hz"], answer: 1, explain: "Berger's rhythm, about 10 Hz." },
+  { q: "$e^{i\\theta}$ is...", options: ["A real number", "The point at angle θ on the unit circle", "Always 1", "θ squared"], answer: 1, explain: "Euler's formula." },
+  { q: "Multiplying two complex numbers...", options: ["Adds their lengths", "Multiplies lengths and adds angles", "Adds angles only", "Has no geometric meaning"], answer: 1, explain: "Polar form." },
+  { q: "$3\\cos\\omega t + 4\\sin\\omega t$ has amplitude...", options: ["7", "5", "1", "12"], answer: 1, explain: "$\\sqrt{9 + 16}$." },
+  { q: "The coefficient of $\\cos\\omega t$ in a signal is found by...", options: ["Its maximum", "Projecting the signal onto $\\cos\\omega t$", "Its mean", "Its derivative"], answer: 1, explain: "Orthogonal basis, Week 4." },
+  { q: "Projection works in noise because noise is...", options: ["Zero", "Nearly orthogonal to the sinusoid, so it averages away", "Periodic", "Large"], answer: 1, explain: "Errors shrink like $\\sigma\\sqrt{2/N}$." },
+]} />
+
+<Flashcards cards={[
+  { front: "Sinusoid?", back: "$A\\cos(2\\pi ft + \\phi)$: amplitude A, frequency f (period 1/f), phase φ." },
+  { front: "Brain rhythm bands?", back: "Delta 1 to 4, theta 4 to 8, alpha 8 to 12, beta 13 to 30, gamma 30 to 100 Hz (boundaries vary)." },
+  { front: "Euler's formula?", back: "$e^{i\\theta} = \\cos\\theta + i\\sin\\theta$." },
+  { front: "Phasor?", back: "$c = Ae^{i\\phi}$; the sinusoid is $\\operatorname{Re}[c\\,e^{i2\\pi ft}]$." },
+  { front: "Amplitude and phase from a and b?", back: "$a\\cos + b\\sin = A\\cos(\\omega t - \\phi)$ with $A = \\sqrt{a^2 + b^2}$, $\\phi = \\operatorname{atan2}(b, a)$." },
+  { front: "Projection onto a frequency?", back: "$a = \\frac{2}{N}\\sum x\\cos\\omega t_n$, $b = \\frac{2}{N}\\sum x\\sin\\omega t_n$ over whole cycles." },
+]} />
+
+<Predict revisit question="Can you measure a rhythm five times smaller than the noise to within 20%?" />
+
+<Key title="Before you go">
+<ul>
+<li>A sinusoid is fixed by frequency, amplitude and phase; brain rhythms are grouped into bands by frequency.</li>
+<li>Euler's formula turns sinusoids into rotating complex numbers; a phasor holds amplitude and phase together.</li>
+<li>$a\cos + b\sin$ and $A\cos(\omega t - \phi)$ are the same sinusoid.</li>
+<li>Projecting onto a cosine and sine measures a rhythm even when it is buried in noise.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Berger (1929), <em>Über das Elektrenkephalogramm des Menschen</em>. Look at the traces and how the alpha rhythm changes with the eyes.</li>
+<li>Mike X Cohen, <em>Analyzing Neural Time Series Data</em>, Chapters 10 and 11: sine waves and the Fourier transform, written for neuroscientists.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Berger saw the alpha rhythm vanish when subjects opened their eyes. Write down two different explanations of why a rhythm might disappear when a brain area becomes active, and an experiment that could tell them apart." />

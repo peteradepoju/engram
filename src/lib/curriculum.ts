@@ -127,6 +127,22 @@ export const DAY_TITLES: Record<number, string[]> = {
     "Two-dimensional convolution: receptive fields and convolutional networks",
     "Forge: Week 10 challenge, quiz and deep read",
   ],
+  11: [
+    "Sines, cosines and complex exponentials: describing rhythms",
+    "Fourier series: building signals from harmonics",
+    "The discrete Fourier transform, the FFT and sampling",
+    "Power spectra: finding rhythms in noisy signals",
+    "Filtering and the convolution theorem",
+    "Forge: Week 11 challenge, quiz and deep read",
+  ],
+  12: [
+    "Optimisation problems: losses, minima and landscapes",
+    "Gradient descent: step size, convergence and divergence",
+    "Convexity: when every valley is the bottom",
+    "Stochastic gradient descent: learning from minibatches",
+    "Learning rules as optimisation: perceptron, delta rule and tempotron",
+    "Forge: Week 12 challenge, quiz and deep read",
+  ],
 };
 
 export const DAYS_PER_WEEK = 6;
@@ -155,7 +171,7 @@ export function dayTitle(w: number, d: number): string {
 }
 
 /** Weeks whose lesson files exist. Kept in sync by hand as content is written. */
-export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 export const isWritten = (w: number) => WRITTEN_WEEKS.includes(w);
 
 /** Every lesson that is published, in order. */

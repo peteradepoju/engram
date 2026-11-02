@@ -1,0 +1,279 @@
+export const meta = {
+  title: "Convexity: when every valley is the bottom",
+  intro: "Some optimisation problems are easy in a deep sense: their loss has a single valley, so any local method that keeps going downhill must reach the best answer. These are the convex problems, and they include least squares, ridge regression, logistic regression and the Poisson models of spiking neurons. Today you learn three equivalent tests for convexity, prove that a local minimum of a convex function is global, check the losses you already use, and see exactly why neural networks are not convex.",
+  goals: [
+    "Define convex functions by chords, tangents and the Hessian",
+    "Prove that every local minimum of a convex function is a global minimum",
+    "Verify the convexity of least-squares, logistic and Poisson losses",
+    "Explain why neural network losses are not convex, using hidden-unit symmetry",
+  ],
+  plan: [
+    { label: "Predict and the definition", minutes: 25 },
+    { label: "Three tests", minutes: 25 },
+    { label: "Convex losses in neuroscience", minutes: 30 },
+    { label: "Why networks are not convex", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "paninski-2004",
+};
+
+<Predict question="A network with two hidden units has been trained to a minimum of its loss. You swap the two hidden units (exchanging their incoming and outgoing weights), which gives another set of weights with exactly the same loss. If you average the two weight settings, will the loss at the average be the same, lower, or higher?" />
+
+<Step n={1} title="The definition" minutes={25} />
+
+A function $f$ is **convex** if the chord between any two points on its graph lies on or above the graph:
+
+$$
+f\left((1 - t)\mathbf{a} + t\mathbf{b}\right) \leq (1 - t)f(\mathbf{a}) + tf(\mathbf{b}) \quad\text{for all } \mathbf{a}, \mathbf{b} \text{ and } 0 \leq t \leq 1
+$$
+
+It is **strictly convex** if the inequality is strict whenever $\mathbf{a} \neq \mathbf{b}$ and $0 \lt t \lt 1$, and **strongly convex** if it curves up at least as fast as some quadratic $\frac{\mu}{2}\lVert\mathbf{w}\rVert^2$. Convex functions include $x^2$, $e^x$, $|x|$, softplus and every linear function; $\sin x$ and the double well are not.
+
+<Figure caption="Drag the ends of the chord. For convex functions it never passes below the graph; for non-convex ones you can find chords that it does (red)." credit="Interactive figure by Engram.">
+  <ConvexChord />
+</Figure>
+
+<Prove title="For convex functions, local means global" task="Suppose f is convex and $\mathbf{w}^*$ is a local minimum: $f(\mathbf{w}^*) \leq f(\mathbf{w})$ for all $\mathbf{w}$ within some distance r of $\mathbf{w}^*$. Show that $f(\mathbf{w}^*) \leq f(\mathbf{b})$ for every $\mathbf{b}$, however far away.">
+
+Suppose instead that some $\mathbf{b}$ had $f(\mathbf{b}) \lt f(\mathbf{w}^*)$. Take a point on the segment towards it, $\mathbf{w}_t = (1 - t)\mathbf{w}^* + t\mathbf{b}$, with $t \gt 0$ small enough that $\mathbf{w}_t$ is within distance r of $\mathbf{w}^*$.
+
+By convexity, $f(\mathbf{w}_t) \leq (1 - t)f(\mathbf{w}^*) + tf(\mathbf{b}) \lt (1 - t)f(\mathbf{w}^*) + tf(\mathbf{w}^*) = f(\mathbf{w}^*)$.
+
+So a point arbitrarily close to $\mathbf{w}^*$ has a lower value, contradicting that $\mathbf{w}^*$ is a local minimum. Hence no such $\mathbf{b}$ exists. For a convex loss there are no false valleys, and any method that only goes downhill, such as gradient descent, cannot get trapped. If f is strictly convex the minimum is also unique.
+
+</Prove>
+
+<Step n={2} title="Three tests" minutes={25} />
+
+For smooth functions, three conditions are equivalent ways to say "convex":
+
+1. **Chords**: the definition above.
+2. **Tangents**: the tangent plane at every point lies on or below the graph, $f(\mathbf{b}) \geq f(\mathbf{a}) + \nabla f(\mathbf{a})\cdot(\mathbf{b} - \mathbf{a})$. A consequence: wherever $\nabla f = \mathbf{0}$, the function is at its global minimum.
+3. **Curvature**: the Hessian is positive semidefinite everywhere, all its eigenvalues at least zero (Week 9). In one dimension, $f'' \geq 0$.
+
+Convexity is also preserved by useful operations: a sum of convex functions is convex, a convex function of a linear (affine) function of $\mathbf{w}$ is convex, and the maximum of convex functions is convex. So a loss built as a sum, over data points, of convex functions of $\mathbf{x}_t\cdot\mathbf{w}$ is convex, which covers most of the statistical models in this course.
+
+<PyCell id="chord" title="Test convexity with random chords" tests={String.raw`
+  import numpy as np
+  def test_convex():
+      "chord_violation finds no violation for x^2, exp and softplus"
+      for f in [lambda x: x ** 2, np.exp, lambda x: np.log1p(np.exp(x))]:
+          assert chord_violation(f, -3, 3) < 1e-12
+
+  def test_nonconvex():
+      "it finds violations for sin and the double well"
+      assert chord_violation(np.sin, -3, 3) > 0.1
+      assert chord_violation(lambda x: (x ** 2 - 1) ** 2, -2, 2) > 0.1
+`} prompt="Write `chord_violation(f, lo, hi, n=2000)`: draw n random pairs (a, b) in [lo, hi] and random t in [0, 1], and return the largest amount by which f at the interpolated point exceeds the chord, or 0 if it never does. It is a numerical check, not a proof: it can show a function is not convex, never that it is."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1951)
+
+  def chord_violation(f, lo, hi, n=2000):
+      a, b = rng.uniform(lo, hi, n), rng.uniform(lo, hi, n)
+      t = rng.uniform(0, 1, n)
+      gap = ...                      # f at the interpolated point minus the chord
+      return max(0.0, gap.max())
+
+  for name, f in [("x^2", lambda x: x ** 2), ("sin", np.sin), ("double well", lambda x: (x ** 2 - 1) ** 2)]:
+      print(f"{name:12s} largest violation {chord_violation(f, -2, 2):.4f}")
+`}
+hint="gap = f((1 - t) * a + t * b) - ((1 - t) * f(a) + t * f(b))"
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1951)
+
+  def chord_violation(f, lo, hi, n=2000):
+      a, b = rng.uniform(lo, hi, n), rng.uniform(lo, hi, n)
+      t = rng.uniform(0, 1, n)
+      gap = f((1 - t) * a + t * b) - ((1 - t) * f(a) + t * f(b))
+      return max(0.0, gap.max())
+
+  for name, f in [("x^2", lambda x: x ** 2), ("sin", np.sin), ("double well", lambda x: (x ** 2 - 1) ** 2)]:
+      print(f"{name:12s} largest violation {chord_violation(f, -2, 2):.4f}")
+`} />
+
+<Step n={3} title="Convex losses in neuroscience" minutes={30} />
+
+The Hessian test is the practical one. You derived three Hessians in Week 9:
+
+- least squares: $X^\top X/T$, positive semidefinite because $\mathbf{v}^\top X^\top X\mathbf{v} = \lVert X\mathbf{v}\rVert^2 \geq 0$;
+- logistic regression: $Z^\top\operatorname{diag}(p(1 - p))Z/T$, a weighted version of the same;
+- Poisson GLM (negative log-likelihood): $X^\top\operatorname{diag}(\boldsymbol\lambda)X$, the same again.
+
+Adding a ridge penalty adds $\lambda I$ to each, making them strongly convex with a unique minimum. Paninski (2004), today's paper, proved the general result behind the success of encoding models: for a linear filter followed by any nonlinearity that is convex and log-concave (the exponential, softplus and others), the point-process likelihood is concave in the filter, so maximum likelihood has no local optima.
+
+<Video id="k28bnNAcOEg" title="Training Landscape" by="Neuromatch Academy (Deep Learning course)" note="Neuromatch's look at the loss landscape of a small linear network: where it is convex, and where it is not." />
+
+<PyCell id="hessians" title="Check the Hessians" tests={String.raw`
+  import numpy as np
+  def test_min_eigs():
+      "the smallest Hessian eigenvalue is non-negative at every sampled point, for both losses"
+      assert min(min_eig_logistic) > -1e-10 and min(min_eig_poisson) > -1e-10
+
+  def test_formula():
+      "poisson_hessian matches a numerical Hessian of the Poisson NLL"
+      w = np.random.default_rng(9).normal(size=3) * 0.3
+      H = np.zeros((3, 3))
+      for j in range(3):
+          e = np.zeros(3); e[j] = 1e-5
+          H[:, j] = (poisson_grad(w + e) - poisson_grad(w - e)) / 2e-5
+      assert np.allclose(poisson_hessian(w), H, atol=1e-5)
+`} prompt="For a random design matrix, write the Hessians of the logistic loss and of the Poisson negative log-likelihood (both averaged over T examples). At 200 random weight vectors, record the smallest eigenvalue of each in `min_eig_logistic` and `min_eig_poisson`."
+code={String.raw`
+  T = 300
+  Xd = np.column_stack([rng.normal(size=(T, 2)), np.ones(T)])
+  def sigmoid(u): return 1 / (1 + np.exp(-u))
+  def poisson_grad(w):                     # gradient of the mean NLL; counts do not affect the Hessian
+      return Xd.T @ (np.exp(Xd @ w) - 1.0) / T
+
+  def logistic_hessian(w):
+      p = sigmoid(Xd @ w)
+      return ...
+
+  def poisson_hessian(w):
+      lam = np.exp(Xd @ w)
+      return ...
+
+  min_eig_logistic, min_eig_poisson = [], []
+  for _ in range(200):
+      w = rng.normal(size=3) * 2
+      min_eig_logistic.append(np.linalg.eigvalsh(logistic_hessian(w)).min())
+      min_eig_poisson.append(np.linalg.eigvalsh(poisson_hessian(w)).min())
+  print("smallest eigenvalue seen: logistic", f"{min(min_eig_logistic):.2e}", " Poisson", f"{min(min_eig_poisson):.2e}")
+`}
+hint="logistic: return Xd.T @ (Xd * (p * (1 - p))[:, None]) / T. Poisson: return Xd.T @ (Xd * lam[:, None]) / T."
+solution={String.raw`
+  T = 300
+  Xd = np.column_stack([rng.normal(size=(T, 2)), np.ones(T)])
+  def sigmoid(u): return 1 / (1 + np.exp(-u))
+  def poisson_grad(w):                     # gradient of the mean NLL; counts do not affect the Hessian
+      return Xd.T @ (np.exp(Xd @ w) - 1.0) / T
+
+  def logistic_hessian(w):
+      p = sigmoid(Xd @ w)
+      return Xd.T @ (Xd * (p * (1 - p))[:, None]) / T
+
+  def poisson_hessian(w):
+      lam = np.exp(Xd @ w)
+      return Xd.T @ (Xd * lam[:, None]) / T
+
+  min_eig_logistic, min_eig_poisson = [], []
+  for _ in range(200):
+      w = rng.normal(size=3) * 2
+      min_eig_logistic.append(np.linalg.eigvalsh(logistic_hessian(w)).min())
+      min_eig_poisson.append(np.linalg.eigvalsh(poisson_hessian(w)).min())
+  print("smallest eigenvalue seen: logistic", f"{min(min_eig_logistic):.2e}", " Poisson", f"{min(min_eig_poisson):.2e}")
+`} />
+
+At every point the Hessians have no negative eigenvalues. Convexity can be lost, though, in ways that matter in practice: fitting the preferred direction or width of a tuning curve inside a nonlinear function (Day 1's frequency problem) breaks it, which is why encoding models are usually written so that the unknowns enter linearly before the nonlinearity.
+
+<Step n={4} title="Why networks are not convex" minutes={25} />
+
+A network with hidden units has a built-in symmetry. Swap two hidden units, exchanging their incoming weights and their outgoing weights together, and the network computes exactly the same function, so the loss is unchanged. If the loss has a minimum at one setting $\mathbf{w}_A$, it has an equally good one at the swapped setting $\mathbf{w}_B$. If the loss were convex, the midpoint $\frac{1}{2}(\mathbf{w}_A + \mathbf{w}_B)$ would be at least as good. But at the midpoint the two hidden units have identical weights and so compute the same thing, wasting half the network.
+
+<PyCell id="symmetry" title="Two minima and a worse midpoint" tests={String.raw`
+  import numpy as np
+  def test_swap():
+      "swapping the hidden units leaves the loss unchanged"
+      assert np.isclose(net_loss(w_A), net_loss(w_B))
+
+  def test_midpoint():
+      "the loss at the midpoint is higher than at both minima, so the loss is not convex"
+      assert net_loss(w_mid) > net_loss(w_A) + 0.05
+`} prompt="Train a two-hidden-unit tanh network to fit y = sin(2x) by gradient descent (code given). Build `w_B` by swapping the two hidden units in the trained weights `w_A` (rows of W1, entries of b1 and w2), and `w_mid`, their average. Compare the three losses."
+code={String.raw`
+  x = np.linspace(-2, 2, 100); y = np.sin(2 * x)
+  def unpack(w): return w[0:2], w[2:4], w[4:6], w[6]        # input weights, biases, output weights, output bias
+  def net_loss(w):
+      W1, b1, w2, b2 = unpack(w)
+      h = np.tanh(np.outer(x, W1) + b1)
+      return np.mean((h @ w2 + b2 - y) ** 2)
+  def num_grad(f, w, h=1e-6):
+      g = np.zeros_like(w)
+      for i in range(len(w)):
+          e = np.zeros_like(w); e[i] = h
+          g[i] = (f(w + e) - f(w - e)) / (2 * h)
+      return g
+  w_A = np.array([1.5, -0.8, 0.5, 0.3, 1.0, 1.0, 0.0])
+  for _ in range(3000):
+      w_A = w_A - 0.1 * num_grad(net_loss, w_A)
+
+  W1, b1, w2, b2 = unpack(w_A)
+  w_B = ...
+  w_mid = ...
+  print(f"loss at w_A {net_loss(w_A):.4f}, at swapped w_B {net_loss(w_B):.4f}, at the midpoint {net_loss(w_mid):.4f}")
+`}
+hint="Reverse each pair: w_B = np.concatenate([W1[::-1], b1[::-1], w2[::-1], [b2]]). Then w_mid = 0.5 * (w_A + w_B)."
+solution={String.raw`
+  x = np.linspace(-2, 2, 100); y = np.sin(2 * x)
+  def unpack(w): return w[0:2], w[2:4], w[4:6], w[6]        # input weights, biases, output weights, output bias
+  def net_loss(w):
+      W1, b1, w2, b2 = unpack(w)
+      h = np.tanh(np.outer(x, W1) + b1)
+      return np.mean((h @ w2 + b2 - y) ** 2)
+  def num_grad(f, w, h=1e-6):
+      g = np.zeros_like(w)
+      for i in range(len(w)):
+          e = np.zeros_like(w); e[i] = h
+          g[i] = (f(w + e) - f(w - e)) / (2 * h)
+      return g
+  w_A = np.array([1.5, -0.8, 0.5, 0.3, 1.0, 1.0, 0.0])
+  for _ in range(3000):
+      w_A = w_A - 0.1 * num_grad(net_loss, w_A)
+
+  W1, b1, w2, b2 = unpack(w_A)
+  w_B = np.concatenate([W1[::-1], b1[::-1], w2[::-1], [b2]])
+  w_mid = 0.5 * (w_A + w_B)
+  print(f"loss at w_A {net_loss(w_A):.4f}, at swapped w_B {net_loss(w_B):.4f}, at the midpoint {net_loss(w_mid):.4f}")
+`} />
+
+The two settings fit equally well; the midpoint is much worse, because its two hidden units have become clones. That answers the prediction, and it proves the loss is not convex: a convex function cannot be higher at the midpoint than at both ends. With $n$ hidden units in a layer there are $n!$ equivalent minima created by permutations alone, so network training cannot have a unique answer. Remarkably, it does not need one: many different minima generalise equally well.
+
+<Bridge title="Convex and non-convex learning"
+  neuro="Encoding models of neurons (GLMs) are built to be convex, so a fit is reproducible and its parameters interpretable. Models of learning circuits are not: many different synaptic configurations can solve the same task, a form of degeneracy that may let the brain keep working while individual synapses drift (Week 140)."
+  ai="Classical machine learning (linear and logistic regression, support vector machines, Week 57) is convex, with guarantees to match. Deep learning gave up convexity for expressive power, and the theory of why gradient descent still finds good solutions in non-convex landscapes is an active research area (Week 97).">
+
+Convexity is the property that turns optimisation from a search into a walk downhill. Know when you have it, and what you lose without it.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A function is convex if every chord...", options: ["Lies below the graph", "Lies on or above the graph", "Crosses the graph twice", "Is horizontal"], answer: 1, explain: "The definition." },
+  { q: "For a smooth convex function, a point where the gradient is zero is...", options: ["A saddle", "The global minimum", "A local maximum", "Undetermined"], answer: 1, explain: "The tangent plane lies below the graph." },
+  { q: "A twice-differentiable function is convex if its Hessian is...", options: ["Zero", "Positive semidefinite everywhere", "Negative definite", "Diagonal"], answer: 1, explain: "No direction curves down." },
+  { q: "Which loss is not convex in its parameters?", options: ["Least squares", "Logistic regression", "Poisson GLM", "A two-layer neural network"], answer: 3, explain: "Hidden-unit symmetry." },
+  { q: "Adding a ridge penalty to a convex loss makes it...", options: ["Non-convex", "Strongly convex, with a unique minimum", "Linear", "Constant"], answer: 1, explain: "Adds λI to the Hessian." },
+  { q: "Paninski (2004) showed the GLM likelihood is concave when the nonlinearity is...", options: ["Any function", "Convex and log-concave", "Periodic", "Linear only"], answer: 1, explain: "Such as the exponential." },
+  { q: "Swapping two hidden units in a network...", options: ["Changes the function", "Leaves the function and the loss unchanged", "Always lowers the loss", "Is impossible"], answer: 1, explain: "So minima come in symmetric copies." },
+]} />
+
+<Flashcards cards={[
+  { front: "Convex function?", back: "$f((1 - t)\\mathbf{a} + t\\mathbf{b}) \\leq (1 - t)f(\\mathbf{a}) + tf(\\mathbf{b})$: chords on or above the graph." },
+  { front: "Three equivalent tests (smooth f)?", back: "Chords above; tangent planes below; Hessian positive semidefinite everywhere." },
+  { front: "Why convexity matters?", back: "Every local minimum is global; gradient descent cannot be trapped." },
+  { front: "Convex losses in this course?", back: "Least squares, ridge, logistic regression, Poisson GLM (with suitable nonlinearities)." },
+  { front: "Why networks are not convex?", back: "Permuting hidden units gives equal minima whose midpoint is worse." },
+]} />
+
+<Predict revisit question="Is the loss at the average of two swapped minima the same, lower or higher?" />
+
+<Key title="Before you go">
+<ul>
+<li>Convex functions have chords above, tangents below and positive semidefinite Hessians.</li>
+<li>For convex losses every local minimum is global, so gradient descent finds the best fit.</li>
+<li>Least squares, logistic and Poisson GLM losses are convex; ridge makes them strongly convex.</li>
+<li>Network losses are not convex: hidden-unit symmetry gives equal minima with worse points between.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Paninski (2004), <em>Maximum likelihood estimation of cascade point-process neural encoding models</em>.</li>
+<li>Boyd and Vandenberghe, <em>Convex Optimization</em> (free online), Chapter 3: convex functions.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Many different synaptic configurations can make a network solve the same task. Is that a problem for neuroscientists trying to infer connectivity from behaviour, or an advantage for the brain? Argue both sides briefly." />

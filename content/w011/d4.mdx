@@ -1,0 +1,307 @@
+export const meta = {
+  title: "Power spectra: finding rhythms in noisy signals",
+  intro: "A brain recording is not a neat sum of a few sinusoids: it is a noisy signal whose power is spread over every frequency, with rhythms appearing as bumps on a sloping background. The power spectrum describes how variance is shared out across frequency. Today you compute it properly, discover that the raw periodogram is far too noisy to trust however long the recording, fix that with Welch's method of averaging, and separate genuine rhythms from the 1/f background, the problem at the heart of this week's deep read.",
+  goals: [
+    "Compute a power spectral density with the correct units so that it integrates to the variance",
+    "Explain why the periodogram does not improve with more data, and use Welch's method",
+    "Explain windowing and spectral leakage",
+    "Fit the aperiodic background on log-log axes and measure a rhythm above it",
+  ],
+  plan: [
+    { label: "Predict and the power spectral density", minutes: 25 },
+    { label: "Why periodograms are noisy", minutes: 25 },
+    { label: "Welch's method and windows", minutes: 30 },
+    { label: "Rhythms above the background", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "donoghue-2020",
+};
+
+<Predict question="You compute the power spectrum of a pure noise signal from 10 seconds of data, then from 100 seconds. With ten times more data, will the spectrum look about ten times smoother, about three times smoother, or just as jagged?" />
+
+<Step n={1} title="The power spectral density" minutes={25} />
+
+Parseval's theorem (Day 2) shares a signal's variance among frequencies. The **power spectral density** (PSD) $S(f)$ makes this precise: $S(f)\,\Delta f$ is the variance contributed by the frequencies between $f$ and $f + \Delta f$, so
+
+$$
+\operatorname{Var}(x) = \int_0^{f_s/2}S(f)\,df
+$$
+
+Its units are signal units squared per hertz (for EEG, µV²/Hz). From the DFT of $N$ samples at rate $f_s$, the simplest estimate is the **periodogram**
+
+$$
+\hat{S}(f_k) = \frac{2}{f_sN}|X_k|^2
+$$
+
+for $0 \lt k \lt N/2$ (the factor 2 adds in the mirror-image negative frequencies; it is left out at $k = 0$ and $k = N/2$).
+
+<Figure caption="Eight seconds of a simulated field potential with a 1/f background and an alpha rhythm. Change the background exponent, the alpha amplitude and the number of Welch segments." credit="Interactive figure by Engram.">
+  <PowerSpectrum />
+</Figure>
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2020)
+  fs = 250
+
+  def aperiodic(n, chi, rng):
+      """Noise with power proportional to 1/f^chi, made by shaping white noise in the frequency domain."""
+      X = np.fft.rfft(rng.normal(size=n)); f = np.fft.rfftfreq(n, 1 / fs)
+      scale = np.zeros_like(f); scale[1:] = f[1:] ** (-chi / 2)
+      y = np.fft.irfft(X * scale, n)
+      return y / y.std()
+
+  def alpha_bursts(n, amp, rng):
+      """10 Hz bursts with random timing, as alpha appears in real EEG."""
+      t = np.arange(n) / fs
+      env = np.convolve((rng.random(n) < 0.004).astype(float), np.hanning(int(0.8 * fs)), "same")
+      return amp * np.clip(env, 0, 1) * np.sin(2 * np.pi * 10 * t + rng.uniform(0, 2 * np.pi))
+
+  N = 60 * fs                                            # one minute
+  eyes_closed = aperiodic(N, 1.5, rng) + alpha_bursts(N, 3.0, rng)
+  eyes_open = aperiodic(N, 1.5, rng) + alpha_bursts(N, 0.5, rng)
+  plt.figure(figsize=(7, 2.5)); plt.plot(np.arange(2 * fs) / fs, eyes_closed[:2 * fs], lw=0.8, label="eyes closed"); plt.plot(np.arange(2 * fs) / fs, eyes_open[:2 * fs] - 6, lw=0.8, label="eyes open (offset)")
+  plt.xlabel("time (s)"); plt.legend(frameon=False); plt.show()
+`} />
+
+<PyCell id="psd" title="A periodogram in physical units" tests={String.raw`
+  import numpy as np
+  def test_units():
+      "the PSD integrates to the variance of the signal (Parseval)"
+      f, p = periodogram(eyes_closed, fs)
+      assert np.isclose(np.sum(p) * (f[1] - f[0]), np.var(eyes_closed), rtol=1e-6)
+
+  def test_sine():
+      "a unit sinusoid's power, summed over its peak, is 0.5"
+      t = np.arange(4 * fs) / fs
+      f, p = periodogram(np.sin(2 * np.pi * 20 * t), fs)
+      assert np.isclose(np.sum(p) * (f[1] - f[0]), 0.5, rtol=1e-6)
+`} prompt="Write `periodogram(x, fs)` returning frequencies and the PSD estimate: remove the mean, take `rfft`, compute $|X_k|^2/(f_sN)$ and double every bin except the first and last. Check that it integrates to the variance, and plot the eyes-closed spectrum on log-log axes."
+code={String.raw`
+  def periodogram(x, fs):
+      x = x - x.mean()
+      X = np.fft.rfft(x)
+      p = ...
+      p[1:-1] *= 2
+      return np.fft.rfftfreq(len(x), 1 / fs), p
+
+  f, p = periodogram(eyes_closed, fs)
+  plt.figure(figsize=(5, 3.2)); plt.loglog(f[1:], p[1:], lw=0.5); plt.xlabel("frequency (Hz)"); plt.ylabel("PSD (units² / Hz)"); plt.show()
+  print("integral of PSD:", round(np.sum(p) * (f[1] - f[0]), 4), "  variance:", round(np.var(eyes_closed), 4))
+`}
+hint="p = np.abs(X) ** 2 / (fs * len(x))"
+solution={String.raw`
+  def periodogram(x, fs):
+      x = x - x.mean()
+      X = np.fft.rfft(x)
+      p = np.abs(X) ** 2 / (fs * len(x))
+      p[1:-1] *= 2
+      return np.fft.rfftfreq(len(x), 1 / fs), p
+
+  f, p = periodogram(eyes_closed, fs)
+  plt.figure(figsize=(5, 3.2)); plt.loglog(f[1:], p[1:], lw=0.5); plt.xlabel("frequency (Hz)"); plt.ylabel("PSD (units² / Hz)"); plt.show()
+  print("integral of PSD:", round(np.sum(p) * (f[1] - f[0]), 4), "  variance:", round(np.var(eyes_closed), 4))
+`} />
+
+<Step n={2} title="Why periodograms are noisy" minutes={25} />
+
+The periodogram is an extraordinarily jagged estimate. Each $X_k$ of a noise signal is a sum of many random terms, so (by the central limit theorem, Week 15) its real and imaginary parts are roughly Gaussian, and $|X_k|^2$ has a chi-squared distribution with 2 degrees of freedom: an exponential distribution, whose standard deviation equals its mean. Every bin is uncertain by 100% of its own value.
+
+Longer recordings do not help. Ten times more data gives ten times more frequency bins, each just as uncertain: the resolution improves but the noise in each estimate does not. That answers the prediction: the spectrum looks just as jagged, only finer. The cure is to trade resolution for reliability by averaging.
+
+<Video id="zBz-U-F3w08" title="Spectral leakage and windowing" by="Neuromatch Academy" note="Neuromatch's explanation of why cutting a recording into a finite segment smears power across frequencies, and how tapering windows reduce the smear." />
+
+<Step n={3} title="Welch's method and windows" minutes={30} />
+
+**Welch's method** cuts the recording into segments (often half-overlapping), computes a periodogram of each, and averages them. With $M$ independent segments the standard deviation of each bin falls by $\sqrt{M}$; the price is that each segment is shorter, so the frequency resolution is $1/(\text{segment length})$.
+
+Before taking each FFT, the segment is multiplied by a **window** that tapers smoothly to zero at both ends, such as the Hann window $w_n = \frac{1}{2}(1 - \cos(2\pi n/(L - 1)))$. Cutting a segment out abruptly is the same as multiplying by a rectangle, whose sharp edges spread power from any strong frequency into distant bins (**spectral leakage**, the Gibbs effect of Day 2 in the frequency domain). The window costs a little resolution and removes most of the leakage; the PSD is then normalised by $\sum w_n^2$ instead of $L$ so that it still integrates to the variance.
+
+<PyCell id="welch" title="Welch's method" tests={String.raw`
+  import numpy as np
+  def test_sine_power():
+      "welch preserves the power of a sinusoid at 20 Hz (within 5%)"
+      t = np.arange(20 * fs) / fs
+      f, p = welch(np.sin(2 * np.pi * 20 * t), fs, 500)
+      assert abs(np.sum(p) * (f[1] - f[0]) - 0.5) < 0.025
+
+  def test_resolution():
+      "a segment of 512 samples gives a frequency spacing of fs / 512"
+      f, p = welch(eyes_closed, fs, 512)
+      assert np.isclose(f[1] - f[0], fs / 512)
+
+  def test_smoother():
+      "Welch's estimate fluctuates far less from bin to bin than the periodogram's"
+      assert jag_welch < jag_periodogram / 20
+`} prompt="Write `welch(x, fs, nperseg)`: Hann-windowed segments of length `nperseg`, half-overlapping, each with its mean removed, PSD $2|X_k|^2/(f_s\sum w^2)$ (not doubled at the first and last bins), averaged. Measure how jagged each estimate is by the variance of the differences of log10 PSD between neighbouring bins from 40 to 100 Hz (`jag_periodogram`, `jag_welch`)."
+code={String.raw`
+  def welch(x, fs, nperseg):
+      w = np.hanning(nperseg)
+      step = nperseg // 2
+      psds = []
+      for start in range(0, len(x) - nperseg + 1, step):
+          seg = x[start:start + nperseg]
+          seg = seg - seg.mean()
+          X = np.fft.rfft(w * seg)
+          p = ...
+          p[1:-1] *= 2
+          psds.append(p)
+      return np.fft.rfftfreq(nperseg, 1 / fs), np.mean(psds, axis=0)
+
+  fw, pw = welch(eyes_closed, fs, 512)
+  def jaggedness(f, p):
+      m = (f > 40) & (f < 100)
+      return np.var(np.diff(np.log10(p[m])))
+  jag_periodogram = jaggedness(f, p)
+  jag_welch = jaggedness(fw, pw)
+
+  plt.figure(figsize=(5, 3.2)); plt.loglog(f[1:], p[1:], lw=0.4, alpha=0.5, label="periodogram"); plt.loglog(fw[1:], pw[1:], lw=2, label="Welch, 512-sample segments")
+  plt.xlabel("frequency (Hz)"); plt.ylabel("PSD"); plt.legend(frameon=False); plt.show()
+  print(f"bin-to-bin jaggedness: periodogram {jag_periodogram:.3f}, Welch {jag_welch:.4f}")
+`}
+hint="p = np.abs(X) ** 2 / (fs * np.sum(w ** 2))"
+solution={String.raw`
+  def welch(x, fs, nperseg):
+      w = np.hanning(nperseg)
+      step = nperseg // 2
+      psds = []
+      for start in range(0, len(x) - nperseg + 1, step):
+          seg = x[start:start + nperseg]
+          seg = seg - seg.mean()
+          X = np.fft.rfft(w * seg)
+          p = np.abs(X) ** 2 / (fs * np.sum(w ** 2))
+          p[1:-1] *= 2
+          psds.append(p)
+      return np.fft.rfftfreq(nperseg, 1 / fs), np.mean(psds, axis=0)
+
+  fw, pw = welch(eyes_closed, fs, 512)
+  def jaggedness(f, p):
+      m = (f > 40) & (f < 100)
+      return np.var(np.diff(np.log10(p[m])))
+  jag_periodogram = jaggedness(f, p)
+  jag_welch = jaggedness(fw, pw)
+
+  plt.figure(figsize=(5, 3.2)); plt.loglog(f[1:], p[1:], lw=0.4, alpha=0.5, label="periodogram"); plt.loglog(fw[1:], pw[1:], lw=2, label="Welch, 512-sample segments")
+  plt.xlabel("frequency (Hz)"); plt.ylabel("PSD"); plt.legend(frameon=False); plt.show()
+  print(f"bin-to-bin jaggedness: periodogram {jag_periodogram:.3f}, Welch {jag_welch:.4f}")
+`} />
+
+Fifty-seven half-overlapping segments make the spectrum two hundred times less jagged. The resolution is now about 0.5 Hz instead of 0.017 Hz, which is plenty to see an alpha peak. Removing each segment's mean also removes power below about half a hertz, which is why the Welch spectrum integrates to slightly less than the full variance of a signal with a strong 1/f background.
+
+<Step n={4} title="Rhythms above the background" minutes={25} />
+
+On log-log axes the 1/f background is a straight line, $\log S = c - \chi\log f$, with **aperiodic exponent** $\chi$. Rhythms are bumps above that line. Donoghue and colleagues (2020), this week's deep read, showed that measuring "alpha power" as the raw power in the 8 to 12 Hz band confuses two things: a genuine change in the rhythm, and a change in the background's offset or exponent, which shifts the power in every band. The fix is to fit the background first and measure rhythms relative to it.
+
+<PyCell id="aperiodic" title="Fit the background, then measure alpha" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "fit_aperiodic returns the slope and intercept of log10 PSD against log10 frequency, excluding 7 to 14 Hz"
+      slope, icpt = fit_aperiodic(fw, pw)
+      sel = (fw >= 2) & (fw <= 40) & ~((fw >= 7) & (fw <= 14))
+      s2, i2 = np.polyfit(np.log10(fw[sel]), np.log10(pw[sel]), 1)
+      assert np.isclose(slope, s2) and np.isclose(icpt, i2)
+
+  def test_exponent():
+      "the estimated exponents are within 0.25 of the true 1.5 in both conditions"
+      assert abs(chi_closed - 1.5) < 0.25 and abs(chi_open - 1.5) < 0.25
+
+  def test_alpha():
+      "alpha rises far more above the background with eyes closed"
+      assert alpha_closed > alpha_open + 0.8
+`} prompt="Write `fit_aperiodic(f, p)`, a straight-line fit of log10 PSD against log10 frequency over 2 to 40 Hz, excluding the alpha range 7 to 14 Hz. For both conditions (Welch, 512-sample segments), store the exponent (minus the slope) in `chi_closed` and `chi_open`, and the mean height of log10 PSD above the fitted line from 8 to 12 Hz in `alpha_closed` and `alpha_open`."
+code={String.raw`
+  def fit_aperiodic(f, p):
+      sel = (f >= 2) & (f <= 40) & ~((f >= 7) & (f <= 14))
+      slope, icpt = ...
+      return slope, icpt
+
+  def analyse(x):
+      f, p = welch(x, fs, 512)
+      slope, icpt = fit_aperiodic(f, p)
+      a = (f >= 8) & (f <= 12)
+      excess = ...
+      return -slope, excess, f, p, slope, icpt
+
+  chi_closed, alpha_closed, fc, pc, sc, ic = analyse(eyes_closed)
+  chi_open, alpha_open, fo, po, so, io = analyse(eyes_open)
+
+  plt.figure(figsize=(5, 3.2))
+  for f_, p_, s_, i_, lab in [(fc, pc, sc, ic, "eyes closed"), (fo, po, so, io, "eyes open")]:
+      line, = plt.loglog(f_[1:], p_[1:], label=lab)
+      plt.loglog(f_[1:], 10 ** (i_ + s_ * np.log10(f_[1:])), "--", color=line.get_color(), lw=1)
+  plt.xlim(1, 100); plt.xlabel("frequency (Hz)"); plt.ylabel("PSD"); plt.legend(frameon=False); plt.show()
+  print(f"exponents: closed {chi_closed:.2f}, open {chi_open:.2f};  alpha above background (log10 units): closed {alpha_closed:.2f}, open {alpha_open:.2f}")
+`}
+hint="slope, icpt = np.polyfit(np.log10(f[sel]), np.log10(p[sel]), 1). The excess is excess = np.mean(np.log10(p[a]) - (icpt + slope * np.log10(f[a])))."
+solution={String.raw`
+  def fit_aperiodic(f, p):
+      sel = (f >= 2) & (f <= 40) & ~((f >= 7) & (f <= 14))
+      slope, icpt = np.polyfit(np.log10(f[sel]), np.log10(p[sel]), 1)
+      return slope, icpt
+
+  def analyse(x):
+      f, p = welch(x, fs, 512)
+      slope, icpt = fit_aperiodic(f, p)
+      a = (f >= 8) & (f <= 12)
+      excess = np.mean(np.log10(p[a]) - (icpt + slope * np.log10(f[a])))
+      return -slope, excess, f, p, slope, icpt
+
+  chi_closed, alpha_closed, fc, pc, sc, ic = analyse(eyes_closed)
+  chi_open, alpha_open, fo, po, so, io = analyse(eyes_open)
+
+  plt.figure(figsize=(5, 3.2))
+  for f_, p_, s_, i_, lab in [(fc, pc, sc, ic, "eyes closed"), (fo, po, so, io, "eyes open")]:
+      line, = plt.loglog(f_[1:], p_[1:], label=lab)
+      plt.loglog(f_[1:], 10 ** (i_ + s_ * np.log10(f_[1:])), "--", color=line.get_color(), lw=1)
+  plt.xlim(1, 100); plt.xlabel("frequency (Hz)"); plt.ylabel("PSD"); plt.legend(frameon=False); plt.show()
+  print(f"exponents: closed {chi_closed:.2f}, open {chi_open:.2f};  alpha above background (log10 units): closed {alpha_closed:.2f}, open {alpha_open:.2f}")
+`} />
+
+Both conditions have the same background, with exponents near the true 1.5. Alpha rises about 2.2 log units (more than a hundredfold) above it with eyes closed and less than one with eyes open: Berger's observation, made quantitative. The specparam method of Donoghue and colleagues fits the background and Gaussian peaks together, which is more robust than this two-step version, especially when peaks overlap or the background bends (a "knee").
+
+<Bridge title="Spectra in brains and machines"
+  neuro="The aperiodic exponent of field-potential spectra changes with age, sleep, anaesthesia and disease, and has been proposed as an index of the balance of excitation and inhibition (Gao, Peterson and Voytek, 2017). Whether a band-power change reflects a rhythm or the background is now a standard question for any EEG or LFP study."
+  ai="Spectral analysis is used to inspect learned representations and training dynamics, and power-law spectra appear in natural images, sounds and language. Image statistics fall off roughly as 1/f² in power, which shapes what convolutional networks and visual cortex learn to encode (Weeks 39 and 84).">
+
+A spectrum is an estimate with error bars, a background and peaks. Average to tame the noise, and fit the background before claiming a rhythm.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The integral of the PSD over frequency equals...", options: ["The mean", "The variance", "The peak", "Zero"], answer: 1, explain: "Parseval." },
+  { q: "The units of an EEG PSD are...", options: ["µV", "µV²/Hz", "Hz", "µV/s"], answer: 1, explain: "Variance per unit frequency." },
+  { q: "Doubling the length of a recording makes each periodogram bin...", options: ["Half as noisy", "Just as noisy, but bins are twice as close", "Twice as noisy", "Exact"], answer: 1, explain: "Each bin stays exponentially distributed." },
+  { q: "Welch's method reduces noise by...", options: ["Filtering", "Averaging periodograms of segments", "Using longer FFTs", "Removing the mean only"], answer: 1, explain: "At the cost of resolution." },
+  { q: "Tapering segments with a Hann window reduces...", options: ["Resolution only", "Spectral leakage", "The variance of the signal", "Aliasing"], answer: 1, explain: "No sharp edges." },
+  { q: "On log-log axes a 1/f^χ background is...", options: ["A parabola", "A straight line with slope −χ", "Flat", "A peak"], answer: 1, explain: "$\\log S = c - \\chi\\log f$." },
+  { q: "A rise in raw alpha-band power could be caused by...", options: ["Only a stronger alpha rhythm", "A stronger rhythm or a shift of the aperiodic background", "Aliasing only", "Nothing"], answer: 1, explain: "Donoghue et al. 2020." },
+]} />
+
+<Flashcards cards={[
+  { front: "Power spectral density?", back: "S(f) with $\\int S\\,df$ = variance; units signal²/Hz. Periodogram: $\\frac{2}{f_sN}|X_k|^2$." },
+  { front: "Why the periodogram is noisy?", back: "Each bin is roughly exponentially distributed: standard deviation equals its mean, whatever the recording length." },
+  { front: "Welch's method?", back: "Average windowed periodograms of (half-overlapping) segments; noise falls like $1/\\sqrt{M}$, resolution is 1/segment length." },
+  { front: "Spectral leakage and windows?", back: "Abrupt segment edges spread power across bins; tapering windows such as Hann reduce it." },
+  { front: "Aperiodic exponent?", back: "χ in $S \\propto 1/f^\\chi$; fit on log-log axes, excluding peaks, before measuring rhythms." },
+]} />
+
+<Predict revisit question="Does ten times more data make the periodogram smoother?" />
+
+<Key title="Before you go">
+<ul>
+<li>The PSD shares variance across frequency; scale it so it integrates to the variance.</li>
+<li>Raw periodograms are noisy by 100% in every bin, however long the recording.</li>
+<li>Welch's method averages windowed segments, trading resolution for reliability.</li>
+<li>Fit the aperiodic background before measuring rhythms above it.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>This week's deep read: Donoghue and colleagues (2020), <em>Parameterizing neural power spectra into periodic and aperiodic components</em>. First pass today.</li>
+<li>Gao, Peterson and Voytek (2017), <em>Inferring synaptic excitation/inhibition balance from field potentials</em>, NeuroImage.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A study reports that a drug increases beta power. List the alternative explanations you would want ruled out, using today's ideas, and the analysis that would rule out each." />

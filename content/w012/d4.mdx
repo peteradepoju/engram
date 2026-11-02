@@ -1,0 +1,243 @@
+export const meta = {
+  title: "Stochastic gradient descent: learning from minibatches",
+  intro: "Computing the exact gradient means visiting every data point before taking a single step. With millions of examples that is absurdly slow. Stochastic gradient descent takes a step after every small random batch instead: each step is noisy, but you take thousands of them in the time one exact step would take. Today you implement it, measure the trade-off between batch size and progress, see why a constant learning rate leaves SGD jittering around the minimum, and fix it with the decaying step sizes Robbins and Monro prescribed in 1951.",
+  goals: [
+    "Show that a minibatch gradient is an unbiased but noisy estimate of the full gradient",
+    "Implement minibatch stochastic gradient descent with epochs and shuffling",
+    "Compare batch sizes for a fixed amount of computation",
+    "Explain the noise floor of constant-step SGD and remove it with a decaying learning rate",
+  ],
+  plan: [
+    { label: "Predict and noisy gradients", minutes: 25 },
+    { label: "Implementing SGD", minutes: 25 },
+    { label: "Batch size and computation", minutes: 30 },
+    { label: "The noise floor and learning-rate decay", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "robbins-1951",
+};
+
+<Predict question="You fit a linear model to 5,000 examples and can afford to look at the whole dataset five times. Option A: five exact gradient steps (one per pass). Option B: 25,000 steps, each using a single random example. Which ends with the lower loss?" />
+
+<Step n={1} title="Noisy gradients" minutes={25} />
+
+Most losses are averages over data points, $L(\mathbf{w}) = \frac{1}{T}\sum_t\ell_t(\mathbf{w})$, so the gradient is an average too. A **minibatch** $\mathcal{B}$ of $B$ examples chosen at random gives the estimate
+
+$$
+\mathbf{g}_{\mathcal{B}} = \frac{1}{B}\sum_{t \in \mathcal{B}}\nabla\ell_t(\mathbf{w})
+$$
+
+and **stochastic gradient descent** (SGD) steps along it: $\mathbf{w} \leftarrow \mathbf{w} - \eta\,\mathbf{g}_{\mathcal{B}}$. Each step costs $B$ gradient evaluations instead of $T$.
+
+<Prove title="The minibatch gradient is unbiased, with variance proportional to 1/B" task="If the B examples are drawn independently and uniformly at random from the T data points, show that $\mathbb{E}[\mathbf{g}_{\mathcal{B}}] = \nabla L$ and that the variance of each component is $\sigma^2/B$, where $\sigma^2$ is the variance of that component of $\nabla\ell_t$ over data points.">
+
+Each drawn example's gradient $\nabla\ell_{t_j}$ is a random vector whose expectation is the average over all data points, $\frac{1}{T}\sum_t\nabla\ell_t = \nabla L$. The minibatch gradient is the average of $B$ such vectors, and the expectation of an average is the average of the expectations, so $\mathbb{E}[\mathbf{g}_{\mathcal{B}}] = \nabla L$: on average SGD goes in the right direction.
+
+The $B$ draws are independent, so for each component the variance of their sum is $B\sigma^2$, and dividing the sum by $B$ divides the variance by $B^2$, giving $\sigma^2/B$ (Week 15). Doubling the batch halves the variance but doubles the cost: the standard deviation of the noise only falls as $1/\sqrt{B}$.
+
+</Prove>
+
+<Video id="hbqUxpNBUGk" title="Mini-batches" by="Neuromatch Academy (Deep Learning course)" note="Neuromatch's explanation of training on minibatches: why a noisy step now beats an exact step later." />
+
+<Step n={2} title="Implementing SGD" minutes={25} />
+
+In practice the data are shuffled once per **epoch** (one pass through the dataset), then split into consecutive minibatches, so every example is used exactly once per epoch. This is called sampling without replacement and usually works a little better than drawing each batch independently.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1951)
+  T, d = 5000, 20
+  X = rng.normal(size=(T, d)) * np.linspace(1, 0.3, d)        # features of differing scales
+  w_true = rng.normal(size=d)
+  y = X @ w_true + 0.5 * rng.normal(size=T)
+  w_star = np.linalg.lstsq(X, y, rcond=None)[0]
+  def loss(w): return 0.5 * np.mean((X @ w - y) ** 2)
+  L_star = loss(w_star)
+  print("best possible loss:", round(L_star, 4))
+`} />
+
+<PyCell id="sgd" title="Minibatch SGD with epochs" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "sgd returns the excess loss after each epoch"
+      h = sgd(0.05, 50, 3)
+      assert h.shape == (3,) and np.all(h >= -1e-12)
+
+  def test_full_batch():
+      "with a batch of the whole dataset, one epoch is one exact gradient step"
+      w = np.zeros(d) - 0.2 * X.T @ (X @ np.zeros(d) - y) / T
+      assert np.isclose(sgd(0.2, T, 1)[0], loss(w) - L_star)
+`} prompt="Write `sgd(lr, batch, epochs, decay=False, seed=0)`: start from zero weights; each epoch, shuffle the indices, step through them in minibatches of size `batch` (the last may be smaller), and update with the minibatch gradient $X_{\mathcal{B}}^\top(X_{\mathcal{B}}\mathbf{w} - \mathbf{y}_{\mathcal{B}})/|\mathcal{B}|$. With `decay=True` use the learning rate lr/(1 + k/500) at update k. Return the excess loss, loss minus `L_star`, after each epoch."
+code={String.raw`
+  def sgd(lr, batch, epochs, decay=False, seed=0):
+      r = np.random.default_rng(seed)
+      w = np.zeros(d)
+      k = 0
+      history = []
+      for epoch in range(epochs):
+          order = r.permutation(T)
+          for start in range(0, T, batch):
+              b = order[start:start + batch]
+              g = ...
+              eta = lr / (1 + k / 500) if decay else lr
+              w = ...
+              k += 1
+          history.append(loss(w) - L_star)
+      return np.array(history)
+
+  print("excess loss per epoch, batch 10:", sgd(0.02, 10, 5).round(5))
+`}
+hint="g = X[b].T @ (X[b] @ w - y[b]) / len(b); then w = w - eta * g."
+solution={String.raw`
+  def sgd(lr, batch, epochs, decay=False, seed=0):
+      r = np.random.default_rng(seed)
+      w = np.zeros(d)
+      k = 0
+      history = []
+      for epoch in range(epochs):
+          order = r.permutation(T)
+          for start in range(0, T, batch):
+              b = order[start:start + batch]
+              g = X[b].T @ (X[b] @ w - y[b]) / len(b)
+              eta = lr / (1 + k / 500) if decay else lr
+              w = w - eta * g
+              k += 1
+          history.append(loss(w) - L_star)
+      return np.array(history)
+
+  print("excess loss per epoch, batch 10:", sgd(0.02, 10, 5).round(5))
+`} />
+
+<Step n={3} title="Batch size and computation" minutes={30} />
+
+<Figure caption="Full-batch gradient descent (blue) and SGD (pink) on a two-weight linear neuron. Change the minibatch size and the learning rate." credit="Interactive figure by Engram.">
+  <SgdPaths />
+</Figure>
+
+<PyCell id="batches" title="Same computation, different batch sizes" tests={String.raw`
+  import numpy as np
+  def test_results():
+      "results holds the final excess loss for each batch size after 5 epochs"
+      assert len(results) == len(batch_sizes)
+
+  def test_minibatch_wins():
+      "minibatches of 10 or 100 beat full-batch gradient descent by a factor of over 100 for the same five epochs"
+      full = results[batch_sizes.index(T)]
+      assert results[batch_sizes.index(10)] < full / 100 and results[batch_sizes.index(100)] < full / 100
+`} prompt="With five epochs each (the same number of gradient evaluations), run SGD with batch sizes 1, 10, 100 and the whole dataset (T). Use learning rate 0.02 for batches below 100 and 0.2 otherwise (larger batches tolerate larger steps). Store the final excess losses in `results`, in the order of `batch_sizes`, and plot them."
+code={String.raw`
+  batch_sizes = [1, 10, 100, T]
+  results = []
+  for B in batch_sizes:
+      lr = ...
+      results.append(...)
+
+  plt.figure(figsize=(5, 3)); plt.loglog(batch_sizes, results, "o-"); plt.xlabel("batch size"); plt.ylabel("excess loss after 5 epochs"); plt.show()
+  print(dict(zip(batch_sizes, np.round(results, 5).tolist())))
+`}
+hint="lr = 0.02 if B < 100 else 0.2; results.append(sgd(lr, B, 5)[-1])."
+solution={String.raw`
+  batch_sizes = [1, 10, 100, T]
+  results = []
+  for B in batch_sizes:
+      lr = 0.02 if B < 100 else 0.2
+      results.append(sgd(lr, B, 5)[-1])
+
+  plt.figure(figsize=(5, 3)); plt.loglog(batch_sizes, results, "o-"); plt.xlabel("batch size"); plt.ylabel("excess loss after 5 epochs"); plt.show()
+  print(dict(zip(batch_sizes, np.round(results, 5).tolist())))
+`} />
+
+Five exact gradient steps barely start the descent, while thousands of cheap noisy steps reach a loss thousands of times closer to the best. That answers the prediction: option B wins easily. Single-example steps (batch 1) are noisier than batches of 10 to 100, so they settle at a higher floor. In practice the best batch is set by hardware: GPUs process a batch of 100 almost as fast as a batch of 1, so moderate batches give most of the speed with less noise.
+
+<Step n={4} title="The noise floor and learning-rate decay" minutes={25} />
+
+Even at the exact minimum, individual examples' gradients are not zero; only their average is. So constant-step SGD never settles: it keeps being kicked around the minimum, and the size of the kicks, and of the resulting **noise floor**, is proportional to $\eta$ (and to $1/B$). Robbins and Monro (1951), today's paper, showed that SGD converges exactly if the step sizes $\eta_k$ satisfy
+
+$$
+\sum_k\eta_k = \infty, \qquad \sum_k\eta_k^2 \lt \infty
+$$
+
+The first condition lets the iterates travel as far as needed; the second makes the accumulated noise finite, so it averages out. Steps proportional to $1/k$ satisfy both. In deep learning, schedules that decay the learning rate during training (step decay, cosine decay) serve the same purpose.
+
+<PyCell id="decay" title="Constant versus decaying learning rate" tests={String.raw`
+  import numpy as np
+  def test_floor():
+      "the constant learning rate stalls at a higher excess loss than the decaying one, by over a factor of 10"
+      assert const[-1] > 10 * decayed[-1]
+
+  def test_larger_floor():
+      "a larger constant learning rate gives a higher noise floor"
+      assert big_lr[-1] > const[-1]
+`} prompt="With batch size 1, run 5 epochs with a constant learning rate of 0.05 (`const`), the same rate decayed as lr/(1 + k/500) (`decayed`), and a constant rate of 0.1 (`big_lr`). Plot all three excess losses against epoch on a log scale."
+code={String.raw`
+  const = ...
+  decayed = ...
+  big_lr = ...
+
+  plt.figure(figsize=(5, 3.2))
+  for h, lab in [(const, "constant 0.05"), (big_lr, "constant 0.1"), (decayed, "0.05 / (1 + k/500)")]:
+      plt.semilogy(range(1, 6), h, "o-", label=lab)
+  plt.xlabel("epoch"); plt.ylabel("excess loss"); plt.legend(frameon=False); plt.show()
+  print("final excess loss: constant", round(const[-1], 5), " larger constant", round(big_lr[-1], 5), " decayed", round(decayed[-1], 6))
+`}
+hint="const = sgd(0.05, 1, 5); decayed = sgd(0.05, 1, 5, decay=True); big_lr = sgd(0.1, 1, 5)."
+solution={String.raw`
+  const = sgd(0.05, 1, 5)
+  decayed = sgd(0.05, 1, 5, decay=True)
+  big_lr = sgd(0.1, 1, 5)
+
+  plt.figure(figsize=(5, 3.2))
+  for h, lab in [(const, "constant 0.05"), (big_lr, "constant 0.1"), (decayed, "0.05 / (1 + k/500)")]:
+      plt.semilogy(range(1, 6), h, "o-", label=lab)
+  plt.xlabel("epoch"); plt.ylabel("excess loss"); plt.legend(frameon=False); plt.show()
+  print("final excess loss: constant", round(const[-1], 5), " larger constant", round(big_lr[-1], 5), " decayed", round(decayed[-1], 6))
+`} />
+
+With a constant step, SGD soon stops improving and jitters at a floor that rises about threefold when the learning rate doubles. Shrinking the step as learning proceeds lets the noise average away, and the excess loss falls hundreds of times further. A large step early on and a small step later is the general recipe.
+
+<Bridge title="Learning one example at a time"
+  neuro="Animals learn online, from one experience at a time, which is closer to SGD with batch size 1 than to full-batch gradient descent. Trial-to-trial variability in learning, and the slowing of learning as performance improves, both have natural counterparts in SGD's noise and decaying step sizes; neuromodulators such as dopamine and acetylcholine have been proposed to set the effective learning rate (Weeks 42 and 47)."
+  ai="Every large network is trained by minibatch SGD or a variant (Week 13). The noise is not only a cost: it helps escape saddles and sharp minima, and is thought to bias training towards solutions that generalise well (Week 83). Batch size, learning rate and schedule are tuned together.">
+
+Many cheap, noisy steps beat a few exact ones, as long as the steps shrink when you get close.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A minibatch gradient is...", options: ["Always exact", "An unbiased but noisy estimate of the full gradient", "Biased towards zero", "The Hessian"], answer: 1, explain: "Its expectation is the full gradient." },
+  { q: "Quadrupling the batch size changes the gradient noise's standard deviation by...", options: ["×4", "×1/4", "×1/2", "No change"], answer: 2, explain: "Variance $\\sigma^2/B$." },
+  { q: "One epoch is...", options: ["One gradient step", "One pass through the whole dataset", "One minibatch", "One hour"], answer: 1, explain: "Shuffle, then use every example once." },
+  { q: "For a fixed number of passes through the data, SGD usually beats full-batch descent because...", options: ["It is exact", "It takes many more steps for the same cost", "It needs no learning rate", "It is convex"], answer: 1, explain: "Thousands of steps versus a handful." },
+  { q: "Constant-step SGD ends up...", options: ["At the exact minimum", "Jittering around the minimum at a noise floor proportional to η", "Diverging", "At a saddle"], answer: 1, explain: "Individual gradients are nonzero at the minimum." },
+  { q: "Robbins and Monro require step sizes with...", options: ["Finite sum", "Infinite sum but finite sum of squares", "Constant size", "Increasing size"], answer: 1, explain: "Such as 1/k." },
+  { q: "Which schedule satisfies the Robbins-Monro conditions?", options: ["$\\eta_k = 0.1$", "$\\eta_k = 1/k$", "$\\eta_k = 1/k^2$", "$\\eta_k = k$"], answer: 1, explain: "Sum diverges, squares converge." },
+]} />
+
+<Flashcards cards={[
+  { front: "SGD update?", back: "$\\mathbf{w} \\leftarrow \\mathbf{w} - \\eta\\frac{1}{B}\\sum_{t\\in\\mathcal{B}}\\nabla\\ell_t(\\mathbf{w})$ with a random minibatch." },
+  { front: "Bias and variance of the minibatch gradient?", back: "Unbiased; variance $\\sigma^2/B$, so noise standard deviation falls like $1/\\sqrt{B}$." },
+  { front: "Epoch?", back: "One pass through the data: shuffle and use each example once in minibatches." },
+  { front: "Noise floor?", back: "Constant-step SGD jitters around the minimum at a level proportional to η/B." },
+  { front: "Robbins-Monro conditions?", back: "$\\sum\\eta_k = \\infty$ and $\\sum\\eta_k^2 \\lt \\infty$, e.g. $\\eta_k \\propto 1/k$." },
+]} />
+
+<Predict revisit question="Five exact steps or 25,000 single-example steps: which ends lower?" />
+
+<Key title="Before you go">
+<ul>
+<li>A minibatch gradient is unbiased with variance proportional to 1/B.</li>
+<li>For a fixed budget, many noisy minibatch steps beat a few exact ones.</li>
+<li>Constant-step SGD settles at a noise floor proportional to the learning rate.</li>
+<li>Decaying the learning rate, as Robbins and Monro prescribed, removes the floor.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Robbins and Monro (1951), <em>A stochastic approximation method</em>.</li>
+<li>Bottou, Curtis and Nocedal (2018), section 4: the convergence of SGD, for this week's deep read.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="An animal learning a task improves quickly at first and then slowly. Explain this with gradient descent ideas from this week (curvature, noise and step size). Which explanation would you test first, and how?" />

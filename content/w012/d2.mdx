@@ -1,0 +1,306 @@
+export const meta = {
+  title: "Gradient descent: step size, convergence and divergence",
+  intro: "Gradient descent is the simplest idea in optimisation: find the direction in which the loss falls fastest, take a small step that way, and repeat. Everything depends on the size of the step. Too small and progress is glacial; too large and the iterates overshoot and explode. Today you write gradient descent as a general tool, derive exactly how fast it converges on a quadratic and why the largest curvature caps the step, and use it to fit all four parameters of a neuron's tuning curve.",
+  goals: [
+    "Implement gradient descent as a reusable function that records its history",
+    "Derive the stability condition and convergence rate on a quadratic",
+    "Explain how the condition number sets the speed of gradient descent",
+    "Fit a nonlinear tuning-curve model by gradient descent on a Poisson likelihood",
+  ],
+  plan: [
+    { label: "Predict and the algorithm", minutes: 20 },
+    { label: "Convergence on a quadratic", minutes: 30 },
+    { label: "Choosing the step size", minutes: 25 },
+    { label: "Fitting a tuning curve", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "bottou-2018",
+};
+
+<Predict question="Gradient descent on a bowl whose curvature is 10 times larger in one direction than the other, with the best possible fixed learning rate. Roughly what fraction of the remaining error is removed at each step: about 90%, about 18%, or about 1%?" />
+
+<Step n={1} title="The algorithm" minutes={20} />
+
+Starting from $\boldsymbol\theta_0$, **gradient descent** repeats
+
+$$
+\boldsymbol\theta_{k+1} = \boldsymbol\theta_k - \eta\,\nabla L(\boldsymbol\theta_k)
+$$
+
+with **learning rate** (step size) $\eta \gt 0$. The gradient points uphill (Week 8), so each step goes downhill. By the tangent-plane approximation, for small $\eta$ the loss falls by about $\eta\lVert\nabla L\rVert^2$, so it decreases as long as the gradient is not zero and the step is small enough. It stops making progress where the gradient vanishes: at a minimum, a saddle or a plateau. In practice you stop after a fixed number of steps, or when the gradient or the change in loss falls below a tolerance.
+
+<Video id="UwgA_SgG0TM" title="Gradient Descent" by="Neuromatch Academy (Deep Learning course)" note="Neuromatch's introduction to gradient descent as following the negative gradient, with the role of the learning rate." />
+
+<PyCell id="gd" title="A reusable gradient descent" tests={String.raw`
+  import numpy as np
+  def test_history():
+      "gradient_descent returns an array of steps + 1 iterates starting at x0"
+      h = gradient_descent(lambda x: 2 * x, np.array([1.0, -2.0]), 0.1, 5)
+      assert h.shape == (6, 2) and np.allclose(h[0], [1, -2])
+
+  def test_quadratic():
+      "on f = x^2 with lr 0.1 each step multiplies x by 0.8"
+      h = gradient_descent(lambda x: 2 * x, np.array([1.0]), 0.1, 3)
+      assert np.allclose(h[:, 0], [1, 0.8, 0.64, 0.512])
+`} prompt="Write `gradient_descent(grad, x0, lr, steps)` that returns an array of all iterates (row k is the parameters after k steps). Use it on the long-valley quadratic below with three learning rates and plot the loss against iteration on a log scale."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def gradient_descent(grad, x0, lr, steps):
+      x = np.array(x0, dtype=float)
+      history = [x.copy()]
+      for _ in range(steps):
+          ...
+          history.append(x.copy())
+      return np.array(history)
+
+  H = np.diag([10.0, 1.0])                    # curvatures 10 and 1
+  loss = lambda w: 0.5 * w @ H @ w
+  grad = lambda w: H @ w
+  plt.figure(figsize=(5, 3.2))
+  for lr in [0.02, 0.1, 0.18, 0.21]:
+      h = gradient_descent(grad, [1.0, 1.0], lr, 60)
+      plt.semilogy([loss(w) for w in h], label=f"η = {lr}")
+  plt.ylim(1e-12, 1e4); plt.xlabel("step"); plt.ylabel("loss"); plt.legend(frameon=False); plt.show()
+`}
+hint="x = x - lr * grad(x)"
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def gradient_descent(grad, x0, lr, steps):
+      x = np.array(x0, dtype=float)
+      history = [x.copy()]
+      for _ in range(steps):
+          x = x - lr * grad(x)
+          history.append(x.copy())
+      return np.array(history)
+
+  H = np.diag([10.0, 1.0])                    # curvatures 10 and 1
+  loss = lambda w: 0.5 * w @ H @ w
+  grad = lambda w: H @ w
+  plt.figure(figsize=(5, 3.2))
+  for lr in [0.02, 0.1, 0.18, 0.21]:
+      h = gradient_descent(grad, [1.0, 1.0], lr, 60)
+      plt.semilogy([loss(w) for w in h], label=f"η = {lr}")
+  plt.ylim(1e-12, 1e4); plt.xlabel("step"); plt.ylabel("loss"); plt.legend(frameon=False); plt.show()
+`} />
+
+With $\eta = 0.18$, close to the best value of 2/11 derived below, the loss falls fastest; at 0.21 it explodes. The boundary is $2/10 = 0.2$: two over the largest curvature, exactly as you found with the Hessian in Week 9.
+
+<Step n={2} title="Convergence on a quadratic" minutes={30} />
+
+Near any smooth minimum the loss is approximately quadratic (Week 9's second-order Taylor expansion), so the quadratic tells you how gradient descent behaves at the end of every run.
+
+<Derivation title="Gradient descent on a quadratic, mode by mode">
+  <div>
+
+Take $L(\mathbf{w}) = \frac{1}{2}\mathbf{w}^\top H\mathbf{w}$ with symmetric positive definite $H$, whose eigenvalues run from $\mu$ (smallest) to $\Lambda$ (largest). The gradient is $H\mathbf{w}$, so a step is $\mathbf{w}_{k+1} = (I - \eta H)\mathbf{w}_k$.
+
+  </div>
+  <div>
+
+In the eigenvector basis of $H$ (Week 6) each component evolves on its own: the component along eigenvector $i$ is multiplied by $1 - \eta\lambda_i$ every step.
+
+  </div>
+  <div>
+
+Every component shrinks if and only if $|1 - \eta\lambda_i| \lt 1$ for all $i$, that is
+
+$$
+0 \lt \eta \lt \frac{2}{\Lambda}
+$$
+
+  </div>
+  <div>
+
+The slowest component sets the speed. The worst factor, $\max_i|1 - \eta\lambda_i|$, is smallest when the two extremes balance, $1 - \eta\mu = -(1 - \eta\Lambda)$, giving $\eta^* = \frac{2}{\Lambda + \mu}$ and a contraction per step of
+
+$$
+\rho^* = \frac{\Lambda - \mu}{\Lambda + \mu} = \frac{\kappa - 1}{\kappa + 1}, \qquad \kappa = \frac{\Lambda}{\mu}
+$$
+
+  </div>
+</Derivation>
+
+So the error shrinks geometrically, by a factor $\rho$ per step (called **linear convergence**), and the number of steps needed to gain a factor of 10 grows roughly in proportion to the condition number $\kappa$. For $\kappa = 10$, $\rho^* = 9/11 \approx 0.82$: each step removes only about 18% of the remaining error. That answers the prediction.
+
+<Figure caption="Gradient descent paths in two dimensions with the loss against iteration. Set the learning rate as a fraction of the stability limit 2/L." credit="Interactive figure by Engram.">
+  <DescentPaths />
+</Figure>
+
+<PyCell id="rate" title="Measure the convergence rate" tests={String.raw`
+  import numpy as np
+  def test_rate():
+      "the measured contraction per step at the best learning rate matches (kappa - 1) / (kappa + 1)"
+      for kap, r in zip(kappas, measured):
+          assert abs(r - (kap - 1) / (kap + 1)) < 0.01, (kap, r)
+
+  def test_steps():
+      "steps to reduce the error a millionfold grow roughly in proportion to kappa"
+      assert 7 < steps_needed[2] / steps_needed[1] < 13
+`} prompt="For Hessians diag(κ, 1) with κ = 2, 10 and 100, run gradient descent with the best learning rate $2/(\kappa + 1)$ from (1, 1). Measure the contraction per step as the ratio of the distance to the minimum at steps 31 and 30 (`measured`), and count the steps until that distance falls below 1e-6 (`steps_needed`)."
+code={String.raw`
+  kappas = [2.0, 10.0, 100.0]
+  measured, steps_needed = [], []
+  for kap in kappas:
+      Hk = np.diag([kap, 1.0])
+      lr = ...
+      h = gradient_descent(lambda w: Hk @ w, [1.0, 1.0], lr, 3000)
+      dist = np.linalg.norm(h, axis=1)
+      measured.append(...)
+      steps_needed.append(int(np.argmax(dist < 1e-6)))
+  print("contraction per step:", np.round(measured, 4), " predicted:", np.round([(k - 1) / (k + 1) for k in kappas], 4))
+  print("steps for a millionfold reduction:", steps_needed)
+`}
+hint="lr = 2 / (kap + 1). measured.append(dist[31] / dist[30])."
+solution={String.raw`
+  kappas = [2.0, 10.0, 100.0]
+  measured, steps_needed = [], []
+  for kap in kappas:
+      Hk = np.diag([kap, 1.0])
+      lr = 2 / (kap + 1)
+      h = gradient_descent(lambda w: Hk @ w, [1.0, 1.0], lr, 3000)
+      dist = np.linalg.norm(h, axis=1)
+      measured.append(dist[31] / dist[30])
+      steps_needed.append(int(np.argmax(dist < 1e-6)))
+  print("contraction per step:", np.round(measured, 4), " predicted:", np.round([(k - 1) / (k + 1) for k in kappas], 4))
+  print("steps for a millionfold reduction:", steps_needed)
+`} />
+
+<Step n={3} title="Choosing the step size" minutes={25} />
+
+In real problems you do not know $\Lambda$ and $\mu$. Practical strategies:
+
+- **Try a sweep** of learning rates spaced by factors of 3 to 10, and keep the largest that reliably decreases the loss. The best is usually close to the largest stable one.
+- **Normalise the inputs** (z-score each feature, Week 3): correlated or badly scaled inputs are the commonest cause of a large condition number, as the loss-surface figure of Week 9 showed.
+- **Line search**: at each step, try a step and halve it until the loss decreases enough (backtracking). Robust, but each step costs several loss evaluations.
+- **Use curvature**: Newton's method (Week 9) rescales by the Hessian and removes the dependence on $\kappa$; the adaptive methods of next week approximate this cheaply.
+
+Bottou, Curtis and Nocedal (2018), this week's deep read, give the general version of today's analysis: for a loss that is $\mu$-strongly convex and has $\Lambda$-Lipschitz gradient, gradient descent with step $1/\Lambda$ converges linearly at rate $1 - \mu/\Lambda$, and without strong convexity the guarantee weakens to the loss gap shrinking like $1/k$.
+
+<Step n={4} title="Fitting a tuning curve" minutes={30} />
+
+Gradient descent works on any differentiable loss, not only quadratics. Fit all four parameters of the von Mises tuning curve from Day 1 (preferred direction, width, baseline, amplitude) by minimising the Poisson negative log-likelihood. Width, baseline and amplitude must be positive, so optimise their logarithms: a common trick that turns a constrained problem into an unconstrained one.
+
+<PyCell code={String.raw`
+  rng = np.random.default_rng(12)
+  theta = np.repeat(np.linspace(0, 2 * np.pi, 16, endpoint=False), 10)
+  def von_mises(theta, mu, kappa, b, A):
+      return b + A * np.exp(kappa * (np.cos(theta - mu) - 1))
+  counts = rng.poisson(von_mises(theta, 1.0, 2.0, 5.0, 30.0))
+
+  def nll(p):
+      mu, log_k, log_b, log_A = p
+      lam = von_mises(theta, mu, np.exp(log_k), np.exp(log_b), np.exp(log_A))
+      return np.mean(lam - counts * np.log(lam))
+
+  def numerical_grad(f, p, h=1e-6):
+      g = np.zeros_like(p)
+      for i in range(len(p)):
+          e = np.zeros_like(p); e[i] = h
+          g[i] = (f(p + e) - f(p - e)) / (2 * h)
+      return g
+  print("NLL at a rough guess:", round(nll(np.array([0.0, 0.0, 1.0, 2.0])), 3))
+`} />
+
+<PyCell id="fit" title="Fit four parameters by gradient descent" tests={String.raw`
+  import numpy as np
+  def test_decrease():
+      "the NLL falls over training"
+      assert nll_hist[-1] < nll_hist[0] - 1
+      assert len(nll_hist) == 4001
+
+  def test_params():
+      "the fitted parameters are close to the truth (mu 1.0, kappa 2, baseline 5, amplitude 30)"
+      mu, k, b, A = fitted
+      assert abs(np.angle(np.exp(1j * (mu - 1.0)))) < 0.1 and abs(k - 2) < 0.5 and abs(b - 5) < 1.5 and abs(A - 30) < 4
+`} prompt="Starting from the rough guess (μ = 0, κ = 1, baseline e, amplitude e²), run 4000 steps of gradient descent with learning rate 0.02 on `nll`, using `numerical_grad`. Record the NLL at every iterate in `nll_hist`, and convert the final parameters back to (μ, κ, b, A) in `fitted`."
+code={String.raw`
+  p0 = np.array([0.0, 0.0, 1.0, 2.0])          # mu, log kappa, log baseline, log amplitude
+  hist = ...
+  nll_hist = [nll(p) for p in hist]
+  mu, log_k, log_b, log_A = hist[-1]
+  fitted = ...
+
+  grid = np.linspace(0, 2 * np.pi, 200)
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(nll_hist); ax[0].set_xlabel("step"); ax[0].set_ylabel("Poisson NLL")
+  ax[1].plot(np.degrees(theta), counts, ".", alpha=0.3); ax[1].plot(np.degrees(grid), von_mises(grid, *fitted), lw=2); ax[1].set_xlabel("direction (deg)")
+  plt.tight_layout(); plt.show()
+  print("fitted (mu, kappa, b, A):", np.round(fitted, 3))
+`}
+hint="hist = gradient_descent(lambda p: numerical_grad(nll, p), p0, 0.02, 4000). Then fitted = (mu, np.exp(log_k), np.exp(log_b), np.exp(log_A))."
+solution={String.raw`
+  p0 = np.array([0.0, 0.0, 1.0, 2.0])          # mu, log kappa, log baseline, log amplitude
+  hist = gradient_descent(lambda p: numerical_grad(nll, p), p0, 0.02, 4000)
+  nll_hist = [nll(p) for p in hist]
+  mu, log_k, log_b, log_A = hist[-1]
+  fitted = (mu, np.exp(log_k), np.exp(log_b), np.exp(log_A))
+
+  grid = np.linspace(0, 2 * np.pi, 200)
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(nll_hist); ax[0].set_xlabel("step"); ax[0].set_ylabel("Poisson NLL")
+  ax[1].plot(np.degrees(theta), counts, ".", alpha=0.3); ax[1].plot(np.degrees(grid), von_mises(grid, *fitted), lw=2); ax[1].set_xlabel("direction (deg)")
+  plt.tight_layout(); plt.show()
+  print("fitted (mu, kappa, b, A):", np.round(fitted, 3))
+`} />
+
+From a poor start, four thousand small steps recover all four parameters. Notice how the loss falls quickly at first and then slowly: the early steps fix the parameters the loss is most sensitive to (high curvature), and the late steps creep along the flat directions (low curvature), the condition-number story again. In practice you would supply the analytic gradient (Week 9) rather than a numerical one, and use a better optimiser (Week 13).
+
+<Bridge title="Descending in brains and machines"
+  neuro="If synapses changed in proportion to the gradient of some loss, learning would inherit gradient descent's properties: fast learning of the most important (high-curvature) directions and slow refinement of the rest, and instability if plasticity were too fast. Some models of synaptic plasticity build in exactly such a learning rate, set by neuromodulators (Week 42)."
+  ai="Every neural network is trained by a variant of gradient descent. The learning rate is the most important hyperparameter, and learning-rate schedules (warm-up, then decay) are designed around the stability limit you derived today; large networks are often trained near the 'edge of stability' where 2/η matches the largest Hessian eigenvalue.">
+
+Gradient descent is only as fast as its worst direction allows: the largest curvature limits the step and the smallest sets the pace.
+
+</Bridge>
+
+<Prove title="Descent on a one-dimensional quadratic" task="For $L(w) = \frac{\lambda}{2}w^2$ with $\lambda \gt 0$, show that gradient descent gives $w_k = (1 - \eta\lambda)^kw_0$. For which $\eta$ does it converge, when does it oscillate, and which $\eta$ is best?">
+
+The gradient is $\lambda w$, so $w_{k+1} = w_k - \eta\lambda w_k = (1 - \eta\lambda)w_k$, and by induction $w_k = (1 - \eta\lambda)^kw_0$.
+
+It converges exactly when $|1 - \eta\lambda| \lt 1$, that is $0 \lt \eta \lt 2/\lambda$. For $\eta \lt 1/\lambda$ the factor is positive and $w$ approaches 0 from one side; for $1/\lambda \lt \eta \lt 2/\lambda$ it is negative and $w$ alternates in sign while shrinking (oscillation); beyond $2/\lambda$ it grows.
+
+The best is $\eta = 1/\lambda$, which makes the factor zero: one step lands exactly on the minimum. That is Newton's method in one dimension (Week 9), which uses the curvature to pick the step.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "A gradient descent step is...", options: ["$\\theta + \\eta\\nabla L$", "$\\theta - \\eta\\nabla L$", "$\\theta - \\nabla^2L$", "$\\theta\\nabla L$"], answer: 1, explain: "Move against the gradient." },
+  { q: "On a quadratic with largest curvature 50, gradient descent is stable for η below...", options: ["0.02", "0.04", "50", "100"], answer: 1, explain: "2/50." },
+  { q: "The best fixed step for a quadratic with curvatures μ and Λ is...", options: ["1/Λ", "2/(Λ + μ)", "1/μ", "2/Λ"], answer: 1, explain: "Balances the extremes." },
+  { q: "With condition number 100 the best contraction per step is about...", options: ["0.01", "0.5", "0.98", "100"], answer: 2, explain: "99/101." },
+  { q: "Linear convergence means the error...", options: ["Falls by a constant amount each step", "Shrinks by a constant factor each step", "Is linear in the parameters", "Never reaches zero"], answer: 1, explain: "Geometric decrease." },
+  { q: "A common fix for slow gradient descent caused by badly scaled inputs is...", options: ["A larger learning rate", "Normalising the inputs", "Fewer steps", "Adding noise"], answer: 1, explain: "It lowers the condition number." },
+  { q: "To keep a parameter positive during optimisation you can...", options: ["Clip it", "Optimise its logarithm", "Ignore it", "Use a smaller step"], answer: 1, explain: "exp of any real number is positive." },
+]} />
+
+<Flashcards cards={[
+  { front: "Gradient descent?", back: "$\\theta_{k+1} = \\theta_k - \\eta\\nabla L(\\theta_k)$; stops at points where the gradient vanishes." },
+  { front: "Stability on a quadratic?", back: "$0 \\lt \\eta \\lt 2/\\Lambda$, with Λ the largest Hessian eigenvalue." },
+  { front: "Best rate on a quadratic?", back: "$\\eta^* = 2/(\\Lambda + \\mu)$, contraction $(\\kappa - 1)/(\\kappa + 1)$ per step." },
+  { front: "Condition number and speed?", back: "Steps needed grow roughly in proportion to $\\kappa = \\Lambda/\\mu$." },
+  { front: "Practical step-size choice?", back: "Sweep by factors of 3 to 10; take the largest stable; normalise inputs; or backtracking line search." },
+]} />
+
+<Predict revisit question="With condition number 10 and the best step, how much error does each step remove?" />
+
+<Key title="Before you go">
+<ul>
+<li>Gradient descent steps against the gradient with a learning rate η.</li>
+<li>On a quadratic, each eigen-direction shrinks by $1 - \eta\lambda_i$: stable only for $\eta \lt 2/\Lambda$.</li>
+<li>The best rate is $(\kappa - 1)/(\kappa + 1)$ per step, so ill-conditioned problems are slow.</li>
+<li>Gradient descent fits nonlinear models too; reparameterise to handle positivity.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>This week's deep read: Bottou, Curtis and Nocedal (2018), <em>Optimization methods for large-scale machine learning</em>. First pass today: sections 1 to 3.</li>
+<li>Goodfellow, Bengio and Courville, <em>Deep Learning</em> (free online), Chapter 4.3 and 8.1.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Your gradient descent fit of a model is slow: the loss drops fast and then crawls for thousands of steps. List three things you would try, in order, and what each tells you about the problem." />

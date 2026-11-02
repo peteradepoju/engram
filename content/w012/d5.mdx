@@ -1,0 +1,281 @@
+export const meta = {
+  title: "Learning rules as optimisation: perceptron, delta rule and tempotron",
+  intro: "Long before deep learning, neuroscientists and engineers proposed rules by which a single neuron could learn from examples. Seen with this week's eyes, each is stochastic gradient descent on some loss: the perceptron rule on a loss that counts only mistakes, the delta rule on squared error, the tempotron on a loss defined by a spiking neuron's peak voltage. Today you implement all three, prove that the perceptron always finds a separating line if one exists, and train a spiking neuron to tell apart patterns that differ only in the timing of their input spikes.",
+  goals: [
+    "Derive the perceptron rule as stochastic gradient descent on the perceptron loss",
+    "Prove the perceptron convergence theorem",
+    "Implement the delta rule and relate it to least squares",
+    "Train a tempotron to classify spike-timing patterns",
+  ],
+  plan: [
+    { label: "Predict and the perceptron", minutes: 25 },
+    { label: "The convergence theorem", minutes: 20 },
+    { label: "The delta rule", minutes: 25 },
+    { label: "The tempotron", minutes: 35 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "gutig-2006",
+};
+
+<Predict question="Fifty input neurons each fire exactly one spike at a random time during half a second. Twenty such patterns are shown, ten labelled 'respond' and ten 'stay silent'. Every input fires once in every pattern, so the patterns differ only in spike timing, not in rates. Can a single integrate-and-fire neuron learn to fire for the first ten and stay silent for the others?" />
+
+<Step n={1} title="The perceptron" minutes={25} />
+
+Rosenblatt's perceptron (Week 1's classic paper) outputs $\hat{y} = \operatorname{sign}(\mathbf{w}\cdot\mathbf{x})$ for labels $y = \pm 1$ (absorb the bias as a weight on a constant input of 1). Its learning rule is: on a mistake, add $\eta\,y\,\mathbf{x}$ to the weights; otherwise do nothing.
+
+This is SGD on the **perceptron loss** $\ell(\mathbf{w}) = \max(0, -y\,\mathbf{w}\cdot\mathbf{x})$, which is zero for correctly classified examples and grows with how far a misclassified example lies on the wrong side. Its gradient is $-y\mathbf{x}$ when the example is misclassified and zero otherwise, so an SGD step is exactly the perceptron update. The loss is convex (a maximum of two linear functions, Day 3), but it is zero on a whole region of correct solutions, so the perceptron stops at the first separating line it finds, not the best one.
+
+<Figure caption="The perceptron learning one example at a time. Step through the updates, and compare separable with overlapping data." credit="Interactive figure by Engram.">
+  <PerceptronLearn />
+</Figure>
+
+<Video id="aSJTRdjRvvw" title="Optimization of an Objective Function" by="Neuromatch Academy (Deep Learning course)" note="Neuromatch's framing of learning as minimising an objective, the view that unites today's three learning rules." />
+
+<Step n={2} title="The convergence theorem" minutes={20} />
+
+<Prove title="The perceptron converges on separable data (Novikoff, 1962)" task="Suppose every example satisfies $\lVert\mathbf{x}_t\rVert \leq R$ and some unit vector $\mathbf{u}$ separates the data with margin $\gamma \gt 0$: $y_t\,\mathbf{u}\cdot\mathbf{x}_t \geq \gamma$ for all t. Starting from $\mathbf{w} = \mathbf{0}$ with $\eta = 1$, show that the perceptron makes at most $(R/\gamma)^2$ mistakes.">
+
+Let $\mathbf{w}_k$ be the weights after the $k$th mistake, made on example $(\mathbf{x}, y)$, so $\mathbf{w}_k = \mathbf{w}_{k-1} + y\mathbf{x}$.
+
+**Progress towards u.** $\mathbf{u}\cdot\mathbf{w}_k = \mathbf{u}\cdot\mathbf{w}_{k-1} + y\,\mathbf{u}\cdot\mathbf{x} \geq \mathbf{u}\cdot\mathbf{w}_{k-1} + \gamma$, so after $k$ mistakes $\mathbf{u}\cdot\mathbf{w}_k \geq k\gamma$.
+
+**Slow growth of length.** $\lVert\mathbf{w}_k\rVert^2 = \lVert\mathbf{w}_{k-1}\rVert^2 + 2y\,\mathbf{w}_{k-1}\cdot\mathbf{x} + \lVert\mathbf{x}\rVert^2 \leq \lVert\mathbf{w}_{k-1}\rVert^2 + R^2$, because the example was misclassified, so $y\,\mathbf{w}_{k-1}\cdot\mathbf{x} \leq 0$. Hence $\lVert\mathbf{w}_k\rVert^2 \leq kR^2$.
+
+**Combine.** By Cauchy-Schwarz (Week 4), $k\gamma \leq \mathbf{u}\cdot\mathbf{w}_k \leq \lVert\mathbf{w}_k\rVert \leq \sqrt{k}R$, so $\sqrt{k} \leq R/\gamma$ and $k \leq (R/\gamma)^2$. The weights move steadily towards the separating direction while their length grows only like the square root of the number of mistakes, so mistakes must stop. If no separating direction exists, the bound fails and the perceptron cycles for ever, as the figure shows.
+
+</Prove>
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1958)
+  n_neurons, n_trials = 20, 200
+  mean_A = rng.uniform(5, 15, n_neurons)
+  mean_B = mean_A + rng.normal(0, 0.8, n_neurons)                         # the two stimuli differ only slightly
+  labels = np.where(np.arange(n_trials) % 2 == 0, 1, -1)                # stimulus A (+1) or B (-1)
+  rates = np.where(labels[:, None] > 0, mean_A, mean_B) + rng.normal(0, 1.0, (n_trials, n_neurons))
+  Xp = np.column_stack([rates - rates.mean(axis=0), np.ones(n_trials)])   # centred responses plus a bias input
+  print(Xp.shape)
+`} />
+
+<PyCell id="perceptron" title="Train a perceptron decoder" tests={String.raw`
+  import numpy as np
+  def test_separates():
+      "after training, the perceptron classifies every training trial correctly"
+      assert np.all(np.sign(Xp @ w_p) == labels)
+
+  def test_bound():
+      "the number of mistakes respects Novikoff's bound computed with the final weights' margin"
+      gamma = np.min(labels * (Xp @ w_p)) / np.linalg.norm(w_p)
+      R = np.max(np.linalg.norm(Xp, axis=1))
+      assert mistakes <= (R / gamma) ** 2
+`} prompt="Train a perceptron on the population responses: sweep through the trials in order, repeatedly, updating w ← w + y x on every mistake, until a full pass makes no mistakes (at most 300 passes). Count all the updates in `mistakes` and store the weights in `w_p`."
+code={String.raw`
+  w_p = np.zeros(Xp.shape[1])
+  mistakes = 0
+  for epoch in range(300):
+      errors = 0
+      for x, yv in zip(Xp, labels):
+          if ...:
+              ...
+      if errors == 0:
+          break
+  gamma = np.min(labels * (Xp @ w_p)) / np.linalg.norm(w_p)
+  R = np.max(np.linalg.norm(Xp, axis=1))
+  print(f"converged after {epoch + 1} passes with {mistakes} mistakes;  bound (R/gamma)^2 = {(R / gamma) ** 2:.0f}")
+`}
+hint="Check for a mistake with yv * (w_p @ x) <= 0. On a mistake: w_p = w_p + yv * x; mistakes += 1; errors += 1."
+solution={String.raw`
+  w_p = np.zeros(Xp.shape[1])
+  mistakes = 0
+  for epoch in range(300):
+      errors = 0
+      for x, yv in zip(Xp, labels):
+          if yv * (w_p @ x) <= 0:
+              w_p = w_p + yv * x
+              mistakes += 1
+              errors += 1
+      if errors == 0:
+          break
+  gamma = np.min(labels * (Xp @ w_p)) / np.linalg.norm(w_p)
+  R = np.max(np.linalg.norm(Xp, axis=1))
+  print(f"converged after {epoch + 1} passes with {mistakes} mistakes;  bound (R/gamma)^2 = {(R / gamma) ** 2:.0f}")
+`} />
+
+The perceptron separates the two stimuli after a hundred or so mistakes, far fewer than the bound. The bound printed here is very loose because it uses the margin of the perceptron's own final weights, which only just separate the data; the theorem's bound uses the best possible margin, which is larger. Either way it guarantees the perceptron stops.
+
+<Step n={3} title="The delta rule" minutes={25} />
+
+For a linear neuron $\hat{y} = \mathbf{w}\cdot\mathbf{x}$ with squared error $\ell = \frac{1}{2}(y - \hat{y})^2$, the SGD update is
+
+$$
+\Delta\mathbf{w} = \eta\,(y - \hat{y})\,\mathbf{x}
+$$
+
+the **delta rule** of Widrow and Hoff (1960), also called the LMS rule. Unlike the perceptron it learns from every example, in proportion to the size of the error, and it converges (with a small enough or decaying step) to the least-squares solution. It is the same "error times input" form you met as the outer-product gradient in Week 9, and the rule thought to describe some error-driven plasticity, such as learning in the cerebellum (Week 122).
+
+<PyCell id="delta" title="The delta rule finds least squares" tests={String.raw`
+  import numpy as np
+  def test_close():
+      "after 50 online passes, the delta-rule weights are within 5% of the least-squares solution"
+      assert np.linalg.norm(w_d - w_ls) / np.linalg.norm(w_ls) < 0.05
+`} prompt="Treat the stimulus labels (±1) as a continuous target and learn linear weights online with the delta rule: 50 passes through the trials in a random order each pass, learning rate 0.001. Compare the result `w_d` with the least-squares solution `w_ls`."
+code={String.raw`
+  w_ls = np.linalg.lstsq(Xp, labels.astype(float), rcond=None)[0]
+  w_d = np.zeros(Xp.shape[1])
+  for epoch in range(50):
+      for i in rng.permutation(n_trials):
+          x, yv = Xp[i], labels[i]
+          w_d = ...
+  print("relative distance from least squares:", round(np.linalg.norm(w_d - w_ls) / np.linalg.norm(w_ls), 4),
+        "  training accuracy:", np.mean(np.sign(Xp @ w_d) == labels))
+`}
+hint="w_d = w_d + 0.001 * (yv - w_d @ x) * x"
+solution={String.raw`
+  w_ls = np.linalg.lstsq(Xp, labels.astype(float), rcond=None)[0]
+  w_d = np.zeros(Xp.shape[1])
+  for epoch in range(50):
+      for i in rng.permutation(n_trials):
+          x, yv = Xp[i], labels[i]
+          w_d = w_d + 0.001 * (yv - w_d @ x) * x
+  print("relative distance from least squares:", round(np.linalg.norm(w_d - w_ls) / np.linalg.norm(w_ls), 4),
+        "  training accuracy:", np.mean(np.sign(Xp @ w_d) == labels))
+`} />
+
+<Step n={4} title="The tempotron" minutes={35} />
+
+The perceptron and delta rule are about rates. Gütig and Sompolinsky (2006), today's paper, asked whether a neuron can learn from the **timing** of its inputs. The tempotron's membrane potential is a weighted sum of postsynaptic potentials, each a fixed kernel triggered by an input spike:
+
+$$
+V(t) = \sum_i w_i\sum_{t_i \lt t}K(t - t_i), \qquad K(s) = V_0\left(e^{-s/\tau} - e^{-s/\tau_s}\right)
+$$
+
+with membrane and synaptic time constants $\tau = 15$ ms and $\tau_s = 3.75$ ms (Week 10's leaky integration applied to synaptic currents). The neuron "fires" for a pattern if $V$ crosses threshold anywhere in the trial. The learning rule is error-driven and acts at the moment $t_{\max}$ when $V$ was largest: if it should have fired and did not, each synapse is strengthened by $\eta K(t_{\max} - t_i)$, its contribution to the voltage at that moment; if it fired and should not have, each is weakened by the same amount. This is gradient descent on a loss equal to how far the peak voltage fell short of (or exceeded) threshold.
+
+<PyCell id="tempotron" title="Train a tempotron" tests={String.raw`
+  import numpy as np
+  def test_kernel():
+      "the PSP kernel is zero before the spike and peaks at 1"
+      s = np.arange(-5, 100, 0.01)
+      assert np.all(K(s[s < 0]) == 0) and abs(K(s).max() - 1) < 1e-3
+
+  def test_learned():
+      "after training, the tempotron fires for every positive pattern and none of the negative ones"
+      fired = np.array([(w_t @ Km[p]).max() >= 1 for p in range(P)])
+      assert np.array_equal(fired, pattern_labels.astype(bool))
+`} prompt="Precompute, for each pattern, the matrix `Km[p]` of PSPs (afferents by time) from `K`. Then train: for each pattern in a random order, find the time of peak voltage; if the decision (peak ≥ 1) is wrong, add or subtract 0.02 × the PSPs at that time from the weights. Stop after an epoch with no errors (at most 300 epochs)."
+code={String.raw`
+  rng_t = np.random.default_rng(2006)
+  N_aff, P, T_ms = 50, 20, 500
+  tau, tau_s = 15.0, 3.75
+  t_peak = tau * tau_s / (tau - tau_s) * np.log(tau / tau_s)
+  V0 = 1 / (np.exp(-t_peak / tau) - np.exp(-t_peak / tau_s))       # normalise the PSP peak to 1
+  def K(s):
+      return np.where(s >= 0, V0 * (np.exp(-s / tau) - np.exp(-s / tau_s)), 0.0)
+
+  times = np.arange(T_ms)                                        # 1 ms resolution
+  spike_times = rng_t.uniform(0, T_ms, (P, N_aff))               # one spike per afferent per pattern
+  pattern_labels = np.array([1] * 10 + [0] * 10)
+  Km = np.array([K(times[None, :] - spike_times[p][:, None]) for p in range(P)])   # (P, N_aff, T_ms)
+
+  w_t = rng_t.normal(0, 0.05, N_aff)
+  for epoch in range(300):
+      errors = 0
+      for p in rng_t.permutation(P):
+          V = w_t @ Km[p]
+          t_max = int(np.argmax(V))
+          fired = V[t_max] >= 1
+          if fired != bool(pattern_labels[p]):
+              errors += 1
+              ...
+      if errors == 0:
+          break
+
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3), sharey=True)
+  for a, p in zip(ax, [0, 10]):
+      a.plot(times, w_t @ Km[p]); a.axhline(1, ls="--", color="r"); a.set_title("positive pattern" if p == 0 else "negative pattern"); a.set_xlabel("time (ms)")
+  plt.tight_layout(); plt.show()
+  print("learned all patterns after", epoch + 1, "epochs")
+`}
+hint="On an error: w_t = w_t + (1 if pattern_labels[p] else -1) * 0.02 * Km[p][:, t_max]. The column Km[p][:, t_max] holds each afferent's PSP at the moment of peak voltage."
+solution={String.raw`
+  rng_t = np.random.default_rng(2006)
+  N_aff, P, T_ms = 50, 20, 500
+  tau, tau_s = 15.0, 3.75
+  t_peak = tau * tau_s / (tau - tau_s) * np.log(tau / tau_s)
+  V0 = 1 / (np.exp(-t_peak / tau) - np.exp(-t_peak / tau_s))       # normalise the PSP peak to 1
+  def K(s):
+      return np.where(s >= 0, V0 * (np.exp(-s / tau) - np.exp(-s / tau_s)), 0.0)
+
+  times = np.arange(T_ms)                                        # 1 ms resolution
+  spike_times = rng_t.uniform(0, T_ms, (P, N_aff))               # one spike per afferent per pattern
+  pattern_labels = np.array([1] * 10 + [0] * 10)
+  Km = np.array([K(times[None, :] - spike_times[p][:, None]) for p in range(P)])   # (P, N_aff, T_ms)
+
+  w_t = rng_t.normal(0, 0.05, N_aff)
+  for epoch in range(300):
+      errors = 0
+      for p in rng_t.permutation(P):
+          V = w_t @ Km[p]
+          t_max = int(np.argmax(V))
+          fired = V[t_max] >= 1
+          if fired != bool(pattern_labels[p]):
+              errors += 1
+              w_t = w_t + (1 if pattern_labels[p] else -1) * 0.02 * Km[p][:, t_max]
+      if errors == 0:
+          break
+
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3), sharey=True)
+  for a, p in zip(ax, [0, 10]):
+      a.plot(times, w_t @ Km[p]); a.axhline(1, ls="--", color="r"); a.set_title("positive pattern" if p == 0 else "negative pattern"); a.set_xlabel("time (ms)")
+  plt.tight_layout(); plt.show()
+  print("learned all patterns after", epoch + 1, "epochs")
+`} />
+
+The tempotron learns to fire for every positive pattern and stay silent for every negative one, within a dozen or so epochs. That answers the prediction. A rate-based neuron could not do this: every afferent fires exactly one spike in every pattern, so the total input is identical. The tempotron succeeds by weighting together afferents whose spikes happen to arrive close in time in the positive patterns, so that their PSPs add up to threshold, a coincidence detector tuned by learning.
+
+<Bridge title="Learning rules old and new"
+  neuro="Error-driven rules like the delta rule fit learning in the cerebellum, where climbing fibres are thought to carry error signals (Week 122). The tempotron showed that a single neuron with plausible PSPs can learn spike-timing codes, and links to spike-timing-dependent plasticity and to how sensory systems might read precise spike patterns (Week 42)."
+  ai="The perceptron is the ancestor of every neural network unit, and its hinge-like loss leads to support vector machines (Week 57). The delta rule is SGD on squared error, and backpropagation (Week 8) is the delta rule extended through hidden layers by the chain rule.">
+
+Many learning rules from neuroscience are gradient descent on some loss in disguise; naming the loss tells you what the rule is really optimising.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The perceptron updates its weights...", options: ["On every example", "Only on mistakes", "Only at the end", "Randomly"], answer: 1, explain: "Its loss is zero for correct examples." },
+  { q: "The perceptron update on a mistake is...", options: ["$\\mathbf{w} - y\\mathbf{x}$", "$\\mathbf{w} + \\eta y\\mathbf{x}$", "$\\mathbf{w}\\,y$", "$\\mathbf{x}$"], answer: 1, explain: "Move towards the correct side." },
+  { q: "Novikoff's bound on perceptron mistakes is...", options: ["$R/\\gamma$", "$(R/\\gamma)^2$", "$\\gamma/R$", "Unbounded"], answer: 1, explain: "For separable data with margin γ." },
+  { q: "On data that are not linearly separable, the perceptron...", options: ["Converges to least squares", "Never stops updating", "Stops at zero", "Finds the best line"], answer: 1, explain: "It reacts to every error for ever." },
+  { q: "The delta rule is SGD on...", options: ["The perceptron loss", "Squared error of a linear neuron", "Cross-entropy", "The peak voltage"], answer: 1, explain: "$\\Delta\\mathbf{w} = \\eta(y - \\hat{y})\\mathbf{x}$." },
+  { q: "The tempotron changes each weight by...", options: ["Its input rate", "Its PSP at the time of peak voltage, when the decision is wrong", "A random amount", "The output rate"], answer: 1, explain: "Its contribution to the decision." },
+  { q: "The tempotron can classify patterns that...", options: ["Differ only in rates", "Differ only in spike timing", "Are identical", "Have no spikes"], answer: 1, explain: "Coincidences sum to threshold." },
+]} />
+
+<Flashcards cards={[
+  { front: "Perceptron loss and rule?", back: "$\\max(0, -y\\,\\mathbf{w}\\cdot\\mathbf{x})$; on a mistake $\\mathbf{w} \\leftarrow \\mathbf{w} + \\eta y\\mathbf{x}$." },
+  { front: "Perceptron convergence theorem?", back: "With $\\lVert\\mathbf{x}\\rVert \\leq R$ and margin γ, at most $(R/\\gamma)^2$ mistakes." },
+  { front: "Delta (LMS) rule?", back: "$\\Delta\\mathbf{w} = \\eta(y - \\mathbf{w}\\cdot\\mathbf{x})\\mathbf{x}$: SGD on squared error, converging to least squares." },
+  { front: "Tempotron?", back: "Weighted sum of PSPs; fires if V crosses threshold; on errors $\\Delta w_i = \\pm\\eta K(t_{\\max} - t_i)$." },
+  { front: "Why the tempotron needs timing?", back: "With one spike per afferent, rates carry no information; only coincidences distinguish patterns." },
+]} />
+
+<Predict revisit question="Can a single neuron learn patterns that differ only in spike timing?" />
+
+<Key title="Before you go">
+<ul>
+<li>The perceptron rule is SGD on the perceptron loss; it converges whenever the data are separable.</li>
+<li>The delta rule is SGD on squared error and converges to least squares.</li>
+<li>The tempotron learns spike-timing patterns by gradient steps at the moment of peak voltage.</li>
+<li>Naming the loss behind a learning rule tells you what it optimises and when it can fail.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Gütig and Sompolinsky (2006), <em>The tempotron: a neuron that learns spike timing-based decisions</em>.</li>
+<li>Rosenblatt (1958), <em>The perceptron</em> (Week 1's classic paper): reread it with the convergence theorem in mind.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="The tempotron learns only when it makes a mistake, as the perceptron does. What would a synapse in the brain need in order to implement this: what signal tells it a mistake was made, and when?" />

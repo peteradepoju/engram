@@ -1,0 +1,274 @@
+export const meta = {
+  title: "Fourier series: building signals from harmonics",
+  intro: "Yesterday you measured one sinusoid in a signal by projection. Fourier's great claim, made in 1807 while studying heat, was that every periodic signal is a sum of sinusoids at whole-number multiples of one basic frequency, and that projection finds every one of them. The reason is that sinusoids of different frequencies are orthogonal, exactly like the axes of Week 4. Today you prove that, compute Fourier coefficients for square waves and spike trains, watch partial sums converge (and overshoot), and check that energy is shared out among the harmonics.",
+  goals: [
+    "Prove that sinusoids at different harmonic frequencies are orthogonal",
+    "Compute Fourier series coefficients by projection",
+    "Reconstruct a signal from partial sums and recognise the Gibbs phenomenon",
+    "Use Parseval's theorem to share a signal's power among its harmonics",
+  ],
+  plan: [
+    { label: "Predict and harmonics", minutes: 20 },
+    { label: "Orthogonality", minutes: 25 },
+    { label: "Computing coefficients", minutes: 30 },
+    { label: "Partial sums and energy", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "buzsaki-2004",
+};
+
+<Predict question="A square wave alternates between +1 and −1 ten times a second. If you take it apart into sinusoids, will you find energy at 10, 20, 30, 40 Hz and so on, only at 10, 30, 50 Hz and so on, or spread over every frequency?" />
+
+<Step n={1} title="Harmonics" minutes={20} />
+
+A signal is **periodic** with period $T$ if it repeats every $T$ seconds. Its **fundamental** frequency is $f_0 = 1/T$, and the **harmonics** are the whole-number multiples $kf_0$. The **Fourier series** of a periodic signal is
+
+$$
+x(t) = \frac{a_0}{2} + \sum_{k=1}^{\infty}\left[a_k\cos(2\pi kf_0t) + b_k\sin(2\pi kf_0t)\right]
+$$
+
+or, in complex form, $x(t) = \sum_{k=-\infty}^{\infty}c_k e^{i2\pi kf_0t}$. Only harmonics appear, because only sinusoids that complete a whole number of cycles in time $T$ repeat with period $T$.
+
+<Figure caption="Partial sums of Fourier series. Choose a target signal and add harmonics; the bars show the amplitude of each harmonic." credit="Interactive figure by Engram.">
+  <FourierSeries />
+</Figure>
+
+<Video id="r6sGWTCMz2k" title="But what is a Fourier series? From heat flow to circle drawings" by="3Blue1Brown (Grant Sanderson)" note="How Fourier came to the idea through the heat equation, and how adding rotating arrows at whole-number frequencies can draw any shape." />
+
+<Step n={2} title="Orthogonality" minutes={25} />
+
+Over one period, define the inner product of two signals as $\langle f, g\rangle = \int_0^T f(t)g(t)\,dt$, the continuous version of the dot product (Week 4), or for samples, $\sum_n f(t_n)g(t_n)$.
+
+<Prove title="Harmonics are orthogonal" task="For whole numbers $j, k \geq 1$ and $\omega_0 = 2\pi/T$, show that $\int_0^T\cos(j\omega_0t)\cos(k\omega_0t)\,dt$ is 0 if $j \neq k$ and $T/2$ if $j = k$, and that $\int_0^T\cos(j\omega_0t)\sin(k\omega_0t)\,dt = 0$ for all $j, k$.">
+
+Use the product-to-sum identity $\cos A\cos B = \frac{1}{2}[\cos(A - B) + \cos(A + B)]$.
+
+For $j \neq k$, both $(j - k)\omega_0t$ and $(j + k)\omega_0t$ complete a whole, nonzero number of cycles in time $T$, and the integral of a cosine over whole cycles is zero. So the integral is 0.
+
+For $j = k$, $\cos^2(k\omega_0t) = \frac{1}{2}[1 + \cos(2k\omega_0t)]$, whose integral over the period is $\frac{1}{2}T + 0 = T/2$.
+
+For cosine times sine, $\cos A\sin B = \frac{1}{2}[\sin(A + B) - \sin(A - B)]$, and every sine integrates to zero over whole cycles (including $\sin 0 = 0$ when $j = k$). The same steps work for sums over $N$ equally spaced samples, with $T/2$ replaced by $N/2$.
+
+</Prove>
+
+<PyCell id="ortho" title="The Gram matrix of harmonics" tests={String.raw`
+  import numpy as np
+  def test_basis():
+      "B has 8 columns: cos and sin of harmonics 1 to 4, sampled at N points"
+      assert B.shape == (N, 8)
+
+  def test_gram():
+      "the Gram matrix B^T B is (N/2) times the identity"
+      assert np.allclose(G, (N / 2) * np.eye(8), atol=1e-9)
+`} prompt="Sample one period at N = 100 points. Build the matrix `B` whose columns are cos(kt) and sin(kt) for k = 1 to 4 (cosines first), and its Gram matrix `G` = BᵀB of all pairwise dot products. It should be (N/2) times the identity."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  N = 100
+  t = 2 * np.pi * np.arange(N) / N          # one period, endpoint excluded
+  B = ...
+  G = ...
+  print(np.round(G, 6))
+`}
+hint="B = np.column_stack([np.cos(k * t) for k in range(1, 5)] + [np.sin(k * t) for k in range(1, 5)]); G = B.T @ B."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  N = 100
+  t = 2 * np.pi * np.arange(N) / N          # one period, endpoint excluded
+  B = np.column_stack([np.cos(k * t) for k in range(1, 5)] + [np.sin(k * t) for k in range(1, 5)])
+  G = B.T @ B
+  print(np.round(G, 6))
+`} />
+
+Every off-diagonal entry is zero and every diagonal entry is $N/2$. The harmonics are an orthogonal basis, so, as in Week 4, the coefficient of a signal along each one is its projection divided by the squared length:
+
+$$
+a_k = \frac{2}{N}\sum_n x(t_n)\cos(kt_n), \qquad b_k = \frac{2}{N}\sum_n x(t_n)\sin(kt_n)
+$$
+
+This is yesterday's formula, applied to every harmonic. The constant term is $a_0/2$, the mean.
+
+<Step n={3} title="Computing coefficients" minutes={30} />
+
+<PyCell id="coefs" title="Fourier coefficients of a square wave and a spike train" tests={String.raw`
+  import numpy as np
+  def test_fn():
+      "fourier_coeffs returns arrays a and b of length K, by projection"
+      a, b = fourier_coeffs(np.cos(3 * t), 5)
+      assert np.isclose(a[2], 1) and np.allclose(np.delete(a, 2), 0, atol=1e-9) and np.allclose(b, 0, atol=1e-9)
+
+  def test_square():
+      "the square wave has b_k = 4 / (pi k) for odd k and 0 for even k"
+      k = np.arange(1, 11)
+      expected = np.where(k % 2 == 1, 4 / (np.pi * k), 0)
+      assert np.allclose(b_sq, expected, atol=0.02) and np.allclose(a_sq, 0, atol=0.02)
+`} prompt="Write `fourier_coeffs(x, K)` returning the cosine and sine coefficients for harmonics 1 to K. Apply it to a square wave (+1 for the first half period, −1 for the second) sampled at 2000 points, with K = 10, and compare `b_sq` with $4/(\pi k)$ for odd k. Then look at the coefficients of a regular spike train."
+code={String.raw`
+  def fourier_coeffs(x, K):
+      n = len(x)
+      tt = 2 * np.pi * np.arange(n) / n
+      a = np.array([...])
+      b = np.array([...])
+      return a, b
+
+  M = 2000
+  t = 2 * np.pi * np.arange(M) / M
+  square = np.where(t < np.pi, 1.0, -1.0)
+  a_sq, b_sq = fourier_coeffs(square, 10)
+
+  spikes = np.zeros(M); spikes[::200] = 1.0        # ten evenly spaced spikes per period
+  a_sp, b_sp = fourier_coeffs(spikes, 40)
+
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].stem(range(1, 11), b_sq); ax[0].plot(range(1, 11), [4 / (np.pi * k) if k % 2 else 0 for k in range(1, 11)], "rx"); ax[0].set_title("square wave: b_k"); ax[0].set_xlabel("harmonic k")
+  ax[1].stem(range(1, 41), np.hypot(a_sp, b_sp)); ax[1].set_title("spike train: amplitude"); ax[1].set_xlabel("harmonic k")
+  plt.tight_layout(); plt.show()
+  print("square wave b_k:", b_sq.round(3))
+`}
+hint="a = np.array([2 / n * x @ np.cos(k * tt) for k in range(1, K + 1)]) and the same with np.sin for b."
+solution={String.raw`
+  def fourier_coeffs(x, K):
+      n = len(x)
+      tt = 2 * np.pi * np.arange(n) / n
+      a = np.array([2 / n * x @ np.cos(k * tt) for k in range(1, K + 1)])
+      b = np.array([2 / n * x @ np.sin(k * tt) for k in range(1, K + 1)])
+      return a, b
+
+  M = 2000
+  t = 2 * np.pi * np.arange(M) / M
+  square = np.where(t < np.pi, 1.0, -1.0)
+  a_sq, b_sq = fourier_coeffs(square, 10)
+
+  spikes = np.zeros(M); spikes[::200] = 1.0        # ten evenly spaced spikes per period
+  a_sp, b_sp = fourier_coeffs(spikes, 40)
+
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].stem(range(1, 11), b_sq); ax[0].plot(range(1, 11), [4 / (np.pi * k) if k % 2 else 0 for k in range(1, 11)], "rx"); ax[0].set_title("square wave: b_k"); ax[0].set_xlabel("harmonic k")
+  ax[1].stem(range(1, 41), np.hypot(a_sp, b_sp)); ax[1].set_title("spike train: amplitude"); ax[1].set_xlabel("harmonic k")
+  plt.tight_layout(); plt.show()
+  print("square wave b_k:", b_sq.round(3))
+`} />
+
+The square wave contains only **odd** harmonics, with amplitudes falling as $1/k$: a 10 Hz square wave has power at 10, 30, 50 Hz and so on. That answers the prediction. The symmetry is the reason: the square wave is unchanged if you shift it by half a period and flip its sign, which every odd harmonic also does and every even harmonic does not. The regular spike train, ten spikes per period, has power only at every tenth harmonic, but equally at all of them: sharp events contain all frequencies. Brain signals that contain sharp features, such as spikes leaking into a field potential, therefore spread power to high frequencies, a problem you will meet again with real data.
+
+<Step n={4} title="Partial sums and energy" minutes={30} />
+
+Keeping the first $K$ harmonics gives the **partial sum**, the best approximation using those frequencies in the least-squares sense (a projection onto their span, Week 5). Near a jump, partial sums overshoot by about 9% of the jump however many harmonics you keep, a ripple that gets narrower but not smaller: the **Gibbs phenomenon**. It is why sharp filters create ringing artefacts (Day 5).
+
+**Parseval's theorem** says that the power of the signal is shared among its harmonics:
+
+$$
+\frac{1}{T}\int_0^T x(t)^2\,dt = \frac{a_0^2}{4} + \frac{1}{2}\sum_{k=1}^{\infty}\left(a_k^2 + b_k^2\right)
+$$
+
+Each harmonic contributes half its squared amplitude, the mean square of a sinusoid. This is Pythagoras for an orthogonal basis (Week 4) and the reason power spectra (Day 4) add up to the variance.
+
+<PyCell id="partial" title="Partial sums, Gibbs and Parseval" tests={String.raw`
+  import numpy as np
+  def test_recon():
+      "reconstruct rebuilds the signal from a and b"
+      a, b = fourier_coeffs(np.cos(2 * t) + 0.5 * np.sin(5 * t), 6)
+      assert np.allclose(reconstruct(a, b, M), np.cos(2 * t) + 0.5 * np.sin(5 * t), atol=1e-9)
+
+  def test_gibbs():
+      "the partial sum peaks near 1.18 (9% of the jump of 2 above 1) for 25 and 101 harmonics"
+      assert all(abs(o - 1.18) < 0.02 for o in overshoots)
+
+  def test_parseval():
+      "power in 500 harmonics accounts for more than 99.5% of the square wave's power"
+      assert power_harmonics / power_signal > 0.995
+`} prompt="Write `reconstruct(a, b, n)` that sums the harmonics at n sample points (no constant term needed for the square wave). Find the maximum of the square wave's partial sums with 25 and 101 harmonics (`overshoots`). Then check Parseval: compare the mean square of the square wave (`power_signal`) with half the sum of squared coefficients up to harmonic 500 (`power_harmonics`)."
+code={String.raw`
+  def reconstruct(a, b, n):
+      tt = 2 * np.pi * np.arange(n) / n
+      x = np.zeros(n)
+      for k in range(1, len(a) + 1):
+          x += ...
+      return x
+
+  overshoots = []
+  for K in [25, 101]:
+      a, b = fourier_coeffs(square, K)
+      overshoots.append(reconstruct(a, b, M).max())
+
+  a5, b5 = fourier_coeffs(square, 500)
+  power_signal = np.mean(square ** 2)
+  power_harmonics = ...
+
+  a, b = fourier_coeffs(square, 25)
+  plt.figure(figsize=(6, 3)); plt.plot(t, square, "k--", lw=1); plt.plot(t, reconstruct(a, b, M), lw=1.5); plt.xlim(2.5, 3.8)
+  plt.title("25 harmonics near the jump"); plt.show()
+  print("overshoots:", np.round(overshoots, 4), "  power: signal", power_signal, " harmonics", round(power_harmonics, 4))
+`}
+hint="Inside the loop: x += a[k - 1] * np.cos(k * tt) + b[k - 1] * np.sin(k * tt). Parseval: power_harmonics = 0.5 * np.sum(a5 ** 2 + b5 ** 2)."
+solution={String.raw`
+  def reconstruct(a, b, n):
+      tt = 2 * np.pi * np.arange(n) / n
+      x = np.zeros(n)
+      for k in range(1, len(a) + 1):
+          x += a[k - 1] * np.cos(k * tt) + b[k - 1] * np.sin(k * tt)
+      return x
+
+  overshoots = []
+  for K in [25, 101]:
+      a, b = fourier_coeffs(square, K)
+      overshoots.append(reconstruct(a, b, M).max())
+
+  a5, b5 = fourier_coeffs(square, 500)
+  power_signal = np.mean(square ** 2)
+  power_harmonics = 0.5 * np.sum(a5 ** 2 + b5 ** 2)
+
+  a, b = fourier_coeffs(square, 25)
+  plt.figure(figsize=(6, 3)); plt.plot(t, square, "k--", lw=1); plt.plot(t, reconstruct(a, b, M), lw=1.5); plt.xlim(2.5, 3.8)
+  plt.title("25 harmonics near the jump"); plt.show()
+  print("overshoots:", np.round(overshoots, 4), "  power: signal", power_signal, " harmonics", round(power_harmonics, 4))
+`} />
+
+Quadrupling the number of harmonics leaves the peak at about 1.18: the jump is from −1 to +1, a size of 2, and 9% of 2 is 0.18. Meanwhile Parseval's sum accounts for essentially all of the square wave's power. The power in the harmonics beyond $K$ is exactly the mean squared error of the partial sum, which is why the least-squares error falls steadily even though the peak overshoot never does.
+
+<Bridge title="Harmonics in brain signals"
+  neuro="Real brain rhythms are rarely pure sinusoids. Hippocampal theta is often sawtooth-shaped and the mu rhythm of motor cortex is arch-shaped, so their spectra have harmonics that can be mistaken for separate faster rhythms. Buzsáki and Draguhn (today's paper) review the family of rhythms; telling a harmonic from a second rhythm needs care, for example by looking at the waveform shape directly."
+  ai="A Fourier series is a linear model in a fixed basis of sinusoids, fitted by projection. 'Fourier features' (random or fixed sinusoids of the input) let simple networks represent high-frequency functions, and neural networks are known to learn low-frequency components first, a 'spectral bias' (Week 97).">
+
+Orthogonal bases make decomposition easy: project once onto each element, and the pieces add back up, in amplitude and in energy.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A signal with period 0.1 s can contain sinusoids at...", options: ["Any frequency", "Multiples of 10 Hz", "Only 10 Hz", "Multiples of 0.1 Hz"], answer: 1, explain: "Only harmonics repeat with the period." },
+  { q: "$\\int_0^T\\cos(2\\omega_0t)\\cos(3\\omega_0t)\\,dt$ is...", options: ["T/2", "0", "T", "1"], answer: 1, explain: "Different harmonics are orthogonal." },
+  { q: "The coefficient $b_k$ is found by...", options: ["Differentiating", "Projecting the signal onto $\\sin(k\\omega_0t)$", "Taking the maximum", "Squaring the signal"], answer: 1, explain: "Orthogonal basis." },
+  { q: "A square wave contains...", options: ["All harmonics", "Only odd harmonics, falling as 1/k", "Only even harmonics", "Only the fundamental"], answer: 1, explain: "Half-period antisymmetry." },
+  { q: "The Gibbs overshoot near a jump...", options: ["Disappears with enough harmonics", "Stays at about 9% of the jump", "Grows with harmonics", "Only occurs for sines"], answer: 1, explain: "It narrows but does not shrink." },
+  { q: "Parseval's theorem says the mean square of the signal equals...", options: ["The largest coefficient", "Half the sum of squared harmonic amplitudes (plus the mean squared)", "The number of harmonics", "Zero"], answer: 1, explain: "Pythagoras in an orthogonal basis." },
+  { q: "A sharp, brief event in a signal contributes power...", options: ["Only at low frequencies", "Spread across many high frequencies", "At one frequency", "Nowhere"], answer: 1, explain: "Sharp features need many harmonics." },
+]} />
+
+<Flashcards cards={[
+  { front: "Fourier series?", back: "$x(t) = \\frac{a_0}{2} + \\sum_k[a_k\\cos(k\\omega_0t) + b_k\\sin(k\\omega_0t)]$ for a signal with period $T = 2\\pi/\\omega_0$." },
+  { front: "Orthogonality of harmonics?", back: "Over a period, $\\int\\cos j\\omega_0t\\cos k\\omega_0t = 0$ for j ≠ k and T/2 for j = k; cos and sin are always orthogonal." },
+  { front: "Coefficient formulas (samples)?", back: "$a_k = \\frac{2}{N}\\sum x_n\\cos(kt_n)$, $b_k = \\frac{2}{N}\\sum x_n\\sin(kt_n)$." },
+  { front: "Gibbs phenomenon?", back: "Partial sums overshoot a jump by about 9% however many harmonics are used." },
+  { front: "Parseval's theorem?", back: "Mean square of x = $a_0^2/4 + \\frac{1}{2}\\sum(a_k^2 + b_k^2)$: power shared among harmonics." },
+]} />
+
+<Predict revisit question="Where is the energy of a 10 Hz square wave?" />
+
+<Key title="Before you go">
+<ul>
+<li>A periodic signal is a sum of sinusoids at harmonics of its fundamental frequency.</li>
+<li>Harmonics are orthogonal, so each coefficient is a projection.</li>
+<li>Partial sums are least-squares approximations; near jumps they overshoot by about 9%.</li>
+<li>Parseval's theorem shares the signal's power among the harmonics.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Buzsáki and Draguhn (2004), <em>Neuronal oscillations in cortical networks</em>.</li>
+<li>Cole and Voytek (2017), <em>Brain oscillations and the importance of waveform shape</em>, Trends in Cognitive Sciences: why non-sinusoidal rhythms matter.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A field potential shows peaks at 8 Hz and 16 Hz. Describe how you would decide whether the 16 Hz peak is a second rhythm or a harmonic of a non-sinusoidal 8 Hz rhythm." />
