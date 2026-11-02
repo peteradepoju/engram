@@ -1,0 +1,203 @@
+export const meta = {
+  title: "Forge: Week 4 challenge, quiz and deep read",
+  intro: "This week you learned to see population activity as vectors and to use dot products, linear combinations and projections on them. Today's challenge is a full motor-cortex study in miniature: estimate every neuron's preferred direction, decode movements on held-out trials with the population vector, and look at the geometry of the whole population with a dissimilarity matrix.",
+  goals: [
+    "Estimate preferred directions for a population from trial data",
+    "Decode held-out trials and measure error honestly",
+    "Describe the geometry of a population code with an RDM",
+    "Critique a classic population-coding paper",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "georgopoulos-1986",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. $\lVert (1, 1, 1, 1) \rVert$?
+2. $(2, -1) \cdot (1, 2)$, and what is the angle?
+3. The cosine similarity of $(1, 2, 3)$ and $(10, 20, 30)$?
+
+<PyCell code={String.raw`
+  import numpy as np
+  print("1.", np.linalg.norm([1, 1, 1, 1]))
+  a, b = np.array([2, -1]), np.array([1, 2])
+  print("2.", a @ b, "so the angle is", np.degrees(np.arccos(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))), "degrees")
+  x, y = np.array([1, 2, 3.0]), np.array([10, 20, 30.0])
+  print("3.", x @ y / (np.linalg.norm(x) * np.linalg.norm(y)))
+`} />
+
+<Step n={2} title="Weekly challenge: decode reaching from motor cortex" minutes={60} />
+
+**The experiment.** 80 motor-cortex neurons are recorded while a monkey reaches to 8 targets, 20 times each. Each neuron is cosine tuned with its own baseline, depth of modulation and preferred direction; spike counts are Poisson in a 0.5 s window. Run the cell to build `counts` (shape: 80 neurons by 8 directions by 20 trials).
+
+<PyCell code={String.raw`
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1986)
+  n_neurons, n_dirs, n_trials, T = 80, 8, 20, 0.5
+  dirs = np.radians(np.arange(0, 360, 45))                     # (8,)
+  true_pd = rng.uniform(0, 2 * np.pi, n_neurons)
+  b0 = rng.uniform(10, 30, n_neurons)
+  k = b0 * rng.uniform(0.3, 0.9, n_neurons)                   # modulation never exceeds baseline
+  rate = b0[:, None] + k[:, None] * np.cos(dirs[None, :] - true_pd[:, None])     # (80, 8)
+  counts = rng.poisson(rate[:, :, None] * T, size=(n_neurons, n_dirs, n_trials))  # (80, 8, 20)
+  print(counts.shape)
+`} />
+
+<PyCell id="partA" title="Part A: preferred directions from training trials" tests={String.raw`
+  import numpy as np
+  def test_split():
+      "train and test each use 10 trials"
+      assert train.shape == (80, 8, 10) and test.shape == (80, 8, 10)
+
+  def test_estimates():
+      "pd_est, base_est and k_est have one value per neuron"
+      assert pd_est.shape == (80,) and base_est.shape == (80,) and k_est.shape == (80,)
+
+  def test_accuracy():
+      "preferred directions are recovered to within 20 degrees on average"
+      err = np.degrees(np.abs(np.angle(np.exp(1j * (pd_est - true_pd)))))
+      assert err.mean() < 20, f"mean error {err.mean():.1f} degrees"
+`} prompt="Split trials into `train` (the first 10) and `test` (the last 10). From `train`, compute each neuron's mean rate per direction (Hz), then estimate `base_est` (mean over directions), `pd_est` (the angle of the rate-weighted sum of direction unit vectors, in radians) and `k_est` (modulation depth: twice the length of that sum divided by the number of directions, from Day 3's proof). No loop over neurons."
+code={String.raw`
+  train, test = ..., ...
+  mean_rate = ...                       # (80, 8) in Hz
+  base_est = ...
+  x = ...                               # (80,) rate-weighted cos sum
+  y = ...
+  pd_est = np.arctan2(y, x) % (2 * np.pi)
+  k_est = ...
+  print(np.degrees(pd_est[:5]).round(0), np.degrees(true_pd[:5]).round(0))
+`}
+hint="train, test = counts[:, :, :10], counts[:, :, 10:]. mean_rate = train.mean(axis=2) / T. base_est = mean_rate.mean(axis=1). x = mean_rate @ np.cos(dirs); y = mean_rate @ np.sin(dirs). k_est = 2 * np.hypot(x, y) / n_dirs."
+solution={String.raw`
+  train, test = counts[:, :, :10], counts[:, :, 10:]
+  mean_rate = train.mean(axis=2) / T
+  base_est = mean_rate.mean(axis=1)
+  x = mean_rate @ np.cos(dirs)
+  y = mean_rate @ np.sin(dirs)
+  pd_est = np.arctan2(y, x) % (2 * np.pi)
+  k_est = 2 * np.hypot(x, y) / n_dirs
+  print(np.degrees(pd_est[:5]).round(0), np.degrees(true_pd[:5]).round(0))
+`} />
+
+<PyCell id="partB" title="Part B: decode the held-out trials" tests={String.raw`
+  import numpy as np
+  def test_decoded():
+      "decoded has one direction per direction and test trial"
+      assert decoded.shape == (8, 10)
+
+  def test_error():
+      "mean decoding error is under 15 degrees"
+      assert mean_err < 15, f"mean error {mean_err:.1f} degrees"
+      true = np.degrees(dirs)[:, None]
+      e = np.abs((decoded - true + 180) % 360 - 180)
+      assert abs(e.mean() - mean_err) < 1e-9
+`} prompt="For every test trial, compute the population vector using the estimates from Part A: weights $(r_i - \hat b_i)/\hat k_i$ on the unit vectors of `pd_est`. Store the decoded directions in degrees in `decoded` (shape 8 by 10) and the mean absolute angular error in `mean_err`. Why must the preferred directions come from different trials than the ones you decode?"
+code={String.raw`
+  test_rate = test / T                                         # (80, 8, 10)
+  w = ...                                                      # weights, same shape
+  px = ...                                                     # sum over neurons, shape (8, 10)
+  py = ...
+  decoded = np.degrees(np.arctan2(py, px)) % 360
+  mean_err = ...
+  print(f"mean error on held-out trials: {mean_err:.1f} degrees")
+`}
+hint="w = (test_rate - base_est[:, None, None]) / k_est[:, None, None]. px = np.einsum('n,ndt->dt', np.cos(pd_est), w), or (w * np.cos(pd_est)[:, None, None]).sum(axis=0). mean_err = np.abs((decoded - np.degrees(dirs)[:, None] + 180) % 360 - 180).mean()."
+solution={String.raw`
+  test_rate = test / T
+  w = (test_rate - base_est[:, None, None]) / k_est[:, None, None]
+  px = (w * np.cos(pd_est)[:, None, None]).sum(axis=0)
+  py = (w * np.sin(pd_est)[:, None, None]).sum(axis=0)
+  decoded = np.degrees(np.arctan2(py, px)) % 360
+  mean_err = np.abs((decoded - np.degrees(dirs)[:, None] + 180) % 360 - 180).mean()
+  print(f"mean error on held-out trials: {mean_err:.1f} degrees")
+`} />
+
+Estimating and testing on the same trials would let noise in those trials help the decoder, so the error would look smaller than it really is. Separating them is the simplest form of **cross-validation** (Week 59), and it is non-negotiable in any decoding analysis.
+
+<PyCell id="partC" title="Part C: the geometry of the code" tests={String.raw`
+  import numpy as np
+  def test_rdm():
+      "D is the 8 by 8 matrix of one minus correlation between direction patterns"
+      assert D.shape == (8, 8) and np.allclose(np.diag(D), 0)
+
+  def test_ring():
+      "neighbouring directions are more similar than opposite ones"
+      assert D[0, 1] < D[0, 4] and D[2, 3] < D[2, 6]
+`} prompt="Using the training mean rates, build `D`, the 8 by 8 representational dissimilarity matrix ($1 - r$ between the population patterns for each pair of directions). Show it as an image. What shape does it have, and what does it say about how the population arranges the eight directions?"
+code={String.raw`
+  D = ...
+  plt.figure(figsize=(3.6, 3))
+  plt.imshow(D, cmap="viridis"); plt.colorbar(label="1 - r")
+  plt.xticks(range(8), np.arange(0, 360, 45)); plt.yticks(range(8), np.arange(0, 360, 45))
+  plt.xlabel("direction (deg)"); plt.ylabel("direction (deg)"); plt.show()
+`}
+hint="D = 1 - np.corrcoef(mean_rate.T): mean_rate is (neurons, directions), and corrcoef correlates rows, so transpose to make directions the rows."
+solution={String.raw`
+  D = 1 - np.corrcoef(mean_rate.T)
+  plt.figure(figsize=(3.6, 3))
+  plt.imshow(D, cmap="viridis"); plt.colorbar(label="1 - r")
+  plt.xticks(range(8), np.arange(0, 360, 45)); plt.yticks(range(8), np.arange(0, 360, 45))
+  plt.xlabel("direction (deg)"); plt.ylabel("direction (deg)"); plt.show()
+`} />
+
+**Part D (think).** The dissimilarity grows with the angle between directions and is largest for opposite ones, and the pattern wraps around: the population arranges the eight directions on a **ring**, matching the circle of targets. In your journal: if the neurons were not cosine tuned but each fired for only one target (very sharp tuning), what would the RDM look like, and would the population vector still work?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. Distance from correlation" task="For two z-scored vectors $\mathbf{x}$ and $\mathbf{y}$ of length $n$ (mean 0 and $\sum x_i^2 = \sum y_i^2 = n$), show that $\lVert \mathbf{x} - \mathbf{y} \rVert^2 = 2n(1 - r)$, where $r = \frac{1}{n}\mathbf{x} \cdot \mathbf{y}$ is their correlation. What does this say about the dissimilarity $1 - r$?">
+
+Expand: $\lVert \mathbf{x} - \mathbf{y} \rVert^2 = \lVert \mathbf{x} \rVert^2 + \lVert \mathbf{y} \rVert^2 - 2\,\mathbf{x} \cdot \mathbf{y} = n + n - 2nr = 2n(1 - r)$.
+
+So for z-scored patterns, $1 - r$ is just the squared Euclidean distance divided by $2n$. The correlation distance used in RSA is a Euclidean distance after removing each pattern's mean and scale.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 4 quiz (15 questions)" questions={[
+  { q: "The activity of 50 neurons at one moment is a point in...", options: ["$\\mathbb{R}^{1}$", "$\\mathbb{R}^{50}$", "$\\mathbb{R}^{2}$", "$\\mathbb{R}^{2500}$"], answer: 1, explain: "One axis per neuron." },
+  { q: "$\\lVert (6, 8) \\rVert$?", options: ["14", "10", "100", "48"], answer: 1, explain: "$\\sqrt{36 + 64} = 10$." },
+  { q: "$\\mathbf{a} \\cdot \\mathbf{b} = \\lVert \\mathbf{a} \\rVert \\lVert \\mathbf{b} \\rVert \\cos\\theta$ follows from...", options: ["Pythagoras only", "The law of cosines", "The chain rule", "Bayes' rule"], answer: 1, explain: "Expanding $\\lVert \\mathbf{a} - \\mathbf{b} \\rVert^2$ two ways." },
+  { q: "Orthogonal vectors have dot product...", options: ["1", "−1", "0", "Their lengths multiplied"], answer: 2, explain: "$\\cos 90° = 0$." },
+  { q: "Projection of a onto unit vector u?", options: ["$\\mathbf{a} \\cdot \\mathbf{u}$", "$\\lVert \\mathbf{a} \\rVert$", "$\\mathbf{a} + \\mathbf{u}$", "$\\mathbf{a} \\times \\mathbf{u}$"], answer: 0, explain: "The scalar projection." },
+  { q: "Cosine similarity of a pattern and its double?", options: ["0.5", "1", "2", "0"], answer: 1, explain: "Same direction." },
+  { q: "In the LN model, the receptive field is...", options: ["The nonlinearity", "The weight vector", "The noise", "The spike train"], answer: 1, explain: "$r = f(\\mathbf{w} \\cdot \\mathbf{x})$." },
+  { q: "Cosine tuning $b_0 + k\\cos(\\phi - \\phi_p)$ equals...", options: ["$b_0 + k\\,\\mathbf{d} \\cdot \\mathbf{p}$", "$b_0 k$", "$\\mathbf{d} + \\mathbf{p}$", "$k\\,\\phi$"], answer: 0, explain: "With unit direction vectors." },
+  { q: "A matrix times a vector is...", options: ["A linear combination of its rows only", "A linear combination of its columns", "Always a scalar", "The rank"], answer: 1, explain: "Column view of $V\\mathbf{c}$." },
+  { q: "Two parallel vectors in the plane span...", options: ["The plane", "A line", "A point", "Three dimensions"], answer: 1, explain: "They are dependent." },
+  { q: "The population-vector error with N neurons falls like...", options: ["$1/N$", "$1/\\sqrt{N}$", "$\\log N$", "It does not fall"], answer: 1, explain: "Averaging independent noise." },
+  { q: "Clustered preferred directions make the population vector...", options: ["More accurate", "Biased towards the cluster", "Exactly zero", "Faster"], answer: 1, explain: "The votes are unbalanced." },
+  { q: "Gram-Schmidt produces...", options: ["Eigenvectors", "An orthonormal set with the same span", "A determinant", "Random vectors"], answer: 1, explain: "Remove earlier projections, then normalise." },
+  { q: "Removing direction u from x gives...", options: ["$\\mathbf{x} - (\\mathbf{x} \\cdot \\mathbf{u})\\mathbf{u}$", "$\\mathbf{x} \\cdot \\mathbf{u}$", "$\\mathbf{u}$", "$2\\mathbf{x}$"], answer: 0, explain: "Subtract the vector projection (u a unit vector)." },
+  { q: "Why estimate preferred directions and decode on different trials?", options: ["To save time", "To avoid fitting the noise and overstating accuracy", "NumPy requires it", "It makes errors larger on purpose"], answer: 1, explain: "Cross-validation gives an honest error." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Georgopoulos, Schwartz and Kettner (1986) its third pass and write your critique under the five headings. Focus on one question: **the population vector shows that direction can be read from motor cortex; does it show that motor cortex encodes direction?** Later work argued that motor cortex is better described as a dynamical system generating muscle commands, with direction tuning a by-product (Churchland and colleagues, 2012). Think about what evidence would separate the two views.
+
+<Callout kind="research">
+This debate, about representation versus dynamics, runs through Weeks 41, 116 and 135. A good research question often sits exactly where two views make different predictions. Write down one such prediction.
+</Callout>
+
+<Key title="Week 4 review checklist">
+<ul>
+<li>I can treat population activity as vectors and trajectories in state space.</li>
+<li>I can compute lengths, distances, dot products, angles and projections.</li>
+<li>I can explain why a linear-nonlinear neuron and a cosine-tuned neuron are dot products.</li>
+<li>I can form linear combinations, test independence and find coordinates in a basis.</li>
+<li>I can build a population-vector decoder and test it on held-out trials.</li>
+<li>I can orthonormalise vectors, project out a signal, and build and compare RDMs.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part D: with very sharply tuned neurons, what would the RDM look like, and would the population vector still work? Then write the prediction that would separate representation from dynamics in motor cortex." />

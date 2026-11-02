@@ -1,0 +1,257 @@
+export const meta = {
+  title: "A neuron as a dot product: receptive fields and cosine tuning",
+  intro: "Many neurons behave, to a first approximation, like a dot product: they weight their inputs, add them up and respond to the total. Today you will see that a visual neuron's receptive field is a weight vector, that its tuning curve is a dot product with each stimulus, and that motor-cortex neurons follow a cosine of the movement direction, which is a dot product in disguise.",
+  goals: [
+    "Model a visual neuron's response as a dot product of an image and a receptive field",
+    "Compute an orientation tuning curve from dot products",
+    "Show that cosine tuning is a dot product of unit vectors",
+    "Estimate a preferred direction from firing rates",
+  ],
+  plan: [
+    { label: "Predict and the linear neuron", minutes: 20 },
+    { label: "Receptive fields as weight vectors", minutes: 35 },
+    { label: "Cosine tuning in motor cortex", minutes: 30 },
+    { label: "Estimating a preferred direction", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "georgopoulos-1982",
+};
+
+<Predict question="A visual neuron's receptive field is an oriented stripe pattern. If you show it a grating at 90° to its preferred orientation, do you expect a strong response, no response, or a response below baseline?" />
+
+<Step n={1} title="The linear neuron" minutes={20} />
+
+The simplest model of a neuron says: response = weights dot input, then a nonlinearity.
+
+$$
+r = f(\mathbf{w} \cdot \mathbf{x} + b)
+$$
+
+You built this as a perceptron in Week 1, with $f$ a step. In sensory neuroscience $\mathbf{x}$ is the stimulus (the pixel intensities of an image, or the sound energy at each frequency), $\mathbf{w}$ is the neuron's **receptive field**, and $f$ is usually a **rectification**, since firing rates cannot go below zero: $f(z) = \max(0, z)$. This is the **linear-nonlinear** (LN) model, which you will fit to real data in Week 35.
+
+The dot product says something precise: the neuron responds most to stimuli that look like its receptive field (largest projection), not at all to stimuli orthogonal to it, and is pushed below baseline by stimuli that look like its opposite.
+
+<Video id="8VdFf3egwfg" title="Hubel and Wiesel: cat cortex experiment" by="David Hubel and Torsten Wiesel (archival footage)" note="The famous recording: each click is a spike from a neuron in cat visual cortex, firing for a bar of light at one orientation." />
+
+<Step n={2} title="Receptive fields as weight vectors" minutes={35} />
+
+Hubel and Wiesel found neurons in primary visual cortex that respond to bars or edges at one orientation. A good model of such a **simple cell** is a **Gabor** receptive field: a stripe pattern under a Gaussian window. An image patch of 21 by 21 pixels is a vector of 441 numbers; so is the receptive field. The response is their dot product.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def gabor(size=21, theta=0.0, wavelength=8.0, sigma=4.0):
+      """A Gabor receptive field: stripes at angle theta (radians) under a Gaussian window."""
+      half = size // 2
+      y, x = np.mgrid[-half:half + 1, -half:half + 1]
+      xr = x * np.cos(theta) + y * np.sin(theta)
+      return np.exp(-(x ** 2 + y ** 2) / (2 * sigma ** 2)) * np.cos(2 * np.pi * xr / wavelength)
+
+  def grating(size=21, theta=0.0, wavelength=8.0):
+      half = size // 2
+      y, x = np.mgrid[-half:half + 1, -half:half + 1]
+      return np.cos(2 * np.pi * (x * np.cos(theta) + y * np.sin(theta)) / wavelength)
+
+  rf = gabor(theta=np.radians(30))
+  fig, axes = plt.subplots(1, 4, figsize=(9, 2.4))
+  for ax, (img, t) in zip(axes, [(rf, "receptive field"), (grating(theta=np.radians(30)), "grating 30°"),
+                                 (grating(theta=np.radians(120)), "grating 120°"), (-grating(theta=np.radians(30)), "grating 30°, inverted")]):
+      ax.imshow(img, cmap="RdBu_r", vmin=-1, vmax=1); ax.set_title(t, fontsize=9); ax.axis("off")
+  plt.tight_layout(); plt.show()
+
+  for name, img in [("30°", grating(theta=np.radians(30))), ("120°", grating(theta=np.radians(120))), ("30° inverted", -grating(theta=np.radians(30)))]:
+      print(f"{name:>13}: w · x = {rf.ravel() @ img.ravel():8.2f}")
+`} />
+
+The matched grating gives a large positive dot product, the orthogonal one almost zero, and the inverted one a large negative value, which rectification turns into silence. That answers today's prediction: orthogonal stimuli give no response (above baseline), because the dot product is near zero.
+
+<PyCell id="tuning" title="An orientation tuning curve from dot products" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "responses has one value per orientation"
+      assert responses.shape == thetas.shape
+
+  def test_values():
+      "each response is the rectified dot product of the receptive field and the grating"
+      for th, r in zip(thetas[::6], responses[::6]):
+          expect = max(0.0, rf.ravel() @ grating(theta=th).ravel())
+          assert abs(r - expect) < 1e-9
+
+  def test_peak():
+      "the preferred orientation is 30 degrees"
+      assert abs(np.degrees(thetas[np.argmax(responses)]) - 30) < 3
+`} prompt="For 60 orientations from 0 to 180° (`thetas`, in radians), compute `responses`: the rectified response $\max(0, \mathbf{w} \cdot \mathbf{x})$ of the receptive field `rf` to a grating at each orientation. Plot the tuning curve. Where does it peak, and how wide is it?"
+code={String.raw`
+  thetas = np.linspace(0, np.pi, 60, endpoint=False)
+  responses = ...
+  plt.figure(figsize=(5, 3))
+  plt.plot(np.degrees(thetas), responses)
+  plt.xlabel("grating orientation (deg)"); plt.ylabel("response (a.u.)")
+  plt.show()
+`}
+hint="responses = np.array([max(0.0, rf.ravel() @ grating(theta=t).ravel()) for t in thetas]). The ravel() turns each 21 by 21 image into a vector of 441 numbers."
+solution={String.raw`
+  thetas = np.linspace(0, np.pi, 60, endpoint=False)
+  responses = np.array([max(0.0, rf.ravel() @ grating(theta=t).ravel()) for t in thetas])
+  plt.figure(figsize=(5, 3))
+  plt.plot(np.degrees(thetas), responses)
+  plt.xlabel("grating orientation (deg)"); plt.ylabel("response (a.u.)")
+  plt.show()
+`} />
+
+A whole tuning curve emerges from one weight vector. In Week 84 you will see that the first layer of a convolutional network trained on natural images learns weight vectors that look just like these Gabor receptive fields, without being told to.
+
+<Callout kind="think">
+Real simple cells are not perfectly linear: their tuning is often sharper than this model predicts, and responses saturate at high contrast. Which part of $r = f(\mathbf{w} \cdot \mathbf{x})$ would you change to make tuning sharper? (Hint: try $f(z) = \max(0, z)^2$.)
+</Callout>
+
+<Step n={3} title="Cosine tuning in motor cortex" minutes={30} />
+
+In this week's classic paper (Georgopoulos and colleagues, 1982), monkeys moved a handle to targets in eight directions while single neurons in motor cortex were recorded. Many neurons fired most for one direction and progressively less for others, following a cosine:
+
+$$
+r(\phi) = b_0 + k \cos(\phi - \phi_{\text{pref}})
+$$
+
+where $\phi$ is the movement direction, $\phi_{\text{pref}}$ the neuron's **preferred direction**, $b_0$ its baseline and $k$ its depth of modulation.
+
+<Figure caption="A cosine-tuned neuron. The target dots grow with firing rate. Move the arm and change the preferred direction." credit="Interactive figure by Engram. Model from Georgopoulos et al. (1982).">
+  <CosineTuning />
+</Figure>
+
+<Derivation title="Cosine tuning is a dot product">
+  <div>
+
+Write the movement direction and the preferred direction as unit vectors: $\mathbf{d} = (\cos\phi, \sin\phi)$ and $\mathbf{p} = (\cos\phi_{\text{pref}}, \sin\phi_{\text{pref}})$.
+
+  </div>
+  <div>
+
+Their dot product is $\mathbf{d} \cdot \mathbf{p} = \cos\phi\cos\phi_{\text{pref}} + \sin\phi\sin\phi_{\text{pref}}$.
+
+  </div>
+  <div>
+
+By the angle-difference identity, $\cos\phi\cos\phi_{\text{pref}} + \sin\phi\sin\phi_{\text{pref}} = \cos(\phi - \phi_{\text{pref}})$.
+
+  </div>
+  <div>
+
+So the tuning curve is a linear neuron whose input is the movement direction:
+
+$$
+r = b_0 + k\,(\mathbf{d} \cdot \mathbf{p})
+$$
+
+The preferred direction $\mathbf{p}$ plays the part of the weight vector. The same equation holds in three dimensions, which the 1986 paper used.
+
+  </div>
+</Derivation>
+
+<Step n={4} title="Estimating a preferred direction" minutes={20} />
+
+Given a neuron's rates for eight evenly spaced directions, how do you find its preferred direction? Treat each direction as a unit vector, weight it by the rate, and add: the sum points towards the preferred direction.
+
+<PyCell id="pd" title="Find the preferred direction" tests={String.raw`
+  import numpy as np
+  def test_pd():
+      "preferred_direction recovers the angle of a cosine-tuned neuron"
+      dirs = np.radians(np.arange(0, 360, 45))
+      for true in [10, 100, 250]:
+          r = 20 + 15 * np.cos(dirs - np.radians(true))
+          est = preferred_direction(dirs, r)
+          assert abs((est - true + 180) % 360 - 180) < 1e-6, f"true {true}, got {est}"
+
+  def test_noisy():
+      "est_noisy is within 15 degrees for the noisy neuron"
+      assert abs((est_noisy - 135 + 180) % 360 - 180) < 15
+`} prompt="Write `preferred_direction(dirs, rates)` that returns the preferred direction in degrees (0 to 360): sum the unit vectors $(\cos\phi, \sin\phi)$ weighted by the rates, and take the angle of the sum with `np.arctan2(y, x)`. Then apply it to the noisy neuron below and store the result in `est_noisy`."
+code={String.raw`
+  def preferred_direction(dirs, rates):
+      x = ...
+      y = ...
+      return np.degrees(np.arctan2(y, x)) % 360
+
+  dirs = np.radians(np.arange(0, 360, 45))
+  rng = np.random.default_rng(4)
+  rates = rng.poisson((20 + 15 * np.cos(dirs - np.radians(135))) * 1.0)    # one second per direction
+  est_noisy = preferred_direction(dirs, rates)
+  print("rates:", rates, " estimated preferred direction:", round(est_noisy, 1), "degrees (true 135)")
+`}
+hint="x = np.sum(rates * np.cos(dirs)); y = np.sum(rates * np.sin(dirs))."
+solution={String.raw`
+  def preferred_direction(dirs, rates):
+      x = np.sum(rates * np.cos(dirs))
+      y = np.sum(rates * np.sin(dirs))
+      return np.degrees(np.arctan2(y, x)) % 360
+
+  dirs = np.radians(np.arange(0, 360, 45))
+  rng = np.random.default_rng(4)
+  rates = rng.poisson((20 + 15 * np.cos(dirs - np.radians(135))) * 1.0)
+  est_noisy = preferred_direction(dirs, rates)
+  print("rates:", rates, " estimated preferred direction:", round(est_noisy, 1), "degrees (true 135)")
+`} />
+
+<Prove title="Why the weighted sum works" task="For evenly spaced directions $\phi_j = 2\pi j / N$ with $N \ge 3$, use $\sum_j \cos\phi_j = \sum_j \sin\phi_j = 0$ and $\sum_j \cos^2\phi_j = \sum_j \sin^2\phi_j = N/2$, $\sum_j \cos\phi_j \sin\phi_j = 0$ to show that $\sum_j r_j \mathbf{d}_j = \tfrac{Nk}{2}\,\mathbf{p}$ for a cosine-tuned neuron. Why does the baseline $b_0$ drop out?">
+
+Write $r_j = b_0 + k\,\mathbf{d}_j \cdot \mathbf{p}$. Then
+
+$$
+\sum_j r_j \mathbf{d}_j = b_0 \sum_j \mathbf{d}_j + k \sum_j (\mathbf{d}_j \cdot \mathbf{p})\,\mathbf{d}_j
+$$
+
+The first sum is $(\sum_j \cos\phi_j, \sum_j \sin\phi_j) = (0, 0)$: evenly spaced unit vectors cancel, so the baseline drops out.
+
+For the second, take the x-entry: $\sum_j (\cos\phi_j\, p_x + \sin\phi_j\, p_y)\cos\phi_j = p_x \tfrac{N}{2} + p_y \cdot 0$. The y-entry is $p_y \tfrac{N}{2}$ in the same way. So the sum is $\tfrac{Nk}{2}\,\mathbf{p}$, which points exactly along the preferred direction.
+
+If directions are not evenly spaced, the first sum is not zero and the estimate is biased towards over-sampled directions. Tomorrow the same argument, applied to many neurons, gives the population vector.
+
+</Prove>
+
+<Bridge title="Neurons and units as dot products"
+  neuro="Visual simple cells, auditory neurons and motor-cortex neurons are all reasonably described, to first order, by a weighted sum of inputs followed by a nonlinearity. Where the description fails is where the interesting biology is: adaptation, normalisation, dendritic nonlinearities (Week 139)."
+  ai="Every unit in an artificial network computes exactly $f(\mathbf{w} \cdot \mathbf{x} + b)$. A layer of units is many dot products at once, which is a matrix times a vector: next week's topic.">
+
+The LN model is where neuroscience and deep learning share a single equation.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In the linear-nonlinear model $r = f(\\mathbf{w} \\cdot \\mathbf{x} + b)$, what is $\\mathbf{w}$?", options: ["The stimulus", "The receptive field (weights)", "The firing rate", "The noise"], answer: 1, explain: "The weights describe which inputs drive the neuron." },
+  { q: "A stimulus orthogonal to a neuron's receptive field gives a linear response of...", options: ["Its maximum", "About zero", "Its minimum", "Infinity"], answer: 1, explain: "The dot product of orthogonal vectors is zero." },
+  { q: "Why is rectification $\\max(0, z)$ used?", options: ["To make the model linear", "Firing rates cannot be negative", "To speed up computation", "To add noise"], answer: 1, explain: "Negative drive gives silence, not negative spikes." },
+  { q: "A 21 by 21 image patch is a vector in...", options: ["$\\mathbb{R}^{21}$", "$\\mathbb{R}^{42}$", "$\\mathbb{R}^{441}$", "$\\mathbb{R}^{2}$"], answer: 2, explain: "One entry per pixel: 441." },
+  { q: "Cosine tuning $r = b_0 + k\\cos(\\phi - \\phi_{\\text{pref}})$ is equivalent to...", options: ["$b_0 + k\\,\\mathbf{d} \\cdot \\mathbf{p}$ with unit vectors d and p", "$b_0 \\cdot k$", "A step function", "$\\mathbf{d} + \\mathbf{p}$"], answer: 0, explain: "By the angle-difference identity." },
+  { q: "How can you estimate a preferred direction from rates at evenly spaced directions?", options: ["Take the direction with the lowest rate", "Sum the direction unit vectors weighted by the rates", "Average the rates", "Use the first direction"], answer: 1, explain: "The baseline cancels and the sum points along the preferred direction." },
+  { q: "What do trained convolutional networks learn in their first layer?", options: ["Random noise", "Gabor-like oriented filters, like V1 receptive fields", "Faces", "Words"], answer: 1, explain: "A striking convergence between brains and networks (Week 84)." },
+]} />
+
+<Flashcards cards={[
+  { front: "The linear-nonlinear (LN) model?", back: "$r = f(\\mathbf{w} \\cdot \\mathbf{x} + b)$: receptive field w, stimulus x, nonlinearity f (often rectification)." },
+  { front: "Gabor receptive field?", back: "A stripe (cosine) pattern under a Gaussian window: a model of a V1 simple cell." },
+  { front: "Cosine tuning?", back: "$r(\\phi) = b_0 + k\\cos(\\phi - \\phi_{\\text{pref}}) = b_0 + k\\,\\mathbf{d} \\cdot \\mathbf{p}$" },
+  { front: "Estimate a preferred direction?", back: "Sum the movement unit vectors weighted by the rates; the angle of the sum (np.arctan2(y, x)) is the preferred direction." },
+  { front: "Why does the baseline cancel in that sum?", back: "Evenly spaced unit vectors add to zero." },
+]} />
+
+<Predict revisit question="What does a simple cell do with a grating at 90° to its preferred orientation?" />
+
+<Key title="Before you go">
+<ul>
+<li>A linear-nonlinear neuron responds to the dot product of its receptive field with the stimulus.</li>
+<li>Its tuning curve is that dot product across stimuli; orthogonal stimuli give no drive.</li>
+<li>Cosine tuning in motor cortex is a dot product of movement and preferred direction.</li>
+<li>The preferred direction is the rate-weighted sum of direction vectors.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Georgopoulos, Kalaska, Caminiti and Massey (1982), on the relation between arm movement direction and motor-cortex firing.</li>
+<li>Hubel and Wiesel (1962), <em>Receptive fields, binocular interaction and functional architecture in the cat's visual cortex</em>, Journal of Physiology 160: the discovery of orientation selectivity.</li>
+<li>Dayan and Abbott, <em>Theoretical Neuroscience</em>, Chapter 2: linear receptive fields.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="The LN model describes a neuron with one weight vector. Real neurons have thousands of synapses on branching dendrites. What could a neuron compute that a single dot product cannot? Write one guess; Week 139 returns to it." />

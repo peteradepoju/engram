@@ -71,6 +71,14 @@ export const DAY_TITLES: Record<number, string[]> = {
     "Reproducible research: notebooks, environments and Git branches",
     "Forge: Week 3 challenge, quiz and deep read",
   ],
+  4: [
+    "Vectors: population activity as a point in space",
+    "The dot product: length, angle and similarity",
+    "A neuron as a dot product: receptive fields and cosine tuning",
+    "Linear combinations, span and basis: the population vector",
+    "Orthogonality, projection and representational similarity",
+    "Forge: Week 4 challenge, quiz and deep read",
+  ],
 };
 
 export const DAYS_PER_WEEK = 6;
@@ -99,7 +107,7 @@ export function dayTitle(w: number, d: number): string {
 }
 
 /** Weeks whose lesson files exist. Kept in sync by hand as content is written. */
-export const WRITTEN_WEEKS = [1, 2, 3];
+export const WRITTEN_WEEKS = [1, 2, 3, 4];
 export const isWritten = (w: number) => WRITTEN_WEEKS.includes(w);
 
 /** Every lesson that is published, in order. */

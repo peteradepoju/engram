@@ -1,0 +1,332 @@
+export const meta = {
+  title: "Orthogonality, projection and representational similarity",
+  intro: "Orthogonal directions do not interfere with each other: a signal along one is invisible along the other. Today you build orthonormal bases with Gram-Schmidt, remove unwanted signals from population activity by projection, and learn representational similarity analysis, the method NeuroAI uses to compare brains with models.",
+  goals: [
+    "Recognise orthogonal and orthonormal sets and use them as coordinates",
+    "Build an orthonormal basis with Gram-Schmidt",
+    "Remove a direction from population activity by projection",
+    "Build a representational dissimilarity matrix and compare two of them",
+  ],
+  plan: [
+    { label: "Predict and orthonormal bases", minutes: 20 },
+    { label: "Gram-Schmidt", minutes: 25 },
+    { label: "Projecting out a signal", minutes: 25 },
+    { label: "Representational similarity", minutes: 35 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "kriegeskorte-2008",
+};
+
+<Predict question="A brain area could prepare a movement without making it. If preparatory activity and movement activity both happen in the same neurons, how might the area keep preparation from leaking into the muscles?" />
+
+<Step n={1} title="Orthonormal bases" minutes={20} />
+
+Vectors are **orthogonal** when their dot product is zero. A set is **orthonormal** when every vector has length 1 and every pair is orthogonal:
+
+$$
+\mathbf{q}_i \cdot \mathbf{q}_j = \begin{cases} 1 & i = j \\ 0 & i \neq j \end{cases}
+$$
+
+Orthonormal bases are the easiest coordinates there are. Yesterday you needed to solve a linear system to find coordinates; with an orthonormal basis each coordinate is just a dot product, $c_i = \mathbf{w} \cdot \mathbf{q}_i$, because every other basis vector contributes zero to it.
+
+If the vectors are the columns of a matrix $Q$, orthonormality says $Q^\top Q = I$, the identity matrix (all coordinates computed at once by $Q^\top \mathbf{w}$). You will meet transposes properly next week; for now $Q^\top Q$ is the table of all dot products between columns.
+
+<PyCell id="ortho" title="Is a set orthonormal?" tests={String.raw`
+  import numpy as np
+  def test_cases():
+      "is_orthonormal gives the right answers"
+      assert is_orthonormal(np.eye(3))
+      c, s = np.cos(0.3), np.sin(0.3)
+      assert is_orthonormal(np.array([[c, -s], [s, c]]))
+      assert not is_orthonormal(np.array([[1.0, 1.0], [0.0, 1.0]]))
+      assert not is_orthonormal(np.array([[2.0, 0.0], [0.0, 2.0]]))
+`} prompt="Write `is_orthonormal(Q)` that returns True when the columns of `Q` are orthonormal, by checking that `Q.T @ Q` is close to the identity matrix (`np.allclose` and `np.eye`)."
+code={String.raw`
+  import numpy as np
+
+  def is_orthonormal(Q):
+      ...
+
+  print(is_orthonormal(np.eye(2)), is_orthonormal(np.array([[1.0, 1.0], [0.0, 1.0]])))
+`}
+hint="return np.allclose(Q.T @ Q, np.eye(Q.shape[1]))"
+solution={String.raw`
+  import numpy as np
+
+  def is_orthonormal(Q):
+      return np.allclose(Q.T @ Q, np.eye(Q.shape[1]))
+
+  print(is_orthonormal(np.eye(2)), is_orthonormal(np.array([[1.0, 1.0], [0.0, 1.0]])))
+`} />
+
+<Step n={2} title="Gram-Schmidt" minutes={25} />
+
+Any set of independent vectors can be turned into an orthonormal set with the same span. The **Gram-Schmidt** process takes the vectors one at a time: remove from each its projections onto all the earlier ones (leaving only the new direction), then scale it to length 1.
+
+<Derivation title="One step of Gram-Schmidt">
+  <div>
+
+Suppose $\mathbf{q}_1, \dots, \mathbf{q}_{k-1}$ are already orthonormal and $\mathbf{v}_k$ is the next vector.
+
+  </div>
+  <div>
+
+Remove its shadow on each earlier direction (Day 2's vector projection):
+
+$$
+\mathbf{u}_k = \mathbf{v}_k - \sum_{j=1}^{k-1} (\mathbf{v}_k \cdot \mathbf{q}_j)\,\mathbf{q}_j
+$$
+
+  </div>
+  <div>
+
+Check that it is orthogonal to each earlier $\mathbf{q}_i$: $\mathbf{u}_k \cdot \mathbf{q}_i = \mathbf{v}_k \cdot \mathbf{q}_i - (\mathbf{v}_k \cdot \mathbf{q}_i)(\mathbf{q}_i \cdot \mathbf{q}_i) = 0$, since every other $\mathbf{q}_j \cdot \mathbf{q}_i$ is zero and $\mathbf{q}_i \cdot \mathbf{q}_i = 1$.
+
+  </div>
+  <div>
+
+Normalise: $\mathbf{q}_k = \mathbf{u}_k / \lVert \mathbf{u}_k \rVert$. If $\mathbf{u}_k = \mathbf{0}$, then $\mathbf{v}_k$ was already in the span of the earlier vectors: they were not independent.
+
+  </div>
+</Derivation>
+
+<PyCell id="gs" title="Gram-Schmidt in NumPy" tests={String.raw`
+  import numpy as np
+  def test_orthonormal():
+      "the output columns are orthonormal"
+      V = np.random.default_rng(0).normal(size=(5, 3))
+      Q = gram_schmidt(V)
+      assert Q.shape == (5, 3) and np.allclose(Q.T @ Q, np.eye(3))
+
+  def test_same_span():
+      "the output spans the same space as the input"
+      V = np.random.default_rng(1).normal(size=(4, 2))
+      Q = gram_schmidt(V)
+      coeffs = np.linalg.lstsq(Q, V, rcond=None)[0]
+      assert np.allclose(Q @ coeffs, V)
+
+  def test_first_direction():
+      "the first output column points along the first input column"
+      V = np.array([[3.0, 1.0], [4.0, 2.0]])
+      assert np.allclose(gram_schmidt(V)[:, 0], [0.6, 0.8])
+`} prompt="Write `gram_schmidt(V)` that takes a matrix with independent columns and returns a matrix `Q` with orthonormal columns spanning the same space, following the derivation."
+code={String.raw`
+  def gram_schmidt(V):
+      Q = np.zeros_like(V, dtype=float)
+      for k in range(V.shape[1]):
+          u = V[:, k].astype(float)
+          for j in range(k):
+              ...
+          Q[:, k] = ...
+      return Q
+
+  V = np.array([[3.0, 1.0], [4.0, 2.0]])
+  Q = gram_schmidt(V)
+  print(Q); print(np.round(Q.T @ Q, 10))
+`}
+hint="Inside the inner loop: u = u - (V[:, k] @ Q[:, j]) * Q[:, j]. Then Q[:, k] = u / np.linalg.norm(u). (Using u @ Q[:, j] instead of V[:, k] @ Q[:, j] gives the more stable modified Gram-Schmidt.)"
+solution={String.raw`
+  def gram_schmidt(V):
+      Q = np.zeros_like(V, dtype=float)
+      for k in range(V.shape[1]):
+          u = V[:, k].astype(float)
+          for j in range(k):
+              u = u - (u @ Q[:, j]) * Q[:, j]
+          Q[:, k] = u / np.linalg.norm(u)
+      return Q
+
+  V = np.array([[3.0, 1.0], [4.0, 2.0]])
+  Q = gram_schmidt(V)
+  print(Q); print(np.round(Q.T @ Q, 10))
+`} />
+
+In practice NumPy's `np.linalg.qr(V)` does this more stably, returning the orthonormal matrix $Q$ and a triangular matrix $R$ with $V = QR$. You will use it in Week 5 to solve least-squares problems.
+
+<Video id="Y_Ac6KiQ1t0" title="Lecture 15: Projections onto subspaces (MIT 18.06 Linear Algebra)" by="Gilbert Strang, MIT OpenCourseWare" note="A classic lecture on projection, the idea behind today and next week's least squares." />
+
+<Step n={3} title="Projecting out a signal" minutes={25} />
+
+Population activity often contains a signal you want to remove: a slow drift, a global change in arousal that raises every neuron's rate, or the movement itself when you want to study preparation. If the unwanted signal lies along a unit direction $\mathbf{u}$, remove it from every state by subtracting the projection:
+
+$$
+\mathbf{x}' = \mathbf{x} - (\mathbf{x} \cdot \mathbf{u})\,\mathbf{u}
+$$
+
+What remains is orthogonal to $\mathbf{u}$: a readout along $\mathbf{u}$ now sees nothing.
+
+<PyCell id="remove" title="Remove a shared arousal signal" tests={String.raw`
+  import numpy as np
+  def test_orthogonal():
+      "cleaned activity has no component along u"
+      assert np.allclose(cleaned @ u, 0, atol=1e-9)
+
+  def test_rest_kept():
+      "everything orthogonal to u is unchanged"
+      P = X - np.outer(X @ u, u)
+      assert np.allclose(cleaned, P)
+
+  def test_task_survives():
+      "the task signal survives the cleaning"
+      r = np.corrcoef(cleaned @ task_dir, task)[0, 1]
+      assert r > 0.8, f"correlation {r:.2f}"
+`} prompt="`X` has 300 trials by 40 neurons. Every neuron gets the same arousal fluctuation (along `u`, the normalised all-ones direction) plus a task signal along `task_dir`, which is orthogonal to `u`. Compute `cleaned` by removing the component along `u` from every trial, with one matrix expression and no loop."
+code={String.raw`
+  rng = np.random.default_rng(3)
+  n = 40
+  u = np.ones(n) / np.sqrt(n)                         # arousal: every neuron up together
+  task_dir = rng.normal(size=n); task_dir -= (task_dir @ u) * u; task_dir /= np.linalg.norm(task_dir)
+  arousal = rng.normal(0, 8, 300)
+  task = rng.normal(0, 1, 300)
+  X = 10 + np.outer(arousal, u) * np.sqrt(n) / 4 + np.outer(task, task_dir) * 3 + rng.normal(0, 1, (300, n))
+
+  cleaned = ...
+  print("variance along u before:", np.var(X @ u).round(1), " after:", np.var(cleaned @ u).round(6))
+`}
+hint="Each trial's component along u is X @ u (one number per trial). Subtract the outer product: cleaned = X - np.outer(X @ u, u)."
+solution={String.raw`
+  rng = np.random.default_rng(3)
+  n = 40
+  u = np.ones(n) / np.sqrt(n)
+  task_dir = rng.normal(size=n); task_dir -= (task_dir @ u) * u; task_dir /= np.linalg.norm(task_dir)
+  arousal = rng.normal(0, 8, 300)
+  task = rng.normal(0, 1, 300)
+  X = 10 + np.outer(arousal, u) * np.sqrt(n) / 4 + np.outer(task, task_dir) * 3 + rng.normal(0, 1, (300, n))
+
+  cleaned = X - np.outer(X @ u, u)
+  print("variance along u before:", np.var(X @ u).round(1), " after:", np.var(cleaned @ u).round(6))
+`} />
+
+This idea answers today's prediction, and it is one of the most influential ideas in motor neuroscience. Kaufman, Churchland, Ryu and Shenoy (2014) proposed that motor cortex prepares movements in an **output-null** subspace: patterns of activity that are orthogonal to the directions the muscles read out. Preparation can then change freely without moving the arm. Activity moves into the **output-potent** directions only when the movement begins. You will analyse this in Week 116.
+
+<Step n={4} title="Representational similarity" minutes={35} />
+
+How do you compare the visual cortex of a monkey with a layer of a deep network? They have different numbers of units, measured in different ways. Representational similarity analysis (Kriegeskorte, Mur and Bandettini, 2008, today's paper) side-steps the problem: for each system, measure how **dissimilar** its responses to every pair of stimuli are. The result is a stimulus-by-stimulus matrix, the **representational dissimilarity matrix** (RDM). Two systems represent the world alike if their RDMs are alike, whatever their units.
+
+<Figure caption="Similarity between the population responses to 12 orientations, from 40 orientation-tuned neurons. Try the three measures and add noise." credit="Interactive figure by Engram.">
+  <SimilarityMatrix />
+</Figure>
+
+A common dissimilarity is one minus the correlation between the two response vectors, $1 - r$: 0 for identical patterns, 1 for unrelated ones, 2 for opposite ones.
+
+<PyCell code={String.raw`
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(5)
+  oris = np.arange(0, 180, 15.0)                              # 12 stimuli
+  prefs = np.linspace(0, 180, 60, endpoint=False)            # 60 "V1" neurons
+  def tuning(theta, pref, kappa=2.0):
+      return 3 + 25 * np.exp(kappa * (np.cos(2 * np.radians(theta - pref)) - 1))
+  brain = np.array([[tuning(o, p) for p in prefs] for o in oris]) + rng.normal(0, 2, (12, 60))   # (stimuli, neurons)
+  print("brain responses:", brain.shape)
+`} />
+
+<PyCell id="rdm" title="Build and compare RDMs" tests={String.raw`
+  import numpy as np
+  def test_rdm_shape():
+      "rdm returns a symmetric matrix with zeros on the diagonal"
+      D = rdm(brain)
+      assert D.shape == (12, 12) and np.allclose(D, D.T) and np.allclose(np.diag(D), 0)
+
+  def test_rdm_values():
+      "entries are one minus the correlation of response patterns"
+      D = rdm(brain)
+      assert abs(D[0, 3] - (1 - np.corrcoef(brain[0], brain[3])[0, 1])) < 1e-9
+
+  def test_compare():
+      "the matching model correlates better with the brain than the shuffled model"
+      assert compare(rdm(brain), rdm(model_good)) > compare(rdm(brain), rdm(model_bad)) + 0.3
+`} prompt="Write `rdm(R)` for a (stimuli, units) array: the matrix of $1 - r$ between every pair of rows (use `np.corrcoef`, which correlates rows). Write `compare(D1, D2)`: the correlation between the two matrices' entries above the diagonal (`np.triu_indices`). Compare the brain with a model that has the right tuning and with one whose stimulus labels are shuffled."
+code={String.raw`
+  def rdm(R):
+      ...
+
+  def compare(D1, D2):
+      i, j = np.triu_indices(D1.shape[0], k=1)
+      ...
+
+  model_good = np.array([[tuning(o, p, kappa=1.2) for p in np.linspace(0, 180, 25, endpoint=False)] for o in oris])   # a different number of units
+  model_bad = model_good[rng.permutation(12)]                                                                     # same units, stimuli scrambled
+
+  fig, axes = plt.subplots(1, 3, figsize=(9, 3))
+  for ax, (name, R) in zip(axes, [("brain", brain), ("good model", model_good), ("shuffled model", model_bad)]):
+      ax.imshow(rdm(R), cmap="viridis"); ax.set_title(name); ax.set_xticks([]); ax.set_yticks([])
+  plt.tight_layout(); plt.show()
+  print("brain vs good model:", round(compare(rdm(brain), rdm(model_good)), 2), "  brain vs shuffled:", round(compare(rdm(brain), rdm(model_bad)), 2))
+`}
+hint="rdm: return 1 - np.corrcoef(R). compare: return np.corrcoef(D1[i, j], D2[i, j])[0, 1]."
+solution={String.raw`
+  def rdm(R):
+      return 1 - np.corrcoef(R)
+
+  def compare(D1, D2):
+      i, j = np.triu_indices(D1.shape[0], k=1)
+      return np.corrcoef(D1[i, j], D2[i, j])[0, 1]
+
+  model_good = np.array([[tuning(o, p, kappa=1.2) for p in np.linspace(0, 180, 25, endpoint=False)] for o in oris])
+  model_bad = model_good[rng.permutation(12)]
+
+  fig, axes = plt.subplots(1, 3, figsize=(9, 3))
+  for ax, (name, R) in zip(axes, [("brain", brain), ("good model", model_good), ("shuffled model", model_bad)]):
+      ax.imshow(rdm(R), cmap="viridis"); ax.set_title(name); ax.set_xticks([]); ax.set_yticks([])
+  plt.tight_layout(); plt.show()
+  print("brain vs good model:", round(compare(rdm(brain), rdm(model_good)), 2), "  brain vs shuffled:", round(compare(rdm(brain), rdm(model_bad)), 2))
+`} />
+
+The good model has 25 units and the brain has 60, yet their RDMs can be compared directly. Kriegeskorte and colleagues usually compare RDMs with a rank correlation (Spearman) rather than Pearson, because a model need only get the order of dissimilarities right. In Week 134 you will see how RSA and related methods ranked deep networks as models of the ventral visual stream, and their pitfalls.
+
+<Bridge title="Orthogonality in brains and machines"
+  neuro="Different signals in the same neurons can be kept apart if they occupy orthogonal directions: preparation and movement in motor cortex, or different memories in one population. Orthogonalisation can also change with learning."
+  ai="Networks trained on several tasks often learn orthogonal representations for them, which reduces interference. Methods for continual learning (Week 140) explicitly push new learning into directions orthogonal to old ones.">
+
+Orthogonality is a geometric way to share neurons between computations without crosstalk.
+
+</Bridge>
+
+<Prove title="Projection removes exactly one dimension" task="Let $\mathbf{u}$ be a unit vector and $\mathbf{x}' = \mathbf{x} - (\mathbf{x} \cdot \mathbf{u})\mathbf{u}$. Show that (a) $\mathbf{x}' \cdot \mathbf{u} = 0$, (b) $\mathbf{x}'' = \mathbf{x}'$ if you project again, and (c) $\lVert \mathbf{x} \rVert^2 = \lVert \mathbf{x}' \rVert^2 + (\mathbf{x} \cdot \mathbf{u})^2$.">
+
+(a) $\mathbf{x}' \cdot \mathbf{u} = \mathbf{x} \cdot \mathbf{u} - (\mathbf{x} \cdot \mathbf{u})(\mathbf{u} \cdot \mathbf{u}) = \mathbf{x} \cdot \mathbf{u} - \mathbf{x} \cdot \mathbf{u} = 0$, since $\mathbf{u} \cdot \mathbf{u} = 1$.
+
+(b) Projecting again subtracts $(\mathbf{x}' \cdot \mathbf{u})\mathbf{u} = \mathbf{0}$, so nothing changes. Projections are **idempotent**: doing them twice is the same as once.
+
+(c) $\mathbf{x} = \mathbf{x}' + (\mathbf{x} \cdot \mathbf{u})\mathbf{u}$, and the two parts are orthogonal by (a). By the Day 1 result, the squared length of a sum of orthogonal vectors is the sum of their squared lengths. So the variance of activity splits cleanly into the part along $\mathbf{u}$ and the rest: the principle behind PCA.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "A set of vectors is orthonormal when...", options: ["They are all parallel", "Each has length 1 and every pair has dot product 0", "They sum to zero", "They are the standard basis only"], answer: 1, explain: "$\\mathbf{q}_i \\cdot \\mathbf{q}_j$ is 1 on the diagonal and 0 off it." },
+  { q: "With an orthonormal basis, the coordinate of w along $\\mathbf{q}_i$ is...", options: ["$\\lVert \\mathbf{w} \\rVert$", "$\\mathbf{w} \\cdot \\mathbf{q}_i$", "The solution of a linear system only", "Always 1"], answer: 1, explain: "Other basis vectors contribute nothing." },
+  { q: "What does Gram-Schmidt do?", options: ["Finds eigenvalues", "Turns independent vectors into an orthonormal set with the same span", "Inverts a matrix", "Computes a dot product"], answer: 1, explain: "Remove earlier projections, then normalise." },
+  { q: "To remove the component of x along unit vector u, compute...", options: ["$\\mathbf{x} + \\mathbf{u}$", "$\\mathbf{x} - (\\mathbf{x} \\cdot \\mathbf{u})\\mathbf{u}$", "$(\\mathbf{x} \\cdot \\mathbf{u})\\mathbf{x}$", "$\\mathbf{u} - \\mathbf{x}$"], answer: 1, explain: "Subtract the vector projection." },
+  { q: "The output-null hypothesis says motor cortex prepares movements...", options: ["In other brain areas", "In activity patterns orthogonal to the muscle readout", "Only during sleep", "By silencing all neurons"], answer: 1, explain: "Preparation stays invisible to the muscles (Kaufman et al., 2014)." },
+  { q: "An entry of a representational dissimilarity matrix compares...", options: ["Two neurons", "The responses to two stimuli", "Two time points", "Two subjects"], answer: 1, explain: "RDMs are indexed by stimuli." },
+  { q: "Why can RSA compare a 60-neuron recording with a 25-unit model?", options: ["It cannot", "Both RDMs are stimulus by stimulus, whatever the number of units", "It deletes units until they match", "It uses only one stimulus"], answer: 1, explain: "That is the point of the method." },
+]} />
+
+<Flashcards cards={[
+  { front: "Orthonormal columns in matrix form?", back: "$Q^\\top Q = I$." },
+  { front: "Gram-Schmidt step?", back: "$\\mathbf{u}_k = \\mathbf{v}_k - \\sum_{j \\lt k} (\\mathbf{v}_k \\cdot \\mathbf{q}_j)\\mathbf{q}_j$, then $\\mathbf{q}_k = \\mathbf{u}_k / \\lVert \\mathbf{u}_k \\rVert$." },
+  { front: "Remove direction u (unit) from every row of X?", back: "`X - np.outer(X @ u, u)`" },
+  { front: "Output-null and output-potent subspaces?", back: "Directions of neural activity invisible to, and read out by, the downstream target (Kaufman et al., 2014)." },
+  { front: "Representational dissimilarity matrix?", back: "A stimulus-by-stimulus matrix of dissimilarities (often $1 - r$) between response patterns." },
+  { front: "Compare two RDMs?", back: "Correlate their entries above the diagonal, usually with a rank (Spearman) correlation." },
+]} />
+
+<Predict revisit question="How could preparation avoid leaking into the muscles?" />
+
+<Key title="Before you go">
+<ul>
+<li>Orthonormal bases make coordinates simple dot products; Gram-Schmidt (or QR) builds them.</li>
+<li>Subtracting a projection removes a signal, leaving only what is orthogonal to it.</li>
+<li>Orthogonal subspaces let one population carry several signals without crosstalk.</li>
+<li>RSA compares any two systems through their stimulus-by-stimulus dissimilarity matrices.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Kriegeskorte, Mur and Bandettini (2008), <em>Representational similarity analysis</em>.</li>
+<li>Kaufman, Churchland, Ryu and Shenoy (2014), <em>Cortical activity in the null space: permitting preparation without movement</em>, Nature Neuroscience.</li>
+<li>Deisenroth, Faisal and Ong, <em>Mathematics for Machine Learning</em>, Chapter 3.5 to 3.8: orthogonality and projections.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If two brain areas, or a brain and a network, have similar RDMs, does that mean they compute in the same way? Write one reason it might and one reason it might not." />
