@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { PARTS, WEEKS } from "@/lib/curriculum";
+import { AccountCta } from "@/components/account-cta";
 
 const FEATURES = [
   { t: "A lesson every day", d: "Two hours of guided learning: interactive figures, step-by-step derivations, curated videos and Python that runs in your browser." },
@@ -20,7 +21,7 @@ export default function Home() {
           Learn how brains and machines learn.
         </h1>
         <p className="mt-5 max-w-2xl text-lg text-ink-2">
-          Engram takes you from mathematics to independent research in NeuroAI: neuroscience, machine learning and deep learning, taught side by side, one day at a time.
+          Engram takes you from the foundations to independent research in NeuroAI: neuroscience, machine learning and deep learning, taught side by side, one day at a time.
         </p>
         <div className="mt-8 flex flex-wrap gap-3">
           <Link href="/learn/w001/d1" className="btn btn-primary !px-5 !py-3 !text-base">Start Day 1</Link>
@@ -72,7 +73,7 @@ export default function Home() {
             <p className="mt-3 text-sm text-ink-2">Six days a week. Day 6 is a Forge (challenge, quiz, deep read) in Years 1 and 2 and a Research Day in Years 3 and 4. Rest days never break your streak.</p>
           </div>
           <div className="flex flex-col justify-center gap-3">
-            <Link href="/login" className="btn btn-primary justify-center !py-3">Create a free account</Link>
+            <AccountCta />
             <Link href="/hub" className="btn justify-center !py-3">Explore the NeuroAI Hub</Link>
           </div>
         </div>

@@ -83,11 +83,11 @@ export function TodayView() {
           </div>
 
           <ul className="mt-5 grid gap-2 sm:grid-cols-3">
-            <li><Link href="/review" className="card block p-3 hover:border-ink-3"><div className="text-xs text-ink-3">Spaced review · 15 min</div><div className="font-semibold">{progress.dueCards} cards due</div></Link></li>
+            <li><Link href="/review" className="card block h-full p-3 hover:border-ink-3"><div className="text-xs text-ink-3">Spaced review · 15 min</div><div className="font-semibold">{progress.dueCards} cards due</div></Link></li>
             <li>{(() => { const pp = papers[info.next ? Math.min(info.next.d, 5) - 1 : 0]; return (
-              <Link href={pp ? `/papers/${pp.id}` : "/papers"} className="card block p-3 hover:border-ink-3"><div className="text-xs text-ink-3">Paper · 30 min</div><div className="truncate font-semibold">{pp?.title ?? "This week's papers"}</div></Link>
+              <Link href={pp ? `/papers/${pp.id}` : "/papers"} className="card block h-full p-3 hover:border-ink-3"><div className="text-xs text-ink-3">Paper · 30 min</div><div className="line-clamp-2 font-semibold leading-snug">{pp?.title ?? "This week's papers"}</div></Link>
             ); })()}</li>
-            <li><Link href="/lab/journal" className="card block p-3 hover:border-ink-3"><div className="text-xs text-ink-3">Journal · 15 min</div><div className="font-semibold">{progress.journalCount} entries</div></Link></li>
+            <li><Link href="/lab/journal" className="card block h-full p-3 hover:border-ink-3"><div className="text-xs text-ink-3">Journal · 15 min</div><div className="font-semibold">{progress.journalCount} entries</div></Link></li>
           </ul>
         </section>
 

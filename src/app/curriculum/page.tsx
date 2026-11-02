@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { PARTS, WEEKS, isWritten, lessonId, weekSlug } from "@/lib/curriculum";
 import { CompletedProvider, WeekDone } from "@/components/progress/completed";
+import { OpenOnHash } from "@/components/open-on-hash";
 
 export const metadata: Metadata = { title: "Curriculum" };
 
@@ -16,18 +17,25 @@ export default function CurriculumPage() {
         <p className="mt-3 max-w-3xl text-ink-2">
           Every week has five lesson days and a Day 6 Forge (Years 1 and 2) or Research Day (Years 3 and 4). Each part ends with a project and an exam, and a rest week falls every 13th week. Weeks are written in batches and kept at least two weeks ahead of the schedule.
         </p>
+        <OpenOnHash />
         <nav className="mt-6 flex flex-wrap gap-2">
           {PARTS.map((p) => <a key={p.n} href={`#part-${p.n}`} className="chip !py-1.5 hover:!bg-accent-soft">Part {p.n}: {p.short}</a>)}
         </nav>
         {PARTS.map((p) => (
-          <section key={p.n} id={`part-${p.n}`} className="mt-10 scroll-mt-20">
-            <div className="flex flex-wrap items-baseline gap-x-3">
-              <h2 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-serif)" }}>Part {p.n}. {p.title}</h2>
-              <span className="text-sm text-ink-3">Weeks {p.weeks[0]} to {p.weeks[1]}</span>
-            </div>
-            <p className="mt-1 text-ink-2">{p.summary}</p>
-            <p className="mt-1 text-sm"><span className="font-semibold">Part project:</span> {p.project}</p>
-            <ol className="mt-4 divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface">
+          <details key={p.n} id={`part-${p.n}`} open={p.n === 0} className="group mt-4 scroll-mt-20 rounded-2xl border border-line bg-surface">
+            <summary className="flex cursor-pointer list-none items-start gap-4 p-5 [&::-webkit-details-marker]:hidden">
+              <span className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-sm font-semibold text-accent">{p.n}</span>
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-baseline gap-x-3">
+                  <span className="text-xl font-semibold" style={{ fontFamily: "var(--font-serif)" }}>{p.title}</span>
+                  <span className="text-sm text-ink-3">{p.weeks[0] === p.weeks[1] ? `Week ${p.weeks[0]}` : `Weeks ${p.weeks[0]} to ${p.weeks[1]}`}</span>
+                </span>
+                <span className="mt-1 block text-[0.95rem] text-ink-2">{p.summary}</span>
+                <span className="mt-1 block text-sm"><span className="font-semibold">Part project:</span> {p.project}</span>
+              </span>
+              <span className="mt-1 text-ink-3 transition-transform group-open:rotate-180" aria-hidden>▾</span>
+            </summary>
+            <ol className="mx-5 mb-5 divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface">
               {WEEKS.filter((w) => w.n >= p.weeks[0] && w.n <= p.weeks[1]).map((w) => (
                 <li key={w.n}>
                   <Link href={`/curriculum/${weekSlug(w.n)}`} className={`flex items-center gap-3 px-4 py-2.5 hover:bg-surface-2 ${w.kind === "rest" ? "text-ink-3" : ""}`}>
@@ -40,7 +48,7 @@ export default function CurriculumPage() {
                 </li>
               ))}
             </ol>
-          </section>
+          </details>
         ))}
       </div>
     </CompletedProvider>

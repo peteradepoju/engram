@@ -46,8 +46,8 @@ export function LabOverview() {
         <ol className="mt-3 flex min-w-[640px] items-stretch gap-1">
           {STAGES.map((s, i) => (
             <li key={s.id} className="flex-1">
-              <div className={`h-full rounded-lg px-2 py-2 text-center ${byStage(s.id) ? "bg-accent-soft" : "bg-surface-2"}`}>
-                <div className="text-xs font-semibold">{i + 1}. {s.label}</div>
+              <div className={`flex h-full flex-col items-center justify-between gap-1 rounded-lg px-2 py-2 text-center ${byStage(s.id) ? "bg-accent-soft" : "bg-surface-2"}`}>
+                <div className="flex min-h-[2.2rem] items-center text-xs font-semibold leading-tight">{i + 1}. {s.label}</div>
                 <div className="text-lg font-semibold">{byStage(s.id)}</div>
               </div>
             </li>
