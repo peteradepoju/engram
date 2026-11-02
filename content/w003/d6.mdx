@@ -1,0 +1,214 @@
+export const meta = {
+  title: "Forge: Week 3 challenge, quiz and deep read",
+  intro: "This week you learned to draw honest figures, work with trial tables and make analyses reproducible. Today's challenge is a small version of the IBL's central question: do mice in different labs behave the same way? You will combine sessions, fit psychometric curves per lab and build a multi-panel figure, then take the weekly quiz and finish your deep read.",
+  goals: [
+    "Run a complete multi-session behavioural analysis with pandas",
+    "Fit and compare psychometric parameters across groups",
+    "Build a publication-style multi-panel figure",
+    "Critique a large collaborative study",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "ibl-2021",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. `pd.Series([1.0, np.nan, 3.0]).mean()`?
+2. A proportion of 0.5 from 100 trials: its standard error?
+3. `np.logspace(0, 2, 3)`?
+
+<PyCell code={String.raw`
+  import numpy as np, pandas as pd
+  print("1.", pd.Series([1.0, np.nan, 3.0]).mean())
+  print("2.", np.sqrt(0.5 * 0.5 / 100))
+  print("3.", np.logspace(0, 2, 3))
+`} />
+
+<Step n={2} title="Weekly challenge: are mice the same in every lab?" minutes={60} />
+
+**The data.** Three labs each ran four mice for one session. All mice learned the same task, but each has its own bias, threshold and lapse rate, and the labs might differ. Run the cell to build the trial table `trials`.
+
+<PyCell code={String.raw`
+  import matplotlib.pyplot as plt
+  from scipy.optimize import curve_fit
+
+  def psychometric(c, bias, sigma, lapse):
+      return lapse + (1 - 2 * lapse) / (1 + np.exp(-(c - bias) / sigma))
+
+  rng = np.random.default_rng(2026)
+  contrasts = np.array([0, 0.0625, 0.125, 0.25, 1.0])
+  rows = []
+  for lab, lab_sigma in [("cshl", 0.14), ("ucl", 0.16), ("champalimaud", 0.15)]:
+      for m in range(4):
+          mouse = f"{lab}_{m + 1:02d}"
+          bias = rng.normal(0, 0.08)
+          sigma = abs(rng.normal(lab_sigma, 0.03)) + 0.05
+          lapse = rng.uniform(0.02, 0.12)
+          n = 500
+          side = rng.choice([-1, 1], n); c = rng.choice(contrasts, n); signed = side * c
+          chose_right = rng.random(n) < psychometric(signed, bias, sigma, lapse)
+          rt = 0.25 + 0.6 * np.exp(-3 * c) * rng.lognormal(0, 0.35, n)
+          rows.append(pd.DataFrame({"lab": lab, "mouse": mouse, "signed_contrast": signed, "chose_right": chose_right, "rt": rt}))
+  trials = pd.concat(rows, ignore_index=True)
+  print(trials.shape); trials.head()
+`} />
+
+<PyCell id="partA" title="Part A: fit every mouse" tests={String.raw`
+  import numpy as np
+  def test_fits_table():
+      "fits has one row per mouse with lab, bias, sigma and lapse"
+      assert len(fits) == 12, f"Expected 12 mice, found {len(fits)}."
+      for col in ["lab", "bias", "sigma", "lapse"]:
+          assert col in fits.columns, f"Missing column {col}."
+
+  def test_reasonable():
+      "fitted values are in sensible ranges"
+      assert fits["sigma"].between(0.01, 1).all() and fits["lapse"].between(0, 0.5).all()
+      assert fits["bias"].abs().max() < 0.6
+
+  def test_matches_curve_fit():
+      "the first mouse's bias matches a direct fit"
+      m = fits.index[0]
+      d = trials[trials["mouse"] == m].groupby("signed_contrast")["chose_right"].agg(["mean", "size"])
+      se = np.maximum(np.sqrt(d["mean"] * (1 - d["mean"]) / d["size"]), 0.02)
+      p, _ = curve_fit(psychometric, d.index.to_numpy(), d["mean"].to_numpy(), sigma=se.to_numpy(), p0=[0, 0.2, 0.05], bounds=([-1, 0.01, 0], [1, 1, 0.5]))
+      assert abs(fits.loc[m, "bias"] - p[0]) < 1e-3
+`} prompt="Write `fit_mouse(df)` that builds the psychometric table for one mouse (mean and count of `chose_right` per signed contrast), computes standard errors (at least 0.02), fits `psychometric` with `p0=[0, 0.2, 0.05]` and `bounds=([-1, 0.01, 0], [1, 1, 0.5])`, and returns a Series with `bias`, `sigma` and `lapse`. Apply it to every mouse to make `fits`, indexed by mouse, with a `lab` column."
+code={String.raw`
+  def fit_mouse(df):
+      d = df.groupby("signed_contrast")["chose_right"].agg(["mean", "size"])
+      se = ...
+      p, _ = curve_fit(...)
+      return pd.Series({"bias": p[0], "sigma": p[1], "lapse": p[2]})
+
+  fits = ...
+  fits
+`}
+hint="se = np.maximum(np.sqrt(d['mean'] * (1 - d['mean']) / d['size']), 0.02). Fit with curve_fit(psychometric, d.index.to_numpy(), d['mean'].to_numpy(), sigma=se.to_numpy(), p0=..., bounds=...). Then fits = pd.DataFrame({m: fit_mouse(g) for m, g in trials.groupby('mouse')}).T and fits['lab'] = trials.groupby('mouse')['lab'].first()."
+solution={String.raw`
+  def fit_mouse(df):
+      d = df.groupby("signed_contrast")["chose_right"].agg(["mean", "size"])
+      se = np.maximum(np.sqrt(d["mean"] * (1 - d["mean"]) / d["size"]), 0.02)
+      p, _ = curve_fit(psychometric, d.index.to_numpy(), d["mean"].to_numpy(), sigma=se.to_numpy(),
+                       p0=[0, 0.2, 0.05], bounds=([-1, 0.01, 0], [1, 1, 0.5]))
+      return pd.Series({"bias": p[0], "sigma": p[1], "lapse": p[2]})
+
+  fits = pd.DataFrame({m: fit_mouse(g) for m, g in trials.groupby("mouse")}).T
+  fits["lab"] = trials.groupby("mouse")["lab"].first()
+  fits
+`} />
+
+<PyCell id="partB" title="Part B: the three-panel figure" tests={String.raw`
+  def test_panels():
+      "the figure has three panels"
+      assert len(fig.axes) == 3, f"Expected 3 panels, found {len(fig.axes)}."
+
+  def test_labels():
+      "every panel has labelled axes"
+      for ax in fig.axes:
+          assert ax.get_xlabel() and ax.get_ylabel(), "Label every axis."
+
+  def test_lines():
+      "panel A has a fitted curve for each lab"
+      assert len(fig.axes[0].get_lines()) >= 3, "Draw one fitted curve per lab in panel A."
+`} prompt="Make `fig` with three panels side by side. A: for each lab, the pooled fraction choosing right at each contrast (points) and the curve with that lab's median parameters (line). B: each mouse's threshold `sigma`, as points grouped by lab. C: median reaction time against absolute contrast, one line per lab. Label every axis and add panel letters."
+code={String.raw`
+  fig, axes = plt.subplots(1, 3, figsize=(12, 3.4), layout="constrained")
+  cc = np.linspace(-1, 1, 200)
+  labs = fits["lab"].unique()
+
+  # A: psychometric data and median fit per lab
+
+  # B: thresholds per mouse, grouped by lab
+
+  # C: chronometric curve per lab
+
+  plt.show()
+`}
+hint="A: for each lab, d = trials[trials.lab == lab].groupby('signed_contrast')['chose_right'].mean(); plot the points, then axes[0].plot(cc, psychometric(cc, *fits[fits.lab == lab][['bias', 'sigma', 'lapse']].median())). B: axes[1].plot(np.full(n, i), sigmas, 'o'). C: trials.assign(abs_c=trials.signed_contrast.abs()).groupby(['lab', 'abs_c'])['rt'].median(), then one line per lab."
+solution={String.raw`
+  fig, axes = plt.subplots(1, 3, figsize=(12, 3.4), layout="constrained")
+  cc = np.linspace(-1, 1, 200)
+  labs = fits["lab"].unique()
+  for i, lab in enumerate(labs):
+      colour = f"C{i}"
+      d = trials[trials["lab"] == lab].groupby("signed_contrast")["chose_right"].mean()
+      axes[0].plot(d.index, d.values, "o", color=colour, ms=4)
+      med = fits[fits["lab"] == lab][["bias", "sigma", "lapse"]].median()
+      axes[0].plot(cc, psychometric(cc, *med), color=colour, label=lab)
+      s = fits.loc[fits["lab"] == lab, "sigma"]
+      axes[1].plot(np.full(len(s), i) + rng.uniform(-0.1, 0.1, len(s)), s, "o", color=colour)
+  chrono = trials.assign(abs_c=trials["signed_contrast"].abs()).groupby(["lab", "abs_c"])["rt"].median()
+  for i, lab in enumerate(labs):
+      axes[2].plot(chrono[lab].index, chrono[lab].values, "o-", color=f"C{i}", label=lab)
+  axes[0].set_xlabel("signed contrast"); axes[0].set_ylabel("P(choose right)"); axes[0].legend(frameon=False, fontsize=8)
+  axes[1].set_xticks(range(len(labs)), labs); axes[1].set_xlabel("lab"); axes[1].set_ylabel("threshold σ")
+  axes[2].set_xlabel("absolute contrast"); axes[2].set_ylabel("median reaction time (s)")
+  for ax, letter in zip(axes, "ABC"):
+      ax.text(-0.12, 1.06, letter, transform=ax.transAxes, fontsize=13, fontweight="bold")
+  plt.show()
+`} />
+
+**Part C (think).** The labs were simulated with slightly different average thresholds (0.14, 0.16 and 0.15), but each mouse also varies. With 4 mice per lab, can you tell the labs apart from panel B? How many mice would you need? Write your reasoning in your journal. The IBL used dozens of mice per lab for exactly this reason. You will learn the statistics to answer it properly in Week 18.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. Comparing two proportions" task="Lab A's mice choose right on 60 per cent of 400 zero-contrast trials; lab B's on 50 per cent of 400. Estimate the standard error of the difference between the two proportions, assuming independent trials. Is a 10-point difference large compared with it?">
+
+Each proportion has standard error $\sqrt{p(1-p)/n}$: $\sqrt{0.6 \times 0.4/400} \approx 0.0245$ and $\sqrt{0.5 \times 0.5/400} = 0.025$.
+
+For independent estimates variances add: $\text{SE}_{\text{diff}} = \sqrt{0.0245^2 + 0.025^2} \approx 0.035$.
+
+The difference, 0.10, is about 2.9 standard errors, so it is unlikely to be chance alone. But trials from one mouse are not truly independent (each mouse has its own bias), so the honest unit of analysis is the mouse, not the trial: a point you will meet again in Week 59.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 3 quiz (15 questions)" questions={[
+  { q: "In Matplotlib, what does `fig, ax = plt.subplots()` return?", options: ["Two figures", "A figure and one Axes", "Two axes", "A colour map"], answer: 1, explain: "The object-oriented starting point." },
+  { q: "Which encoding do readers judge most accurately?", options: ["Colour hue", "Area", "Position on a common scale", "Angle"], answer: 2, explain: "Cleveland and McGill (1984)." },
+  { q: "Best format for a figure in a paper?", options: ["JPEG", "PDF or SVG at print size", "Screenshot", "GIF"], answer: 1, explain: "Vector files stay sharp." },
+  { q: "Why avoid jet?", options: ["It is slow", "Its lightness is not monotonic, so it invents edges", "It has no red", "It is not in Matplotlib"], answer: 1, explain: "Use perceptually uniform maps." },
+  { q: "Which map for a change from baseline, centred on zero?", options: ["viridis", "A diverging map such as RdBu_r", "jet", "twilight"], answer: 1, explain: "Diverging maps need a meaningful centre." },
+  { q: "Firing rates spanning 0.1 to 100 Hz: which axis?", options: ["Linear", "Logarithmic", "Polar", "Categorical"], answer: 1, explain: "Log axes spread orders of magnitude." },
+  { q: "Which call draws a spike raster?", options: ["ax.imshow", "ax.eventplot", "ax.bar", "ax.pie"], answer: 1, explain: "One row of ticks per trial." },
+  { q: "How do you set values in df for rows matching a condition?", options: ["df[cond]['col'] = v", "df.loc[cond, 'col'] = v", "df.iloc[cond] = v", "df.col[cond] = v"], answer: 1, explain: "One-step .loc assignment changes df itself." },
+  { q: "`df['rt'].mean()` with missing values...", options: ["Returns NaN", "Skips them", "Counts them as zero", "Fails"], answer: 1, explain: "Count and report missing values." },
+  { q: "What is a tidy table?", options: ["Sorted rows", "One row per observation, one column per variable", "No missing data", "One column per group"], answer: 1, explain: "Wickham (2014)." },
+  { q: "Psychometric bias μ is...", options: ["The steepness", "The indifference point", "The lapse", "The reaction time"], answer: 1, explain: "Where the curve crosses its midpoint." },
+  { q: "Standard error of a proportion of 0.3 from 100 trials?", options: ["0.03", "about 0.046", "0.3", "0.0021"], answer: 1, explain: "$\\sqrt{0.3 \\times 0.7 / 100} \\approx 0.046$." },
+  { q: "Hidden state in a notebook comes from...", options: ["Encryption", "Running and editing cells out of order", "Large files", "Plotting"], answer: 1, explain: "Restart and run all to check." },
+  { q: "What should a provenance record include?", options: ["Only the result", "Value, inputs, seed, package versions and code commit", "The author's name", "The figure"], answer: 1, explain: "Enough to regenerate the result." },
+  { q: "What is a Git branch for?", options: ["Backups", "Trying an idea without changing main until merged", "Deleting history", "Publishing"], answer: 1, explain: "Merge if it works, delete if not." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give the IBL paper (2021) its third pass and write your critique on the paper's page under the five headings. Focus on one question: **what exactly does "reproducible" mean in this paper, and what would have counted as a failure to reproduce?** Look at which measures were compared across labs, how much they were allowed to differ, and what was left out (for example learning speed).
+
+<Callout kind="research">
+The IBL behavioural data are public, and the same mice were later recorded with Neuropixels across the brain. In Week 51 you will fit decision models to these data. Write down now one question about lab-to-lab or mouse-to-mouse differences you would like to answer then.
+</Callout>
+
+<Key title="Week 3 review checklist">
+<ul>
+<li>I can build figures with the object-oriented interface and save them at print size.</li>
+<li>I choose colour maps, axis ranges and scales that tell the truth.</li>
+<li>I can draw rasters, heatmaps with colour bars and well-binned histograms.</li>
+<li>I can load, inspect, filter and add columns to a DataFrame, and handle missing values.</li>
+<li>I can group, pivot, concatenate and merge tables, and fit a psychometric curve.</li>
+<li>I avoid hidden state, keep code in modules and record provenance.</li>
+<li>I made a branch, opened a pull request and merged it.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Write your answer to Part C: with 4 mice per lab, can you tell the labs apart? What sample size would you want, and why is the mouse, not the trial, the right unit?" />

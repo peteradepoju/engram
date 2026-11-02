@@ -1,0 +1,293 @@
+export const meta = {
+  title: "Reproducible research: notebooks, environments and Git branches",
+  intro: "A result you cannot regenerate is a result you cannot defend. Today you learn the habits that let you (or a reviewer, or yourself in a year) rerun an analysis and get the same numbers: notebooks without hidden state, code in modules, recorded environments, seeds and provenance, and Git branches for trying ideas safely.",
+  goals: [
+    "Recognise and avoid hidden state in notebooks",
+    "Move reusable code into a module and import it",
+    "Record the environment, seed and inputs behind every result",
+    "Use Git branches to try an idea without risking working code",
+  ],
+  plan: [
+    { label: "Predict and hidden state", minutes: 25 },
+    { label: "Code in modules", minutes: 25 },
+    { label: "Environments, seeds and provenance", minutes: 30 },
+    { label: "Git branches", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "sandve-2013",
+};
+
+<Predict question="An analysis has 10 manual steps (copying numbers, renaming files, rerunning cells by hand). If each has a 2 per cent chance of a silent mistake, what is the chance the whole analysis is free of mistakes?" />
+
+<Step n={1} title="Hidden state" minutes={25} />
+
+Notebooks are wonderful for exploring: you run a cell, look, change it, run it again. But a notebook remembers everything you ran, in the order you ran it, including cells you have since deleted or edited. The variables in memory can stop matching the code on the page. This is **hidden state**, and it is the most common reason a notebook gives a different answer the next day.
+
+The lesson pages here work the same way: cells on a page share one Python, like a notebook. Try it.
+
+<PyCell code={String.raw`
+  threshold = 0.5
+`} />
+
+<PyCell code={String.raw`
+  import numpy as np
+  rts = np.array([0.31, 0.62, 0.45, 0.88, 0.52])
+  print("slow trials:", (rts > threshold).sum())
+`} />
+
+Now change the first cell to `threshold = 0.6` but **do not run it**, and run the second cell again. The answer is still computed with 0.5, although the page now says 0.6. In a long notebook that kind of mismatch is invisible.
+
+Three habits prevent it:
+
+1. Before trusting a notebook, **restart and run all** cells from the top (in Colab: Runtime, then Restart and run all).
+2. Write **functions that take their inputs as arguments** instead of reading global variables.
+3. Once code is stable, move it out of the notebook into a **module** (a `.py` file) and import it.
+
+<PyCell id="pure" title="Bug hunt: a function with a hidden input" tests={String.raw`
+  def test_argument():
+      "count_slow uses the threshold it is given"
+      import numpy as np
+      x = np.array([0.2, 0.5, 0.9])
+      assert count_slow(x, 0.4) == 2 and count_slow(x, 0.8) == 1
+
+  def test_no_global():
+      "count_slow does not read a global threshold"
+      import numpy as np
+      g = count_slow.__globals__
+      old = g.get("threshold")
+      g["threshold"] = 100
+      try:
+          assert count_slow(np.array([0.2, 0.5, 0.9]), 0.4) == 2, "The result changed when the global changed."
+      finally:
+          g["threshold"] = old
+`} prompt="`count_slow` quietly reads the global `threshold`, so its answer depends on which cells were run. Rewrite it to take the threshold as an argument, `count_slow(rts, threshold)`, and use only its arguments."
+code={String.raw`
+  def count_slow(rts):
+      return int((rts > threshold).sum())
+
+  print(count_slow(rts))
+`}
+hint="def count_slow(rts, threshold): return int((rts > threshold).sum()). Call it as count_slow(rts, 0.6)."
+solution={String.raw`
+  def count_slow(rts, threshold):
+      return int((rts > threshold).sum())
+
+  print(count_slow(rts, 0.6))
+`} />
+
+<Step n={2} title="Code in modules" minutes={25} />
+
+A **module** is just a Python file. Code in a module is written once, tested once and imported everywhere, so every notebook and script uses the same version. The in-page Python has its own small file system, so you can write a module and import it right here.
+
+<PyCell code={String.raw`
+  import os, sys, importlib
+  code = '''
+  """Small tools for analysing decision-making sessions."""
+  import numpy as np
+
+  def proportion_right(choices):
+      """Fraction of responses that were 'right' (choice == 1), ignoring no-response trials (0)."""
+      choices = np.asarray(choices)
+      valid = choices[choices != 0]
+      return float((valid == 1).mean())
+  '''
+  os.makedirs("src", exist_ok=True)
+  open("src/behaviour.py", "w").write(code)
+  sys.path.insert(0, os.path.abspath("src"))
+  importlib.invalidate_caches()
+  import behaviour
+  print(behaviour.proportion_right([1, -1, 1, 0, 1]))
+  help(behaviour.proportion_right)
+`} />
+
+<PyCell id="module" title="Add a function to the module" tests={String.raw`
+  import importlib, numpy as np
+  def test_module_has_function():
+      "behaviour.py defines psychometric"
+      import behaviour
+      importlib.reload(behaviour)
+      assert hasattr(behaviour, "psychometric"), "Write psychometric into src/behaviour.py."
+
+  def test_function_works():
+      "psychometric gives the right values"
+      import behaviour
+      importlib.reload(behaviour)
+      assert abs(behaviour.psychometric(0.0, 0.0, 0.2, 0.0) - 0.5) < 1e-12
+      assert abs(behaviour.psychometric(10.0, 0.0, 0.2, 0.1) - 0.9) < 1e-6
+
+  def test_docstring():
+      "the function has a docstring"
+      import behaviour
+      importlib.reload(behaviour)
+      assert behaviour.psychometric.__doc__, "Add a one-line docstring saying what it computes."
+`} prompt="Append a function `psychometric(c, bias, sigma, lapse)` with a one-line docstring to `src/behaviour.py` (yesterday's formula), then reload the module and call it."
+code={String.raw`
+  extra = '''
+
+  def psychometric(c, bias, sigma, lapse):
+      ...
+  '''
+  with open("src/behaviour.py", "a") as f:
+      f.write(extra)
+  importlib.reload(behaviour)
+  print(behaviour.psychometric(0.1, 0.05, 0.15, 0.06))
+`}
+hint="Inside the string, under the def line, write a one-line docstring in triple double quotes, then: return lapse + (1 - 2 * lapse) / (1 + np.exp(-(c - bias) / sigma)). Double quotes work for the docstring because the outer string uses single quotes."
+solution={String.raw`
+  extra = '''
+
+  def psychometric(c, bias, sigma, lapse):
+      """Probability of choosing right at signed contrast c."""
+      return lapse + (1 - 2 * lapse) / (1 + np.exp(-(c - bias) / sigma))
+  '''
+  with open("src/behaviour.py", "a") as f:
+      f.write(extra)
+  importlib.reload(behaviour)
+  print(behaviour.psychometric(0.1, 0.05, 0.15, 0.06))
+`} />
+
+In a real project, the notebook becomes a thin layer: it imports from `src/`, calls functions and shows figures. When you change the module, every analysis that uses it changes in the same way, and the tests you wrote in Week 1 catch mistakes.
+
+<Step n={3} title="Environments, seeds and provenance" minutes={30} />
+
+Code also depends on the exact versions of NumPy, pandas, SciPy and Python. A function can change its default between versions and quietly change your result. So record the **environment**:
+
+<PyCell code={String.raw`
+  import sys, platform, numpy, pandas, scipy, matplotlib
+  print("Python", sys.version.split()[0], "on", platform.system())
+  for m in [numpy, pandas, scipy, matplotlib]:
+      print(f"{m.__name__}=={m.__version__}")
+`} />
+
+Those lines, saved in a `requirements.txt` file, let anyone rebuild your environment (`pip install -r requirements.txt`, or `uv pip install -r requirements.txt`). Conda users keep an `environment.yml` instead.
+
+A result also depends on its **inputs** and its **random seed**. Saving all of this next to the result is called **provenance**: a record of exactly how it was made.
+
+<PyCell id="provenance" title="Save a result with its provenance" tests={String.raw`
+  import json, os
+  def test_file():
+      "the result file exists and is valid JSON"
+      assert os.path.exists("results/bias_session1.json")
+      json.load(open("results/bias_session1.json"))
+
+  def test_contents():
+      "it records the value, seed, input file and package versions"
+      d = json.load(open("results/bias_session1.json"))
+      for k in ["value", "seed", "input", "versions", "created"]:
+          assert k in d, f"Missing the key {k!r}."
+      assert d["seed"] == 1 and "numpy" in d["versions"]
+`} prompt="Write `save_result(path, value, seed, input_file)` that saves a JSON file holding `value`, `seed`, `input`, `versions` (a dictionary of the numpy, pandas and scipy versions) and `created` (the current date and time as text). Then save a bias of 0.08 from seed 1 and input `data/raw/session1.csv` to `results/bias_session1.json`."
+code={String.raw`
+  import json, os, datetime
+
+  def save_result(path, value, seed, input_file):
+      record = {
+          ...
+      }
+      os.makedirs(os.path.dirname(path), exist_ok=True)
+      with open(path, "w") as f:
+          json.dump(record, f, indent=2)
+
+  save_result("results/bias_session1.json", 0.08, 1, "data/raw/session1.csv")
+  print(open("results/bias_session1.json").read())
+`}
+hint="record = {'value': value, 'seed': seed, 'input': input_file, 'versions': {'numpy': numpy.__version__, 'pandas': pandas.__version__, 'scipy': scipy.__version__}, 'created': datetime.datetime.now().isoformat(timespec='seconds')}"
+solution={String.raw`
+  import json, os, datetime
+
+  def save_result(path, value, seed, input_file):
+      record = {
+          "value": value,
+          "seed": seed,
+          "input": input_file,
+          "versions": {"numpy": numpy.__version__, "pandas": pandas.__version__, "scipy": scipy.__version__},
+          "created": datetime.datetime.now().isoformat(timespec="seconds"),
+      }
+      os.makedirs(os.path.dirname(path), exist_ok=True)
+      with open(path, "w") as f:
+          json.dump(record, f, indent=2)
+
+  save_result("results/bias_session1.json", 0.08, 1, "data/raw/session1.csv")
+  print(open("results/bias_session1.json").read())
+`} />
+
+In a Git repository you would also store the **commit hash** of the code that made the result (`git rev-parse HEAD`). Then every number in a paper points to the exact code, data and environment that produced it.
+
+<Prove title="Why automation matters" task="An analysis has $k$ independent manual steps, each with probability $q$ of a silent mistake. Find the probability that the whole analysis is mistake-free. Evaluate it for $k = 10$, $q = 0.02$ and for $k = 50$, $q = 0.02$.">
+
+Each step is correct with probability $1 - q$, independently, so all $k$ are correct with probability $(1 - q)^k$.
+
+For $k = 10$: $0.98^{10} \approx 0.82$. Nearly one analysis in five contains a mistake.
+
+For $k = 50$: $0.98^{50} \approx 0.36$. Most such analyses are wrong somewhere.
+
+A script has the same steps but performs them identically every time, and its mistakes can be found once and fixed for good. That is the argument for automating every step, rule 1 of today's paper.
+
+</Prove>
+
+<Step n={4} title="Git branches" minutes={25} />
+
+You will often want to try something risky: a new smoothing method, a different trial selection, a refactor. A **branch** is a separate line of commits. You work on the branch, and `main` stays exactly as it was. If the idea works, you **merge** it into `main`; if not, you delete the branch.
+
+<Figure caption="A branch for an experiment, merged back into main, and a tag marking the commit behind a paper figure." credit="Interactive figure by Engram.">
+  <GitBranches />
+</Figure>
+
+Your tasks for today, in your `neuroai-journey` repository from Week 1 (about 15 minutes, on your computer or in GitHub's web editor):
+
+1. Create a branch: `git switch -c week3-psychometric`.
+2. Add a `src/behaviour.py` with today's two functions and a `requirements.txt` listing numpy, pandas, scipy and matplotlib with versions.
+3. Commit with a message that says why, push the branch, and open a pull request on GitHub to merge it into `main`. Read your own diff before you merge: this is how code review works in every lab and company.
+
+<WatchList items={[
+  { title: "Version Control (Git)", by: "MIT, The Missing Semester of Your CS Education", url: "https://missing.csail.mit.edu/2020/version-control/", note: "The clearest explanation of how Git really works, with a lecture video and notes." },
+  { title: "Git and GitHub for beginners", by: "freeCodeCamp", query: "freeCodeCamp Git and GitHub for Beginners Crash Course", note: "A practical crash course if you have not used Git much." },
+  { title: "Pro Git (free book), Chapter 3: Git branching", by: "Scott Chacon and Ben Straub", url: "https://git-scm.com/book/en/v2/Git-Branching-Branches-in-a-Nutshell", note: "The reference on branches and merging." },
+]} />
+
+<Bridge title="Reproducibility in both fields"
+  neuro="Neuroscience has had a reproducibility crisis: many published effects could not be repeated, often because of small samples, flexible analysis choices and unshared code. The IBL study you read this week answered it with shared protocols and open code."
+  ai="Machine learning has its own: results that depend on a lucky seed, a tuned baseline or an undisclosed trick. Conferences now ask for code, seeds and multiple runs, and NeurIPS asks authors to complete a reproducibility checklist.">
+
+The habits are the same in both: scripts not hand edits, recorded environments and seeds, version control, and shared code and data.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "What is hidden state in a notebook?", options: ["Encrypted cells", "Variables in memory that no longer match the code on the page", "Cells that are collapsed", "Private data"], answer: 1, explain: "It comes from running, editing and deleting cells out of order." },
+  { q: "The simplest check against hidden state is to...", options: ["Save often", "Restart and run all cells from the top", "Use more cells", "Turn off autosave"], answer: 1, explain: "If it still works from a clean start, the page matches the result." },
+  { q: "Why should a function take its threshold as an argument?", options: ["It is faster", "So its result depends only on its inputs, not on which cells ran", "Python requires it", "To save memory"], answer: 1, explain: "Pure functions are reproducible and testable." },
+  { q: "What does requirements.txt record?", options: ["Your results", "The packages and versions the code needs", "Your Git history", "The raw data"], answer: 1, explain: "It lets others rebuild the environment." },
+  { q: "Provenance of a result means...", options: ["Who funded it", "The record of code, data, seed and environment that produced it", "Its p-value", "Where it was published"], answer: 1, explain: "Enough to regenerate it exactly." },
+  { q: "Ten manual steps each with a 2 per cent error rate are all correct with probability about...", options: ["98 per cent", "82 per cent", "50 per cent", "20 per cent"], answer: 1, explain: "$0.98^{10} \\approx 0.82$." },
+  { q: "What is a Git branch for?", options: ["Deleting old code", "Working on an idea without changing main until you merge", "Backing up to GitHub", "Making the repository public"], answer: 1, explain: "Merge if it works, delete if not." },
+]} />
+
+<Flashcards cards={[
+  { front: "Three habits against hidden state?", back: "Restart and run all; functions take inputs as arguments; move stable code into modules." },
+  { front: "Record an environment?", back: "List packages with exact versions in requirements.txt (pip or uv) or environment.yml (conda)." },
+  { front: "What goes in a provenance record?", back: "The value, input files, random seed, package versions, date, and the Git commit of the code." },
+  { front: "Make and switch to a new branch?", back: "`git switch -c branch-name`; later `git switch main` and `git merge branch-name`." },
+  { front: "Probability k independent steps with error rate q are all right?", back: "$(1 - q)^k$" },
+  { front: "Tag the commit behind a paper figure?", back: "`git tag figure-3-v1` (then `git push --tags`)." },
+]} />
+
+<Predict revisit question="What is the chance a 10-step manual analysis has no mistakes?" />
+
+<Key title="Before you go">
+<ul>
+<li>Restart and run all before you trust a notebook.</li>
+<li>Functions take their inputs as arguments; stable code lives in modules.</li>
+<li>Save every result with its inputs, seed, versions and commit.</li>
+<li>Use branches for experiments and pull requests to review your own changes.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Sandve, Nekrutenko, Taylor and Hovig (2013), <em>Ten Simple Rules for Reproducible Computational Research</em>.</li>
+<li>The Turing Way (book.the-turing-way.org): a free, community handbook on reproducible research.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Score yourself against the ten rules in today's paper. Which two will you adopt this week, and what will you change in your setup to make them automatic?" />

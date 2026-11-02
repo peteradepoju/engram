@@ -1,0 +1,276 @@
+export const meta = {
+  title: "Matplotlib II: figures that tell the truth",
+  intro: "A figure can be accurate in every number and still mislead: a cut-off axis makes a tiny effect look huge, a rainbow colour map invents edges, a bar hides the twenty points behind it. Today you learn the choices that keep figures honest, and the plots neuroscientists use every day: rasters, heatmaps and histograms on the right scale.",
+  goals: [
+    "Choose colour maps that are perceptually uniform and colour-blind safe",
+    "Decide when an axis must start at zero and when a log scale is needed",
+    "Draw spike rasters, heatmaps with colour bars and well-binned histograms",
+    "Show individual data points, not only summaries",
+  ],
+  plan: [
+    { label: "Predict and honest axes", minutes: 20 },
+    { label: "Colour maps", minutes: 25 },
+    { label: "Log scales", minutes: 15 },
+    { label: "Plots of neural data", minutes: 35 },
+    { label: "Show the data", minutes: 10 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "crameri-2020",
+};
+
+<Predict question="Two groups of neurons fire at 20 Hz and 22 Hz on average. A bar chart shows the second bar twice as tall as the first. Is the figure wrong, or just misleading?" />
+
+<Step n={1} title="Honest axes" minutes={20} />
+
+A bar's **length** encodes its value, so a bar chart must start at zero. If the axis starts at 19 Hz, a 20 Hz bar is 1 unit long and a 22 Hz bar is 3 units long: three times as long, for a 10 per cent difference. The numbers are right and the picture lies.
+
+Points and lines encode value by **position**, not length, so their axis may start elsewhere, as long as the reader can see where it starts.
+
+<PyCell id="axis" title="Bug hunt: the exaggerated bar chart" tests={String.raw`
+  def test_starts_at_zero():
+      "the bar chart's y axis starts at zero"
+      assert ax.get_ylim()[0] == 0, f"The y axis starts at {ax.get_ylim()[0]}; bars must start at zero."
+
+  def test_labelled():
+      "the y axis is labelled with units"
+      assert "(Hz)" in ax.get_ylabel()
+`} prompt="This chart makes a 10 per cent difference look like a factor of three. Fix it so the bars start at zero, and label the y axis with its unit."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  fig, ax = plt.subplots(figsize=(3, 3))
+  ax.bar(["group A", "group B"], [20, 22], color=["#c2416b", "#1f6fc7"])
+  ax.set_ylim(19, 22.5)
+  plt.show()
+`}
+hint="Remove the set_ylim line, or use ax.set_ylim(0, 25). Add ax.set_ylabel('firing rate (Hz)')."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  fig, ax = plt.subplots(figsize=(3, 3))
+  ax.bar(["group A", "group B"], [20, 22], color=["#c2416b", "#1f6fc7"])
+  ax.set_ylim(0, 25)
+  ax.set_ylabel("firing rate (Hz)")
+  plt.show()
+`} />
+
+<Step n={2} title="Colour maps" minutes={25} />
+
+When colour encodes a number (a heatmap, an image of a receptive field), the colour map decides what readers see. Our eyes judge **lightness** far better than hue, so a good map changes lightness steadily from one end to the other. Rainbow maps such as `jet` do not: their lightness rises and falls, so smooth data appear to have bright bands and sharp edges. Try it.
+
+<Figure caption="The same smooth receptive field (an excitatory centre with an inhibitory surround) in four colour maps, with each map's perceived lightness underneath." credit="Interactive figure by Engram. Lightness computed as CIELAB L*. Colour map values sampled from Matplotlib.">
+  <Colormaps />
+</Figure>
+
+Rules of thumb:
+
+- **Sequential** data (firing rate, power, probability): `viridis`, `magma`, `cividis`, or greyscale.
+- **Diverging** data with a meaningful zero (change from baseline, correlation, excitation against inhibition): `RdBu_r` or `coolwarm`, centred on zero with `vmin=-m, vmax=m`.
+- **Cyclic** data (orientation, phase, direction): `twilight` or `hsv`, so the two ends match.
+- **Categories** (brain areas, conditions): a qualitative palette such as `tab10`, and never more colours than a reader can tell apart.
+
+About 1 in 12 men and 1 in 200 women have a colour-vision deficiency, most often red against green. Uniform maps like `viridis` and `cividis` remain readable for them.
+
+<WatchList items={[
+  { title: "A Better Default Colormap for Matplotlib", by: "Nathaniel Smith and Stéfan van der Walt, SciPy 2015", query: "A Better Default Colormap for Matplotlib SciPy 2015 Nathaniel Smith Stefan van der Walt", note: "The talk that introduced viridis, explaining the perception science behind it." },
+  { title: "Choosing colormaps in Matplotlib", by: "Matplotlib documentation", url: "https://matplotlib.org/stable/users/explain/colors/colormaps.html", note: "Every built-in map, grouped by kind, with lightness plots like the one above." },
+  { title: "Scientific colour maps", by: "Fabio Crameri (author of today's paper)", url: "https://www.fabiocrameri.ch/colourmaps/", note: "Free perceptually uniform maps for every kind of data." },
+]} />
+
+<Step n={3} title="Log scales" minutes={15} />
+
+Many quantities in neuroscience span orders of magnitude: firing rates, synapse sizes, the power of brain rhythms at different frequencies. On a linear axis most of the data is crushed against zero.
+
+<Figure caption="Firing rates of 400 simulated cortical neurons, drawn from a log-normal distribution." credit="Interactive figure by Engram.">
+  <LogScale />
+</Figure>
+
+<PyCell id="loghist" title="A log-scale histogram" tests={String.raw`
+  import numpy as np
+  def test_log_axis():
+      "the x axis is logarithmic"
+      assert ax.get_xscale() == "log", "Use ax.set_xscale('log')."
+
+  def test_log_bins():
+      "bins are evenly spaced in log space"
+      assert np.allclose(np.diff(np.log10(bins)), np.diff(np.log10(bins))[0]), "Make bins with np.logspace."
+      assert bins[0] <= rates.min() and bins[-1] >= rates.max(), "The bins should cover all the data."
+`} prompt="`rates` holds 400 firing rates. Make `bins` with `np.logspace` (30 bins from 0.01 Hz to 1000 Hz), draw a histogram with them on `ax`, and set the x axis to a log scale."
+code={String.raw`
+  rng = np.random.default_rng(0)
+  rates = np.exp(rng.normal(np.log(3), 1.1, 400))
+
+  fig, ax = plt.subplots(figsize=(5, 3))
+  bins = ...
+  # histogram and log x axis here
+  ax.set_xlabel("firing rate (Hz)"); ax.set_ylabel("number of neurons")
+  plt.show()
+`}
+hint="bins = np.logspace(-2, 3, 31) gives 30 bins from 10^-2 to 10^3. Then ax.hist(rates, bins=bins) and ax.set_xscale('log')."
+solution={String.raw`
+  rng = np.random.default_rng(0)
+  rates = np.exp(rng.normal(np.log(3), 1.1, 400))
+
+  fig, ax = plt.subplots(figsize=(5, 3))
+  bins = np.logspace(-2, 3, 31)
+  ax.hist(rates, bins=bins)
+  ax.set_xscale("log")
+  ax.set_xlabel("firing rate (Hz)"); ax.set_ylabel("number of neurons")
+  plt.show()
+`} />
+
+<Step n={4} title="Plots of neural data" minutes={35} />
+
+Three plots appear in almost every systems neuroscience paper.
+
+**The raster.** `ax.eventplot` draws one row of ticks per trial (Week 2, Day 4).
+
+<PyCell id="raster" title="A raster with eventplot" tests={String.raw`
+  def test_rows():
+      "one row of ticks per trial"
+      assert len(ax.collections) == len(trains), f"Expected {len(trains)} rows, found {len(ax.collections)}."
+
+  def test_labels():
+      "axes are labelled"
+      assert "(s)" in ax.get_xlabel() and ax.get_ylabel(), "Label time (s) and trials."
+`} prompt="`trains` is a list of 30 arrays of spike times (seconds). Draw them as a raster on `ax` with `ax.eventplot(trains, color='k', linelengths=0.8)`, label the x axis `time (s)` and the y axis `trial`, and mark the stimulus onset at 0.2 s with `ax.axvline`."
+code={String.raw`
+  rng = np.random.default_rng(1)
+  def one_trial():
+      t = np.arange(0, 1, 0.001)
+      rate = 5 + 60 * ((t > 0.25) & (t < 0.45))
+      return t[rng.random(t.size) < rate * 0.001]
+  trains = [one_trial() for _ in range(30)]
+
+  fig, ax = plt.subplots(figsize=(6, 3))
+  # raster here
+  plt.show()
+`}
+hint="ax.eventplot(trains, color='k', linelengths=0.8); ax.axvline(0.2, color='C1', ls='--'); ax.set_xlabel('time (s)'); ax.set_ylabel('trial')"
+solution={String.raw`
+  rng = np.random.default_rng(1)
+  def one_trial():
+      t = np.arange(0, 1, 0.001)
+      rate = 5 + 60 * ((t > 0.25) & (t < 0.45))
+      return t[rng.random(t.size) < rate * 0.001]
+  trains = [one_trial() for _ in range(30)]
+
+  fig, ax = plt.subplots(figsize=(6, 3))
+  ax.eventplot(trains, color="k", linelengths=0.8)
+  ax.axvline(0.2, color="C1", ls="--")
+  ax.set_xlabel("time (s)"); ax.set_ylabel("trial")
+  plt.show()
+`} />
+
+**The heatmap.** A (neurons, time) array of firing rates shown with `ax.imshow`. Always add a colour bar with its unit, and use `aspect="auto"` so the image fills the panel.
+
+<PyCell id="heatmap" title="A population heatmap" tests={String.raw`
+  def test_image():
+      "the heatmap uses viridis"
+      im = ax.images[0]
+      assert im.get_cmap().name == "viridis", "Use cmap='viridis'."
+
+  def test_colorbar():
+      "there is a colour bar with a unit"
+      assert len(fig.axes) == 2, "Add a colour bar with fig.colorbar(im, ax=ax)."
+      cb_ax = [a for a in fig.axes if a is not ax][0]
+      assert "(Hz)" in cb_ax.get_ylabel(), "Label the colour bar, for example 'rate (Hz)'."
+`} prompt="`pop` has shape (40 neurons, 100 time bins). Show it with `ax.imshow(pop, aspect='auto', cmap='viridis', extent=[0, 1, 40, 0])`, add a colour bar labelled `rate (Hz)`, and label both axes."
+code={String.raw`
+  rng = np.random.default_rng(2)
+  peak = np.sort(rng.uniform(0.1, 0.9, 40))
+  tt = np.linspace(0, 1, 100)
+  pop = 2 + 30 * np.exp(-(tt[None, :] - peak[:, None]) ** 2 / (2 * 0.05 ** 2)) + rng.normal(0, 1.5, (40, 100))
+
+  fig, ax = plt.subplots(figsize=(5, 3.5))
+  im = ...
+  # colour bar and labels
+  plt.show()
+`}
+hint="im = ax.imshow(pop, aspect='auto', cmap='viridis', extent=[0, 1, 40, 0]); cb = fig.colorbar(im, ax=ax); cb.set_label('rate (Hz)'); ax.set_xlabel('time (s)'); ax.set_ylabel('neuron')"
+solution={String.raw`
+  rng = np.random.default_rng(2)
+  peak = np.sort(rng.uniform(0.1, 0.9, 40))
+  tt = np.linspace(0, 1, 100)
+  pop = 2 + 30 * np.exp(-(tt[None, :] - peak[:, None]) ** 2 / (2 * 0.05 ** 2)) + rng.normal(0, 1.5, (40, 100))
+
+  fig, ax = plt.subplots(figsize=(5, 3.5))
+  im = ax.imshow(pop, aspect="auto", cmap="viridis", extent=[0, 1, 40, 0])
+  cb = fig.colorbar(im, ax=ax)
+  cb.set_label("rate (Hz)")
+  ax.set_xlabel("time (s)"); ax.set_ylabel("neuron")
+  plt.show()
+`} />
+
+The diagonal you see is a **sequence**: each neuron fires at its own moment. Plots like this, with neurons sorted by peak time, appear in studies of hippocampal time cells and of task-trained recurrent networks (Week 135). Sorting is a choice, so always say how the neurons were sorted, and ideally sort on half the trials and plot the other half (Week 2, Day 2).
+
+**The histogram.** Bin width changes the story, just like the PSTH last week. Try `bins=5`, `bins=20` and `bins=100` on the same data and see what disappears.
+
+<Step n={5} title="Show the data" minutes={10} />
+
+A bar with an error bar summarises dozens of points with two numbers. Very different datasets give the same bar: one outlier, two clusters, or a smooth spread. Whenever there are fewer than a few hundred points, draw them.
+
+<PyCell code={String.raw`
+  rng = np.random.default_rng(4)
+  groups = {"smooth": rng.normal(20, 4, 30),
+            "two clusters": np.r_[rng.normal(15, 1, 15), rng.normal(25, 1, 15)],
+            "one outlier": np.r_[rng.normal(18.5, 1.5, 29), 60]}
+  fig, axes = plt.subplots(1, 2, figsize=(8, 3), sharey=True)
+  for i, (name, x) in enumerate(groups.items()):
+      axes[0].bar(i, x.mean(), yerr=x.std(ddof=1) / np.sqrt(len(x)), capsize=4, color="0.7")
+      axes[1].plot(np.full(len(x), i) + rng.uniform(-0.15, 0.15, len(x)), x, "o", ms=4, alpha=0.7)
+      axes[1].plot([i - 0.25, i + 0.25], [x.mean()] * 2, "k-", lw=2)
+  for ax, t in zip(axes, ["bars hide it", "points show it"]):
+      ax.set_xticks(range(3), groups.keys()); ax.set_title(t)
+  axes[0].set_ylabel("firing rate (Hz)")
+  plt.tight_layout(); plt.show()
+`} />
+
+<Bridge title="Perception can be fooled, and so can models"
+  neuro="Rainbow maps fool us because the visual system groups colours into hue categories and judges lightness, not wavelength. We perceive edges where hue categories change, even in smooth data."
+  ai="Neural networks have their own blind spots: adversarial examples are changes too small for a human to see that flip a network's answer (Week 151). Both are reminders that a system's representation, not the raw data, decides what it perceives.">
+
+When you show a figure to a reader, you are feeding their visual system. Choose inputs it can read faithfully.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Why must a bar chart's axis start at zero?", options: ["Matplotlib requires it", "Bar length encodes the value, so a cut axis distorts ratios", "It looks better", "To fit the legend"], answer: 1, explain: "A 20 against 22 Hz difference drawn from 19 Hz looks like 1 against 3." },
+  { q: "What makes the jet colour map misleading?", options: ["It has too few colours", "Its lightness rises and falls, creating false edges", "It is too dark", "It only works in print"], answer: 1, explain: "We read lightness; jet's non-monotonic lightness invents structure." },
+  { q: "Which colour map suits orientation preference (0 to 180 degrees, wrapping round)?", options: ["viridis", "A cyclic map such as twilight", "jet", "greys"], answer: 1, explain: "Cyclic maps join their two ends, as orientation does." },
+  { q: "Firing rates spanning 0.1 to 100 Hz are best shown with...", options: ["A linear axis", "A log axis with log-spaced bins", "A pie chart", "A bar per neuron"], answer: 1, explain: "Log axes spread orders of magnitude evenly." },
+  { q: "Which Matplotlib function draws a spike raster?", options: ["ax.hist", "ax.eventplot", "ax.imshow", "ax.pie"], answer: 1, explain: "eventplot draws one row of event ticks per sequence." },
+  { q: "What must accompany every heatmap?", options: ["A legend", "A colour bar with a unit", "A title in bold", "Grid lines"], answer: 1, explain: "Without a colour bar, colours have no values." },
+  { q: "Why show individual points instead of only a bar?", options: ["Bars are illegal", "Very different data can give the same mean and error bar", "It is faster", "Points need no axis"], answer: 1, explain: "Clusters and outliers vanish inside a bar." },
+]} />
+
+<Flashcards cards={[
+  { front: "When must an axis start at zero?", back: "When length encodes value: bar charts and area plots." },
+  { front: "Three kinds of colour map and an example of each?", back: "Sequential (viridis), diverging around a meaningful centre (RdBu_r), cyclic (twilight)." },
+  { front: "What is a perceptually uniform colour map?", back: "One whose perceived lightness changes steadily, so equal data steps look like equal colour steps." },
+  { front: "Log-spaced histogram bins in NumPy?", back: "`np.logspace(a, b, n)`, with `ax.set_xscale('log')`." },
+  { front: "Raster and heatmap functions in Matplotlib?", back: "`ax.eventplot(trains)` and `ax.imshow(array, aspect='auto')` with `fig.colorbar(im, ax=ax)`." },
+  { front: "Rule for small datasets in figures?", back: "Show every point, with the summary on top." },
+]} />
+
+<Predict revisit question="Is a bar chart with a cut-off axis wrong or misleading?" />
+
+<Key title="Before you go">
+<ul>
+<li>Bars start at zero; points and lines may not, if the axis is clear.</li>
+<li>Use perceptually uniform colour maps of the right kind, and never jet.</li>
+<li>Use log axes when data span orders of magnitude.</li>
+<li>Rasters, heatmaps with colour bars and well-binned histograms are the daily tools; show individual points when you can.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Crameri, Shephard and Heron (2020), <em>The misuse of colour in science communication</em>.</li>
+<li>Weissgerber, Milic, Winham and Garovic (2015), <em>Beyond bar and line graphs: time for a new data presentation paradigm</em>, PLOS Biology: why showing the points matters.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Find a figure in a paper you have read that uses a rainbow colour map or hides data behind bars. What might readers have misread, and how would you redraw it?" />

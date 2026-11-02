@@ -1,0 +1,246 @@
+export const meta = {
+  title: "Matplotlib I: the anatomy of a figure",
+  intro: "In research, figures carry the argument: reviewers look at them first, and readers often look at nothing else. Today you learn how a Matplotlib figure is built, piece by piece, and make your first publication-ready panel: a neuron's tuning curve with honest error bars.",
+  goals: [
+    "Name the parts of a Matplotlib figure and the code that controls each",
+    "Use the object-oriented interface (fig, ax) instead of plt shortcuts",
+    "Plot means with error bars and label every axis with units",
+    "Build multi-panel figures with subplots and save them for a paper",
+  ],
+  plan: [
+    { label: "Predict and why figures matter", minutes: 10 },
+    { label: "The anatomy of a figure", minutes: 25 },
+    { label: "Your first real figure", minutes: 30 },
+    { label: "Several panels", minutes: 25 },
+    { label: "Saving and style", minutes: 10 },
+    { label: "Quiz, flashcards, journal", minutes: 20 },
+  ],
+  paper: "rougier-2014",
+};
+
+<Predict question="You want readers to compare the heights of two firing rates precisely. Which encoding lets them do that best: bar length, position of a dot on a shared axis, colour, or the area of a circle?" />
+
+<Step n={1} title="Why figures matter" minutes={10} />
+
+A paper is read in a strange order. Most readers look at the title, the abstract and then the figures. If the figures are clear, they read on. If not, they move to the next paper. A good figure makes one point that a reader can see in a few seconds; the caption and the text add the detail.
+
+Matplotlib is the plotting library underneath most scientific Python. It can do almost anything, which is both its strength and its difficulty: the defaults are fine for exploring data, but almost never right for a paper. This week you learn to take control of every part.
+
+<WatchList items={[
+  { title: "Matplotlib tutorial series (line plots, bar charts, subplots)", by: "Corey Schafer", query: "Corey Schafer Matplotlib Tutorial Part 1 Creating and Customizing Our First Plots", note: "Clear, practical walkthroughs. Watch part 1 today and the subplots part before Step 4." },
+  { title: "Matplotlib quick start guide", by: "Matplotlib documentation", url: "https://matplotlib.org/stable/users/explain/quick_start.html", note: "The official introduction to figures, axes and the two interfaces." },
+  { title: "Scientific visualisation in Python", by: "Nicolas Rougier (author of today's paper)", url: "https://github.com/rougier/scientific-visualization-book", note: "A free book with beautiful, fully reproducible examples. Browse it for ideas." },
+]} />
+
+<Step n={2} title="The anatomy of a figure" minutes={25} />
+
+Every Matplotlib figure is a tree of objects. The **Figure** is the whole canvas. It holds one or more **Axes**: each Axes is a plotting area with its own coordinate system, ticks, labels and data. Click the parts below.
+
+<Figure caption="The parts of a figure. Each one is an object you can control from code." credit="Interactive figure by Engram, after the Matplotlib documentation's anatomy of a figure.">
+  <FigureAnatomy />
+</Figure>
+
+Matplotlib has two ways of working:
+
+- The **pyplot** style, `plt.plot(...)`, `plt.xlabel(...)`, acts on whichever axes is current. It is quick for a one-off look.
+- The **object-oriented** style, `fig, ax = plt.subplots()` then `ax.plot(...)`, `ax.set_xlabel(...)`, names each object. It is clearer, works the same with one panel or twenty, and is what this course uses.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  oris = np.arange(0, 180, 22.5)
+  rate = 4 + 26 * np.exp(2.2 * (np.cos(2 * np.radians(oris - 90)) - 1))
+
+  fig, ax = plt.subplots(figsize=(5, 3))
+  ax.plot(oris, rate, marker="o")
+  ax.set_xlabel("orientation (deg)")
+  ax.set_ylabel("firing rate (Hz)")
+  ax.set_title("A V1 neuron's tuning curve")
+  plt.show()
+`} />
+
+<Bridge title="How we read a figure"
+  neuro="Your visual system judges position along a common scale more precisely than length, angle, area or colour. Cleveland and McGill (1984) measured this ranking in perception experiments, and it follows from how early vision encodes position."
+  ai="The same ranking guides how we plot models: learning curves use position on shared axes, not colour, because small differences in loss must be visible.">
+
+So the answer to today's prediction is position: a dot on a shared axis. Use colour for categories, not for precise quantities.
+
+</Bridge>
+
+<Step n={3} title="Your first real figure" minutes={30} />
+
+Real data come with noise, and a figure must show it. Below, a simulated neuron is shown each of 8 orientations 20 times. The array `counts` has shape (8, 20): orientations by trials, spike counts in a 0.5 s window.
+
+<PyCell code={String.raw`
+  rng = np.random.default_rng(3)
+  true_rate = 4 + 26 * np.exp(2.2 * (np.cos(2 * np.radians(oris - 90)) - 1))
+  counts = rng.poisson(true_rate[:, None] * 0.5, size=(8, 20))   # (orientations, trials)
+  print(counts.shape, counts[:, :5])
+`} />
+
+<PyCell id="tuning" title="A tuning curve with error bars" tests={String.raw`
+  import numpy as np
+  def test_returns_axes():
+      "plot_tuning returns the Axes it drew on"
+      fig, ax = plt.subplots()
+      out = plot_tuning(ax, oris, counts, window=0.5)
+      assert out is ax, "Return the ax you were given."
+      plt.close(fig)
+
+  def test_labels():
+      "both axes are labelled with units"
+      fig, ax = plt.subplots()
+      plot_tuning(ax, oris, counts, window=0.5)
+      assert "(deg)" in ax.get_xlabel(), "The x label needs its unit, (deg)."
+      assert "(Hz)" in ax.get_ylabel(), "The y label needs its unit, (Hz)."
+      plt.close(fig)
+
+  def test_errorbars():
+      "the curve is drawn with error bars showing the SEM in Hz"
+      fig, ax = plt.subplots()
+      plot_tuning(ax, oris, counts, window=0.5)
+      assert len(ax.containers) >= 1, "Use ax.errorbar so the error bars are part of the plot."
+      line = ax.containers[0].lines[0]
+      assert np.allclose(line.get_ydata(), counts.mean(axis=1) / 0.5), "The y values should be mean counts divided by the window, in Hz."
+      plt.close(fig)
+`} prompt="Write `plot_tuning(ax, oris, counts, window)` that draws the mean firing rate (Hz) at each orientation with error bars equal to the standard error of the mean (also in Hz), labels both axes with units, and returns `ax`. Use `ax.errorbar(x, y, yerr=..., marker='o', capsize=3)`."
+code={String.raw`
+  def plot_tuning(ax, oris, counts, window):
+      rate = ...
+      sem = ...
+      # draw with ax.errorbar, then label the axes
+      return ax
+
+  fig, ax = plt.subplots(figsize=(5, 3))
+  plot_tuning(ax, oris, counts, window=0.5)
+  plt.show()
+`}
+hint="rate = counts.mean(axis=1) / window. sem = counts.std(axis=1, ddof=1) / np.sqrt(counts.shape[1]) / window. Then ax.errorbar(oris, rate, yerr=sem, marker='o', capsize=3), ax.set_xlabel('orientation (deg)'), ax.set_ylabel('firing rate (Hz)')."
+solution={String.raw`
+  def plot_tuning(ax, oris, counts, window):
+      rate = counts.mean(axis=1) / window
+      sem = counts.std(axis=1, ddof=1) / np.sqrt(counts.shape[1]) / window
+      ax.errorbar(oris, rate, yerr=sem, marker="o", capsize=3)
+      ax.set_xlabel("orientation (deg)")
+      ax.set_ylabel("firing rate (Hz)")
+      return ax
+
+  fig, ax = plt.subplots(figsize=(5, 3))
+  plot_tuning(ax, oris, counts, window=0.5)
+  plt.show()
+`} />
+
+Writing plotting code as a function that takes an `ax` is a habit worth keeping. The same function can then draw into a single figure, one panel of a big figure, or a slide, and you can test it, as the checks above just did.
+
+<Callout kind="think">
+Your error bars show the SEM over 20 trials. Would the figure tell a different story with SD bars? Which would you choose to show how reliable the tuning is, and which to show how variable single trials are? (Week 1, Day 3.)
+</Callout>
+
+<Step n={4} title="Several panels" minutes={25} />
+
+Most figures in a paper have several panels labelled A, B, C. `plt.subplots(rows, cols)` returns the figure and an array of axes. Options worth knowing: `sharex=True` or `sharey=True` to share axes, and `layout="constrained"` to stop labels overlapping.
+
+<PyCell code={String.raw`
+  fig, axes = plt.subplots(1, 3, figsize=(10, 3), layout="constrained")
+  axes[0].imshow(counts, aspect="auto", cmap="viridis")
+  axes[0].set_xlabel("trial"); axes[0].set_ylabel("orientation index"); axes[0].set_title("counts")
+  plot_tuning(axes[1], oris, counts, 0.5); axes[1].set_title("tuning")
+  axes[2].hist(counts.ravel(), bins=range(counts.max() + 2))
+  axes[2].set_xlabel("spike count"); axes[2].set_ylabel("number of trials"); axes[2].set_title("all counts")
+  for ax, letter in zip(axes, "ABC"):
+      ax.text(-0.15, 1.08, letter, transform=ax.transAxes, fontsize=13, fontweight="bold")
+  plt.show()
+`} />
+
+<PyCell id="panels" title="A two-panel figure" tests={String.raw`
+  def test_two_axes():
+      "the figure has two panels side by side"
+      assert len(fig.axes) == 2, f"Expected 2 axes, found {len(fig.axes)}."
+
+  def test_shared_y():
+      "the panels share their y axis"
+      a, b = fig.axes
+      assert a.get_shared_y_axes().joined(a, b), "Use sharey=True in plt.subplots."
+
+  def test_titles():
+      "each panel has a title"
+      assert all(ax.get_title() for ax in fig.axes), "Give both panels a title."
+`} prompt="Make `fig` with two panels side by side that share the y axis. In the left panel plot the tuning curve for the first 10 trials only (`counts[:, :10]`); in the right, all 20 trials. Give each panel a title such as `10 trials` and `20 trials`. What changes between them?"
+code={String.raw`
+  fig, axes = plt.subplots(...)
+  # left: first 10 trials, right: all 20
+  plt.show()
+`}
+hint="fig, axes = plt.subplots(1, 2, figsize=(8, 3), sharey=True). Then plot_tuning(axes[0], oris, counts[:, :10], 0.5) and axes[0].set_title('10 trials'), and the same for axes[1] with counts."
+solution={String.raw`
+  fig, axes = plt.subplots(1, 2, figsize=(8, 3), sharey=True)
+  plot_tuning(axes[0], oris, counts[:, :10], 0.5); axes[0].set_title("10 trials")
+  plot_tuning(axes[1], oris, counts, 0.5); axes[1].set_title("20 trials")
+  plt.show()
+`} />
+
+<Prove title="How much do the error bars shrink?" task="The SEM is $s/\sqrt{n}$. If you go from 10 trials to 20, by what factor do the error bars shrink (on average)? How many trials would you need to halve the error bars of the 10-trial panel?">
+
+From 10 to 20 trials the SEM changes by $\sqrt{10}/\sqrt{20} = 1/\sqrt{2} \approx 0.71$, so the bars shrink by about 29 per cent.
+
+To halve them you need $\sqrt{10/n} = 1/2$, so $n = 40$ trials. Halving uncertainty always costs four times the data.
+
+</Prove>
+
+<Step n={5} title="Saving and style" minutes={10} />
+
+For a paper, save figures as **vector** files (PDF or SVG), which stay sharp at any size, and make the figure the size it will be printed so fonts come out right. A single column in most journals is about 8.5 cm (3.3 inches) wide.
+
+<PyCell code={String.raw`
+  plt.rcParams.update({"font.size": 9, "axes.spines.top": False, "axes.spines.right": False})
+  fig, ax = plt.subplots(figsize=(3.3, 2.4), layout="constrained")
+  plot_tuning(ax, oris, counts, 0.5)
+  fig.savefig("tuning.pdf")              # vector: for papers
+  fig.savefig("tuning.png", dpi=300)     # bitmap: for slides and the web
+  import os; print([f for f in os.listdir(".") if f.startswith("tuning")])
+  plt.show()
+  plt.rcdefaults()
+`} />
+
+<Step n={6} title="Check, remember, reflect" minutes={20} />
+
+<Quiz id="quiz" questions={[
+  { q: "In Matplotlib, what is an Axes?", options: ["The x and y lines only", "One plotting area with its own coordinates, ticks and labels", "The whole image", "A colour map"], answer: 1, explain: "A Figure can contain many Axes; each is one panel." },
+  { q: "Why prefer `fig, ax = plt.subplots()` over plain `plt.plot`?", options: ["It is faster to run", "Each object is named, so code is clearer and scales to many panels", "plt.plot is removed", "It makes colour maps"], answer: 1, explain: "The object-oriented style says exactly which panel each command changes." },
+  { q: "Which visual encoding do people judge most precisely?", options: ["Colour", "Area", "Position on a common scale", "Angle"], answer: 2, explain: "Cleveland and McGill found position on a shared scale is read most accurately." },
+  { q: "What must every axis label include?", options: ["A colour", "The quantity and its unit", "The author's name", "The sample size"], answer: 1, explain: "Firing rate (Hz), orientation (deg), time (s)." },
+  { q: "Which file type keeps a figure sharp at any size?", options: ["PNG", "JPEG", "PDF or SVG", "GIF"], answer: 2, explain: "Vector formats store shapes, not pixels." },
+  { q: "What does `sharey=True` do in `plt.subplots(1, 2, sharey=True)`?", options: ["Copies the data", "Gives both panels the same y-axis limits and ticks", "Hides the y axis", "Swaps x and y"], answer: 1, explain: "Shared axes make panels directly comparable." },
+  { q: "Halving the error bars requires how many times more trials?", options: ["Two", "Four", "Eight", "Half as many"], answer: 1, explain: "SEM scales as $1/\\sqrt{n}$." },
+]} />
+
+<Flashcards cards={[
+  { front: "Figure versus Axes in Matplotlib?", back: "Figure: the whole canvas. Axes: one plotting area (panel) with its own coordinates; a figure can hold many." },
+  { front: "Object-oriented Matplotlib in two lines?", back: "`fig, ax = plt.subplots()` then `ax.plot(...)`, `ax.set_xlabel(...)`." },
+  { front: "Plot means with SEM error bars?", back: "`ax.errorbar(x, mean, yerr=sem, marker='o', capsize=3)`" },
+  { front: "Cleveland and McGill's main finding?", back: "Position on a common scale is judged most accurately, then length, then angle, area and colour." },
+  { front: "Save a figure for a paper?", back: "As a vector file (PDF or SVG), at the printed size: `fig.savefig('fig.pdf')`." },
+  { front: "Why write plotting code as `plot_x(ax, ...)`?", back: "The same function works in any panel, figure or slide, and can be tested." },
+]} />
+
+<Predict revisit question="Which encoding lets readers compare values most precisely?" />
+
+<Key title="Before you go">
+<ul>
+<li>A Figure holds Axes; draw on Axes with the object-oriented interface.</li>
+<li>Every axis gets a quantity and a unit; every error bar gets a definition in the caption.</li>
+<li>Plotting functions that take an `ax` are reusable and testable.</li>
+<li>Save at print size as PDF or SVG.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Rougier, Droettboom and Bourne (2014), <em>Ten Simple Rules for Better Figures</em>.</li>
+<li>Cleveland and McGill (1984), <em>Graphical perception</em>, Journal of the American Statistical Association: the experiments behind the ranking of visual encodings.</li>
+<li>The Matplotlib gallery (matplotlib.org/stable/gallery) when you need an example of any kind of plot.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Find the figure you remember best from last week's papers. Why did it stick? Write one thing you will copy from it in your own figures." />

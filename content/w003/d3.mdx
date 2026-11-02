@@ -1,0 +1,243 @@
+export const meta = {
+  title: "pandas I: tables of trials",
+  intro: "Behaviour and metadata come as tables: one row per trial, one column per variable (stimulus, choice, reaction time, outcome). pandas is the Python library for such tables. Today you load a mouse decision-making session, inspect it, select from it, add columns and handle missing trials, and get a first look at grouping.",
+  goals: [
+    "Create, load and inspect a DataFrame",
+    "Select rows and columns with labels, positions and conditions",
+    "Add derived columns and handle missing values",
+    "Summarise by condition with groupby",
+  ],
+  plan: [
+    { label: "Predict and why tables", minutes: 15 },
+    { label: "A session as a DataFrame", minutes: 25 },
+    { label: "Selecting rows and columns", minutes: 30 },
+    { label: "New columns and missing data", minutes: 20 },
+    { label: "A first look at groupby", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "mckinney-2010",
+};
+
+<Predict question="In a decision task some trials end with no response, so they have no reaction time. If you average the reaction-time column without thinking, what do you expect pandas to do with those trials?" />
+
+<Step n={1} title="Why tables" minutes={15} />
+
+Last week your data were arrays: every number the same kind of thing (a spike count), arranged by neuron, trial and time. Behaviour is different. Each trial has several variables of different types: the contrast on each side (numbers), the mouse's choice (a category), the reaction time (a number, sometimes missing), whether it was rewarded (true or false). A **DataFrame** holds such data: columns have names and their own types, rows have labels, and operations line up by label.
+
+In this course arrays hold neural activity and DataFrames hold everything about the trials. Most analyses join the two.
+
+<WatchList items={[
+  { title: "pandas tutorial series (DataFrames, filtering, grouping)", by: "Corey Schafer", query: "Corey Schafer Python Pandas Tutorial Part 1 Getting Started with Data Analysis", note: "Watch parts 1 to 4 across today and tomorrow." },
+  { title: "10 minutes to pandas", by: "pandas documentation", url: "https://pandas.pydata.org/docs/user_guide/10min.html", note: "The official whirlwind tour. Keep it open as a reference." },
+  { title: "Data analysis with pandas", by: "Kevin Markham (Data School)", query: "Data School pandas Q&A series Kevin Markham", note: "Short videos, each answering one practical question." },
+]} />
+
+<Step n={2} title="A session as a DataFrame" minutes={25} />
+
+The cell below simulates one session of a task like the International Brain Laboratory's (this week's deep read): a grating appears on the left or right at one of several contrasts, and the mouse turns a wheel to choose a side. Run it, then look at the table.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import pandas as pd
+
+  def make_session(seed=0, n=600, bias=0.05, sigma=0.15, lapse=0.06):
+      rng = np.random.default_rng(seed)
+      contrasts = np.array([0, 0.0625, 0.125, 0.25, 1.0])
+      side = rng.choice([-1, 1], n)                          # -1 left, 1 right
+      c = rng.choice(contrasts, n)
+      signed = side * c
+      p_right = lapse + (1 - 2 * lapse) / (1 + np.exp(-(signed - bias) / sigma))
+      choice = np.where(rng.random(n) < p_right, 1, -1)
+      timeout = rng.random(n) < 0.04                         # no response on some trials
+      rt = 0.25 + 0.6 * np.exp(-3 * c) * rng.lognormal(0, 0.35, n)
+      return pd.DataFrame({
+          "trial": np.arange(1, n + 1),
+          "contrast_left": np.where(side == -1, c, 0.0),
+          "contrast_right": np.where(side == 1, c, 0.0),
+          "choice": np.where(timeout, 0, choice),            # 0 means no response
+          "rt": np.where(timeout, np.nan, rt.round(3)),      # seconds
+          "feedback": np.where(timeout, -1, np.where(choice == side, 1, -1)),
+      })
+
+  df = make_session()
+  df.head(8)
+`} />
+
+The first things to run on any new table:
+
+<PyCell code={String.raw`
+  print(df.shape)          # (rows, columns)
+  print(df.dtypes)         # the type of each column
+  df.describe()            # count, mean, std and quartiles of each numeric column
+`} />
+
+Notice that `rt` has fewer values in `count` than the other columns: those are the missing trials. Tables are saved and loaded as CSV files:
+
+<PyCell code={String.raw`
+  df.to_csv("session01_trials.csv", index=False)
+  again = pd.read_csv("session01_trials.csv")
+  print(again.equals(df), again.shape)
+`} />
+
+<Step n={3} title="Selecting rows and columns" minutes={30} />
+
+| You want | Code |
+| --- | --- |
+| One column (a Series) | `df["rt"]` |
+| Several columns | `df[["choice", "rt"]]` |
+| Rows by condition | `df[df["rt"] < 0.5]` |
+| Rows and columns by label | `df.loc[df["feedback"] == 1, ["trial", "rt"]]` |
+| Rows and columns by position | `df.iloc[:10, :3]` |
+| Rows by a readable condition | `df.query("choice == 1 and rt < 0.5")` |
+
+Conditions combine with `&`, `|` and `~` and need brackets, exactly as with NumPy masks (Week 2, Day 2).
+
+<PyCell id="select" title="Easy and hard trials" tests={String.raw`
+  def test_easy():
+      "easy holds the rows with 100 per cent contrast on either side"
+      expect = df[(df["contrast_left"] == 1) | (df["contrast_right"] == 1)]
+      assert easy.equals(expect), "Select rows where either contrast column equals 1."
+
+  def test_rates():
+      "easy_correct and zero_correct are fractions of rewarded trials"
+      zero = df[(df["contrast_left"] == 0) & (df["contrast_right"] == 0)]
+      assert abs(easy_correct - (easy["feedback"] == 1).mean()) < 1e-12
+      assert abs(zero_correct - (zero["feedback"] == 1).mean()) < 1e-12
+`} prompt="Make `easy`, the rows where the contrast is 1 on either side. Compute `easy_correct`, the fraction of easy trials with `feedback == 1`, and `zero_correct`, the same for trials with zero contrast on both sides. What should `zero_correct` be if the mouse is guessing?"
+code={String.raw`
+  easy = ...
+  easy_correct = ...
+  zero = ...
+  zero_correct = ...
+  print(f"easy: {easy_correct:.2f}   zero contrast: {zero_correct:.2f}")
+`}
+hint="easy = df[(df['contrast_left'] == 1) | (df['contrast_right'] == 1)]. The mean of a True/False Series is the fraction True: (easy['feedback'] == 1).mean()."
+solution={String.raw`
+  easy = df[(df["contrast_left"] == 1) | (df["contrast_right"] == 1)]
+  easy_correct = (easy["feedback"] == 1).mean()
+  zero = df[(df["contrast_left"] == 0) & (df["contrast_right"] == 0)]
+  zero_correct = (zero["feedback"] == 1).mean()
+  print(f"easy: {easy_correct:.2f}   zero contrast: {zero_correct:.2f}")
+`} />
+
+At zero contrast there is no correct answer to see; the task assigns the rewarded side at random, so a guessing mouse is right about half the time. Easy trials are not 100 per cent correct either. Those errors are **lapses**, and you will measure them tomorrow.
+
+<Step n={4} title="New columns and missing data" minutes={20} />
+
+Derived columns make analysis readable. The single most useful one here is **signed contrast**: right contrast minus left contrast, so negative means the stimulus was on the left.
+
+<PyCell id="derived" title="Signed contrast and clean trials" tests={String.raw`
+  import numpy as np
+  def test_signed():
+      "signed_contrast is right minus left"
+      assert np.allclose(df["signed_contrast"], df["contrast_right"] - df["contrast_left"])
+
+  def test_right():
+      "chose_right is True when choice is 1"
+      assert df["chose_right"].dtype == bool and (df["chose_right"] == (df["choice"] == 1)).all()
+
+  def test_clean():
+      "clean has no missing reaction times and no very slow trials"
+      assert clean["rt"].notna().all() and (clean["rt"] < 2).all()
+      assert len(clean) == ((df["rt"] < 2) & df["rt"].notna()).sum()
+`} prompt="Add two columns to `df`: `signed_contrast` (right minus left) and `chose_right` (True when `choice == 1`). Then make `clean`: the trials with a reaction time that is present and under 2 seconds."
+code={String.raw`
+  df["signed_contrast"] = ...
+  df["chose_right"] = ...
+  clean = ...
+  print(len(df), "trials,", len(clean), "clean")
+`}
+hint="df['signed_contrast'] = df['contrast_right'] - df['contrast_left']; df['chose_right'] = df['choice'] == 1; clean = df[df['rt'].notna() & (df['rt'] < 2)]"
+solution={String.raw`
+  df["signed_contrast"] = df["contrast_right"] - df["contrast_left"]
+  df["chose_right"] = df["choice"] == 1
+  clean = df[df["rt"].notna() & (df["rt"] < 2)]
+  print(len(df), "trials,", len(clean), "clean")
+`} />
+
+Missing values appear as `NaN`. Most pandas summaries **skip them by default**: `df["rt"].mean()` averages only the trials that have a reaction time. That answers today's prediction, and it is usually what you want, but it is a decision. Always count how many values were missing (`df["rt"].isna().sum()`) and report it.
+
+<PyCell id="copybug" title="Bug hunt: the flag that never sets" tests={String.raw`
+  def test_flag():
+      "slow is True exactly for trials with rt over 1 s"
+      assert "slow" in df.columns, "Create the column on df itself."
+      assert (df["slow"] == (df["rt"] > 1)).all()
+`} prompt="The code below tries to mark slow trials, but `df['slow']` ends up all False. Selecting rows first and then a column gives a temporary copy, so the assignment is lost. Fix it with a single `.loc[rows, column]` assignment."
+code={String.raw`
+  df["slow"] = False
+  df[df["rt"] > 1]["slow"] = True
+  print(df["slow"].sum(), "slow trials")
+`}
+hint="df.loc[df['rt'] > 1, 'slow'] = True selects rows and column in one step and changes df itself."
+solution={String.raw`
+  df["slow"] = False
+  df.loc[df["rt"] > 1, "slow"] = True
+  print(df["slow"].sum(), "slow trials")
+`} />
+
+<Step n={5} title="A first look at groupby" minutes={15} />
+
+Almost every behavioural analysis is "compute something for each condition". pandas does this with `groupby`, in three steps: **split** the rows into groups, **apply** a summary to each, **combine** the results into a new table. Try it on a tiny table:
+
+<Figure caption="Split, apply, combine. Pick the column to group by and the column to summarise." credit="Interactive figure by Engram. The split-apply-combine idea is from Hadley Wickham (2011).">
+  <SplitApplyCombine />
+</Figure>
+
+<PyCell code={String.raw`
+  summary = clean.groupby("signed_contrast").agg(
+      n=("trial", "size"),
+      p_right=("chose_right", "mean"),
+      median_rt=("rt", "median"),
+  )
+  summary
+`} />
+
+That table is a psychometric curve and a chronometric curve (reaction time against difficulty) in seven rows. Tomorrow you will plot and fit it.
+
+<Bridge title="Trials as rows in brains and machines"
+  neuro="Neuroscience experiments are organised by trial. The International Brain Laboratory publishes a standard trial table for every session, with the same columns in every lab, which is what makes results comparable."
+  ai="Machine learning datasets are tables too: one row per example, one column per feature, plus a label. Tools such as scikit-learn (Week 54) expect exactly this shape.">
+
+Neural data then joins the table by trial number: one row of behaviour, one slice of the (neurons, trials, time) array.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "What does `df.describe()` show?", options: ["The first rows", "Count, mean, spread and quartiles of numeric columns", "Column types only", "A plot"], answer: 1, explain: "It is the first summary to run on new data." },
+  { q: "How do you select rows where rt is under 0.5 s?", options: ["df.rt < 0.5", "df[df['rt'] < 0.5]", "df.loc[0.5]", "df.iloc['rt']"], answer: 1, explain: "Index the DataFrame with a boolean Series." },
+  { q: "What is the difference between `.loc` and `.iloc`?", options: ["None", ".loc uses labels and conditions, .iloc uses integer positions", ".iloc is faster", ".loc only selects columns"], answer: 1, explain: "Label-based against position-based selection." },
+  { q: "What does `df['rt'].mean()` do with missing values?", options: ["Returns NaN", "Skips them", "Treats them as zero", "Raises an error"], answer: 1, explain: "Most pandas reductions skip NaN by default; count and report how many." },
+  { q: "Why does `df[df.rt > 1]['slow'] = True` fail to change df?", options: ["slow is a reserved word", "Selecting rows first makes a temporary copy; the assignment goes to the copy", "Booleans cannot be assigned", "rt has NaN"], answer: 1, explain: "Use df.loc[rows, 'slow'] = True in one step." },
+  { q: "What is signed contrast in this task?", options: ["Left plus right", "Right minus left contrast", "The larger contrast", "Always positive"], answer: 1, explain: "Negative means the stimulus was on the left." },
+  { q: "The mean of a True/False column is...", options: ["Undefined", "The fraction of True values", "Always 0.5", "The count of True"], answer: 1, explain: "True counts as 1 and False as 0." },
+]} />
+
+<Flashcards cards={[
+  { front: "DataFrame versus NumPy array?", back: "DataFrame: labelled columns that can each have their own type, rows aligned by label. Array: one type, positions only." },
+  { front: "Three first commands on a new DataFrame?", back: "`df.head()`, `df.dtypes` (or `df.info()`), `df.describe()`." },
+  { front: "Set values for rows matching a condition?", back: "`df.loc[condition, 'column'] = value` (one step, so it changes df itself)." },
+  { front: "How do pandas summaries treat NaN?", back: "They skip it by default. Count missing values with `.isna().sum()` and report them." },
+  { front: "groupby in three words?", back: "Split, apply, combine." },
+  { front: "Named aggregation in pandas?", back: "`df.groupby('c').agg(n=('trial', 'size'), m=('rt', 'median'))`" },
+]} />
+
+<Predict revisit question="What does pandas do with missing reaction times when you average?" />
+
+<Key title="Before you go">
+<ul>
+<li>Arrays for neural activity, DataFrames for trials and metadata.</li>
+<li>Select with conditions, `.loc` (labels) and `.iloc` (positions); assign with `.loc` in one step.</li>
+<li>Missing values are skipped by most summaries: count them and say so.</li>
+<li>groupby splits by condition, applies a summary and combines the results.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: McKinney (2010), <em>Data Structures for Statistical Computing in Python</em>.</li>
+<li>Wes McKinney, <em>Python for Data Analysis</em>, 3rd edition (free online at wesmckinney.com/book), Chapters 5 and 10.</li>
+<li>Wickham (2011), <em>The Split-Apply-Combine Strategy for Data Analysis</em>, Journal of Statistical Software.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="The task assigns zero-contrast trials a rewarded side at random. What could a mouse's choices on those trials tell you about its internal state or strategy?" />

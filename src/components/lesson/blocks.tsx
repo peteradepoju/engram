@@ -103,3 +103,34 @@ export function Reading({ children }: { children: ReactNode }) {
     </aside>
   );
 }
+
+type WatchItem = { title: string; by: string; query?: string; url?: string; note?: string };
+
+/** A list of videos to watch. Each links to a YouTube search for that teacher and topic (or to an official course page), so links never break. */
+export function WatchList({ title = "Watch", items }: { title?: string; items: WatchItem[] }) {
+  return (
+    <section className="not-prose overflow-hidden rounded-xl border border-line bg-surface">
+      <div className="border-b border-line px-5 py-3">
+        <div className="eyebrow">{title}</div>
+        <div className="text-sm text-ink-3">Chosen teachers for today&apos;s topic. Watch one or all; each opens in a new tab.</div>
+      </div>
+      <ul className="divide-y divide-line">
+        {items.map((it) => {
+          const href = it.url ?? `https://www.youtube.com/results?search_query=${encodeURIComponent(it.query ?? `${it.by} ${it.title}`)}`;
+          return (
+            <li key={it.title}>
+              <a href={href} target="_blank" rel="noreferrer" className="flex items-start gap-3 px-5 py-3 hover:bg-surface-2">
+                <span className="mt-0.5 flex h-7 w-10 shrink-0 items-center justify-center rounded-md bg-[#e62117] text-xs text-white" aria-hidden>▶</span>
+                <span className="min-w-0">
+                  <span className="block font-medium">{it.title}</span>
+                  <span className="block text-sm text-ink-3">{it.by}{it.url ? " · course page" : " · YouTube"}</span>
+                  {it.note ? <span className="mt-0.5 block text-sm text-ink-2">{it.note}</span> : null}
+                </span>
+              </a>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}

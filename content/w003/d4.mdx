@@ -1,0 +1,320 @@
+export const meta = {
+  title: "pandas II: grouping, reshaping and the psychometric curve",
+  intro: "Today you turn trial tables into the most important plot in behavioural neuroscience: the psychometric curve. Along the way you learn to group by several variables, combine sessions, reshape tables between long and wide form, join metadata, and fit a curve with four interpretable parameters.",
+  goals: [
+    "Group by one or several columns and compute several summaries at once",
+    "Combine sessions with concat and join metadata with merge",
+    "Reshape between tidy (long) and wide tables with pivot_table and melt",
+    "Fit a psychometric curve and interpret bias, threshold and lapses",
+  ],
+  plan: [
+    { label: "Predict and the psychometric curve", minutes: 25 },
+    { label: "Grouping in depth", minutes: 25 },
+    { label: "Many sessions: concat, merge, pivot", minutes: 30 },
+    { label: "Fitting the curve", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "ibl-2021",
+};
+
+<Predict question="A well-trained mouse sees a 100 per cent contrast grating on the right. What fraction of the time do you think it chooses right: 100 per cent, about 95 per cent, or about 75 per cent? Why might it not be perfect?" />
+
+<Step n={1} title="The psychometric curve" minutes={25} />
+
+A **psychometric curve** plots the probability of one choice (here, "right") against the signed strength of the evidence. It is the standard summary of perceptual decisions, used for humans in the 1800s and for every mouse in the IBL study.
+
+$$
+P(\text{right} \mid c) = \lambda_L + (1 - \lambda_L - \lambda_R)\,\frac{1}{1 + e^{-(c - \mu)/\sigma}}
+$$
+
+Four parameters, each with a meaning:
+
+- **Bias** $\mu$: the contrast at which the animal is indifferent. Non-zero means it prefers a side.
+- **Threshold** $\sigma$: how much contrast it needs; smaller means more sensitive and a steeper curve.
+- **Lapse rates** $\lambda_L$, $\lambda_R$: errors even on the easiest trials, often blamed on inattention or exploration.
+
+The figure uses a single lapse rate for both sides. Move the sliders and resample to see how noisy 40 trials per contrast are.
+
+<Figure caption="A psychometric curve (line) and simulated choices (dots, 40 trials per contrast)." credit="Interactive figure by Engram. Parameterisation follows the International Brain Laboratory (2021).">
+  <Psychometric />
+</Figure>
+
+<WatchList items={[
+  { title: "Psychometric functions and signal detection theory", by: "Lecture videos on perception", query: "psychometric function signal detection theory lecture", note: "Pick a lecture from a university channel; you will meet signal detection theory properly in Week 48." },
+  { title: "The International Brain Laboratory", by: "IBL talks", query: "International Brain Laboratory brain wide map talk", note: "Talks by IBL members on the task, the standardisation and the brain-wide recordings." },
+  { title: "pandas groupby explained", by: "Corey Schafer", query: "Corey Schafer pandas grouping and aggregating", note: "A clear walk through groupby, agg and multiple keys." },
+]} />
+
+<Step n={2} title="Grouping in depth" minutes={25} />
+
+Set up the same simulated session as yesterday (each page has its own Python).
+
+<PyCell code={String.raw`
+  import numpy as np
+  import pandas as pd
+  import matplotlib.pyplot as plt
+
+  def make_session(seed=0, n=600, bias=0.05, sigma=0.15, lapse=0.06):
+      rng = np.random.default_rng(seed)
+      contrasts = np.array([0, 0.0625, 0.125, 0.25, 1.0])
+      side = rng.choice([-1, 1], n)
+      c = rng.choice(contrasts, n)
+      signed = side * c
+      p_right = lapse + (1 - 2 * lapse) / (1 + np.exp(-(signed - bias) / sigma))
+      choice = np.where(rng.random(n) < p_right, 1, -1)
+      timeout = rng.random(n) < 0.04
+      rt = 0.25 + 0.6 * np.exp(-3 * c) * rng.lognormal(0, 0.35, n)
+      df = pd.DataFrame({
+          "trial": np.arange(1, n + 1),
+          "contrast_left": np.where(side == -1, c, 0.0),
+          "contrast_right": np.where(side == 1, c, 0.0),
+          "choice": np.where(timeout, 0, choice),
+          "rt": np.where(timeout, np.nan, rt.round(3)),
+          "feedback": np.where(timeout, -1, np.where(choice == side, 1, -1)),
+      })
+      df["signed_contrast"] = df["contrast_right"] - df["contrast_left"]
+      df["chose_right"] = df["choice"] == 1
+      return df
+
+  df = make_session()
+  valid = df[df["choice"] != 0]            # drop no-response trials
+  print(len(valid), "valid trials")
+`} />
+
+<PyCell id="psych" title="The psychometric table" tests={String.raw`
+  import numpy as np
+  def test_index():
+      "psych has one row per signed contrast, in order"
+      assert list(psych.index) == sorted(valid["signed_contrast"].unique())
+
+  def test_columns():
+      "psych has columns n, p_right and sem"
+      assert set(["n", "p_right", "sem"]) <= set(psych.columns)
+
+  def test_values():
+      "p_right and its standard error are correct"
+      g = valid.groupby("signed_contrast")["chose_right"]
+      assert np.allclose(psych["p_right"], g.mean())
+      p, n = g.mean(), g.size()
+      assert np.allclose(psych["sem"], np.sqrt(p * (1 - p) / n))
+`} prompt="Make `psych`: for each signed contrast, the number of valid trials `n`, the fraction choosing right `p_right`, and its standard error `sem` = $\sqrt{p(1-p)/n}$ (the standard error of a proportion). Then plot it with error bars."
+code={String.raw`
+  psych = valid.groupby("signed_contrast").agg(
+      n=...,
+      p_right=...,
+  )
+  psych["sem"] = ...
+
+  fig, ax = plt.subplots(figsize=(5, 3))
+  ax.errorbar(psych.index, psych["p_right"], yerr=psych["sem"], fmt="o", capsize=3)
+  ax.set_xlabel("signed contrast"); ax.set_ylabel("P(choose right)")
+  plt.show()
+  psych
+`}
+hint="n=('chose_right', 'size'), p_right=('chose_right', 'mean'). Then psych['sem'] = np.sqrt(psych['p_right'] * (1 - psych['p_right']) / psych['n'])."
+solution={String.raw`
+  psych = valid.groupby("signed_contrast").agg(
+      n=("chose_right", "size"),
+      p_right=("chose_right", "mean"),
+  )
+  psych["sem"] = np.sqrt(psych["p_right"] * (1 - psych["p_right"]) / psych["n"])
+
+  fig, ax = plt.subplots(figsize=(5, 3))
+  ax.errorbar(psych.index, psych["p_right"], yerr=psych["sem"], fmt="o", capsize=3)
+  ax.set_xlabel("signed contrast"); ax.set_ylabel("P(choose right)")
+  plt.show()
+  psych
+`} />
+
+<Derivation title="The standard error of a proportion">
+  <div>
+
+Each trial is a Bernoulli variable: $X = 1$ (chose right) with probability $p$, else 0. Its mean is $p$ and its variance is $p(1-p)$.
+
+  </div>
+  <div>
+
+The proportion $\hat{p}$ is the mean of $n$ independent trials, so by Week 1's argument its variance is $p(1-p)/n$.
+
+  </div>
+  <div>
+
+$$
+\text{SE}(\hat{p}) = \sqrt{\frac{p(1-p)}{n}}
+$$
+
+It is largest at $p = 0.5$ (the hard, uncertain contrasts) and shrinks towards 0 and 1. That is why the error bars in the middle of a psychometric curve are always the widest.
+
+  </div>
+</Derivation>
+
+Two more grouping tools:
+
+- **Several keys**: `df.groupby(["session", "signed_contrast"])` makes one group per combination.
+- **transform** returns a result the same length as the original, so you can add it as a column. For example `df["rt_z"] = df.groupby("signed_contrast")["rt"].transform(lambda x: (x - x.mean()) / x.std())` z-scores reaction times within each contrast.
+
+<Step n={3} title="Many sessions: concat, merge, pivot" minutes={30} />
+
+Real studies have many sessions and many mice. Stack sessions with `pd.concat`, attach information about each mouse with `merge`, and reshape with `pivot_table`.
+
+<PyCell code={String.raw`
+  sessions = pd.concat(
+      [make_session(seed=s, bias=b).assign(session=s, mouse=m)
+       for s, b, m in [(1, 0.10, "CSHL_001"), (2, 0.08, "CSHL_001"), (3, -0.12, "UCL_004"), (4, -0.09, "UCL_004")]],
+      ignore_index=True,
+  )
+  mice = pd.DataFrame({"mouse": ["CSHL_001", "UCL_004"], "lab": ["cshl", "ucl"], "sex": ["F", "M"]})
+  sessions = sessions.merge(mice, on="mouse", how="left")    # adds lab and sex to every trial
+  sessions = sessions[sessions["choice"] != 0]
+  print(sessions.shape)
+  sessions.head()
+`} />
+
+The table above is **tidy** (long form): one row per observation (a trial), one column per variable. Tidy tables are easy to group and filter. For reading and plotting it is often handy to make a **wide** table, with one column per group:
+
+<PyCell id="pivot" title="One column per mouse" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "wide has one row per signed contrast and one column per mouse"
+      assert list(wide.columns) == ["CSHL_001", "UCL_004"]
+      assert len(wide) == sessions["signed_contrast"].nunique()
+
+  def test_values():
+      "values are the fraction choosing right"
+      m = sessions[sessions["mouse"] == "UCL_004"].groupby("signed_contrast")["chose_right"].mean()
+      assert np.allclose(wide["UCL_004"], m)
+`} prompt="Use `pd.pivot_table` to make `wide`: rows are signed contrast, columns are mouse, values are the mean of `chose_right`. Then plot one line per mouse. Which mouse is biased towards which side?"
+code={String.raw`
+  wide = pd.pivot_table(sessions, ...)
+
+  ax = wide.plot(marker="o", figsize=(5, 3))
+  ax.set_xlabel("signed contrast"); ax.set_ylabel("P(choose right)")
+  plt.show()
+  wide
+`}
+hint="pd.pivot_table(sessions, index='signed_contrast', columns='mouse', values='chose_right', aggfunc='mean')"
+solution={String.raw`
+  wide = pd.pivot_table(sessions, index="signed_contrast", columns="mouse", values="chose_right", aggfunc="mean")
+
+  ax = wide.plot(marker="o", figsize=(5, 3))
+  ax.set_xlabel("signed contrast"); ax.set_ylabel("P(choose right)")
+  plt.show()
+  wide
+`} />
+
+`pd.melt` goes the other way, from wide back to long. A useful rule from Hadley Wickham's paper on tidy data: **store tidy, reshape only to display.**
+
+<Step n={4} title="Fitting the curve" minutes={25} />
+
+To compare animals we summarise each curve by its parameters. `scipy.optimize.curve_fit` finds the parameters that make the curve closest to the data points (by least squares, weighted by the error bars). In Week 17 you will learn the better method, maximum likelihood, and see why it is preferred for choice data.
+
+<PyCell id="fit" title="Fit bias, threshold and lapse" tests={String.raw`
+  import numpy as np
+  def test_params():
+      "params holds bias, threshold and lapse"
+      assert len(params) == 3
+
+  def test_recovered():
+      "the fit recovers the true values used in the simulation"
+      bias, sigma, lapse = params
+      assert abs(bias - 0.05) < 0.05, f"bias {bias:.3f}, true 0.05"
+      assert abs(sigma - 0.15) < 0.07, f"threshold {sigma:.3f}, true 0.15"
+      assert abs(lapse - 0.06) < 0.05, f"lapse {lapse:.3f}, true 0.06"
+`} prompt="Complete `psychometric(c, bias, sigma, lapse)` (one lapse rate for both sides) and fit it to `psych` with `curve_fit`. Use starting values `p0=[0, 0.2, 0.05]` and `bounds=([-1, 0.01, 0], [1, 1, 0.5])`. Store the fitted values in `params`. The simulation used bias 0.05, threshold 0.15 and lapse 0.06: how close do you get?"
+code={String.raw`
+  from scipy.optimize import curve_fit
+
+  def psychometric(c, bias, sigma, lapse):
+      return ...
+
+  x = psych.index.to_numpy()
+  y = psych["p_right"].to_numpy()
+  err = np.maximum(psych["sem"].to_numpy(), 0.02)    # avoid zero error bars
+  params, cov = curve_fit(psychometric, x, y, sigma=err, p0=[0, 0.2, 0.05], bounds=([-1, 0.01, 0], [1, 1, 0.5]))
+  print("bias, threshold, lapse =", np.round(params, 3))
+
+  cc = np.linspace(-1, 1, 200)
+  fig, ax = plt.subplots(figsize=(5, 3))
+  ax.errorbar(x, y, yerr=psych["sem"], fmt="o", capsize=3, label="data")
+  ax.plot(cc, psychometric(cc, *params), label="fit")
+  ax.set_xlabel("signed contrast"); ax.set_ylabel("P(choose right)"); ax.legend(frameon=False)
+  plt.show()
+`}
+hint="return lapse + (1 - 2 * lapse) / (1 + np.exp(-(c - bias) / sigma))"
+solution={String.raw`
+  from scipy.optimize import curve_fit
+
+  def psychometric(c, bias, sigma, lapse):
+      return lapse + (1 - 2 * lapse) / (1 + np.exp(-(c - bias) / sigma))
+
+  x = psych.index.to_numpy()
+  y = psych["p_right"].to_numpy()
+  err = np.maximum(psych["sem"].to_numpy(), 0.02)
+  params, cov = curve_fit(psychometric, x, y, sigma=err, p0=[0, 0.2, 0.05], bounds=([-1, 0.01, 0], [1, 1, 0.5]))
+  print("bias, threshold, lapse =", np.round(params, 3))
+
+  cc = np.linspace(-1, 1, 200)
+  fig, ax = plt.subplots(figsize=(5, 3))
+  ax.errorbar(x, y, yerr=psych["sem"], fmt="o", capsize=3, label="data")
+  ax.plot(cc, psychometric(cc, *params), label="fit")
+  ax.set_xlabel("signed contrast"); ax.set_ylabel("P(choose right)"); ax.legend(frameon=False)
+  plt.show()
+`} />
+
+<Bridge title="Lapses: inattention or exploration?"
+  neuro="Lapses were long treated as noise. Some studies argue they partly reflect deliberate exploration: the animal occasionally tries the other side to check that the rules have not changed. Inactivating some brain areas changes lapse rates more than thresholds."
+  ai="Reinforcement learning agents explore on purpose, for example by acting randomly a small fraction of the time (epsilon-greedy, Week 69). A lapse rate looks just like epsilon.">
+
+So a fitted lapse rate is a hypothesis, not just a nuisance. You will meet this exploration question again in Week 69.
+
+</Bridge>
+
+<Prove title="Where the curve is steepest" task="Ignoring lapses, show that $P(c) = 1/(1 + e^{-(c - \mu)/\sigma})$ has its steepest point at $c = \mu$, with slope $1/(4\sigma)$. Why does this justify calling $\sigma$ a threshold?">
+
+Let $u = (c - \mu)/\sigma$ and $s(u) = 1/(1 + e^{-u})$. The logistic function satisfies $s'(u) = s(u)(1 - s(u))$.
+
+By the chain rule $dP/dc = s(u)(1 - s(u))/\sigma$. The product $s(1-s)$ is largest when $s = 1/2$, that is $u = 0$, or $c = \mu$, where it equals $1/4$. So the maximum slope is $1/(4\sigma)$.
+
+A small $\sigma$ gives a steep curve: a small change in contrast moves the choice from left to right. So $\sigma$ measures how much evidence the animal needs, which is what a threshold is.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "What does the bias parameter μ measure?", options: ["How steep the curve is", "The contrast at which the animal is indifferent", "Errors on easy trials", "Reaction time"], answer: 1, explain: "Non-zero bias means a preference for one side." },
+  { q: "A smaller threshold σ means the animal is...", options: ["Less sensitive", "More sensitive (a steeper curve)", "More biased", "Lapsing more"], answer: 1, explain: "Less contrast is needed to change its choice." },
+  { q: "Standard error of a proportion p from n trials?", options: ["$p/n$", "$\\sqrt{p(1-p)/n}$", "$p(1-p)$", "$1/\\sqrt{p}$"], answer: 1, explain: "It is largest at p = 0.5." },
+  { q: "Which pandas function stacks several sessions into one table?", options: ["merge", "pd.concat", "pivot_table", "melt"], answer: 1, explain: "concat stacks; merge joins by key." },
+  { q: "What is a tidy table?", options: ["One with no missing values", "One row per observation, one column per variable", "One column per mouse", "A sorted table"], answer: 1, explain: "Store tidy, reshape only to display." },
+  { q: "groupby(...).transform(f) returns...", options: ["One row per group", "A result the same length as the original, aligned to it", "A plot", "A pivot table"], answer: 1, explain: "Useful for adding per-group normalised columns." },
+  { q: "Why might lapses not be just inattention?", options: ["They never happen", "They may reflect deliberate exploration", "They are a coding bug", "They only occur at zero contrast"], answer: 1, explain: "Like epsilon-greedy exploration in reinforcement learning." },
+]} />
+
+<Flashcards cards={[
+  { front: "The psychometric function with lapses?", back: "$P = \\lambda_L + (1 - \\lambda_L - \\lambda_R)/(1 + e^{-(c - \\mu)/\\sigma})$" },
+  { front: "Meaning of μ, σ and λ in a psychometric curve?", back: "Bias (indifference point), threshold (sensitivity: smaller is steeper), lapse rates (errors on easy trials)." },
+  { front: "Standard error of a proportion?", back: "$\\sqrt{p(1-p)/n}$, largest at $p = 0.5$." },
+  { front: "concat, merge, pivot_table, melt?", back: "Stack tables; join by key; long to wide; wide to long." },
+  { front: "Tidy data?", back: "Each row one observation, each column one variable, each table one kind of thing (Wickham, 2014)." },
+  { front: "Maximum slope of a logistic with scale σ?", back: "$1/(4\\sigma)$, at its midpoint." },
+]} />
+
+<Predict revisit question="How often does a trained mouse choose correctly at 100 per cent contrast?" />
+
+<Key title="Before you go">
+<ul>
+<li>The psychometric curve summarises decisions with bias, threshold and lapses.</li>
+<li>groupby with named aggregations builds the curve; transform adds per-group columns.</li>
+<li>concat stacks sessions, merge joins metadata, pivot_table and melt reshape.</li>
+<li>Store data tidy; reshape only to display.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's deep-read paper: The International Brain Laboratory et al. (2021), <em>Standardized and reproducible measurement of decision-making in mice</em>.</li>
+<li>Wickham (2014), <em>Tidy Data</em>, Journal of Statistical Software 59(10).</li>
+<li>Wichmann and Hill (2001), <em>The psychometric function: I. Fitting, sampling, and goodness of fit</em>, Perception and Psychophysics: the classic guide to fitting these curves.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="The IBL found trained mice behaved alike across labs but learned at different speeds. What could make learning speed differ when the protocol is identical? Write two hypotheses you could test." />
