@@ -1,0 +1,296 @@
+export const meta = {
+  title: "Conditional probability: joint, marginal and conditional distributions",
+  intro: "Last week you described single random quantities. Science is mostly about how quantities relate: how a neuron's response depends on the stimulus, how one neuron's count depends on another's, how the probability of a word depends on the words before it. The tool for all of these is conditional probability, the probability of one thing once you know another. Today you learn to compute conditional distributions from joint ones, to break joint probabilities into chains of conditionals, and to average over what you do not know with the laws of total probability and total variance. You will also meet conditional independence, which explains how two neurons can be correlated without either influencing the other.",
+  goals: [
+    "Compute conditional probabilities and conditional distributions from a joint distribution",
+    "Use the product rule and the law of total probability",
+    "Use the laws of total expectation and total variance to split variability into parts",
+    "Distinguish independence from conditional independence, and P(A | B) from P(B | A)",
+  ],
+  plan: [
+    { label: "Predict and conditioning", minutes: 25 },
+    { label: "Conditional distributions", minutes: 25 },
+    { label: "Totals: probability, expectation, variance", minutes: 30 },
+    { label: "Conditional independence", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "knill-2004",
+};
+
+<Predict question="A neuron fires a burst on 90% of the trials when its preferred stimulus is shown, and on 5% of the trials otherwise. The preferred stimulus is shown on only 2% of trials. You see a burst. Is the preferred stimulus more likely than not to have been shown?" />
+
+<Step n={1} title="Conditioning" minutes={25} />
+
+The **conditional probability** of $A$ given $B$ is the fraction of $B$'s probability in which $A$ also happens:
+
+$$
+P(A \mid B) = \frac{P(A \text{ and } B)}{P(B)}, \qquad P(B) > 0.
+$$
+
+Conditioning shrinks the sample space to the outcomes where $B$ happened and rescales so that probabilities again add to 1. Rearranged, it gives the **product rule**, $P(A \text{ and } B) = P(A \mid B)P(B)$, and applied repeatedly the **chain rule**
+
+$$
+P(A_1, A_2, \dots, A_n) = P(A_1)\,P(A_2 \mid A_1)\,P(A_3 \mid A_1, A_2)\cdots P(A_n \mid A_1, \dots, A_{n-1}).
+$$
+
+The chain rule is exactly how a language model assigns probability to a sentence: the probability of each word given all the words before it, multiplied together.
+
+Conditioning is not symmetric. $P(\text{burst} \mid \text{preferred})$ and $P(\text{preferred} \mid \text{burst})$ answer different questions and can be wildly different, a confusion so common in courtrooms that it has a name, the prosecutor's fallacy.
+
+<Video id="iprFMHch2_g" title="Correlation and marginalization" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's introduction to joint distributions, marginalising and conditioning, from its day on Bayesian decisions." />
+
+<PyCell id="asym" title="Two conditionals, two answers" tests={String.raw`
+  import numpy as np
+  def test_forward():
+      "P(burst | preferred) is close to 0.9 in the simulation"
+      assert abs(p_burst_given_pref - 0.9) < 0.02
+
+  def test_backward():
+      "P(preferred | burst) matches the exact value 0.9 * 0.02 / (0.9 * 0.02 + 0.05 * 0.98) to within 0.02"
+      exact = 0.9 * 0.02 / (0.9 * 0.02 + 0.05 * 0.98)
+      assert abs(p_pref_given_burst - exact) < 0.02 and abs(exact_value - exact) < 1e-12
+`} prompt="Simulate 200,000 trials of the prediction's experiment. Estimate `p_burst_given_pref` and `p_pref_given_burst` by counting, and compute `exact_value` for the second from the definition of conditional probability."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2004)
+  T = 200000
+  pref = rng.random(T) < 0.02                                   # was the preferred stimulus shown?
+  burst = np.where(pref, rng.random(T) < 0.9, rng.random(T) < 0.05)
+
+  p_burst_given_pref = ...          # among trials with the preferred stimulus, the fraction with a burst
+  p_pref_given_burst = ...          # among trials with a burst, the fraction with the preferred stimulus
+  exact_value = ...                 # P(pref and burst) / P(burst)
+  print(f"P(burst | preferred) = {p_burst_given_pref:.3f};  P(preferred | burst) = {p_pref_given_burst:.3f} (exact {exact_value:.3f})")
+`}
+hint="p_burst_given_pref = burst[pref].mean(); p_pref_given_burst = pref[burst].mean(); exact_value = 0.9 * 0.02 / (0.9 * 0.02 + 0.05 * 0.98)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2004)
+  T = 200000
+  pref = rng.random(T) < 0.02                                   # was the preferred stimulus shown?
+  burst = np.where(pref, rng.random(T) < 0.9, rng.random(T) < 0.05)
+
+  p_burst_given_pref = burst[pref].mean()          # among trials with the preferred stimulus, the fraction with a burst
+  p_pref_given_burst = pref[burst].mean()          # among trials with a burst, the fraction with the preferred stimulus
+  exact_value = 0.9 * 0.02 / (0.9 * 0.02 + 0.05 * 0.98)                 # P(pref and burst) / P(burst)
+  print(f"P(burst | preferred) = {p_burst_given_pref:.3f};  P(preferred | burst) = {p_pref_given_burst:.3f} (exact {exact_value:.3f})")
+`} />
+
+The neuron is a reliable detector, yet a burst means the preferred stimulus only about a quarter of the time, because the preferred stimulus is rare and the other stimuli, though each unlikely to cause a burst, are many. That answers the prediction, and it is Bayes' rule, which you derive properly tomorrow.
+
+<Step n={2} title="Conditional distributions" minutes={25} />
+
+For two discrete random variables, conditioning on $X = x$ turns one row (or column) of the joint table into a distribution:
+
+$$
+p(y \mid x) = \frac{p(x, y)}{p_X(x)} = \frac{p(x, y)}{\sum_{y'} p(x, y')}.
+$$
+
+Its mean, $\mathbb{E}[Y \mid X = x]$, is the **conditional expectation**: the best prediction of $Y$, in the squared-error sense, once you know $x$. As a function of $x$ it is the **regression function**, which linear regression (Week 5) approximates with a straight line.
+
+<Figure caption="The joint distribution of two neurons' counts. Drag the pink column to condition on neuron A's count, and compare the conditional distribution of neuron B with its marginal." credit="Interactive figure by Engram.">
+  <ConditionalSlice />
+</Figure>
+
+<PyCell id="conditional" title="Conditional distributions from a joint table" tests={String.raw`
+  import numpy as np
+  def test_rows():
+      "each row of cond sums to 1 where neuron A's count was observed"
+      ok = joint.sum(1) > 0
+      assert np.allclose(cond[ok].sum(1), 1)
+
+  def test_cond_mean():
+      "the conditional mean of B rises with A's count over counts 0 to 8"
+      assert np.all(np.diff(cond_mean[:9]) > 0)
+`} prompt="Two neurons share a fluctuating gain. Build their joint table of counts, the conditional distributions `cond[a, b]` = P(B = b | A = a), and the conditional means `cond_mean[a]` = E[B | A = a]."
+code={String.raw`
+  T = 100000
+  g = rng.gamma(4.0, 1 / 4.0, T)                     # shared gain, mean 1
+  a, b = rng.poisson(3 * g), rng.poisson(4 * g)
+  joint = np.zeros((a.max() + 1, b.max() + 1))
+  np.add.at(joint, (a, b), 1)
+  joint /= T
+
+  pA = joint.sum(axis=1)
+  cond = ...                                          # divide each row by its total (leave empty rows as zeros)
+  cond_mean = ...
+  print("E[B] =", round(b.mean(), 3)); print("E[B | A = a] for a = 0..8:", cond_mean[:9].round(2))
+  plt.plot(np.arange(9), cond_mean[:9], "o-"); plt.axhline(b.mean(), ls="--", c="k"); plt.xlabel("neuron A count"); plt.ylabel("E[B | A]"); plt.show()
+`}
+hint="cond = np.divide(joint, pA[:, None], out=np.zeros_like(joint), where=pA[:, None] > 0); cond_mean = cond @ np.arange(joint.shape[1])."
+solution={String.raw`
+  T = 100000
+  g = rng.gamma(4.0, 1 / 4.0, T)                     # shared gain, mean 1
+  a, b = rng.poisson(3 * g), rng.poisson(4 * g)
+  joint = np.zeros((a.max() + 1, b.max() + 1))
+  np.add.at(joint, (a, b), 1)
+  joint /= T
+
+  pA = joint.sum(axis=1)
+  cond = np.divide(joint, pA[:, None], out=np.zeros_like(joint), where=pA[:, None] > 0)                                          # divide each row by its total (leave empty rows as zeros)
+  cond_mean = cond @ np.arange(joint.shape[1])
+  print("E[B] =", round(b.mean(), 3)); print("E[B | A = a] for a = 0..8:", cond_mean[:9].round(2))
+  plt.plot(np.arange(9), cond_mean[:9], "o-"); plt.axhline(b.mean(), ls="--", c="k"); plt.xlabel("neuron A count"); plt.ylabel("E[B | A]"); plt.show()
+`} />
+
+Knowing neuron A fired a lot raises your prediction for neuron B, though neither neuron drives the other. A's count is evidence about the hidden gain, and the gain affects B.
+
+<Step n={3} title="Totals: probability, expectation, variance" minutes={30} />
+
+If the events $B_1, B_2, \dots$ split the sample space into non-overlapping pieces, then the **law of total probability** says
+
+$$
+P(A) = \sum_i P(A \mid B_i)\,P(B_i),
+$$
+
+a weighted average of the conditional probabilities. The same averaging gives the **law of total expectation**, $\mathbb{E}[Y] = \mathbb{E}\left[\mathbb{E}[Y \mid X]\right]$, and the **law of total variance**, promised last week:
+
+$$
+\operatorname{Var}(Y) = \mathbb{E}\left[\operatorname{Var}(Y \mid X)\right] + \operatorname{Var}\left(\mathbb{E}[Y \mid X]\right).
+$$
+
+The first term is the variability that remains once $X$ is known; the second is the variability explained by $X$. Their split is the basis of the fraction of variance explained, $R^2$.
+
+<Derivation title="The law of total variance">
+
+<div>
+
+Write $m(X) = \mathbb{E}[Y \mid X]$. Then $Y - \mathbb{E}[Y] = (Y - m(X)) + (m(X) - \mathbb{E}[Y])$, using $\mathbb{E}[m(X)] = \mathbb{E}[Y]$.
+
+</div>
+
+<div>
+
+Square and take expectations. The cross term vanishes: conditional on $X$, the factor $m(X) - \mathbb{E}[Y]$ is fixed and $\mathbb{E}[Y - m(X) \mid X] = 0$.
+
+</div>
+
+<div>
+
+What remains is $\mathbb{E}\left[(Y - m(X))^2\right] + \mathbb{E}\left[(m(X) - \mathbb{E}[Y])^2\right]$. The first is $\mathbb{E}[\operatorname{Var}(Y \mid X)]$, and the second is $\operatorname{Var}(m(X))$.
+
+</div>
+
+</Derivation>
+
+<PyCell id="total" title="Split the variance" tests={String.raw`
+  import numpy as np
+  def test_total_prob():
+      "the law of total probability reproduces the marginal of B"
+      assert np.allclose(pB_total, joint.sum(0))
+
+  def test_total_var():
+      "the two parts of the variance add up to Var(B) to within 1%"
+      assert abs(within + between - np.var(b)) / np.var(b) < 0.01
+
+  def test_gain_part():
+      "the gain explains about half of B's variance here (between 40% and 60%)"
+      assert 0.4 < between / np.var(b) < 0.6
+`} prompt="Check the law of total probability by rebuilding P(B) from `cond` and `pA` (store it in `pB_total`). Then split Var(B) using the gain: given g, B is Poisson with mean 4g, so Var(B | g) = 4g and E[B | g] = 4g. Store `within` = E[Var(B | g)] and `between` = Var(E[B | g])."
+code={String.raw`
+  pB_total = ...
+  within = ...
+  between = ...
+  print(f"Var(B) = {np.var(b):.3f};  within (Poisson) {within:.3f} + between (gain) {between:.3f} = {within + between:.3f}")
+  print(f"fraction of B's variance explained by the gain: {between / np.var(b):.2f}")
+`}
+hint="pB_total = pA @ cond; within = np.mean(4 * g); between = np.var(4 * g)."
+solution={String.raw`
+  pB_total = pA @ cond
+  within = np.mean(4 * g)
+  between = np.var(4 * g)
+  print(f"Var(B) = {np.var(b):.3f};  within (Poisson) {within:.3f} + between (gain) {between:.3f} = {within + between:.3f}")
+  print(f"fraction of B's variance explained by the gain: {between / np.var(b):.2f}")
+`} />
+
+This is last week's modulated Poisson formula, $\mu + \sigma_g^2\mu^2$, derived rather than assumed: with $\mu = 4$ and $\sigma_g^2 = 0.25$, the two parts are 4 and 4.
+
+<Step n={4} title="Conditional independence" minutes={25} />
+
+$A$ and $B$ are **conditionally independent given** $C$ if $P(A, B \mid C) = P(A \mid C)\,P(B \mid C)$ for every value of $C$. The two neurons here are dependent, but conditionally independent given the gain: once you know $g$, A's count tells you nothing more about B's. Many apparent connections between neurons are of this kind, which is why correlations alone cannot establish who drives whom (Week 18 and, properly, the causal inference weeks of Part 5).
+
+<PyCell id="condindep" title="Correlated overall, independent given the gain" tests={String.raw`
+  import numpy as np
+  def test_overall():
+      "overall, A and B are clearly correlated (r above 0.3)"
+      assert r_overall > 0.3
+
+  def test_within():
+      "within narrow bins of the gain, the average correlation is near 0 (below 0.03 in size)"
+      assert abs(r_within) < 0.03
+`} prompt="Compute the overall correlation `r_overall` between a and b. Then split the trials into 20 bins of equal size by the value of g, compute the correlation within each bin, and store the average in `r_within`."
+code={String.raw`
+  r_overall = ...
+  order = np.argsort(g)
+  bins = np.array_split(order, 20)
+  r_within = ...
+  print(f"correlation overall {r_overall:.3f};  average correlation within gain bins {r_within:.3f}")
+`}
+hint="r_overall = np.corrcoef(a, b)[0, 1]; r_within = np.mean([np.corrcoef(a[i], b[i])[0, 1] for i in bins])."
+solution={String.raw`
+  r_overall = np.corrcoef(a, b)[0, 1]
+  order = np.argsort(g)
+  bins = np.array_split(order, 20)
+  r_within = np.mean([np.corrcoef(a[i], b[i])[0, 1] for i in bins])
+  print(f"correlation overall {r_overall:.3f};  average correlation within gain bins {r_within:.3f}")
+`} />
+
+In a real recording you rarely observe the gain, but you can sometimes measure a proxy, such as pupil size, running speed or the summed activity of the rest of the population, and condition on it.
+
+<Bridge title="Conditioning in brains and machines"
+  neuro="Every perceptual inference is a conditional probability: the probability of a state of the world given the sensory evidence. Knill and Pouget (2004, today's paper) argue that the brain represents such conditional distributions, not just single estimates, a claim you will test in the rest of this week."
+  ai="Language models are built on the chain rule: they learn the conditional probability of each token given the ones before it. Graphical models and causal models encode which variables are conditionally independent, which is what makes large joint distributions tractable.">
+
+Conditioning is updating what you expect once you know something; marginalising is averaging over what you do not.
+
+</Bridge>
+
+<Prove title="Independence in both directions" task="Show that if $P(A \mid B) = P(A)$ (with $P(A)$ and $P(B)$ both positive), then $P(B \mid A) = P(B)$ and $P(A \text{ and } B) = P(A)P(B)$.">
+
+From the definition, $P(A \text{ and } B) = P(A \mid B)P(B) = P(A)P(B)$.
+
+Then $P(B \mid A) = P(A \text{ and } B)/P(A) = P(A)P(B)/P(A) = P(B)$.
+
+So independence is symmetric: if learning $B$ does not change the probability of $A$, learning $A$ does not change the probability of $B$, and the joint probability factorises.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "P(A | B) is...", options: ["P(A)P(B)", "P(A and B) / P(B)", "P(B | A)", "P(A) + P(B)"], answer: 1, explain: "Rescale to the outcomes where B happened." },
+  { q: "In general, P(A | B) and P(B | A) are...", options: ["Equal", "Different", "Both 1", "Both P(A and B)"], answer: 1, explain: "The prosecutor's fallacy confuses them." },
+  { q: "The chain rule writes a joint probability as...", options: ["A sum of marginals", "A product of conditionals", "A single conditional", "A variance"], answer: 1, explain: "How language models score sentences." },
+  { q: "The law of total probability is...", options: ["$P(A) = \\sum_i P(A \\mid B_i)P(B_i)$", "$P(A) = P(A \\mid B)$", "$P(A) = 1 - P(B)$", "$P(A) = \\max_i P(A \\mid B_i)$"], answer: 0, explain: "A weighted average of conditionals." },
+  { q: "E[Y | X] as a function of x is called...", options: ["The marginal", "The regression function", "The variance", "The prior"], answer: 1, explain: "The best prediction of Y given x." },
+  { q: "Var(E[Y | X]) is the part of Var(Y)...", options: ["Left after knowing X", "Explained by X", "Due to noise only", "Always zero"], answer: 1, explain: "The law of total variance." },
+  { q: "Two neurons correlated only through a shared gain are...", options: ["Independent", "Conditionally independent given the gain", "Causally connected", "Identical"], answer: 1, explain: "Knowing g, one tells you nothing more about the other." },
+]} />
+
+<Flashcards cards={[
+  { front: "Conditional probability?", back: "$P(A \\mid B) = P(A \\text{ and } B)/P(B)$." },
+  { front: "Chain rule?", back: "$P(A_1, \\dots, A_n) = \\prod_i P(A_i \\mid A_1, \\dots, A_{i-1})$." },
+  { front: "Law of total probability?", back: "$P(A) = \\sum_i P(A \\mid B_i)P(B_i)$." },
+  { front: "Law of total variance?", back: "$\\text{Var}(Y) = E[\\text{Var}(Y \\mid X)] + \\text{Var}(E[Y \\mid X])$." },
+  { front: "Conditional independence?", back: "$P(A, B \\mid C) = P(A \\mid C)P(B \\mid C)$: dependent overall, independent once C is known." },
+]} />
+
+<Predict revisit question="After a burst, is the preferred stimulus more likely than not?" />
+
+<Key title="Before you go">
+<ul>
+<li>Conditioning restricts to the outcomes where something happened and renormalises.</li>
+<li>The product and chain rules build joint probabilities from conditionals; total probability averages conditionals back into a marginal.</li>
+<li>The law of total variance splits variability into an explained and an unexplained part.</li>
+<li>Variables can be dependent yet conditionally independent given a hidden cause.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Knill and Pouget (2004), <em>The Bayesian brain: the role of uncertainty in neural coding and computation</em>.</li>
+<li>Blitzstein and Hwang, <em>Introduction to Probability</em>, chapter 2 (conditional probability), free online.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Think of a pair of quantities in neuroscience or in your own life that are correlated only because of a third, hidden one. Name the hidden variable and say how you could measure it to test your guess." />

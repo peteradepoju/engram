@@ -1,0 +1,227 @@
+export const meta = {
+  title: "Bayes' rule: priors, likelihoods and posteriors",
+  intro: "Yesterday you saw that a reliable detector can still mislead you when what it detects is rare. Bayes' rule is the general fix: it turns the probability of the evidence given each possible cause into the probability of each cause given the evidence. It needs two ingredients, how likely the evidence is under each cause (the likelihood) and how likely each cause was beforehand (the prior). Today you derive it, learn its odds form, update beliefs one observation at a time, and build a Bayesian decoder that reads a grating's orientation from the spike counts of a few neurons. You will find that the prior helps most exactly when the evidence is weakest.",
+  goals: [
+    "Derive Bayes' rule and name its parts: prior, likelihood, evidence and posterior",
+    "Use the odds form and update a belief sequentially as evidence arrives",
+    "Build a Bayesian decoder for a population of Poisson neurons",
+    "Compare maximum likelihood and maximum a posteriori estimates, and say when the prior matters",
+  ],
+  plan: [
+    { label: "Predict and Bayes' rule", minutes: 25 },
+    { label: "Odds and sequential updating", minutes: 25 },
+    { label: "Decoding a population", minutes: 40 },
+    { label: "When does the prior matter?", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "kording-2004",
+};
+
+<Predict question="You decode a grating's orientation from the spike counts of a few neurons. In this experiment most gratings are near 45°. Will using that prior knowledge make your decoder more accurate on average, less accurate, or make no difference? Does your answer change if you record from many more neurons?" />
+
+<Step n={1} title="Bayes' rule" minutes={25} />
+
+Write the product rule two ways, $P(H \text{ and } D) = P(D \mid H)P(H) = P(H \mid D)P(D)$, and divide by $P(D)$:
+
+$$
+\underbrace{P(H \mid D)}_{\text{posterior}} = \frac{\overbrace{P(D \mid H)}^{\text{likelihood}}\;\overbrace{P(H)}^{\text{prior}}}{\underbrace{P(D)}_{\text{evidence}}}, \qquad P(D) = \sum_{H'} P(D \mid H')P(H').
+$$
+
+Here $H$ is a hypothesis (the stimulus, a parameter, a cause) and $D$ the data. The **prior** is what you believed before the data; the **likelihood**, read as a function of $H$ with the data fixed, says how well each hypothesis predicts what you saw; the **posterior** is what you should believe afterwards. The evidence is just the normalising constant that makes the posterior sum to 1, computed by the law of total probability. Often you only need proportionality: posterior $\propto$ likelihood $\times$ prior.
+
+<Video id="HZGCoVF3YvM" title="Bayes theorem, the geometry of changing beliefs" by="3Blue1Brown" note="Grant Sanderson builds Bayes' rule from a picture of a population, the clearest way to see why base rates matter." />
+
+<Step n={2} title="Odds and sequential updating" minutes={25} />
+
+For two hypotheses, dividing Bayes' rule for each removes the evidence term and gives the **odds form**:
+
+$$
+\frac{P(H_1 \mid D)}{P(H_0 \mid D)} = \frac{P(D \mid H_1)}{P(D \mid H_0)} \times \frac{P(H_1)}{P(H_0)}.
+$$
+
+Posterior odds are the **likelihood ratio** times the prior odds. Yesterday's neuron has a likelihood ratio of $0.9/0.05 = 18$ for a burst, but the prior odds are $0.02/0.98$, so the posterior odds are only about 0.37. If observations are independent given the hypothesis, the likelihood ratios multiply, and today's posterior becomes tomorrow's prior. In logarithms the evidence simply adds, which is the idea behind the drift-diffusion model of decisions (Week 24).
+
+<PyCell id="odds" title="Evidence accumulates" tests={String.raw`
+  import numpy as np
+  def test_one():
+      "the posterior after one burst, from the odds form, is about 0.269"
+      assert abs(post_after[1] - 0.9 * 0.02 / (0.9 * 0.02 + 0.05 * 0.98)) < 1e-9
+
+  def test_sequence():
+      "after three bursts in three independent presentations the posterior is above 0.98"
+      assert post_after[3] > 0.98 and np.all(np.diff(post_after) > 0)
+`} prompt="The same stimulus is shown on several independent presentations, and the neuron bursts on each. Using the odds form, compute the posterior probability that it is the preferred stimulus after 0, 1, 2, 3 and 4 bursts, and store them in the array `post_after`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  prior_odds = 0.02 / 0.98
+  LR = 0.9 / 0.05
+  post_odds = ...                              # array for k = 0, 1, 2, 3, 4 bursts
+  post_after = ...                             # convert odds to probabilities: odds / (1 + odds)
+  print("posterior after k bursts:", post_after.round(4))
+`}
+hint="post_odds = prior_odds * LR ** np.arange(5); post_after = post_odds / (1 + post_odds)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  prior_odds = 0.02 / 0.98
+  LR = 0.9 / 0.05
+  post_odds = prior_odds * LR ** np.arange(5)                              # array for k = 0, 1, 2, 3, 4 bursts
+  post_after = post_odds / (1 + post_odds)                             # convert odds to probabilities: odds / (1 + odds)
+  print("posterior after k bursts:", post_after.round(4))
+`} />
+
+One burst leaves you unsure; three make you nearly certain. The prior's influence fades as independent evidence piles up.
+
+<Step n={3} title="Decoding a population" minutes={40} />
+
+Now the hypothesis is a continuous quantity, a grating's orientation $\theta$, and the data are the spike counts $k_1, \dots, k_N$ of $N$ neurons with tuning curves $f_i(\theta)$. If the counts are independent Poisson given $\theta$, the likelihood is a product, and its logarithm a sum:
+
+$$
+\log P(\mathbf{k} \mid \theta) = \sum_{i=1}^{N}\left[k_i\log f_i(\theta) - f_i(\theta)\right] + \text{const}.
+$$
+
+Evaluate it on a grid of orientations, add the log prior, subtract the maximum (to avoid overflow), exponentiate and normalise: that is the posterior. Its peak is the **maximum a posteriori** (MAP) estimate; the peak of the likelihood alone is the **maximum likelihood** (ML) estimate.
+
+<Figure caption="A Bayesian decoder. Change the number of neurons and the width of the prior, and draw new trials, to see when the prior pulls the posterior away from the likelihood." credit="Interactive figure by Engram.">
+  <BayesUpdate />
+</Figure>
+
+<PyCell id="decode" title="A Bayesian decoder" tests={String.raw`
+  import numpy as np
+  def test_posterior():
+      "posterior returns a normalised distribution over the grid"
+      p = posterior(np.array([3, 0, 1, 5]), prefs4, log_prior)
+      assert abs(p.sum() - 1) < 1e-9 and np.all(p >= 0)
+
+  def test_map_better_few():
+      "with 4 neurons, the MAP estimate has a lower mean squared error than ML (stimuli drawn from the prior)"
+      assert err[4]["MAP"] < 0.8 * err[4]["ML"]
+
+  def test_converge_many():
+      "with 32 neurons the two errors are within 15% of each other"
+      assert abs(err[32]["MAP"] - err[32]["ML"]) / err[32]["ML"] < 0.15
+`} prompt="Write `posterior(counts, prefs, log_prior)` returning the normalised posterior on `grid`. Then, for 4 and 32 neurons, decode 2,000 trials whose orientations are drawn from the prior (centred on 45° with sd 15°), and store the mean squared errors of the ML and MAP estimates in `err[N]['ML']` and `err[N]['MAP']`."
+code={String.raw`
+  rng = np.random.default_rng(2002)
+  grid = np.arange(0, 180, 0.5)
+  def circ(d): d = np.mod(d, 180); return np.minimum(d, 180 - d)
+  def tuning(theta, prefs): return 1 + 9 * np.exp(2 * (np.cos(np.deg2rad(2 * (np.subtract.outer(theta, prefs)))) - 1))
+  log_prior = -circ(grid - 45) ** 2 / (2 * 15 ** 2)
+  prefs4 = np.arange(4) * 45.0 + 10
+
+  def posterior(counts, prefs, log_prior):
+      f = tuning(grid, prefs)                                 # shape (len(grid), N)
+      loglik = ...
+      lp = ...                                                # log posterior up to a constant
+      p = np.exp(lp - lp.max())
+      return p / p.sum()
+
+  err = {}
+  for N in [4, 32]:
+      prefs = np.arange(N) * 180 / N + 10
+      sq = {"ML": [], "MAP": []}
+      for _ in range(2000):
+          theta = np.mod(45 + 15 * rng.normal(), 180)
+          counts = rng.poisson(tuning(np.array([theta]), prefs)[0])
+          flat = posterior(counts, prefs, np.zeros_like(grid))       # a flat prior gives the likelihood
+          post = posterior(counts, prefs, log_prior)
+          sq["ML"].append(circ(grid[np.argmax(flat)] - theta) ** 2)
+          sq["MAP"].append(...)
+      err[N] = {k: np.mean(v) for k, v in sq.items()}
+  print({N: {k: round(v, 1) for k, v in e.items()} for N, e in err.items()})
+`}
+hint="loglik = (counts * np.log(f) - f).sum(axis=1); lp = loglik + log_prior; sq['MAP'].append(circ(grid[np.argmax(post)] - theta) ** 2)."
+solution={String.raw`
+  rng = np.random.default_rng(2002)
+  grid = np.arange(0, 180, 0.5)
+  def circ(d): d = np.mod(d, 180); return np.minimum(d, 180 - d)
+  def tuning(theta, prefs): return 1 + 9 * np.exp(2 * (np.cos(np.deg2rad(2 * (np.subtract.outer(theta, prefs)))) - 1))
+  log_prior = -circ(grid - 45) ** 2 / (2 * 15 ** 2)
+  prefs4 = np.arange(4) * 45.0 + 10
+
+  def posterior(counts, prefs, log_prior):
+      f = tuning(grid, prefs)                                 # shape (len(grid), N)
+      loglik = (counts * np.log(f) - f).sum(axis=1)
+      lp = loglik + log_prior                                                # log posterior up to a constant
+      p = np.exp(lp - lp.max())
+      return p / p.sum()
+
+  err = {}
+  for N in [4, 32]:
+      prefs = np.arange(N) * 180 / N + 10
+      sq = {"ML": [], "MAP": []}
+      for _ in range(2000):
+          theta = np.mod(45 + 15 * rng.normal(), 180)
+          counts = rng.poisson(tuning(np.array([theta]), prefs)[0])
+          flat = posterior(counts, prefs, np.zeros_like(grid))       # a flat prior gives the likelihood
+          post = posterior(counts, prefs, log_prior)
+          sq["ML"].append(circ(grid[np.argmax(flat)] - theta) ** 2)
+          sq["MAP"].append(circ(grid[np.argmax(post)] - theta) ** 2)
+      err[N] = {k: np.mean(v) for k, v in sq.items()}
+  print({N: {k: round(v, 1) for k, v in e.items()} for N, e in err.items()})
+`} />
+
+<Step n={4} title="When does the prior matter?" minutes={15} />
+
+With four neurons the likelihood is broad, sometimes with several bumps, and the prior rescues many trials: the mean squared error falls by about 40% (from about 130 to 77 squared degrees). With 32 neurons the likelihood is sharp and the prior barely moves it (10.1 against 9.7). That answers the prediction: a correct prior helps on average, and helps most when the evidence is weak.
+
+Two cautions. The prior helps only if it is right: decode gratings near 120° with a prior centred on 45° and MAP is *worse* than ML, biased towards the expected value. And this bias is not a flaw of the method but a prediction about perception. Körding and Wolpert (2004, today's paper) showed that people's reaching corrections are biased towards a learned prior exactly as much as Bayes' rule predicts, more so when their visual feedback was blurred.
+
+<Bridge title="Priors in brains and machines"
+  neuro="Perceptual biases often look like priors at work: we see slow motion when contrast is low, and light as coming from above. Körding and Wolpert showed people learn a prior over a task's hidden shifts within a few hundred trials and weight it by the reliability of their senses."
+  ai="Regularisation is a prior: ridge regression is MAP estimation with a Gaussian prior on the weights, and the lasso with a Laplace prior (Week 17). Naive Bayes classifiers and probabilistic language models all compute posteriors by Bayes' rule.">
+
+Weak evidence leans on the prior; strong evidence overrides it.
+
+</Bridge>
+
+<Prove title="The odds form" task="Starting from Bayes' rule for two hypotheses $H_0$ and $H_1$, derive the odds form. Then show that for $n$ observations that are independent given the hypothesis, the log posterior odds equal the log prior odds plus the sum of the $n$ log likelihood ratios.">
+
+Bayes' rule gives $P(H_j \mid D) = P(D \mid H_j)P(H_j)/P(D)$ for each $j$. Dividing the $j = 1$ equation by the $j = 0$ one, $P(D)$ cancels:
+
+$$
+\frac{P(H_1 \mid D)}{P(H_0 \mid D)} = \frac{P(D \mid H_1)}{P(D \mid H_0)}\cdot\frac{P(H_1)}{P(H_0)}.
+$$
+
+If $D = (d_1, \dots, d_n)$ with the $d_i$ independent given each hypothesis, $P(D \mid H_j) = \prod_i P(d_i \mid H_j)$, so the likelihood ratio is a product of the individual ratios. Taking logarithms turns the product into a sum: $\log \text{posterior odds} = \log\text{prior odds} + \sum_i \log\frac{P(d_i \mid H_1)}{P(d_i \mid H_0)}$.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "In Bayes' rule, the likelihood is...", options: ["P(H)", "P(D | H) as a function of H", "P(H | D)", "P(D)"], answer: 1, explain: "How well each hypothesis predicts the data." },
+  { q: "The evidence P(D) is...", options: ["The prior", "A normalising constant from the law of total probability", "Always 1", "The maximum likelihood"], answer: 1, explain: "Sum of likelihood times prior over hypotheses." },
+  { q: "Posterior odds equal...", options: ["Prior odds plus the likelihood ratio", "Likelihood ratio times prior odds", "The likelihood ratio", "Prior odds"], answer: 1, explain: "The odds form." },
+  { q: "For independent observations, log likelihood ratios...", options: ["Multiply", "Add", "Cancel", "Are all equal"], answer: 1, explain: "Evidence accumulates additively in logs." },
+  { q: "The MAP estimate is the peak of...", options: ["The prior", "The likelihood", "The posterior", "The evidence"], answer: 2, explain: "Maximum a posteriori." },
+  { q: "A correct prior helps decoding most when...", options: ["Many neurons are recorded", "The evidence is weak", "The prior is flat", "Counts are large"], answer: 1, explain: "Broad likelihoods lean on the prior." },
+  { q: "If the true stimuli are far from the prior's centre, MAP estimates are...", options: ["Unbiased", "Biased towards the prior", "Always better than ML", "Random"], answer: 1, explain: "A wrong prior costs accuracy." },
+]} />
+
+<Flashcards cards={[
+  { front: "Bayes' rule?", back: "$P(H \\mid D) = P(D \\mid H)P(H)/P(D)$." },
+  { front: "Odds form?", back: "Posterior odds = likelihood ratio × prior odds." },
+  { front: "Poisson population log-likelihood?", back: "$\\sum_i [k_i \\log f_i(\\theta) - f_i(\\theta)]$ + const." },
+  { front: "ML and MAP?", back: "Peak of the likelihood; peak of the posterior (likelihood × prior)." },
+  { front: "Körding and Wolpert (2004)?", back: "People combine a learned prior with feedback, weighting the prior more when feedback is blurred." },
+]} />
+
+<Predict revisit question="Does a correct prior make decoding more accurate, and does that change with more neurons?" />
+
+<Key title="Before you go">
+<ul>
+<li>Posterior ∝ likelihood × prior; the evidence normalises.</li>
+<li>In odds form, likelihood ratios multiply and log evidence adds up across independent observations.</li>
+<li>A Bayesian decoder sums Poisson log-likelihoods across neurons and adds the log prior.</li>
+<li>Priors help most when evidence is weak, and bias estimates towards what is expected.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Körding and Wolpert (2004), <em>Bayesian integration in sensorimotor learning</em>.</li>
+<li>3Blue1Brown, <em>The medical test paradox</em>, on Bayes factors and the odds form.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Describe a perceptual illusion or bias you know that could be explained by a prior. What is the prior, and in what circumstances would it usually be right?" />

@@ -1,0 +1,295 @@
+export const meta = {
+  title: "Forge: Week 16 challenge, quiz and deep read",
+  intro: "This week you learned to reason backwards from evidence to causes: conditional distributions and the laws of total probability and variance, Bayes' rule and Bayesian decoding, optimal cue combination, the multivariate Gaussian and its conditionals, and decisions from posteriors. Today's challenge asks three questions a working scientist would ask. Does a Bayesian decoder's uncertainty mean anything, that is, are its 68% intervals right 68% of the time? Is a simulated observer combining cues optimally, or not quite? And how well can one neuron be predicted from its neighbours when the covariance must be estimated from limited data? Then the quiz and a critique of Ernst and Banks.",
+  goals: [
+    "Check whether a Bayesian decoder's posterior is calibrated, and relate its width to the number of spikes",
+    "Test an observer's cue weights and combined precision against the optimal predictions",
+    "Predict a held-out neuron by Gaussian conditioning, and see how estimation error in the covariance limits it",
+    "Critique the evidence that human cue combination is statistically optimal",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "ernst-2002",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. A test has a likelihood ratio of 10 and the prior odds are 1 to 99. What is the posterior probability?
+2. Two cues have standard deviations 1 and 3. What weight goes on the first?
+3. For a bivariate Gaussian with correlation 0.8, by what factor does knowing $x_1$ shrink the standard deviation of $x_2$?
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  odds = 10 / 99
+  print("1. posterior =", round(odds / (1 + odds), 4))
+  print("2. weight =", (1 / 1 ** 2) / (1 / 1 ** 2 + 1 / 3 ** 2))
+  print("3. factor sqrt(1 - 0.8^2) =", np.sqrt(1 - 0.8 ** 2))
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: does the posterior mean what it says?** Sixteen neurons tile orientation evenly. On each trial a grating appears at a random orientation, and a gain (like contrast) that varies from 0.5 to 2 scales every neuron's rate. A decoder that does not know the gain computes the posterior over orientation from a flat prior. If the posterior is **calibrated**, its 68% credible set should contain the true orientation on about 68% of trials.
+
+<PyCell id="partA" title="Part A: calibration and certainty" tests={String.raw`
+  import numpy as np
+  def test_coverage():
+      "the 68% credible sets contain the true orientation on 63% to 73% of trials"
+      assert 0.63 < coverage < 0.73
+
+  def test_spikes_certainty():
+      "trials with more spikes give narrower posteriors: correlation below -0.6"
+      assert np.corrcoef(total_spikes, post_sd)[0, 1] < -0.6
+`} prompt="For 2,000 trials, compute the posterior on `grid`, its 68% credible set (the most probable grid points until their probability reaches 0.68), whether that set contains the truth (within half a grid step), the posterior standard deviation around the MAP, and the total spike count. Store `coverage`, `post_sd` and `total_spikes`."
+code={String.raw`
+  rng = np.random.default_rng(2006)
+  grid = np.arange(0, 180, 0.5)
+  def circ(d): d = np.mod(d, 180); return np.minimum(d, 180 - d)
+  N = 16
+  prefs = np.arange(N) * 180 / N
+  def tuning(theta, p): return 0.5 + 6 * np.exp(2 * (np.cos(np.deg2rad(2 * np.subtract.outer(theta, p))) - 1))
+  F = tuning(grid, prefs)                                       # rates for every grid orientation (gain 1)
+
+  hits, post_sd, total_spikes = [], [], []
+  for _ in range(2000):
+      theta, gain = rng.uniform(0, 180), rng.uniform(0.5, 2.0)
+      k = rng.poisson(gain * tuning(np.array([theta]), prefs)[0])
+      loglik = (k * np.log(F) - F).sum(axis=1)                 # the decoder assumes gain 1
+      p = np.exp(loglik - loglik.max()); p /= p.sum()
+      order = np.argsort(-p)
+      credible = order[: np.searchsorted(np.cumsum(p[order]), 0.68) + 1]
+      hits.append(...)                                          # does the credible set contain theta?
+      m = grid[np.argmax(p)]
+      d = np.mod(grid - m + 90, 180) - 90                       # signed distance from the MAP
+      post_sd.append(...)
+      total_spikes.append(k.sum())
+  coverage = np.mean(hits)
+  print(f"coverage of 68% credible sets: {coverage:.3f};  correlation of total spikes with posterior sd: {np.corrcoef(total_spikes, post_sd)[0, 1]:.2f}")
+  plt.plot(total_spikes, post_sd, ".", alpha=0.3); plt.xlabel("total spikes on the trial"); plt.ylabel("posterior sd (degrees)"); plt.show()
+`}
+hint="hits.append(np.any(circ(grid[credible] - theta) <= 0.25)); post_sd.append(np.sqrt(np.sum(p * d ** 2)))."
+solution={String.raw`
+  rng = np.random.default_rng(2006)
+  grid = np.arange(0, 180, 0.5)
+  def circ(d): d = np.mod(d, 180); return np.minimum(d, 180 - d)
+  N = 16
+  prefs = np.arange(N) * 180 / N
+  def tuning(theta, p): return 0.5 + 6 * np.exp(2 * (np.cos(np.deg2rad(2 * np.subtract.outer(theta, p))) - 1))
+  F = tuning(grid, prefs)                                       # rates for every grid orientation (gain 1)
+
+  hits, post_sd, total_spikes = [], [], []
+  for _ in range(2000):
+      theta, gain = rng.uniform(0, 180), rng.uniform(0.5, 2.0)
+      k = rng.poisson(gain * tuning(np.array([theta]), prefs)[0])
+      loglik = (k * np.log(F) - F).sum(axis=1)                 # the decoder assumes gain 1
+      p = np.exp(loglik - loglik.max()); p /= p.sum()
+      order = np.argsort(-p)
+      credible = order[: np.searchsorted(np.cumsum(p[order]), 0.68) + 1]
+      hits.append(np.any(circ(grid[credible] - theta) <= 0.25))                                          # does the credible set contain theta?
+      m = grid[np.argmax(p)]
+      d = np.mod(grid - m + 90, 180) - 90                       # signed distance from the MAP
+      post_sd.append(np.sqrt(np.sum(p * d ** 2)))
+      total_spikes.append(k.sum())
+  coverage = np.mean(hits)
+  print(f"coverage of 68% credible sets: {coverage:.3f};  correlation of total spikes with posterior sd: {np.corrcoef(total_spikes, post_sd)[0, 1]:.2f}")
+  plt.plot(total_spikes, post_sd, ".", alpha=0.3); plt.xlabel("total spikes on the trial"); plt.ylabel("posterior sd (degrees)"); plt.show()
+`} />
+
+The posterior is close to calibrated even though the decoder never knew the gain. Because the tuning curves tile orientation evenly, the summed rate does not depend on orientation, so the unknown gain cancels from the posterior's shape, and the spikes themselves set its width: more spikes, narrower posterior. Ma, Beck, Latham and Pouget (2006) built a theory of **probabilistic population codes** on exactly this property: with Poisson-like variability, a population's activity carries a whole likelihood function, and its total activity encodes certainty.
+
+**Part B: is this observer optimal?** You are given simulated data from an observer judging an object's size by vision alone, by touch alone, and by both with a 3 mm conflict, at two levels of visual blur. Estimate each sense's noise from the single-cue trials, predict the optimal weights and combined precision, and compare them with what the observer actually did.
+
+<PyCell code={String.raw`
+  true = 55.0
+  def observer(sV, sH, n, conflict=0.0, mode="both"):
+      xV = true - conflict / 2 + sV * rng.normal(size=n)
+      xH = true + conflict / 2 + sH * rng.normal(size=n)
+      if mode == "vision": return xV
+      if mode == "touch": return xH
+      wopt = (1 / sV ** 2) / (1 / sV ** 2 + 1 / sH ** 2)
+      w = min(1.0, wopt + 0.15)                       # this observer leans on vision a little too much
+      return w * xV + (1 - w) * xH
+  blur_levels = {"sharp": 1.0, "blurred": 2.5}
+  sigma_H_true = 1.8
+`} />
+
+<PyCell id="partB" title="Part B: weights and precision" tests={String.raw`
+  import numpy as np
+  def test_noise_estimates():
+      "single-cue noise estimates are within 5% of the observer's true noise"
+      assert abs(sH_hat - 1.8) / 1.8 < 0.05 and all(abs(sV_hat[k] - v) / v < 0.05 for k, v in blur_levels.items())
+
+  def test_overweight():
+      "at both blur levels the measured visual weight exceeds the predicted optimal weight by more than 0.08"
+      assert all(w_meas[k] - w_pred[k] > 0.08 for k in blur_levels)
+
+  def test_precision():
+      "even so, the combined sd beats the better single cue at both blur levels"
+      assert all(sd_comb[k] < min(sV_hat[k], sH_hat) for k in blur_levels)
+`} prompt="Use 3,000 trials of each kind. Estimate `sH_hat` from touch-alone trials and `sV_hat[level]` from vision-alone trials. For each blur level, predict the optimal visual weight `w_pred[level]`, measure the observer's weight `w_meas[level]` from conflict trials, and record the sd of no-conflict combined trials in `sd_comb[level]`."
+code={String.raw`
+  n = 3000
+  sH_hat = observer(1.0, sigma_H_true, n, mode="touch").std()
+  sV_hat, w_pred, w_meas, sd_comb = {}, {}, {}, {}
+  for level, sV in blur_levels.items():
+      sV_hat[level] = observer(sV, sigma_H_true, n, mode="vision").std()
+      w_pred[level] = ...
+      est_conflict = observer(sV, sigma_H_true, n, conflict=3.0)
+      w_meas[level] = ...                                     # (true + 1.5 - mean) / 3, as on Day 3
+      sd_comb[level] = observer(sV, sigma_H_true, n).std()
+      best = min(sV_hat[level], sH_hat)
+      print(f"{level:8s} predicted weight {w_pred[level]:.2f}, measured {w_meas[level]:.2f};  combined sd {sd_comb[level]:.2f}, better cue {best:.2f}")
+`}
+hint="w_pred[level] = (1 / sV_hat[level] ** 2) / (1 / sV_hat[level] ** 2 + 1 / sH_hat ** 2); w_meas[level] = (true + 1.5 - est_conflict.mean()) / 3.0."
+solution={String.raw`
+  n = 3000
+  sH_hat = observer(1.0, sigma_H_true, n, mode="touch").std()
+  sV_hat, w_pred, w_meas, sd_comb = {}, {}, {}, {}
+  for level, sV in blur_levels.items():
+      sV_hat[level] = observer(sV, sigma_H_true, n, mode="vision").std()
+      w_pred[level] = (1 / sV_hat[level] ** 2) / (1 / sV_hat[level] ** 2 + 1 / sH_hat ** 2)
+      est_conflict = observer(sV, sigma_H_true, n, conflict=3.0)
+      w_meas[level] = (true + 1.5 - est_conflict.mean()) / 3.0                                     # (true + 1.5 - mean) / 3, as on Day 3
+      sd_comb[level] = observer(sV, sigma_H_true, n).std()
+      best = min(sV_hat[level], sH_hat)
+      print(f"{level:8s} predicted weight {w_pred[level]:.2f}, measured {w_meas[level]:.2f};  combined sd {sd_comb[level]:.2f}, better cue {best:.2f}")
+`} />
+
+The observer is not optimal: it puts 0.92 of its weight on sharp vision where 0.76 would be optimal, and 0.49 on blurred vision where 0.34 would be. Yet its combined precision still beats either sense alone, so the variance test alone would not have caught the bias. Only measuring both quantities, as Ernst and Banks did, and comparing each with its prediction separates "combines cues" from "combines cues optimally". Real data add a further complication: weights and variances are estimated with error, so "consistent with optimal" needs a statistical test (Week 18).
+
+**Part C: predict a neuron from its neighbours.** Twenty neurons share three hidden sources of fluctuation, so their noise covariance is low-rank plus private noise. Estimate the covariance from a limited number of training trials, then predict neuron 0 on new trials from the other 19 with the Gaussian conditional mean.
+
+<PyCell id="partC" title="Part C: Gaussian conditioning on data" tests={String.raw`
+  import numpy as np
+  def test_r2_good():
+      "with 200 training trials the prediction explains more than 80% of neuron 0's variance on test trials"
+      assert r2[200] > 0.8
+
+  def test_more_data():
+      "more training trials give a better prediction, approaching the true-covariance limit"
+      assert r2[30] < r2[200] <= r2_true + 0.02
+`} prompt="Write `predict0(train, test)` that estimates the mean and covariance from `train`, then returns the conditional mean of neuron 0 given neurons 1 to 19 for each test trial. Compute the test R² (1 − mean squared error / variance) for 30 and 200 training trials, and `r2_true` using the true covariance."
+code={String.raw`
+  n_neur, k = 20, 3
+  Lf = rng.normal(0, 1, (n_neur, k))
+  private = rng.uniform(0.5, 1.5, n_neur); private[0] = 0.3          # neuron 0 has little private noise
+  S_true = Lf @ Lf.T + np.diag(private)
+  data = rng.multivariate_normal(np.zeros(n_neur), S_true, 2200)
+  train_all, test = data[:200], data[200:]
+  o = np.arange(1, n_neur)
+
+  def predict0(train, test):
+      mu = train.mean(0)
+      C = np.cov(train.T)
+      w = ...                                         # C_oo^-1 C_o0
+      return ...
+
+  def R2(pred): return 1 - np.mean((test[:, 0] - pred) ** 2) / np.var(test[:, 0])
+  r2 = {m: R2(predict0(train_all[:m], test)) for m in (30, 200)}
+  w_true = np.linalg.solve(S_true[np.ix_(o, o)], S_true[o, 0])
+  r2_true = R2(test[:, o] @ w_true)
+  print({m: round(v, 3) for m, v in r2.items()}, "  true covariance:", round(r2_true, 3))
+`}
+hint="w = np.linalg.solve(C[np.ix_(o, o)], C[o, 0]); return mu[0] + (test[:, o] - mu[o]) @ w."
+solution={String.raw`
+  n_neur, k = 20, 3
+  Lf = rng.normal(0, 1, (n_neur, k))
+  private = rng.uniform(0.5, 1.5, n_neur); private[0] = 0.3          # neuron 0 has little private noise
+  S_true = Lf @ Lf.T + np.diag(private)
+  data = rng.multivariate_normal(np.zeros(n_neur), S_true, 2200)
+  train_all, test = data[:200], data[200:]
+  o = np.arange(1, n_neur)
+
+  def predict0(train, test):
+      mu = train.mean(0)
+      C = np.cov(train.T)
+      w = np.linalg.solve(C[np.ix_(o, o)], C[o, 0])                                         # C_oo^-1 C_o0
+      return mu[0] + (test[:, o] - mu[o]) @ w
+
+  def R2(pred): return 1 - np.mean((test[:, 0] - pred) ** 2) / np.var(test[:, 0])
+  r2 = {m: R2(predict0(train_all[:m], test)) for m in (30, 200)}
+  w_true = np.linalg.solve(S_true[np.ix_(o, o)], S_true[o, 0])
+  r2_true = R2(test[:, o] @ w_true)
+  print({m: round(v, 3) for m, v in r2.items()}, "  true covariance:", round(r2_true, 3))
+`} />
+
+With 200 training trials the prediction explains 68% of neuron 0's variance, close to the 71% limit set by the true covariance. With 30 trials for 20 neurons the estimated covariance is noisy and the prediction explains only 24%: a sample covariance needs many more trials than dimensions. Estimating 190 correlations from a few dozen trials is a real problem in neuroscience, and shrinkage estimators and factor models (Week 17 and Part 5) exist to solve it.
+
+**Part D (written).** Answer in your journal: in which of today's three parts did a Gaussian or Poisson assumption do the most work, and how would you check it on real data?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The posterior of a mean" task="You observe $x_1, \dots, x_n$, independent $\mathcal{N}(\mu, \sigma^2)$ with $\sigma$ known, and put a prior $\mathcal{N}(\mu_0, \sigma_0^2)$ on $\mu$. Show that the posterior of $\mu$ is Gaussian with precision $n/\sigma^2 + 1/\sigma_0^2$, and write its mean.">
+
+The likelihood is $\prod_i \exp(-(x_i - \mu)^2/2\sigma^2)$. As a function of $\mu$ its exponent is $-\tfrac{n}{2\sigma^2}\mu^2 + \tfrac{n\bar{x}}{\sigma^2}\mu + \text{const}$, the same as a single Gaussian cue at $\bar{x}$ with variance $\sigma^2/n$.
+
+Combining this cue with the prior cue by Day 3's rule, precisions add: $1/\sigma_{\text{post}}^2 = n/\sigma^2 + 1/\sigma_0^2$, and the mean is precision-weighted:
+
+$$
+\mu_{\text{post}} = \frac{(n/\sigma^2)\,\bar{x} + (1/\sigma_0^2)\,\mu_0}{n/\sigma^2 + 1/\sigma_0^2}.
+$$
+
+As $n$ grows the data's precision dominates and the posterior concentrates on $\bar{x}$; this is the conjugate Gaussian model of Week 19.
+
+</Prove>
+
+<Prove title="2. Why LDA is linear" task="For two classes with Gaussian class-conditionals $\mathcal{N}(\boldsymbol{\mu}_c, \Sigma)$ sharing $\Sigma$, and priors $\pi_0, \pi_1$, show that the log posterior odds are $\mathbf{w}^\top\mathbf{x} + b$ with $\mathbf{w} = \Sigma^{-1}(\boldsymbol{\mu}_1 - \boldsymbol{\mu}_0)$.">
+
+The log odds are $\log\pi_1 - \log\pi_0 - \tfrac{1}{2}(\mathbf{x} - \boldsymbol{\mu}_1)^\top\Sigma^{-1}(\mathbf{x} - \boldsymbol{\mu}_1) + \tfrac{1}{2}(\mathbf{x} - \boldsymbol{\mu}_0)^\top\Sigma^{-1}(\mathbf{x} - \boldsymbol{\mu}_0)$; the normalising constants cancel because $\Sigma$ is shared.
+
+Expanding, the $\mathbf{x}^\top\Sigma^{-1}\mathbf{x}$ terms cancel. The terms linear in $\mathbf{x}$ give $(\boldsymbol{\mu}_1 - \boldsymbol{\mu}_0)^\top\Sigma^{-1}\mathbf{x}$, so $\mathbf{w} = \Sigma^{-1}(\boldsymbol{\mu}_1 - \boldsymbol{\mu}_0)$.
+
+The rest is constant: $b = -\tfrac{1}{2}\boldsymbol{\mu}_1^\top\Sigma^{-1}\boldsymbol{\mu}_1 + \tfrac{1}{2}\boldsymbol{\mu}_0^\top\Sigma^{-1}\boldsymbol{\mu}_0 + \log(\pi_1/\pi_0)$. With separate covariances the quadratic terms would not cancel and the boundary would curve.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 16 quiz (15 questions)" questions={[
+  { q: "P(A | B) equals...", options: ["P(A)P(B)", "P(A and B)/P(B)", "P(B | A)", "P(A) − P(B)"], answer: 1, explain: "The definition." },
+  { q: "The prosecutor's fallacy confuses...", options: ["Mean and median", "P(A | B) with P(B | A)", "Variance and sd", "Prior and evidence"], answer: 1, explain: "Conditioning is not symmetric." },
+  { q: "The law of total variance splits Var(Y) into...", options: ["Mean and mode", "Expected conditional variance plus variance of the conditional mean", "Two equal halves", "Signal and prior"], answer: 1, explain: "Unexplained plus explained." },
+  { q: "Two neurons driven by a shared gain are, given the gain...", options: ["Perfectly correlated", "Conditionally independent", "Anti-correlated", "Identical"], answer: 1, explain: "The gain explains their dependence." },
+  { q: "Posterior is proportional to...", options: ["Prior plus likelihood", "Likelihood times prior", "Evidence times prior", "Likelihood alone"], answer: 1, explain: "Bayes' rule." },
+  { q: "In odds form, independent evidence...", options: ["Adds in log odds", "Cancels", "Has no effect", "Multiplies the prior probability by 2"], answer: 0, explain: "Log likelihood ratios add." },
+  { q: "A correct prior helps decoding most when...", options: ["Evidence is weak", "Many neurons are recorded", "The prior is flat", "Rates are high"], answer: 0, explain: "Broad likelihoods lean on it." },
+  { q: "Combining Gaussian cues, precisions...", options: ["Multiply", "Add", "Average", "Cancel"], answer: 1, explain: "One over the variances add." },
+  { q: "Which result rules out simply choosing the better cue?", options: ["The weights", "A combined variance below the better cue's", "The mean", "The prior"], answer: 1, explain: "Cue switching cannot beat the best cue." },
+  { q: "If $x \\sim N(\\mu, \\Sigma)$, the variance of $w^\\top x$ is...", options: ["$w^\\top w$", "$w^\\top\\Sigma w$", "$\\Sigma$", "$|w|$"], answer: 1, explain: "Linear transform rule." },
+  { q: "The Gaussian conditional mean is...", options: ["The marginal mean", "Linear in the observed variables", "Quadratic", "Zero"], answer: 1, explain: "Regression." },
+  { q: "Conditioning a Gaussian on correlated variables makes the variance...", options: ["Larger", "Smaller or equal", "Unchanged always", "Negative"], answer: 1, explain: "Schur complement." },
+  { q: "For squared-error loss the best estimate is the posterior...", options: ["Mode", "Mean", "Median", "Maximum"], answer: 1, explain: "Minimises expected squared error." },
+  { q: "LDA's boundary is linear because...", options: ["The classes have equal means", "The classes share a covariance", "The data are binary", "The prior is flat"], answer: 1, explain: "Quadratic terms cancel." },
+  { q: "The reparameterisation trick writes z as...", options: ["μ + σε", "με", "σ/μ", "ε²"], answer: 0, explain: "Gradients flow through μ and σ." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Ernst and Banks (2002) its third pass and write your critique under the five headings. Focus on one question: **does the experiment show that the brain computes a Bayesian combination, or only that behaviour matches one?** Consider how the single-cue noise levels were measured and whether they stay the same when both cues are present; Part B's lesson that weights and precision must both be tested; how many participants and conditions the conclusion rests on; and what a neural mechanism would have to do to produce the result (Part A suggests one).
+
+<Callout kind="research">
+
+Optimal cue combination has been tested in many senses and species, with both successes and systematic deviations, and how neurons implement it is still debated. Choose one deviation you can imagine, for example observers who underweight a cue they rarely rely on, and design a simulation like Part B that would tell it apart from optimal combination.
+
+</Callout>
+
+<Key title="Week 16 review checklist">
+<ul>
+<li>I can compute conditional distributions, use total probability, and split variance with the law of total variance.</li>
+<li>I can tell independence from conditional independence, and P(A | B) from P(B | A).</li>
+<li>I can apply Bayes' rule, its odds form and sequential updating.</li>
+<li>I can build a Bayesian decoder for Poisson neurons and check that its posterior is calibrated.</li>
+<li>I can combine Gaussian cues and priors, and test weights and precision against optimal predictions.</li>
+<li>I can sample a multivariate Gaussian, transform it linearly, and compute its marginals and conditionals.</li>
+<li>I can choose estimates for different losses, derive LDA, and explain the reparameterisation trick.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part D: where did a Gaussian or Poisson assumption do the most work today, and how would you check it on real data? Then write your simulation design for the research question." />

@@ -1,0 +1,269 @@
+export const meta = {
+  title: "Decisions and Gaussian classifiers: from posteriors to choices",
+  intro: "A posterior is a whole distribution, but an animal, a doctor or a classifier must eventually act: report one orientation, choose left or right, label an image. Which single answer is best depends on what mistakes cost. Today you meet Bayesian decision theory, and see that the posterior mean, median and mode are each the best answer for a different cost. Then you build the classic Gaussian classifier, linear discriminant analysis, and find that with shared noise covariance its posterior is exactly a logistic regression, which explains why ignoring noise correlations can hurt a decoder. You finish with the reparameterisation trick, the step that lets gradients pass through random Gaussian samples in variational autoencoders.",
+  goals: [
+    "Choose the best point estimate for squared, absolute and all-or-nothing losses",
+    "Derive linear discriminant analysis from Gaussian class-conditional distributions and Bayes' rule",
+    "Show how priors move the decision boundary, and why a decoder that ignores correlations is worse",
+    "Estimate a gradient through a Gaussian sample with the reparameterisation trick",
+  ],
+  plan: [
+    { label: "Predict and loss functions", minutes: 25 },
+    { label: "Linear discriminant analysis", minutes: 40 },
+    { label: "Priors and thresholds", minutes: 15 },
+    { label: "The reparameterisation trick", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "kingma-2014",
+};
+
+<Predict question="Two neurons respond to stimuli A and B. Their noise is positively correlated, and stimulus B raises one neuron's rate while lowering the other's. A decoder that treats the neurons as independent ignores the correlation. Will it decode about as well as one that uses the correlation, noticeably worse, or better?" />
+
+<Step n={1} title="Loss functions" minutes={25} />
+
+**Bayesian decision theory** chooses the action $a$ that minimises the **expected loss** under the posterior:
+
+$$
+a^* = \arg\min_a \;\mathbb{E}\left[L(a, \theta) \mid \text{data}\right] = \arg\min_a \int L(a, \theta)\,p(\theta \mid \text{data})\,\mathrm{d}\theta.
+$$
+
+For estimating a number, three losses give three familiar answers. Squared error, $L = (a - \theta)^2$, is minimised by the **posterior mean**. Absolute error, $|a - \theta|$, by the **posterior median**. And the all-or-nothing loss, zero if exactly right and one otherwise, by the **posterior mode** (MAP). For a symmetric posterior they coincide; for a skewed one they do not, and the choice matters.
+
+<Video id="tz9zsmTHR68" title="Bayesian Decisions" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's introduction to combining posteriors with utility or loss functions to make choices." />
+
+<PyCell id="loss" title="Three losses, three answers" tests={String.raw`
+  import numpy as np
+  def test_point_estimates():
+      "mean, median and mode are computed from the posterior"
+      assert abs(post_mean - np.sum(grid * post)) < 1e-9 and post_mode == grid[np.argmax(post)]
+
+  def test_minimisers():
+      "grid search over candidates 0.1 apart confirms each estimate minimises its own expected loss"
+      step = 0.15
+      assert abs(best["squared"] - post_mean) < step and abs(best["absolute"] - post_median) < step and abs(best["zero-one"] - post_mode) < step
+`} prompt="A posterior over a neuron's firing rate is skewed (a gamma shape). Compute its mean, median and mode. Then, for each candidate answer on the grid, compute the expected squared loss, absolute loss and zero-one loss (zero within 0.25 Hz of the truth), and store the best answer for each in the dictionary `best`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  grid = np.linspace(0, 40, 4001)
+  post = grid ** 2 * np.exp(-grid / 4)                 # a skewed posterior over rate (Hz)
+  post /= post.sum()
+
+  post_mean = ...
+  post_median = ...                                     # first grid value where the CDF reaches 0.5
+  post_mode = ...
+
+  cands = grid[::10]
+  exp_sq = [np.sum((a - grid) ** 2 * post) for a in cands]
+  exp_abs = ...
+  exp_01 = [1 - post[np.abs(grid - a) < 0.25].sum() for a in cands]
+  best = {"squared": cands[np.argmin(exp_sq)], "absolute": ..., "zero-one": cands[np.argmin(exp_01)]}
+  print(f"mean {post_mean:.2f}, median {post_median:.2f}, mode {post_mode:.2f}");  print({k: round(float(v), 2) for k, v in best.items()})
+`}
+hint="post_mean = np.sum(grid * post); post_median = grid[np.searchsorted(np.cumsum(post), 0.5)]; post_mode = grid[np.argmax(post)]; exp_abs = [np.sum(np.abs(a - grid) * post) for a in cands]; best['absolute'] = cands[np.argmin(exp_abs)]."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  grid = np.linspace(0, 40, 4001)
+  post = grid ** 2 * np.exp(-grid / 4)                 # a skewed posterior over rate (Hz)
+  post /= post.sum()
+
+  post_mean = np.sum(grid * post)
+  post_median = grid[np.searchsorted(np.cumsum(post), 0.5)]                                     # first grid value where the CDF reaches 0.5
+  post_mode = grid[np.argmax(post)]
+
+  cands = grid[::10]
+  exp_sq = [np.sum((a - grid) ** 2 * post) for a in cands]
+  exp_abs = [np.sum(np.abs(a - grid) * post) for a in cands]
+  exp_01 = [1 - post[np.abs(grid - a) < 0.25].sum() for a in cands]
+  best = {"squared": cands[np.argmin(exp_sq)], "absolute": cands[np.argmin(exp_abs)], "zero-one": cands[np.argmin(exp_01)]}
+  print(f"mean {post_mean:.2f}, median {post_median:.2f}, mode {post_mode:.2f}");  print({k: round(float(v), 2) for k, v in best.items()})
+`} />
+
+<Step n={2} title="Linear discriminant analysis" minutes={40} />
+
+Now the decision is between two classes, $c \in \{0, 1\}$, from a response vector $\mathbf{x}$. Suppose each class's responses are Gaussian with its own mean but a **shared covariance** $\Sigma$. Bayes' rule gives the posterior log odds:
+
+$$
+\log\frac{P(c = 1 \mid \mathbf{x})}{P(c = 0 \mid \mathbf{x})} = \underbrace{(\boldsymbol{\mu}_1 - \boldsymbol{\mu}_0)^\top\Sigma^{-1}}_{\mathbf{w}^\top}\mathbf{x} + b,
+$$
+
+because the quadratic terms $\mathbf{x}^\top\Sigma^{-1}\mathbf{x}$ cancel between the two classes. The posterior is therefore a sigmoid of a linear function of $\mathbf{x}$: exactly the form of logistic regression (Week 12). This is **linear discriminant analysis** (LDA, Fisher 1936). Its weights are $\Sigma^{-1}$ times the difference of means, so the noise correlations tilt the boundary away from the line joining the means. If the classes have different covariances, the quadratic terms survive and the boundary curves (quadratic discriminant analysis).
+
+LDA is a **generative** classifier: it models how the data were produced in each class and inverts with Bayes' rule. Logistic regression is **discriminative**: it fits the posterior directly. When the Gaussian model is right, LDA needs less data; when it is wrong, logistic regression is more robust.
+
+<Figure caption="Two classes with a shared covariance and the Bayes-optimal linear boundary. Change the noise correlation to tilt it, and the prior to slide it." credit="Interactive figure by Engram.">
+  <GaussianClassifier />
+</Figure>
+
+<PyCell id="lda" title="Correlations matter for decoding" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "lda_fit returns w = inverse covariance times the mean difference"
+      w, b = lda_fit(Xtr, ytr)
+      m0, m1 = Xtr[ytr == 0].mean(0), Xtr[ytr == 1].mean(0)
+      assert np.allclose(np.linalg.solve(pooled_cov(Xtr, ytr), m1 - m0), w)
+
+  def test_better():
+      "on test trials, full LDA is at least 5 points more accurate than the decoder that ignores correlations"
+      assert acc_full > acc_diag + 0.05
+`} prompt="Write `lda_fit(X, y, diagonal=False)` that estimates the class means and the pooled covariance (keeping only its diagonal if `diagonal=True`) and returns w and b for equal priors. Train on 400 trials, test on 4,000, and compare `acc_full` with `acc_diag`."
+code={String.raw`
+  rng = np.random.default_rng(1936)
+  Sig = np.array([[1.0, 0.8], [0.8, 1.0]])               # positively correlated noise
+  mu0, mu1 = np.array([0.0, 0.0]), np.array([0.6, -0.2])  # B raises neuron 1 and lowers neuron 2 a little
+  def make(n):
+      y = rng.integers(0, 2, n)
+      X = rng.multivariate_normal([0, 0], Sig, n) + np.where(y[:, None] == 1, mu1, mu0)
+      return X, y
+  Xtr, ytr = make(400); Xte, yte = make(4000)
+
+  def pooled_cov(X, y):
+      R = np.vstack([X[y == c] - X[y == c].mean(0) for c in (0, 1)])
+      return R.T @ R / (len(X) - 2)
+
+  def lda_fit(X, y, diagonal=False):
+      m0, m1 = X[y == 0].mean(0), X[y == 1].mean(0)
+      S = pooled_cov(X, y)
+      if diagonal:
+          S = np.diag(np.diag(S))
+      w = ...
+      b = ...                                             # boundary halfway between the means: -w . (m0 + m1) / 2
+      return w, b
+
+  def accuracy(w, b, X, y): return np.mean(((X @ w + b) > 0) == (y == 1))
+  acc_full = accuracy(*lda_fit(Xtr, ytr), Xte, yte)
+  acc_diag = accuracy(*lda_fit(Xtr, ytr, diagonal=True), Xte, yte)
+  print(f"test accuracy: LDA with correlations {acc_full:.3f}, ignoring correlations {acc_diag:.3f}")
+`}
+hint="w = np.linalg.solve(S, m1 - m0); b = -w @ (m0 + m1) / 2."
+solution={String.raw`
+  rng = np.random.default_rng(1936)
+  Sig = np.array([[1.0, 0.8], [0.8, 1.0]])               # positively correlated noise
+  mu0, mu1 = np.array([0.0, 0.0]), np.array([0.6, -0.2])  # B raises neuron 1 and lowers neuron 2 a little
+  def make(n):
+      y = rng.integers(0, 2, n)
+      X = rng.multivariate_normal([0, 0], Sig, n) + np.where(y[:, None] == 1, mu1, mu0)
+      return X, y
+  Xtr, ytr = make(400); Xte, yte = make(4000)
+
+  def pooled_cov(X, y):
+      R = np.vstack([X[y == c] - X[y == c].mean(0) for c in (0, 1)])
+      return R.T @ R / (len(X) - 2)
+
+  def lda_fit(X, y, diagonal=False):
+      m0, m1 = X[y == 0].mean(0), X[y == 1].mean(0)
+      S = pooled_cov(X, y)
+      if diagonal:
+          S = np.diag(np.diag(S))
+      w = np.linalg.solve(S, m1 - m0)
+      b = -w @ (m0 + m1) / 2                                             # boundary halfway between the means: -w . (m0 + m1) / 2
+      return w, b
+
+  def accuracy(w, b, X, y): return np.mean(((X @ w + b) > 0) == (y == 1))
+  acc_full = accuracy(*lda_fit(Xtr, ytr), Xte, yte)
+  acc_diag = accuracy(*lda_fit(Xtr, ytr, diagonal=True), Xte, yte)
+  print(f"test accuracy: LDA with correlations {acc_full:.3f}, ignoring correlations {acc_diag:.3f}")
+`} />
+
+Here the signal pushes the two neurons partly in opposite directions, which is where positively correlated noise is smallest: the neurons' fluctuations go up and down together, so their difference is quiet. A decoder that knows the correlation weights the neurons to read the signal along that quiet direction; one that ignores it reads mostly along the noisy one. On test trials the full decoder is right 74% of the time, against 66% for the one that ignores correlations. That answers the prediction: noticeably worse. When the signal lies along the noisy direction instead, correlations hurt everyone, and ignoring them costs little. This is the geometry at the heart of today's reading by Averbeck and colleagues.
+
+<Step n={3} title="Priors and thresholds" minutes={15} />
+
+With unequal priors the log odds gain a constant, $\log\frac{P(c = 1)}{P(c = 0)}$, which slides the boundary towards the rarer class: you need stronger evidence to choose something unlikely. Different costs for the two kinds of error shift it the same way. In psychophysics this is the observer's **criterion** in signal detection theory, and separating a change in sensitivity ($d'$) from a change in criterion is how experimenters tell whether attention improved perception or merely made people more willing to say "yes".
+
+<Step n={4} title="The reparameterisation trick" minutes={25} />
+
+Many models must optimise an average over Gaussian noise, $\mathbb{E}_{z \sim \mathcal{N}(\mu, \sigma^2)}[f(z)]$, with respect to $\mu$ and $\sigma$. You cannot differentiate through "draw a sample". But you can write the sample as $z = \mu + \sigma\varepsilon$ with $\varepsilon \sim \mathcal{N}(0, 1)$ fixed, and then
+
+$$
+\frac{\partial}{\partial\mu}\mathbb{E}[f(z)] = \mathbb{E}_\varepsilon\left[f'(\mu + \sigma\varepsilon)\right],
+$$
+
+which can be estimated by averaging over a few samples of $\varepsilon$. This is Kingma and Welling's **reparameterisation trick** (2014, today's paper), and with $z = \boldsymbol{\mu} + L\boldsymbol{\varepsilon}$ it works for full covariances too. The older alternative, the score-function estimator $\mathbb{E}[f(z)(z - \mu)/\sigma^2]$, needs no derivative of $f$ but is far noisier.
+
+<PyCell id="reparam" title="Two gradient estimators" tests={String.raw`
+  import numpy as np
+  def test_unbiased():
+      "both estimators average close to the true gradient 2 mu (within 0.1)"
+      assert abs(np.mean(g_rep) - 2 * mu) < 0.1 and abs(np.mean(g_score) - 2 * mu) < 0.1
+
+  def test_variance():
+      "the reparameterisation estimator has at least 4 times smaller variance"
+      assert np.var(g_score) > 4 * np.var(g_rep)
+`} prompt="For f(z) = z² with z ~ N(μ = 1.5, σ = 1), the true gradient with respect to μ is 2μ. Compute 5,000 single-sample gradient estimates with the reparameterisation trick (`g_rep` = f′(z) = 2z) and with the score-function estimator (`g_score` = f(z)(z − μ)/σ²), using the same ε, and compare their means and variances."
+code={String.raw`
+  mu, sigma = 1.5, 1.0
+  eps = rng.normal(size=5000)
+  z = mu + sigma * eps
+  g_rep = ...
+  g_score = ...
+  print(f"true gradient {2 * mu};  reparameterisation mean {g_rep.mean():.3f} (variance {g_rep.var():.2f});  score function mean {g_score.mean():.3f} (variance {g_score.var():.2f})")
+`}
+hint="g_rep = 2 * z; g_score = z ** 2 * (z - mu) / sigma ** 2."
+solution={String.raw`
+  mu, sigma = 1.5, 1.0
+  eps = rng.normal(size=5000)
+  z = mu + sigma * eps
+  g_rep = 2 * z
+  g_score = z ** 2 * (z - mu) / sigma ** 2
+  print(f"true gradient {2 * mu};  reparameterisation mean {g_rep.mean():.3f} (variance {g_rep.var():.2f});  score function mean {g_score.mean():.3f} (variance {g_score.var():.2f})")
+`} />
+
+Both are right on average, but the reparameterised estimate has about a twelfth of the variance (4 against 49), which is the difference between a variational autoencoder that trains and one that does not. The score-function estimator survives where $f$ cannot be differentiated, as in reinforcement learning, where it is called REINFORCE (Week 71).
+
+<Bridge title="Decisions in brains and machines"
+  neuro="Animals trade off errors by their costs: a monkey rewarded more for one choice shifts its criterion, and neurons in parietal cortex reflect both the evidence and the expected value of each option. Signal detection theory, built on two Gaussians and a threshold, remains the standard way to separate sensitivity from bias in perception experiments."
+  ai="Classifiers output posteriors, and the decision threshold is chosen afterwards for the costs at hand, for example to trade false alarms against misses in medical screening. The reparameterisation trick trains variational autoencoders and many probabilistic deep networks.">
+
+A posterior says what you believe; a loss says what you should do about it.
+
+</Bridge>
+
+<Prove title="The posterior mean minimises squared error" task="Show that $a^* = \mathbb{E}[\theta \mid \text{data}]$ minimises $\mathbb{E}[(a - \theta)^2 \mid \text{data}]$, and that the minimum value is the posterior variance.">
+
+Write $m = \mathbb{E}[\theta \mid \text{data}]$. Then $(a - \theta)^2 = (a - m)^2 + 2(a - m)(m - \theta) + (m - \theta)^2$.
+
+Taking the posterior expectation, the middle term vanishes because $\mathbb{E}[m - \theta \mid \text{data}] = 0$, leaving $(a - m)^2 + \operatorname{Var}(\theta \mid \text{data})$.
+
+This is smallest when $a = m$, and the minimum is the posterior variance: the irreducible uncertainty that no single answer can remove.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "Squared-error loss is minimised by the posterior...", options: ["Mode", "Median", "Mean", "Maximum"], answer: 2, explain: "Proved above." },
+  { q: "Absolute-error loss is minimised by the posterior...", options: ["Mean", "Median", "Mode", "Variance"], answer: 1, explain: "Half the probability on each side." },
+  { q: "With Gaussian classes sharing one covariance, the Bayes boundary is...", options: ["Curved", "Linear", "Circular", "Undefined"], answer: 1, explain: "Quadratic terms cancel." },
+  { q: "LDA's weight vector is...", options: ["μ1 − μ0", "Σ⁻¹(μ1 − μ0)", "Σ(μ1 − μ0)", "μ1 + μ0"], answer: 1, explain: "Noise correlations tilt it." },
+  { q: "LDA's posterior has the same form as...", options: ["k-means", "Logistic regression", "PCA", "A Poisson GLM"], answer: 1, explain: "A sigmoid of a linear function." },
+  { q: "A lower prior for class 1 moves the boundary...", options: ["Towards class 1", "Towards class 0", "Nowhere", "To infinity"], answer: 0, explain: "Rarer classes need stronger evidence." },
+  { q: "The reparameterisation trick writes a Gaussian sample as...", options: ["μσε", "μ + σε", "ε/σ − μ", "μ²"], answer: 1, explain: "Gradients pass through μ and σ." },
+]} />
+
+<Flashcards cards={[
+  { front: "Bayes decision rule?", back: "Choose the action minimising posterior expected loss." },
+  { front: "Best estimates for three losses?", back: "Squared: mean. Absolute: median. Zero-one: mode." },
+  { front: "LDA?", back: "Gaussian classes with shared Σ; $w = \\Sigma^{-1}(\\mu_1 - \\mu_0)$; posterior is logistic." },
+  { front: "Generative or discriminative?", back: "Generative models p(x | c) and inverts (LDA); discriminative fits p(c | x) directly (logistic regression)." },
+  { front: "Reparameterisation trick?", back: "$z = \\mu + \\sigma\\varepsilon$; gradient $E[f'(\\mu + \\sigma\\varepsilon)]$, low variance." },
+]} />
+
+<Predict revisit question="Does a decoder that ignores noise correlations do as well, worse or better here?" />
+
+<Key title="Before you go">
+<ul>
+<li>The best answer depends on the loss: mean, median or mode.</li>
+<li>Shared-covariance Gaussian classes give a linear, logistic posterior with weights Σ⁻¹(μ1 − μ0).</li>
+<li>Priors and costs shift the criterion; d′ measures sensitivity separately.</li>
+<li>The reparameterisation trick turns sampling into a differentiable step with low-variance gradients.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Kingma and Welling (2014), <em>Auto-encoding variational Bayes</em>, section 2.4 and the example in section 3.</li>
+<li>Hastie, Tibshirani and Friedman, <em>The Elements of Statistical Learning</em>, section 4.3 on linear discriminant analysis (free from the authors).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Think of a decision where the two kinds of mistake have very different costs, such as missing a predator against fleeing from a shadow. How should the criterion be set, and what would you expect to see in an animal's behaviour?" />

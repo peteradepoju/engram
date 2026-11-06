@@ -1,0 +1,252 @@
+export const meta = {
+  title: "The multivariate Gaussian: covariance, marginals and conditionals",
+  intro: "A population of neurons does not fluctuate one neuron at a time: their trial-to-trial noise is correlated, and the natural description is a joint distribution over all of them at once. The multivariate Gaussian is that description, and it is the most useful distribution in this course, because everything you might want to do with it has a formula. Linear transformations of it are Gaussian, its marginals are read off by deleting rows and columns, and its conditionals are Gaussian with a mean given by linear regression. Today you bring together the covariance matrices of Week 7 and the probability of the last two weeks, sample correlated population noise, and predict one neuron's response from the others.",
+  goals: [
+    "Write the multivariate Gaussian density and interpret its mean vector and covariance matrix",
+    "Sample correlated noise with the Cholesky factor, and compute Mahalanobis distances",
+    "Find the distribution of linear combinations, such as a population sum or a decoder's output",
+    "Derive and use the conditional distribution of one block of variables given another",
+  ],
+  plan: [
+    { label: "Predict and the density", minutes: 25 },
+    { label: "Sampling and distance", minutes: 25 },
+    { label: "Linear combinations", minutes: 20 },
+    { label: "Conditioning", minutes: 35 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "averbeck-2006",
+};
+
+<Predict question="You record 100 neurons whose noise is weakly correlated, with every pair correlated at 0.1. You sum all their spike counts to average the noise away. Compared with 100 independent neurons, is the variance of the sum about the same, about twice as large, or about ten times as large?" />
+
+<Step n={1} title="The density" minutes={25} />
+
+A random vector $\mathbf{x} \in \mathbb{R}^d$ is **multivariate Gaussian** with mean $\boldsymbol{\mu}$ and covariance matrix $\Sigma$ if its density is
+
+$$
+p(\mathbf{x}) = \frac{1}{(2\pi)^{d/2}\det(\Sigma)^{1/2}}\exp\!\left(-\tfrac{1}{2}(\mathbf{x} - \boldsymbol{\mu})^\top\Sigma^{-1}(\mathbf{x} - \boldsymbol{\mu})\right).
+$$
+
+The covariance matrix holds every variance on its diagonal and every covariance $\Sigma_{ij} = \operatorname{Cov}(x_i, x_j)$ off it. It is symmetric and positive semidefinite (Week 6). The exponent's quadratic form,
+
+$$
+d_M^2(\mathbf{x}) = (\mathbf{x} - \boldsymbol{\mu})^\top\Sigma^{-1}(\mathbf{x} - \boldsymbol{\mu}),
+$$
+
+is the squared **Mahalanobis distance**: distance from the mean measured in units of the noise in each direction. Its level sets, the contours of equal density, are ellipsoids whose axes are the eigenvectors of $\Sigma$ and whose half-lengths are proportional to the square roots of its eigenvalues, the PCA picture of Week 7.
+
+<Figure caption="A two-dimensional Gaussian. Change the correlation, then drag the pink handle to condition on x1 and watch the conditional distribution of x2." credit="Interactive figure by Engram.">
+  <GaussianConditional />
+</Figure>
+
+<Video id="d_qvLDhkg00" title="A pretty reason why Gaussian + Gaussian = Gaussian" by="3Blue1Brown" note="Grant Sanderson uses the rotational symmetry of the two-dimensional Gaussian to show why sums of Gaussians stay Gaussian." />
+
+<Step n={2} title="Sampling and distance" minutes={25} />
+
+To sample from $\mathcal{N}(\boldsymbol{\mu}, \Sigma)$, factor the covariance as $\Sigma = LL^\top$ with $L$ lower triangular (the **Cholesky factorisation**), draw independent standard normals $\mathbf{z}$, and set $\mathbf{x} = \boldsymbol{\mu} + L\mathbf{z}$. Its covariance is $L\,I\,L^\top = \Sigma$, as you will prove in step 3. This is also the **reparameterisation trick** of today's AI paper, used to train variational autoencoders (tomorrow).
+
+<PyCell id="sample" title="Correlated population noise" tests={String.raw`
+  import numpy as np
+  def test_cov():
+      "the sample covariance matches Sigma to within 0.05 in every entry"
+      assert np.abs(np.cov(X.T) - Sigma).max() < 0.05
+
+  def test_mahal():
+      "about 86.5% of two-dimensional samples lie within Mahalanobis distance 2 (1 - exp(-2))"
+      assert abs(frac_within - (1 - np.exp(-2))) < 0.01
+`} prompt="Build the covariance of three neurons from standard deviations (1, 2, 1.5) and correlations 0.6, 0.3 and −0.2, sample 50,000 noise vectors with the Cholesky factor, and check the sample covariance. Then, for the first two neurons only, compute each sample's squared Mahalanobis distance and the fraction within distance 2."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2006)
+  sd = np.array([1.0, 2.0, 1.5])
+  R = np.array([[1, 0.6, 0.3], [0.6, 1, -0.2], [0.3, -0.2, 1]])
+  Sigma = R * np.outer(sd, sd)
+
+  L = ...                                   # Cholesky factor
+  X = ...                                   # 50,000 samples as rows: (L @ z).T for z standard normal
+  S2 = Sigma[:2, :2]
+  d2 = ...                                  # squared Mahalanobis distance of X[:, :2] under S2
+  frac_within = np.mean(d2 < 4)
+  print("sample covariance:\n", np.cov(X.T).round(3)); print(f"fraction within Mahalanobis distance 2: {frac_within:.4f}")
+`}
+hint="L = np.linalg.cholesky(Sigma); X = (L @ rng.normal(size=(3, 50000))).T; d2 = np.einsum('ij,jk,ik->i', X[:, :2], np.linalg.inv(S2), X[:, :2])."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2006)
+  sd = np.array([1.0, 2.0, 1.5])
+  R = np.array([[1, 0.6, 0.3], [0.6, 1, -0.2], [0.3, -0.2, 1]])
+  Sigma = R * np.outer(sd, sd)
+
+  L = np.linalg.cholesky(Sigma)                                   # Cholesky factor
+  X = (L @ rng.normal(size=(3, 50000))).T                                   # 50,000 samples as rows: (L @ z).T for z standard normal
+  S2 = Sigma[:2, :2]
+  d2 = np.einsum("ij,jk,ik->i", X[:, :2], np.linalg.inv(S2), X[:, :2])                                  # squared Mahalanobis distance of X[:, :2] under S2
+  frac_within = np.mean(d2 < 4)
+  print("sample covariance:\n", np.cov(X.T).round(3)); print(f"fraction within Mahalanobis distance 2: {frac_within:.4f}")
+`} />
+
+In two dimensions only about 86% of the probability lies within two Mahalanobis units, not the 95% you know from one dimension; in higher dimensions, the fraction within any fixed distance shrinks further, because there are more directions in which to stray.
+
+<Step n={3} title="Linear combinations" minutes={20} />
+
+If $\mathbf{x} \sim \mathcal{N}(\boldsymbol{\mu}, \Sigma)$, then for any matrix $A$ and vector $\mathbf{b}$,
+
+$$
+A\mathbf{x} + \mathbf{b} \sim \mathcal{N}\!\left(A\boldsymbol{\mu} + \mathbf{b},\; A\Sigma A^\top\right).
+$$
+
+The mean part follows from linearity of expectation; the covariance part from $\operatorname{Cov}(A\mathbf{x}) = \mathbb{E}[A(\mathbf{x} - \boldsymbol{\mu})(\mathbf{x} - \boldsymbol{\mu})^\top A^\top] = A\Sigma A^\top$. For a single readout $\mathbf{w}^\top\mathbf{x}$, the variance is $\mathbf{w}^\top\Sigma\mathbf{w}$, the quantity you minimised in Week 13. For the plain population sum, $\mathbf{w} = \mathbf{1}$, it is the sum of every entry of $\Sigma$, which is where correlations bite.
+
+<PyCell id="sum" title="Correlations and the population sum" tests={String.raw`
+  import numpy as np
+  def test_formula():
+      "var_sum equals 1' Sigma 1"
+      assert abs(var_sum - Sigma100.sum()) < 1e-9
+
+  def test_ratio():
+      "with correlation 0.1 among 100 neurons the variance of the sum is about 11 times that of independent neurons"
+      assert abs(var_sum / var_indep - 10.9) < 0.05
+
+  def test_simulated():
+      "a simulation of the sum agrees with the formula to within 3%"
+      assert abs(var_sim - var_sum) / var_sum < 0.03
+`} prompt="One hundred neurons each have noise variance 1, and every pair is correlated at 0.1. Compute the variance of the summed count `var_sum` from the formula, the variance for independent neurons `var_indep`, and check `var_sum` by simulating 20,000 trials (`var_sim`)."
+code={String.raw`
+  N = 100
+  Sigma100 = 0.1 * np.ones((N, N)) + 0.9 * np.eye(N)
+  one = np.ones(N)
+  var_sum = ...
+  var_indep = ...
+  samples = rng.multivariate_normal(np.zeros(N), Sigma100, size=20000)
+  var_sim = ...
+  print(f"variance of the sum: correlated {var_sum:.1f}, independent {var_indep:.1f}, ratio {var_sum / var_indep:.1f};  simulated {var_sim:.1f}")
+`}
+hint="var_sum = one @ Sigma100 @ one; var_indep = float(N); var_sim = samples.sum(axis=1).var()."
+solution={String.raw`
+  N = 100
+  Sigma100 = 0.1 * np.ones((N, N)) + 0.9 * np.eye(N)
+  one = np.ones(N)
+  var_sum = one @ Sigma100 @ one
+  var_indep = float(N)
+  samples = rng.multivariate_normal(np.zeros(N), Sigma100, size=20000)
+  var_sim = samples.sum(axis=1).var()
+  print(f"variance of the sum: correlated {var_sum:.1f}, independent {var_indep:.1f}, ratio {var_sum / var_indep:.1f};  simulated {var_sim:.1f}")
+`} />
+
+The diagonal contributes 100, but there are 9,900 off-diagonal pairs, each adding 0.1: the variance is about eleven times larger. That answers the prediction: correlations that look negligible pair by pair dominate a large population, which is why noise correlations of around 0.1, typical of cortex, matter so much (Averbeck, Latham and Pouget, 2006, today's paper).
+
+<Step n={4} title="Conditioning" minutes={35} />
+
+Split the vector into two blocks, $\mathbf{x} = (\mathbf{x}_1, \mathbf{x}_2)$, with the mean and covariance split to match:
+
+$$
+\boldsymbol{\mu} = \begin{pmatrix}\boldsymbol{\mu}_1 \\ \boldsymbol{\mu}_2\end{pmatrix}, \qquad \Sigma = \begin{pmatrix}\Sigma_{11} & \Sigma_{12} \\ \Sigma_{21} & \Sigma_{22}\end{pmatrix}.
+$$
+
+The **marginal** of $\mathbf{x}_1$ is simply $\mathcal{N}(\boldsymbol{\mu}_1, \Sigma_{11})$: delete the other rows and columns. The **conditional** of $\mathbf{x}_1$ given $\mathbf{x}_2$ is also Gaussian:
+
+$$
+\mathbf{x}_1 \mid \mathbf{x}_2 \sim \mathcal{N}\!\left(\boldsymbol{\mu}_1 + \Sigma_{12}\Sigma_{22}^{-1}(\mathbf{x}_2 - \boldsymbol{\mu}_2),\;\; \Sigma_{11} - \Sigma_{12}\Sigma_{22}^{-1}\Sigma_{21}\right).
+$$
+
+Three things to notice. The conditional mean is linear in the observed values, with coefficients $\Sigma_{12}\Sigma_{22}^{-1}$: exactly the population regression coefficients, so for Gaussians the best predictor is linear regression. The conditional covariance does not depend on which value was observed. And it is never larger than the marginal covariance: observing correlated variables can only reduce uncertainty. In two dimensions the formulas reduce to the figure's: mean $\rho(\sigma_2/\sigma_1)x_1$ and standard deviation $\sigma_2\sqrt{1 - \rho^2}$.
+
+<PyCell id="condition" title="Predict one neuron from five others" tests={String.raw`
+  import numpy as np
+  def test_coef():
+      "the conditional-mean coefficients match least-squares regression on samples to within 0.05"
+      assert np.abs(coef - beta_ls).max() < 0.05
+
+  def test_var():
+      "the conditional variance is below the marginal variance and matches the regression residual variance to within 3%"
+      assert cond_var < Sig[0, 0] and abs(cond_var - resid_var) / cond_var < 0.03
+`} prompt="Six neurons have a random covariance `Sig`. Using the conditioning formula, compute the coefficients `coef` (Σ12 Σ22⁻¹) and the conditional variance `cond_var` of neuron 0 given neurons 1 to 5. Check both against least-squares regression of neuron 0 on the others in 50,000 samples (`beta_ls`, `resid_var`)."
+code={String.raw`
+  A = rng.normal(size=(6, 6))
+  Sig = A @ A.T / 6 + 0.3 * np.eye(6)          # a random valid covariance
+  S11, S12, S21, S22 = Sig[:1, :1], Sig[:1, 1:], Sig[1:, :1], Sig[1:, 1:]
+
+  coef = ...                                   # shape (5,)
+  cond_var = ...                               # a number
+
+  Xs = rng.multivariate_normal(np.zeros(6), Sig, size=50000)
+  beta_ls = np.linalg.lstsq(Xs[:, 1:], Xs[:, 0], rcond=None)[0]
+  resid_var = np.var(Xs[:, 0] - Xs[:, 1:] @ beta_ls)
+  print("coefficients, formula:", coef.round(3)); print("coefficients, regression:", beta_ls.round(3))
+  print(f"marginal variance {Sig[0, 0]:.3f}, conditional variance {cond_var:.3f}, residual variance {resid_var:.3f}")
+`}
+hint="coef = (S12 @ np.linalg.inv(S22)).ravel(); cond_var = (S11 - S12 @ np.linalg.inv(S22) @ S21).item()."
+solution={String.raw`
+  A = rng.normal(size=(6, 6))
+  Sig = A @ A.T / 6 + 0.3 * np.eye(6)          # a random valid covariance
+  S11, S12, S21, S22 = Sig[:1, :1], Sig[:1, 1:], Sig[1:, :1], Sig[1:, 1:]
+
+  coef = (S12 @ np.linalg.inv(S22)).ravel()                                   # shape (5,)
+  cond_var = (S11 - S12 @ np.linalg.inv(S22) @ S21).item()                               # a number
+
+  Xs = rng.multivariate_normal(np.zeros(6), Sig, size=50000)
+  beta_ls = np.linalg.lstsq(Xs[:, 1:], Xs[:, 0], rcond=None)[0]
+  resid_var = np.var(Xs[:, 0] - Xs[:, 1:] @ beta_ls)
+  print("coefficients, formula:", coef.round(3)); print("coefficients, regression:", beta_ls.round(3))
+  print(f"marginal variance {Sig[0, 0]:.3f}, conditional variance {cond_var:.3f}, residual variance {resid_var:.3f}")
+`} />
+
+The formula and the regression agree, as they must. This conditioning step is the engine of Gaussian process regression, of the Kalman filter, and of methods that fill in missing neurons or predict activity in one brain area from another.
+
+<Bridge title="Covariance in brains and machines"
+  neuro="Population noise is well described, to first order, by a multivariate Gaussian with a structured covariance. Shared fluctuations put most of the noise in a few directions, the large eigenvalues of the noise covariance, and whether those directions overlap with the signal decides how much information is lost (Averbeck, Latham and Pouget, 2006; Week 119)."
+  ai="Gaussian processes put a multivariate Gaussian over function values and predict by conditioning. Variational autoencoders and diffusion models draw multivariate Gaussian noise with the reparameterisation μ + Lε. Weight initialisation, batch normalisation and whitening all manipulate covariance matrices.">
+
+Marginalise by deleting, condition by regressing: the multivariate Gaussian keeps every answer Gaussian.
+
+</Bridge>
+
+<Prove title="Conditioning in two dimensions" task="For $(x_1, x_2)$ Gaussian with zero means, standard deviations $\sigma_1, \sigma_2$ and correlation $\rho$, use the block formula to show that $x_2 \mid x_1$ has mean $\rho(\sigma_2/\sigma_1)x_1$ and variance $\sigma_2^2(1 - \rho^2)$.">
+
+Here the observed block is $x_1$ and the predicted block is $x_2$, so the roles in the formula are: $\Sigma_{22} \to \sigma_1^2$ (observed), $\Sigma_{11} \to \sigma_2^2$ (predicted), and $\Sigma_{12} \to \rho\sigma_1\sigma_2$.
+
+The conditional mean is $\rho\sigma_1\sigma_2 \cdot \sigma_1^{-2}\cdot x_1 = \rho(\sigma_2/\sigma_1)x_1$.
+
+The conditional variance is $\sigma_2^2 - (\rho\sigma_1\sigma_2)^2/\sigma_1^2 = \sigma_2^2(1 - \rho^2)$. With $\rho = 0$ nothing is learned; as $|\rho| \to 1$, $x_1$ determines $x_2$ completely.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "The diagonal of a covariance matrix holds...", options: ["Means", "Variances", "Correlations", "Eigenvalues"], answer: 1, explain: "Off the diagonal are covariances." },
+  { q: "The Mahalanobis distance measures distance...", options: ["In millimetres", "In units of the noise in each direction", "Along the first axis only", "Between two covariances"], answer: 1, explain: "$(x - \\mu)^\\top\\Sigma^{-1}(x - \\mu)$." },
+  { q: "If $x \\sim N(\\mu, \\Sigma)$, then Ax has covariance...", options: ["AΣ", "AΣAᵀ", "Σ", "AᵀΣA"], answer: 1, explain: "Covariance transforms on both sides." },
+  { q: "To sample correlated Gaussians from standard normals z, use...", options: ["Σz", "μ + Lz with Σ = LLᵀ", "z / Σ", "μ + z"], answer: 1, explain: "The Cholesky factor." },
+  { q: "The marginal of a block of a multivariate Gaussian is found by...", options: ["Inverting Σ", "Deleting the other rows and columns", "Conditioning", "Summing the means"], answer: 1, explain: "Marginals are easy." },
+  { q: "The conditional mean of one block given another is...", options: ["Constant", "Linear in the observed values (regression)", "Quadratic", "Always zero"], answer: 1, explain: "$\\mu_1 + \\Sigma_{12}\\Sigma_{22}^{-1}(x_2 - \\mu_2)$." },
+  { q: "100 neurons with pairwise noise correlation 0.1: the variance of their sum is about...", options: ["The same as independent", "11 times that of independent", "Half", "100 times"], answer: 1, explain: "100 + 9,900 × 0.1." },
+]} />
+
+<Flashcards cards={[
+  { front: "Multivariate Gaussian exponent?", back: "$-\\tfrac{1}{2}(x - \\mu)^\\top\\Sigma^{-1}(x - \\mu)$." },
+  { front: "Linear transform rule?", back: "$Ax + b \\sim N(A\\mu + b, A\\Sigma A^\\top)$." },
+  { front: "Sampling?", back: "$x = \\mu + Lz$, $\\Sigma = LL^\\top$ (Cholesky), z standard normal." },
+  { front: "Gaussian conditional?", back: "Mean $\\mu_1 + \\Sigma_{12}\\Sigma_{22}^{-1}(x_2 - \\mu_2)$; covariance $\\Sigma_{11} - \\Sigma_{12}\\Sigma_{22}^{-1}\\Sigma_{21}$." },
+  { front: "Variance of a population sum?", back: "$\\mathbf{1}^\\top\\Sigma\\mathbf{1}$, the sum of every entry of Σ." },
+]} />
+
+<Predict revisit question="With pairwise correlations of 0.1, how much larger is the variance of the sum of 100 neurons?" />
+
+<Key title="Before you go">
+<ul>
+<li>A multivariate Gaussian is fixed by its mean vector and covariance matrix; its contours are ellipsoids along the eigenvectors.</li>
+<li>Sample with μ + Lz using the Cholesky factor.</li>
+<li>Linear readouts are Gaussian with variance wᵀΣw; small pairwise correlations dominate large sums.</li>
+<li>Marginals delete rows and columns; conditionals are Gaussian with a regression mean and reduced covariance.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Averbeck, Latham and Pouget (2006), <em>Neural correlations, population coding and computation</em>.</li>
+<li>Carl Rasmussen and Christopher Williams (2006), <em>Gaussian Processes for Machine Learning</em>, appendix A.2 (free from gaussianprocess.org).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If you could predict one neuron's response well from its neighbours' responses on the same trial, what would that tell you about its noise? Would it make the neuron more or less useful to a downstream reader?" />

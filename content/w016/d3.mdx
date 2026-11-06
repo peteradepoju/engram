@@ -1,0 +1,281 @@
+export const meta = {
+  title: "Bayesian perception: combining cues and priors",
+  intro: "When you pick up a cup you both see and feel its size, and neither sense is perfect. How should the two be combined? Bayes' rule gives a precise answer when the noise is Gaussian: weight each cue by its reliability, one over its variance, and the combined estimate is more precise than either cue alone. A prior is just one more cue, built from experience. Today you derive the rule, simulate an observer in Ernst and Banks's famous experiment, and reproduce the key result of Körding and Wolpert: how strongly people lean on a prior depends on how blurred their feedback is. Together these are the most successful quantitative tests of the idea that perception is Bayesian.",
+  goals: [
+    "Show that a product of two Gaussians is Gaussian, with precision-weighted mean and summed precisions",
+    "Predict cue weights and combined variance for an optimal observer",
+    "Measure an observer's cue weights from conflict trials, and compare optimal combination with choosing the better cue",
+    "Explain how prior reliability sets the slope of a Bayesian estimator",
+  ],
+  plan: [
+    { label: "Predict and multiplying Gaussians", minutes: 25 },
+    { label: "Ernst and Banks", minutes: 40 },
+    { label: "The prior as a cue", minutes: 25 },
+    { label: "Is perception optimal?", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "ernst-2002",
+};
+
+<Predict question="Your vision estimates an object's height with a standard deviation of 2 mm, and touch with a standard deviation of 2 mm too. If you combine them optimally, what is the standard deviation of the combined estimate: 2 mm, about 1.4 mm, 1 mm, or 4 mm?" />
+
+<Step n={1} title="Multiplying Gaussians" minutes={25} />
+
+Suppose vision reports $x_V$ and touch $x_H$, each the true size $s$ plus independent Gaussian noise with standard deviations $\sigma_V$ and $\sigma_H$. With a flat prior, the posterior over $s$ is proportional to the product of the two likelihoods, each a Gaussian in $s$:
+
+$$
+p(s \mid x_V, x_H) \propto \exp\!\left(-\frac{(s - x_V)^2}{2\sigma_V^2}\right)\exp\!\left(-\frac{(s - x_H)^2}{2\sigma_H^2}\right).
+$$
+
+<Derivation title="The product of two Gaussians">
+
+<div>
+
+The exponent is a quadratic in $s$. Collecting terms, the coefficient of $s^2$ is $-\tfrac{1}{2}\left(\tfrac{1}{\sigma_V^2} + \tfrac{1}{\sigma_H^2}\right)$, so the product is a Gaussian whose **precision** (one over variance) is the sum of the two precisions:
+
+$$
+\frac{1}{\sigma^2} = \frac{1}{\sigma_V^2} + \frac{1}{\sigma_H^2}.
+$$
+
+</div>
+
+<div>
+
+The coefficient of $s$ is $\tfrac{x_V}{\sigma_V^2} + \tfrac{x_H}{\sigma_H^2}$, and completing the square puts the mean at that coefficient divided by the total precision:
+
+$$
+\hat{s} = w_V x_V + w_H x_H, \qquad w_V = \frac{1/\sigma_V^2}{1/\sigma_V^2 + 1/\sigma_H^2}, \quad w_H = 1 - w_V.
+$$
+
+</div>
+
+<div>
+
+Each cue is weighted by its share of the total reliability, and the combined variance is smaller than either. With two equally reliable cues, $\sigma = \sigma_V/\sqrt{2}$, which answers the prediction: about 1.4 mm.
+
+</div>
+
+</Derivation>
+
+<Figure caption="Optimal cue combination. Change the reliability of vision and touch, and the conflict between them." credit="Interactive figure by Engram, after Ernst and Banks (2002).">
+  <CueCombination />
+</Figure>
+
+<Video id="1Q3VqcpfvBk" title="Bayesian inference with Gaussian distribution" by="Neuromatch Academy (prerequisite course)" note="Neuromatch's derivation of the Gaussian posterior and why reliabilities add." />
+
+<PyCell id="combine" title="Combine two cues" tests={String.raw`
+  import numpy as np
+  def test_formula():
+      "combine gives the precision-weighted mean and the combined sd"
+      mu, s = combine(50.0, 1.0, 56.0, 2.0)
+      assert abs(mu - (0.8 * 50 + 0.2 * 56)) < 1e-9 and abs(s - np.sqrt(1 / (1 + 0.25))) < 1e-9
+
+  def test_grid():
+      "the product of the two densities on a grid has the same mean and sd"
+      assert abs(grid_mu - combine(50.0, 1.0, 56.0, 2.0)[0]) < 1e-3 and abs(grid_sd - combine(50.0, 1.0, 56.0, 2.0)[1]) < 1e-3
+`} prompt="Write `combine(mu1, s1, mu2, s2)` returning the combined mean and standard deviation. Check it by multiplying the two Gaussian densities on a fine grid, normalising, and computing the mean `grid_mu` and standard deviation `grid_sd`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def combine(mu1, s1, mu2, s2):
+      w1 = ...
+      mu = ...
+      s = ...
+      return mu, s
+
+  x = np.linspace(30, 80, 20001)
+  gauss = lambda x, m, s: np.exp(-(x - m) ** 2 / (2 * s ** 2))
+  prod = gauss(x, 50.0, 1.0) * gauss(x, 56.0, 2.0)
+  prod /= prod.sum()
+  grid_mu = ...
+  grid_sd = ...
+  print("formula:", np.round(combine(50.0, 1.0, 56.0, 2.0), 4), "  grid:", round(grid_mu, 4), round(grid_sd, 4))
+`}
+hint="w1 = (1 / s1 ** 2) / (1 / s1 ** 2 + 1 / s2 ** 2); mu = w1 * mu1 + (1 - w1) * mu2; s = np.sqrt(1 / (1 / s1 ** 2 + 1 / s2 ** 2)). grid_mu = np.sum(x * prod); grid_sd = np.sqrt(np.sum((x - grid_mu) ** 2 * prod))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def combine(mu1, s1, mu2, s2):
+      w1 = (1 / s1 ** 2) / (1 / s1 ** 2 + 1 / s2 ** 2)
+      mu = w1 * mu1 + (1 - w1) * mu2
+      s = np.sqrt(1 / (1 / s1 ** 2 + 1 / s2 ** 2))
+      return mu, s
+
+  x = np.linspace(30, 80, 20001)
+  gauss = lambda x, m, s: np.exp(-(x - m) ** 2 / (2 * s ** 2))
+  prod = gauss(x, 50.0, 1.0) * gauss(x, 56.0, 2.0)
+  prod /= prod.sum()
+  grid_mu = np.sum(x * prod)
+  grid_sd = np.sqrt(np.sum((x - grid_mu) ** 2 * prod))
+  print("formula:", np.round(combine(50.0, 1.0, 56.0, 2.0), 4), "  grid:", round(grid_mu, 4), round(grid_sd, 4))
+`} />
+
+<Step n={2} title="Ernst and Banks" minutes={40} />
+
+Ernst and Banks (2002, this week's deep read) tested two predictions. First, the weights: when vision and touch are put slightly in conflict, judgements should fall between the two, nearer the more reliable cue, and shift towards touch as vision is degraded. Second, the variance: combined judgements should be more precise than either sense alone. They measured each sense's noise separately, predicted both quantities, and found that people matched them closely.
+
+The variance prediction is the stronger test, because it rules out a tempting alternative: an observer who simply relies on whichever cue is better. That observer's weights would jump from 0 to 1 as visual noise crosses touch noise, and its variance could never beat the better cue.
+
+<PyCell id="ernst" title="An observer in the experiment" tests={String.raw`
+  import numpy as np
+  def test_weights():
+      "the measured visual weights match the predicted weights to within 0.05"
+      assert np.all(np.abs(w_measured - w_predicted) < 0.05)
+
+  def test_variance():
+      "the optimal observer's sd is below the better single cue's at every noise level, most of all when the cues are equally reliable"
+      assert np.all(sd_optimal < sd_best_single)
+      i = list(sigma_V).index(2.0)
+      assert sd_optimal[i] < 0.75 * sd_best_single[i]
+`} prompt="For four levels of visual noise, simulate 5,000 conflict trials in which vision reports the true height minus 1.5 mm and touch the true height plus 1.5 mm, each with its own noise. The observer combines them optimally. Measure the visual weight from the mean estimate, store it in `w_measured`, and compare `sd_optimal` with the better single cue's sd, `sd_best_single`."
+code={String.raw`
+  rng = np.random.default_rng(2002)
+  sigma_H = 2.0
+  sigma_V = np.array([0.67, 1.33, 2.0, 4.0])
+  true, conflict, T = 55.0, 3.0, 5000
+
+  w_measured, w_predicted, sd_optimal, sd_best_single = [], [], [], []
+  for sV in sigma_V:
+      xV = true - conflict / 2 + sV * rng.normal(size=T)
+      xH = true + conflict / 2 + sigma_H * rng.normal(size=T)
+      est, _ = combine(xV, sV, xH, sigma_H)                 # works on arrays too
+      # mean estimate = wV (true - c/2) + (1 - wV)(true + c/2), so wV = (true + c/2 - mean) / c
+      w_measured.append(...)
+      w_predicted.append(...)
+      sd_optimal.append(est.std())
+      sd_best_single.append(min(sV, sigma_H))
+  w_measured, w_predicted, sd_optimal, sd_best_single = map(np.array, (w_measured, w_predicted, sd_optimal, sd_best_single))
+  print("visual sd:        ", sigma_V); print("weight measured:  ", w_measured.round(3)); print("weight predicted: ", w_predicted.round(3))
+  print("sd optimal:       ", sd_optimal.round(3)); print("sd better cue:    ", sd_best_single.round(3))
+`}
+hint="w_measured.append((true + conflict / 2 - est.mean()) / conflict); w_predicted.append((1 / sV ** 2) / (1 / sV ** 2 + 1 / sigma_H ** 2))."
+solution={String.raw`
+  rng = np.random.default_rng(2002)
+  sigma_H = 2.0
+  sigma_V = np.array([0.67, 1.33, 2.0, 4.0])
+  true, conflict, T = 55.0, 3.0, 5000
+
+  w_measured, w_predicted, sd_optimal, sd_best_single = [], [], [], []
+  for sV in sigma_V:
+      xV = true - conflict / 2 + sV * rng.normal(size=T)
+      xH = true + conflict / 2 + sigma_H * rng.normal(size=T)
+      est, _ = combine(xV, sV, xH, sigma_H)                 # works on arrays too
+      # mean estimate = wV (true - c/2) + (1 - wV)(true + c/2), so wV = (true + c/2 - mean) / c
+      w_measured.append((true + conflict / 2 - est.mean()) / conflict)
+      w_predicted.append((1 / sV ** 2) / (1 / sV ** 2 + 1 / sigma_H ** 2))
+      sd_optimal.append(est.std())
+      sd_best_single.append(min(sV, sigma_H))
+  w_measured, w_predicted, sd_optimal, sd_best_single = map(np.array, (w_measured, w_predicted, sd_optimal, sd_best_single))
+  print("visual sd:        ", sigma_V); print("weight measured:  ", w_measured.round(3)); print("weight predicted: ", w_predicted.round(3))
+  print("sd optimal:       ", sd_optimal.round(3)); print("sd better cue:    ", sd_best_single.round(3))
+`} />
+
+The weight on vision slides smoothly from about 0.9 to 0.2 as visual noise rises, and the combined estimate is always more precise than the better cue, by a factor of $\sqrt{2}$ when the two are equally reliable. In the real experiment the weights came from psychometric functions (Week 3) rather than from direct reports, but the logic is the same.
+
+<Step n={3} title="The prior as a cue" minutes={25} />
+
+A prior is a Gaussian too, and combines in exactly the same way. If hidden shifts $s$ come from a prior $\mathcal{N}(\mu_p, \sigma_p^2)$ and feedback reports $x = s + $ noise of sd $\sigma_\ell$, the posterior mean is
+
+$$
+\hat{s} = \frac{\sigma_p^2}{\sigma_p^2 + \sigma_\ell^2}\,x + \frac{\sigma_\ell^2}{\sigma_p^2 + \sigma_\ell^2}\,\mu_p.
+$$
+
+Plotted against the true shift, the average estimate is a straight line whose slope, $\sigma_p^2/(\sigma_p^2 + \sigma_\ell^2)$, falls as the feedback gets noisier. This is what Körding and Wolpert (yesterday's paper) measured in reaching: blurrier feedback, flatter slope, more reliance on the learned prior.
+
+<PyCell id="slope" title="Blur flattens the slope" tests={String.raw`
+  import numpy as np
+  def test_slopes():
+      "the fitted slopes match the predicted sigma_p^2 / (sigma_p^2 + sigma_l^2) to within 0.03"
+      assert np.all(np.abs(slopes - predicted) < 0.03)
+
+  def test_order():
+      "slopes fall as the feedback gets noisier"
+      assert np.all(np.diff(slopes) < 0)
+`} prompt="Shifts come from a prior with mean 1 cm and sd 0.5 cm. For feedback noise of 0.1, 0.5, 1 and 2 cm, simulate 4,000 trials, compute the Bayesian estimate of each shift, and fit the slope of the estimate against the true shift. Store the fitted and predicted slopes in `slopes` and `predicted`."
+code={String.raw`
+  mu_p, sigma_p = 1.0, 0.5
+  noise_levels = np.array([0.1, 0.5, 1.0, 2.0])
+  slopes, predicted = [], []
+  for sl in noise_levels:
+      s = mu_p + sigma_p * rng.normal(size=4000)          # true shifts
+      x = s + sl * rng.normal(size=4000)                   # blurred feedback
+      est, _ = combine(x, sl, mu_p, sigma_p)               # likelihood and prior are both cues
+      slopes.append(...)
+      predicted.append(...)
+  slopes, predicted = np.array(slopes), np.array(predicted)
+  print("feedback noise:", noise_levels, " slopes:", slopes.round(3), " predicted:", predicted.round(3))
+`}
+hint="slopes.append(np.polyfit(s, est, 1)[0]); predicted.append(sigma_p ** 2 / (sigma_p ** 2 + sl ** 2))."
+solution={String.raw`
+  mu_p, sigma_p = 1.0, 0.5
+  noise_levels = np.array([0.1, 0.5, 1.0, 2.0])
+  slopes, predicted = [], []
+  for sl in noise_levels:
+      s = mu_p + sigma_p * rng.normal(size=4000)          # true shifts
+      x = s + sl * rng.normal(size=4000)                   # blurred feedback
+      est, _ = combine(x, sl, mu_p, sigma_p)               # likelihood and prior are both cues
+      slopes.append(np.polyfit(s, est, 1)[0])
+      predicted.append(sigma_p ** 2 / (sigma_p ** 2 + sl ** 2))
+  slopes, predicted = np.array(slopes), np.array(predicted)
+  print("feedback noise:", noise_levels, " slopes:", slopes.round(3), " predicted:", predicted.round(3))
+`} />
+
+<Step n={4} title="Is perception optimal?" minutes={15} />
+
+Results like these are often summarised as "perception is Bayes-optimal", and that claim deserves care. Optimal relative to what? The predictions depend on the noise model, the prior and the cost of errors, all assumed by the experimenter. Many deviations have been found: people sometimes overweight one cue, combine cues that come from different objects, or use priors that differ from the experiment's statistics. A more defensible reading is that the Bayesian observer is a powerful *model* of behaviour: it makes precise, testable predictions, and its failures are informative. You will critique the deep read with this in mind in the Forge.
+
+<Bridge title="Reliability weighting in brains and machines"
+  neuro="Neurons in the dorsal medial superior temporal area of monkeys combine visual and vestibular signals about self-motion, and their combined responses are more sensitive than either alone (Gu, Angelaki and DeAngelis, 2008), with weights that shift with cue reliability as the behaviour does (Fetsch and colleagues, 2012). Population codes with Poisson-like variability can perform this combination simply by adding activity (Week 36)."
+  ai="The Kalman filter (Week 24 and Part 5) is cue combination repeated in time: each step combines a prediction (the prior) with a noisy measurement, weighted by their precisions. Ensembles and sensor fusion in robotics use the same rule.">
+
+Weight each source by its reliability, and the whole is more reliable than any part.
+
+</Bridge>
+
+<Prove title="Combination never hurts" task="Show that the optimally combined variance $\sigma^2 = (1/\sigma_V^2 + 1/\sigma_H^2)^{-1}$ is smaller than both $\sigma_V^2$ and $\sigma_H^2$, and find its value when $\sigma_V = \sigma_H$.">
+
+Since $1/\sigma_H^2 > 0$, the total precision $1/\sigma_V^2 + 1/\sigma_H^2$ exceeds $1/\sigma_V^2$, so its reciprocal $\sigma^2$ is less than $\sigma_V^2$. The same argument with the roles swapped gives $\sigma^2 \lt \sigma_H^2$.
+
+When $\sigma_V = \sigma_H = \sigma_0$, the total precision is $2/\sigma_0^2$, so $\sigma^2 = \sigma_0^2/2$ and $\sigma = \sigma_0/\sqrt{2}$: two equally good cues cut the standard deviation by about 29%.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "The product of two Gaussian likelihoods is...", options: ["Not Gaussian", "Gaussian with summed precisions", "Gaussian with summed variances", "Uniform"], answer: 1, explain: "Precisions add." },
+  { q: "The weight on a cue is proportional to...", options: ["Its variance", "Its precision, one over its variance", "Its mean", "Its sd"], answer: 1, explain: "Reliability weighting." },
+  { q: "Two cues with sd 2 mm each combine to sd...", options: ["2 mm", "1.41 mm", "1 mm", "4 mm"], answer: 1, explain: "$2/\\sqrt{2}$." },
+  { q: "Why test the combined variance and not just the weights?", options: ["It is easier", "It rules out simply choosing the better cue", "Weights cannot be measured", "It is always zero"], answer: 1, explain: "Cue switching can never beat the better cue." },
+  { q: "As visual noise increases, the weight on vision...", options: ["Rises", "Falls", "Stays at 0.5", "Becomes negative"], answer: 1, explain: "Shifts to touch." },
+  { q: "With noisier feedback, the slope of estimates against true shifts...", options: ["Steepens", "Flattens towards 0", "Stays at 1", "Becomes negative"], answer: 1, explain: "More weight on the prior." },
+  { q: "The Kalman filter is...", options: ["Unrelated", "Cue combination repeated over time", "A non-linear classifier", "A prior with no data"], answer: 1, explain: "Prediction and measurement combined by precision." },
+]} />
+
+<Flashcards cards={[
+  { front: "Combined mean of two Gaussian cues?", back: "$\\hat{s} = w_1x_1 + w_2x_2$ with $w_i \\propto 1/\\sigma_i^2$." },
+  { front: "Combined variance?", back: "$\\sigma^2 = (1/\\sigma_1^2 + 1/\\sigma_2^2)^{-1}$, smaller than both." },
+  { front: "Ernst and Banks's two predictions?", back: "Cue weights by reliability, and combined variance below the better cue." },
+  { front: "Prior-likelihood slope?", back: "$\\sigma_p^2/(\\sigma_p^2 + \\sigma_\\ell^2)$: flatter with noisier evidence." },
+  { front: "Precision?", back: "One over the variance; precisions of independent Gaussian cues add." },
+]} />
+
+<Predict revisit question="Two cues with sd 2 mm each: what is the combined sd?" />
+
+<Key title="Before you go">
+<ul>
+<li>Gaussian cues combine by adding precisions; the mean is precision-weighted.</li>
+<li>Optimal combination always beats the better single cue, which cue switching cannot.</li>
+<li>A prior is a cue: its weight grows as the evidence gets noisier.</li>
+<li>"Bayes-optimal" is a model with assumptions; its successes and failures are both informative.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>This week's deep read: Ernst and Banks (2002), <em>Humans integrate visual and haptic information in a statistically optimal fashion</em>. Start the first pass today.</li>
+<li>Wei Ji Ma, Konrad Kording and Daniel Goldreich, <em>Bayesian Models of Perception and Action</em> (2023), chapters 2 to 5.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Choose a situation where you combine two senses, such as hearing and seeing someone speak. Which cue do you think is more reliable, and how could you change its reliability to test whether your brain shifts its weights?" />

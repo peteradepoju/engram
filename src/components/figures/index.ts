@@ -69,3 +69,8 @@ export { BinomialRelease } from "./binomial-release";
 export { BinomialPoisson } from "./binomial-poisson";
 export { CentralLimit } from "./central-limit";
 export { Thinning } from "./thinning";
+export { ConditionalSlice } from "./conditional-slice";
+export { BayesUpdate } from "./bayes-update";
+export { CueCombination } from "./cue-combination";
+export { GaussianConditional } from "./gaussian-conditional";
+export { GaussianClassifier } from "./gaussian-classifier";
