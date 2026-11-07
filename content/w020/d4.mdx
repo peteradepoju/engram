@@ -1,0 +1,282 @@
+export const meta = {
+  title: "KL divergence and cross-entropy",
+  intro: "You have met the Kullback-Leibler divergence twice already: as the gap that variational inference closes, and as the distance of a joint distribution from independence that defines mutual information. Today you study it properly. It measures how many extra bits you pay for coding data from one distribution with a code built for another, and it is the hidden objective behind maximum likelihood, the cross-entropy loss of every classifier and language model, and many measures of how a neural representation changes. You will compute it, see why its two directions differ, and train a tiny next-spike predictor whose cross-entropy approaches the true entropy of the spike train.",
+  goals: [
+    "Compute the KL divergence and explain its coding interpretation, non-negativity and asymmetry",
+    "Show that cross-entropy equals entropy plus KL, and that maximum likelihood minimises KL from the data",
+    "Use the closed form for the KL divergence between Gaussians, and check it by Monte Carlo",
+    "Train a next-spike predictor and interpret its cross-entropy as compression",
+  ],
+  plan: [
+    { label: "Predict and the divergence", minutes: 25 },
+    { label: "Cross-entropy and maximum likelihood", minutes: 25 },
+    { label: "Gaussians", minutes: 20 },
+    { label: "Prediction is compression", minutes: 35 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "kullback-1951",
+};
+
+<Predict question="You model a neuron's spike train by predicting each 2 ms bin from the previous two bins. The neuron is refractory. Will your model's average surprise per bin (its cross-entropy) be higher or lower than that of a model that only knows the firing rate?" />
+
+<Step n={1} title="The divergence" minutes={25} />
+
+The **Kullback-Leibler divergence** of $q$ from $p$ is
+
+$$
+\mathrm{KL}(p\,\|\,q) = \sum_x p(x)\log_2\frac{p(x)}{q(x)}.
+$$
+
+Its coding meaning: if outcomes come from $p$ but you use a code optimised for $q$ (codeword lengths $-\log_2 q(x)$), you pay on average $\mathrm{KL}(p\,\|\,q)$ extra bits per outcome. Kullback and Leibler (1951, today's paper) read it as the mean information per observation for telling $p$ apart from $q$: the average log-likelihood ratio, the quantity that accumulates in the odds-form updates of Week 16.
+
+Its properties: $\mathrm{KL} \ge 0$, with equality only when $p = q$ (Gibbs' inequality); it is **not symmetric**, so it is a divergence, not a distance; and it is infinite if $q$ gives zero probability to something $p$ says can happen. That last property explains the mode-seeking of variational inference (Week 19): minimising $\mathrm{KL}(q\,\|\,p)$ forbids $q$ from putting mass where $p$ has none, while minimising $\mathrm{KL}(p\,\|\,q)$ forbids $q$ from missing anything $p$ does.
+
+<Figure caption="A true distribution p and a model q. Move and widen the model and compare the two directions of KL and the cross-entropy." credit="Interactive figure by Engram.">
+  <KLAsymmetry />
+</Figure>
+
+<Video id="GlYgs6v2YfU" title="But what is Cross-Entropy? | Compression is Intelligence, Part 2" by="3Blue1Brown" note="Grant Sanderson explains cross-entropy as the cost of coding with the wrong model, and why it is the loss that trains language models." />
+
+<PyCell id="kl" title="Compute the divergence" tests={String.raw`
+  import numpy as np
+  def test_zero():
+      "KL of a distribution from itself is 0"
+      assert abs(kl([0.2, 0.3, 0.5], [0.2, 0.3, 0.5])) < 1e-12
+
+  def test_asym():
+      "the two directions differ for p and q"
+      assert abs(kl(p, q) - kl(q, p)) > 0.1
+
+  def test_inf():
+      "KL is infinite when q is zero where p is not"
+      assert np.isinf(kl([0.5, 0.5], [1.0, 0.0]))
+
+  def test_ce():
+      "cross-entropy equals entropy plus KL"
+      assert abs(cross_entropy(p, q) - (entropy(p) + kl(p, q))) < 1e-12
+`} prompt="Write `kl(p, q)` in bits (sum over entries where p is positive; return infinity if q is zero there) and `cross_entropy(p, q)` = −Σ p log₂ q. Check the asymmetry on the given p and q."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1951)
+  def entropy(p):
+      p = np.asarray(p, float); p = p[p > 0]
+      return -np.sum(p * np.log2(p))
+
+  def kl(p, q):
+      p, q = np.asarray(p, float), np.asarray(q, float)
+      m = p > 0
+      if np.any(q[m] == 0):
+          return np.inf
+      return ...
+
+  def cross_entropy(p, q):
+      p, q = np.asarray(p, float), np.asarray(q, float)
+      m = p > 0
+      return ...
+
+  p = np.array([0.7, 0.2, 0.05, 0.05])
+  q = np.array([0.25, 0.25, 0.25, 0.25])
+  print(f"KL(p||q) = {kl(p, q):.3f}, KL(q||p) = {kl(q, p):.3f} bits;  H(p) = {entropy(p):.3f}, H(p, q) = {cross_entropy(p, q):.3f}")
+`}
+hint="kl returns np.sum(p[m] * np.log2(p[m] / q[m])); cross_entropy returns -np.sum(p[m] * np.log2(q[m]))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1951)
+  def entropy(p):
+      p = np.asarray(p, float); p = p[p > 0]
+      return -np.sum(p * np.log2(p))
+
+  def kl(p, q):
+      p, q = np.asarray(p, float), np.asarray(q, float)
+      m = p > 0
+      if np.any(q[m] == 0):
+          return np.inf
+      return np.sum(p[m] * np.log2(p[m] / q[m]))
+
+  def cross_entropy(p, q):
+      p, q = np.asarray(p, float), np.asarray(q, float)
+      m = p > 0
+      return -np.sum(p[m] * np.log2(q[m]))
+
+  p = np.array([0.7, 0.2, 0.05, 0.05])
+  q = np.array([0.25, 0.25, 0.25, 0.25])
+  print(f"KL(p||q) = {kl(p, q):.3f}, KL(q||p) = {kl(q, p):.3f} bits;  H(p) = {entropy(p):.3f}, H(p, q) = {cross_entropy(p, q):.3f}")
+`} />
+
+<Step n={2} title="Cross-entropy and maximum likelihood" minutes={25} />
+
+The **cross-entropy** $H(p, q) = -\sum_x p(x)\log_2 q(x)$ is the average code length when coding $p$ with $q$, so
+
+$$
+H(p, q) = H(p) + \mathrm{KL}(p\,\|\,q).
+$$
+
+Now let $p$ be the empirical distribution of your data and $q_\theta$ a model. The average negative log-likelihood of the data under the model is exactly the cross-entropy $H(\hat{p}, q_\theta)$ (in nats if you use natural logs). Since $H(\hat{p})$ does not depend on $\theta$, **maximising the likelihood is minimising $\mathrm{KL}(\hat{p}\,\|\,q_\theta)$**: fitting a model by maximum likelihood finds the member of the family closest to the data in this direction. The "cross-entropy loss" of classifiers and language models is the same thing, and their **perplexity** is $2^{H(p, q)}$, the effective number of equally likely choices the model is left with.
+
+<Step n={3} title="Gaussians" minutes={20} />
+
+For two one-dimensional Gaussians the KL divergence has a closed form (in nats):
+
+$$
+\mathrm{KL}\left(\mathcal{N}(\mu_1, \sigma_1^2)\,\|\,\mathcal{N}(\mu_2, \sigma_2^2)\right) = \log\frac{\sigma_2}{\sigma_1} + \frac{\sigma_1^2 + (\mu_1 - \mu_2)^2}{2\sigma_2^2} - \frac{1}{2}.
+$$
+
+It appears in the ELBO of variational autoencoders (Week 16) and in comparisons of neural response distributions.
+
+<PyCell id="gausskl" title="The Gaussian formula, checked" tests={String.raw`
+  import numpy as np
+  def test_formula():
+      "kl_gauss is zero for identical Gaussians and matches the Monte Carlo estimate to within 0.01 nats"
+      assert abs(kl_gauss(1, 2, 1, 2)) < 1e-12 and abs(kl_gauss(0, 1, 1, 2) - kl_mc) < 0.01
+
+  def test_asym():
+      "the reverse direction differs"
+      assert abs(kl_gauss(0, 1, 1, 2) - kl_gauss(1, 2, 0, 1)) > 0.3
+`} prompt="Write `kl_gauss(m1, s1, m2, s2)` in nats. Check KL(N(0, 1) ‖ N(1, 2²)) against a Monte Carlo estimate `kl_mc`: the mean of log p(x) − log q(x) over 500,000 samples from p."
+code={String.raw`
+  def kl_gauss(m1, s1, m2, s2):
+      return ...
+
+  def log_norm(x, m, s): return -0.5 * np.log(2 * np.pi * s ** 2) - (x - m) ** 2 / (2 * s ** 2)
+  x = rng.normal(0, 1, 500000)
+  kl_mc = ...
+  print(f"formula {kl_gauss(0, 1, 1, 2):.4f} nats, Monte Carlo {kl_mc:.4f};  reverse direction {kl_gauss(1, 2, 0, 1):.4f}")
+`}
+hint="return np.log(s2 / s1) + (s1 ** 2 + (m1 - m2) ** 2) / (2 * s2 ** 2) - 0.5; kl_mc = np.mean(log_norm(x, 0, 1) - log_norm(x, 1, 2))."
+solution={String.raw`
+  def kl_gauss(m1, s1, m2, s2):
+      return np.log(s2 / s1) + (s1 ** 2 + (m1 - m2) ** 2) / (2 * s2 ** 2) - 0.5
+
+  def log_norm(x, m, s): return -0.5 * np.log(2 * np.pi * s ** 2) - (x - m) ** 2 / (2 * s ** 2)
+  x = rng.normal(0, 1, 500000)
+  kl_mc = np.mean(log_norm(x, 0, 1) - log_norm(x, 1, 2))
+  print(f"formula {kl_gauss(0, 1, 1, 2):.4f} nats, Monte Carlo {kl_mc:.4f};  reverse direction {kl_gauss(1, 2, 0, 1):.4f}")
+`} />
+
+<Step n={4} title="Prediction is compression" minutes={35} />
+
+A model that predicts each symbol from the ones before it can be used to compress a sequence: code each symbol with $-\log_2 q(x_t \mid \text{past})$ bits. Its cross-entropy per symbol is therefore its compression rate, and it can never beat the true **entropy rate** of the source; the gap is a KL divergence. This is why better next-token prediction means a better language model, and the same holds for spike trains: a model of a neuron that predicts its next bin well has captured its structure.
+
+<PyCell id="predict" title="Predicting the next bin" tests={String.raw`
+  import numpy as np
+  def test_rate_model():
+      "the rate-only model's cross-entropy equals the binary entropy of the firing probability (within 0.01)"
+      assert abs(ce["rate"] - entropy([p_spike, 1 - p_spike])) < 0.01
+
+  def test_context_better():
+      "the context model has lower test cross-entropy than the rate model"
+      assert ce["context"] < ce["rate"] - 0.05
+`} prompt="A refractory neuron fires at about 80 Hz in 2 ms bins. Fit two predictors on the first half of the train: a rate model (P(spike) = overall rate) and a context model (P(spike | previous two bins), estimated by counting, with one pseudo-count each for spike and no spike). Compute each one's cross-entropy in bits per bin on the second half, storing the results in `ce['rate']` and `ce['context']`."
+code={String.raw`
+  T = 400000
+  p0 = 80 * 0.002; q_r = p0 / (1 - 2 * p0)
+  train = np.zeros(T, int); t = 0
+  while t < T:
+      if rng.random() < q_r:
+          train[t] = 1; t += 3
+      else:
+          t += 1
+  half = T // 2
+  fit, test = train[:half], train[half:]
+  p_spike = fit.mean()
+
+  def context_index(x):                       # previous two bins as 0..3, for bins 2 onwards
+      return 2 * x[1:-1] + x[:-2]
+
+  ctx_fit, nxt_fit = context_index(fit), fit[2:]
+  p_ctx = np.array([(nxt_fit[ctx_fit == c].sum() + 1) / ((ctx_fit == c).sum() + 2) for c in range(4)])
+
+  ctx_test, nxt_test = context_index(test), test[2:]
+  q_rate = np.full(len(nxt_test), p_spike)
+  q_ctx = ...                                 # predicted spike probability for each test bin
+  def bits(qs, y): return -np.mean(y * np.log2(qs) + (1 - y) * np.log2(1 - qs))
+  ce = {"rate": bits(q_rate, nxt_test), "context": ...}
+  print(f"cross-entropy (bits per bin): rate model {ce['rate']:.4f}, context model {ce['context']:.4f};  P(spike | context) = {p_ctx.round(3)}")
+`}
+hint="q_ctx = p_ctx[ctx_test]; ce['context'] = bits(q_ctx, nxt_test)."
+solution={String.raw`
+  T = 400000
+  p0 = 80 * 0.002; q_r = p0 / (1 - 2 * p0)
+  train = np.zeros(T, int); t = 0
+  while t < T:
+      if rng.random() < q_r:
+          train[t] = 1; t += 3
+      else:
+          t += 1
+  half = T // 2
+  fit, test = train[:half], train[half:]
+  p_spike = fit.mean()
+
+  def context_index(x):                       # previous two bins as 0..3, for bins 2 onwards
+      return 2 * x[1:-1] + x[:-2]
+
+  ctx_fit, nxt_fit = context_index(fit), fit[2:]
+  p_ctx = np.array([(nxt_fit[ctx_fit == c].sum() + 1) / ((ctx_fit == c).sum() + 2) for c in range(4)])
+
+  ctx_test, nxt_test = context_index(test), test[2:]
+  q_rate = np.full(len(nxt_test), p_spike)
+  q_ctx = p_ctx[ctx_test]                                 # predicted spike probability for each test bin
+  def bits(qs, y): return -np.mean(y * np.log2(qs) + (1 - y) * np.log2(1 - qs))
+  ce = {"rate": bits(q_rate, nxt_test), "context": bits(q_ctx, nxt_test)}
+  print(f"cross-entropy (bits per bin): rate model {ce['rate']:.4f}, context model {ce['context']:.4f};  P(spike | context) = {p_ctx.round(3)}")
+`} />
+
+The context model knows that a spike is impossible in the two bins after a spike, so it is less surprised by the data, which answers the prediction. Its cross-entropy is the number of bits per bin needed to store this neuron's spikes with that model: better prediction, better compression. For this neuron the context model is essentially exact, so its cross-entropy is the train's true entropy rate.
+
+<Bridge title="Divergences in brains and machines"
+  neuro="KL divergences compare neural response distributions across conditions (Berkes and colleagues' test in Week 19), measure Bayesian surprise (how much an observation changes beliefs), and define the free energy that predictive-coding theories say the brain minimises (Part 5)."
+  ai="Every classifier and language model is trained by minimising cross-entropy, which is maximum likelihood and KL minimisation at once. KL penalties keep a fine-tuned language model close to its original in reinforcement learning from human feedback, and distillation trains a small network to match a large one's output distribution.">
+
+Coding p with q costs KL(p‖q) extra bits; minimising that cost is what fitting a model means.
+
+</Bridge>
+
+<Prove title="Gibbs' inequality" task="Show that $\mathrm{KL}(p\,\|\,q) \ge 0$, with equality only if $p = q$, using Jensen's inequality for the concave function $\log$.">
+
+Over the outcomes where $p(x) > 0$, $-\mathrm{KL}(p\,\|\,q) = \sum_x p(x)\log\frac{q(x)}{p(x)} = \mathbb{E}_p\left[\log\frac{q(X)}{p(X)}\right]$.
+
+By Jensen, $\mathbb{E}_p[\log Y] \le \log\mathbb{E}_p[Y]$, and $\mathbb{E}_p\left[\frac{q(X)}{p(X)}\right] = \sum_{x: p(x) > 0} q(x) \le 1$, so $-\mathrm{KL} \le \log 1 = 0$.
+
+Equality needs $q(x)/p(x)$ to be constant where $p > 0$ and $q$ to put no mass elsewhere, which together mean $q = p$.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "KL(p ‖ q) measures...", options: ["The distance between means", "Extra bits needed to code p with a code built for q", "The entropy of q", "The correlation"], answer: 1, explain: "The coding interpretation." },
+  { q: "KL(p ‖ q) equals KL(q ‖ p)...", options: ["Always", "Only when p = q (in general they differ)", "For Gaussians", "Never when p ≠ q"], answer: 1, explain: "It is asymmetric." },
+  { q: "If q(x) = 0 where p(x) > 0, KL(p ‖ q) is...", options: ["0", "Infinite", "1", "Negative"], answer: 1, explain: "An impossible event under the code." },
+  { q: "Cross-entropy H(p, q) equals...", options: ["H(p) − KL", "H(p) + KL(p ‖ q)", "KL only", "H(q)"], answer: 1, explain: "Entropy plus the excess." },
+  { q: "Maximising likelihood minimises...", options: ["KL(model ‖ data)", "KL(empirical data ‖ model)", "The entropy of the data", "The prior"], answer: 1, explain: "Average negative log-likelihood is cross-entropy." },
+  { q: "Perplexity is...", options: ["The entropy", "2 to the power of the cross-entropy (in bits)", "The KL divergence", "The number of parameters"], answer: 1, explain: "Effective number of choices." },
+  { q: "A model's cross-entropy on a sequence cannot fall below...", options: ["Zero bits", "The true entropy rate", "1 bit", "The KL"], answer: 1, explain: "Compression limit." },
+]} />
+
+<Flashcards cards={[
+  { front: "KL divergence?", back: "$KL(p \\| q) = \\sum p\\log_2(p/q) \\ge 0$; zero only if p = q; asymmetric." },
+  { front: "Cross-entropy?", back: "$H(p, q) = -\\sum p\\log_2 q = H(p) + KL(p \\| q)$." },
+  { front: "MLE and KL?", back: "Maximising likelihood minimises KL(empirical ‖ model)." },
+  { front: "KL between Gaussians?", back: "$\\log(\\sigma_2/\\sigma_1) + (\\sigma_1^2 + (\\mu_1 - \\mu_2)^2)/(2\\sigma_2^2) - 1/2$ nats." },
+  { front: "Prediction and compression?", back: "Cross-entropy of a sequential predictor is its compression rate, bounded below by the entropy rate." },
+]} />
+
+<Predict revisit question="Does knowing the previous two bins lower the cross-entropy of a refractory neuron's spike train?" />
+
+<Key title="Before you go">
+<ul>
+<li>KL is the extra code length from using the wrong distribution; it is non-negative and asymmetric.</li>
+<li>Cross-entropy = entropy + KL, and maximum likelihood minimises KL from the data.</li>
+<li>The Gaussian KL has a closed form used in variational methods.</li>
+<li>Better prediction is better compression, down to the entropy rate.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Kullback and Leibler (1951), <em>On information and sufficiency</em>, sections 1 to 3.</li>
+<li>MacKay, <em>Information Theory, Inference, and Learning Algorithms</em>, chapter 2.6 and chapter 6 on stream codes.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If a language model were trained on spike trains from many neurons instead of text, what would its cross-entropy measure, and what would it mean for the model to have learned something about the brain?" />

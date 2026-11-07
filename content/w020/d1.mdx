@@ -1,0 +1,268 @@
+export const meta = {
+  title: "Entropy: measuring uncertainty in bits",
+  intro: "How much can a neuron tell you? Before you can answer, you need a way to measure uncertainty itself, and in 1948 Claude Shannon found the unique sensible one: entropy, the average surprise of an outcome, measured in bits. Today you learn what entropy means (the average number of yes-or-no questions needed to find out what happened), its key properties, how it sets the limit on how far data can be compressed, and how to compute the entropy of a neuron's spike patterns. You will discover that a neuron's refractory period, by making some patterns impossible, lowers the entropy of its output.",
+  goals: [
+    "Define surprise and entropy, and compute entropy in bits for any discrete distribution",
+    "State the properties of entropy: non-negativity, maximum for the uniform distribution, additivity",
+    "Build a Huffman code and show that its average length is within one bit of the entropy",
+    "Estimate the entropy of spike words and explain how refractoriness lowers it",
+  ],
+  plan: [
+    { label: "Predict and surprise", minutes: 20 },
+    { label: "Entropy and its properties", minutes: 25 },
+    { label: "Codes and compression", minutes: 30 },
+    { label: "The entropy of spike trains", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "shannon-1948",
+};
+
+<Predict question="A neuron's spike train is cut into 2 ms bins, each holding a spike or not, and grouped into words of 8 bins. The neuron fires at 80 Hz. If spikes were independent from bin to bin, the words would have about 5.1 bits of entropy. The real neuron has a 4 ms refractory period. Will its words have more entropy, less, or the same?" />
+
+<Step n={1} title="Surprise" minutes={20} />
+
+An outcome with probability $p$ carries **surprise** (or information content) $-\log_2 p$ bits. A certain outcome ($p = 1$) carries none; a fair coin's outcome carries 1 bit; an outcome with probability 1/1024 carries 10 bits. Logarithms make surprise **additive**: for two independent outcomes the probabilities multiply and the surprises add. Base 2 gives **bits**; the natural logarithm gives **nats** (1 nat ≈ 1.44 bits).
+
+<Video id="l6DKRf-fAAM" title="Reinventing Entropy | Compression is Intelligence, Part 1" by="3Blue1Brown" note="Grant Sanderson rebuilds entropy from scratch as the length of the best code, the view taken in step 3 of this lesson." />
+
+<Step n={2} title="Entropy and its properties" minutes={25} />
+
+The **entropy** of a discrete random variable is its average surprise:
+
+$$
+H(X) = -\sum_x p(x)\log_2 p(x),
+$$
+
+with $0\log 0 = 0$. Shannon (1948, today's paper) showed that this is the only measure (up to the choice of base) that is continuous, grows with the number of equally likely options, and adds up correctly when a choice is broken into stages. Its properties:
+
+- $H \ge 0$, with equality only when one outcome is certain.
+- $H \le \log_2 n$ for $n$ possible outcomes, with equality only for the uniform distribution.
+- For independent variables, $H(X, Y) = H(X) + H(Y)$; in general $H(X, Y) = H(X) + H(Y \mid X) \le H(X) + H(Y)$, where the **conditional entropy** $H(Y \mid X)$ is the average entropy of $Y$ once $X$ is known.
+
+The last inequality says that dependence between variables reduces their joint uncertainty, the seed of tomorrow's mutual information.
+
+<Figure caption="A distribution over n outcomes and its entropy. Concentrate the probability and watch the entropy fall from log₂ n towards zero." credit="Interactive figure by Engram.">
+  <EntropyBars />
+</Figure>
+
+<PyCell id="entropy" title="Compute entropy" tests={String.raw`
+  import numpy as np
+  def test_values():
+      "entropy gives 1 bit for a fair coin, 2 bits for four equal outcomes and 0 for a certainty"
+      assert abs(entropy([0.5, 0.5]) - 1) < 1e-12 and abs(entropy([0.25] * 4) - 2) < 1e-12 and entropy([1.0, 0.0]) == 0
+
+  def test_zero_safe():
+      "zero probabilities contribute nothing and cause no warnings or nans"
+      assert np.isfinite(entropy([0.0, 0.3, 0.7]))
+
+  def test_joint():
+      "for the dependent pair, H(X, Y) is less than H(X) + H(Y)"
+      assert H_joint < H_x + H_y - 0.05
+`} prompt="Write `entropy(p)` in bits for any array of probabilities, skipping zeros. Then, for the joint table `pxy` of two dependent binary variables, compute `H_joint`, the marginal entropies `H_x` and `H_y`, and check that H(X, Y) is less than H(X) + H(Y)."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def entropy(p):
+      p = np.asarray(p, dtype=float)
+      p = p[p > 0]
+      return ...
+
+  pxy = np.array([[0.4, 0.1],
+                  [0.1, 0.4]])            # rows: X, columns: Y
+  H_joint = entropy(pxy.ravel())
+  H_x, H_y = ..., ...
+  print(f"H(X) = {H_x:.3f}, H(Y) = {H_y:.3f}, H(X, Y) = {H_joint:.3f} bits;  H(Y | X) = {H_joint - H_x:.3f}")
+`}
+hint="return -np.sum(p * np.log2(p)); H_x, H_y = entropy(pxy.sum(axis=1)), entropy(pxy.sum(axis=0))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def entropy(p):
+      p = np.asarray(p, dtype=float)
+      p = p[p > 0]
+      return -np.sum(p * np.log2(p))
+
+  pxy = np.array([[0.4, 0.1],
+                  [0.1, 0.4]])            # rows: X, columns: Y
+  H_joint = entropy(pxy.ravel())
+  H_x, H_y = entropy(pxy.sum(axis=1)), entropy(pxy.sum(axis=0))
+  print(f"H(X) = {H_x:.3f}, H(Y) = {H_y:.3f}, H(X, Y) = {H_joint:.3f} bits;  H(Y | X) = {H_joint - H_x:.3f}")
+`} />
+
+<Step n={3} title="Codes and compression" minutes={30} />
+
+Entropy has an operational meaning: it is the minimum average number of bits per symbol needed to record the outcomes of a source without loss (the **source coding theorem**). The idea is to give frequent outcomes short codewords and rare ones long codewords, with lengths close to $-\log_2 p(x)$. **Huffman's algorithm** builds the best such prefix code: repeatedly merge the two least probable symbols into one, adding a bit to each of their codewords. Its average length is always between $H$ and $H + 1$ bits.
+
+<PyCell id="huffman" title="A Huffman code" tests={String.raw`
+  import numpy as np
+  def test_lengths():
+      "huffman_lengths gives lengths 1, 2, 3, 3 for probabilities 0.5, 0.25, 0.125, 0.125"
+      assert sorted(huffman_lengths([0.5, 0.25, 0.125, 0.125])) == [1, 2, 3, 3]
+
+  def test_bound():
+      "the average Huffman length is within one bit above the entropy"
+      assert H_letters <= avg_len < H_letters + 1
+`} prompt="Write `huffman_lengths(p)` returning the codeword length of each symbol: keep a list of (probability, list of symbol indices) groups, repeatedly merge the two smallest groups and add 1 to the length of every symbol in them. Apply it to a skewed distribution over 8 symbols and compare the average length with the entropy."
+code={String.raw`
+  def huffman_lengths(p):
+      lengths = [0] * len(p)
+      groups = [(pi, [i]) for i, pi in enumerate(p)]
+      while len(groups) > 1:
+          groups.sort(key=lambda g: g[0])
+          (p1, s1), (p2, s2) = groups[0], groups[1]
+          for i in s1 + s2:
+              ...
+          groups = groups[2:] + [...]
+      return lengths
+
+  letters = np.array([0.35, 0.2, 0.15, 0.1, 0.08, 0.06, 0.04, 0.02])
+  L = np.array(huffman_lengths(letters))
+  avg_len = np.sum(letters * L)
+  H_letters = entropy(letters)
+  print(f"code lengths {L};  average {avg_len:.3f} bits;  entropy {H_letters:.3f} bits;  a fixed-length code would need 3 bits")
+`}
+hint="Inside the inner loop: lengths[i] += 1. Then groups = groups[2:] + [(p1 + p2, s1 + s2)]."
+solution={String.raw`
+  def huffman_lengths(p):
+      lengths = [0] * len(p)
+      groups = [(pi, [i]) for i, pi in enumerate(p)]
+      while len(groups) > 1:
+          groups.sort(key=lambda g: g[0])
+          (p1, s1), (p2, s2) = groups[0], groups[1]
+          for i in s1 + s2:
+              lengths[i] += 1
+          groups = groups[2:] + [(p1 + p2, s1 + s2)]
+      return lengths
+
+  letters = np.array([0.35, 0.2, 0.15, 0.1, 0.08, 0.06, 0.04, 0.02])
+  L = np.array(huffman_lengths(letters))
+  avg_len = np.sum(letters * L)
+  H_letters = entropy(letters)
+  print(f"code lengths {L};  average {avg_len:.3f} bits;  entropy {H_letters:.3f} bits;  a fixed-length code would need 3 bits")
+`} />
+
+The Huffman code beats the 3-bit fixed-length code and comes within a fraction of a bit of the entropy, which no lossless code can beat. Compression is prediction: the better your model of the source, the shorter your code, an idea that connects entropy to modern language models (Day 4).
+
+<Step n={4} title="The entropy of spike trains" minutes={30} />
+
+To measure a neuron's entropy, discretise its spike train into bins of width $\Delta t$ (a 1 if there is a spike, 0 otherwise) and group them into **words** of $L$ bins. The entropy of the word distribution, estimated from a long recording, measures the variety of patterns the neuron produces: an upper bound on how much it could convey (Strong and colleagues, 1998, Day 3's paper). If bins were independent with spike probability $p$, each would contribute the binary entropy $h(p) = -p\log_2 p - (1 - p)\log_2(1 - p)$, and the words $L\,h(p)$. Any structure, such as refractoriness, makes some words impossible and others more likely, lowering the entropy below that.
+
+<PyCell id="words" title="Spike words with and without refractoriness" tests={String.raw`
+  import numpy as np
+  def test_word_entropy():
+      "word_entropy of independent bins is close to L h(p) (within 0.1 bit)"
+      assert abs(H_indep - 8 * h_bin) < 0.1
+
+  def test_refractory_lower():
+      "the refractory neuron's words have lower entropy than independent bins at the same rate, by more than 0.4 bits"
+      assert H_refr < H_indep - 0.4
+`} prompt="Write `word_entropy(train, L)` that cuts a binary spike train into non-overlapping words of L bins, counts each word (as an integer), and returns the entropy in bits. Compare an independent-bin neuron firing at 80 Hz (spike probability p per 2 ms bin) and a neuron of the same rate that cannot fire in the 2 bins after a spike, using words of 8 bins from 400,000 bins."
+code={String.raw`
+  rng = np.random.default_rng(1948)
+  T, L = 400000, 8
+  p = 80 * 0.002                                         # 80 Hz, 2 ms bins
+
+  def word_entropy(train, L):
+      n = len(train) // L
+      words = train[:n * L].reshape(n, L) @ (2 ** np.arange(L))      # each word as an integer
+      counts = np.bincount(words, minlength=2 ** L)
+      return ...
+
+  indep = (rng.random(T) < p).astype(int)
+  # refractory neuron: after a spike, 2 silent bins; raise the per-bin probability to keep the same rate
+  q = p / (1 - 2 * p)
+  refr = np.zeros(T, int); t = 0
+  while t < T:
+      if rng.random() < q:
+          refr[t] = 1; t += 3
+      else:
+          t += 1
+  h_bin = entropy([p, 1 - p])
+  H_indep, H_refr = word_entropy(indep, L), word_entropy(refr, L)
+  print(f"rates: {indep.mean() / 0.002:.1f} and {refr.mean() / 0.002:.1f} Hz;  L h(p) = {L * h_bin:.3f};  word entropy independent {H_indep:.3f}, refractory {H_refr:.3f} bits")
+`}
+hint="return entropy(counts / counts.sum())."
+solution={String.raw`
+  rng = np.random.default_rng(1948)
+  T, L = 400000, 8
+  p = 80 * 0.002                                         # 80 Hz, 2 ms bins
+
+  def word_entropy(train, L):
+      n = len(train) // L
+      words = train[:n * L].reshape(n, L) @ (2 ** np.arange(L))      # each word as an integer
+      counts = np.bincount(words, minlength=2 ** L)
+      return entropy(counts / counts.sum())
+
+  indep = (rng.random(T) < p).astype(int)
+  # refractory neuron: after a spike, 2 silent bins; raise the per-bin probability to keep the same rate
+  q = p / (1 - 2 * p)
+  refr = np.zeros(T, int); t = 0
+  while t < T:
+      if rng.random() < q:
+          refr[t] = 1; t += 3
+      else:
+          t += 1
+  h_bin = entropy([p, 1 - p])
+  H_indep, H_refr = word_entropy(indep, L), word_entropy(refr, L)
+  print(f"rates: {indep.mean() / 0.002:.1f} and {refr.mean() / 0.002:.1f} Hz;  L h(p) = {L * h_bin:.3f};  word entropy independent {H_indep:.3f}, refractory {H_refr:.3f} bits")
+`} />
+
+At the same firing rate, the refractory neuron's words have about 4.4 bits against 5.1, which answers the prediction: forbidding spikes in quick succession removes possible patterns. Entropy is an upper bound on information, not information itself: a neuron could produce rich patterns that have nothing to do with the stimulus. Separating the two is tomorrow's job.
+
+<Bridge title="Entropy in brains and machines"
+  neuro="Entropy bounds what a spike train can carry, and its dependence on rate, timing precision and refractoriness shows that precise spike timing could in principle carry far more than rates alone. Whether neurons use that capacity is a central question of neural coding (Weeks 34 and 39)."
+  ai="Entropy measures a classifier's uncertainty, is maximised in exploration bonuses for reinforcement learning, and, through the source coding theorem, links a language model's predictive accuracy to how well it could compress text.">
+
+Entropy is average surprise: the number of yes-or-no questions you would need, on average, to find out what happened.
+
+</Bridge>
+
+<Prove title="The uniform distribution has maximum entropy" task="Using Jensen's inequality for the concave function $\log$, show that $H(X) \le \log_2 n$ for any distribution over n outcomes, with equality for the uniform distribution.">
+
+Write $H(X) = \sum_x p(x)\log_2\frac{1}{p(x)} = \mathbb{E}\left[\log_2\frac{1}{p(X)}\right]$, an average over outcomes with nonzero probability.
+
+By Jensen's inequality, $\mathbb{E}[\log_2 Y] \le \log_2\mathbb{E}[Y]$. With $Y = 1/p(X)$, $\mathbb{E}[Y] = \sum_x p(x)\cdot\frac{1}{p(x)} = $ (number of outcomes with nonzero probability) $\le n$.
+
+So $H(X) \le \log_2 n$. Equality in Jensen needs $1/p(x)$ to be constant, that is $p(x) = 1/n$ for all $n$ outcomes. (Week 13 found the same result with a Lagrange multiplier.)
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "An outcome with probability 1/8 carries...", options: ["1 bit", "3 bits", "8 bits", "0.125 bits"], answer: 1, explain: "−log₂(1/8)." },
+  { q: "Entropy is...", options: ["The most likely outcome", "The average surprise", "The variance", "The number of outcomes"], answer: 1, explain: "$-\\sum p\\log_2 p$." },
+  { q: "The maximum entropy over 16 outcomes is...", options: ["16 bits", "4 bits", "1 bit", "8 bits"], answer: 1, explain: "log₂ 16, for the uniform distribution." },
+  { q: "For dependent X and Y, H(X, Y) is...", options: ["H(X) + H(Y)", "Less than H(X) + H(Y)", "More than H(X) + H(Y)", "Zero"], answer: 1, explain: "Dependence reduces joint uncertainty." },
+  { q: "The source coding theorem says the average code length is at least...", options: ["log₂ n", "The entropy", "1 bit", "The variance"], answer: 1, explain: "No lossless code beats H." },
+  { q: "A Huffman code's average length is...", options: ["Exactly H always", "Between H and H + 1", "Above H + 1", "log₂ n"], answer: 1, explain: "Optimal prefix code." },
+  { q: "Refractoriness makes a spike train's word entropy...", options: ["Higher", "Lower", "Unchanged", "Infinite"], answer: 1, explain: "Some words become impossible." },
+]} />
+
+<Flashcards cards={[
+  { front: "Surprise?", back: "$-\\log_2 p$ bits." },
+  { front: "Entropy?", back: "$H(X) = -\\sum_x p(x)\\log_2 p(x)$; 0 ≤ H ≤ log₂ n." },
+  { front: "Chain rule for entropy?", back: "$H(X, Y) = H(X) + H(Y \\mid X)$." },
+  { front: "Source coding theorem?", back: "Lossless codes need at least H bits per symbol on average; Huffman achieves less than H + 1." },
+  { front: "Binary entropy?", back: "$h(p) = -p\\log_2 p - (1-p)\\log_2(1-p)$, maximal (1 bit) at p = 1/2." },
+]} />
+
+<Predict revisit question="Does a 4 ms refractory period raise or lower the entropy of 8-bin spike words?" />
+
+<Key title="Before you go">
+<ul>
+<li>Surprise is −log₂ p; entropy is its average, in bits.</li>
+<li>Entropy is largest for the uniform distribution and adds for independent variables.</li>
+<li>Entropy is the limit of lossless compression; Huffman codes come within a bit of it.</li>
+<li>Spike-word entropy bounds what a neuron can convey, and structure such as refractoriness lowers it.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Shannon (1948), <em>A mathematical theory of communication</em>, Part I to section 7.</li>
+<li>David MacKay (2003), <em>Information Theory, Inference, and Learning Algorithms</em>, chapters 2 and 4 to 5 (free from the author's site).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A neuron that fires at a high rate with millisecond precision could have a very high entropy. Give one reason why a real neuron might not use all that capacity, and one experiment that could tell you how much it does use." />

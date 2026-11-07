@@ -1,0 +1,261 @@
+export const meta = {
+  title: "Channels, efficient coding and the information bottleneck",
+  intro: "This week ends where information theory meets the question of what neurons should do. A neuron is a noisy channel with a limited range of outputs and a budget of energy. How much can such a channel carry, and how should a population share the work? Shannon's formula for the Gaussian channel answers the first question; Barlow's efficient coding hypothesis, that sensory systems remove redundancy to make the most of their capacity, answers the second; and the information bottleneck generalises both, asking for the most compressed representation that still keeps what matters. Today you compute channel capacities, measure the redundancy of two neurons that say the same thing, and find the best two-word summary of a variable by brute force.",
+  goals: [
+    "Compute the information carried by a Gaussian channel and relate it to the correlation between input and output",
+    "Show that two neurons carrying the same signal are redundant, and quantify the redundancy",
+    "Explain the efficient coding hypothesis and its link to Laughlin's equalisation and decorrelation",
+    "Formulate the information bottleneck and solve a small one by search",
+  ],
+  plan: [
+    { label: "Predict and the Gaussian channel", minutes: 25 },
+    { label: "Redundancy", minutes: 25 },
+    { label: "Efficient coding", minutes: 20 },
+    { label: "The information bottleneck", minutes: 35 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "tishby-2000",
+};
+
+<Predict question="Two neurons each receive the same signal plus their own independent noise, and each alone carries 1 bit about the signal. How much do they carry together: 2 bits, more than 1 but less than 2, or exactly 1?" />
+
+<Step n={1} title="The Gaussian channel" minutes={25} />
+
+A Gaussian signal $S$ with variance $P$ is sent through a channel that adds independent Gaussian noise with variance $N$: $R = S + \text{noise}$. The mutual information is
+
+$$
+I(S; R) = \tfrac{1}{2}\log_2\left(1 + \frac{P}{N}\right) \ \text{bits per sample},
+$$
+
+and this is also the channel's **capacity** under a power limit $P$: no input distribution does better (Shannon, 1948). Each doubling of the signal-to-noise ratio adds only about half a bit, so information is cheap at first and then expensive. For jointly Gaussian variables, information and correlation are tied: $I = -\tfrac{1}{2}\log_2(1 - \rho^2)$.
+
+<Figure caption="A Gaussian channel: signal against noisy response, and the information carried as the signal-to-noise ratio changes." credit="Interactive figure by Engram.">
+  <GaussianChannel />
+</Figure>
+
+<Video id="OOIDEr1e5Gg" title="&quot;Why&quot; models" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's introduction to normative models, which ask why a neuron behaves as it does, using the example of a spike-timing distribution that maximises entropy." />
+
+<PyCell id="channel" title="Information from correlation" tests={String.raw`
+  import numpy as np
+  def test_formula():
+      "for each SNR the information from the sample correlation is within 0.03 bits of 0.5 log2(1 + SNR)"
+      assert np.all(np.abs(info_from_corr - 0.5 * np.log2(1 + snrs)) < 0.03)
+`} prompt="For signal-to-noise ratios 0.25, 1, 4 and 16, simulate 200,000 samples of a unit-variance Gaussian signal plus noise of variance 1/SNR, estimate the correlation between signal and response, and convert it to information with −½ log₂(1 − ρ²). Store the results in `info_from_corr`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2000)
+  def entropy(p):
+      p = np.asarray(p, float); p = p[p > 0]
+      return -np.sum(p * np.log2(p))
+
+  snrs = np.array([0.25, 1, 4, 16])
+  info_from_corr = []
+  for snr in snrs:
+      s = rng.normal(size=200000)
+      r = s + rng.normal(scale=np.sqrt(1 / snr), size=200000)
+      rho = ...
+      info_from_corr.append(...)
+  info_from_corr = np.array(info_from_corr)
+  print("SNR:", snrs, " information from correlation:", info_from_corr.round(3), " formula:", (0.5 * np.log2(1 + snrs)).round(3))
+`}
+hint="rho = np.corrcoef(s, r)[0, 1]; info_from_corr.append(-0.5 * np.log2(1 - rho ** 2))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2000)
+  def entropy(p):
+      p = np.asarray(p, float); p = p[p > 0]
+      return -np.sum(p * np.log2(p))
+
+  snrs = np.array([0.25, 1, 4, 16])
+  info_from_corr = []
+  for snr in snrs:
+      s = rng.normal(size=200000)
+      r = s + rng.normal(scale=np.sqrt(1 / snr), size=200000)
+      rho = np.corrcoef(s, r)[0, 1]
+      info_from_corr.append(-0.5 * np.log2(1 - rho ** 2))
+  info_from_corr = np.array(info_from_corr)
+  print("SNR:", snrs, " information from correlation:", info_from_corr.round(3), " formula:", (0.5 * np.log2(1 + snrs)).round(3))
+`} />
+
+<Step n={2} title="Redundancy" minutes={25} />
+
+When two neurons carry the same signal with independent noise, the best combination of their responses (their average, by Week 16's cue combination) has the noise variance halved, so its SNR doubles. If each alone has SNR 3 (1 bit), together they have SNR 6: $\tfrac{1}{2}\log_2 7 \approx 1.40$ bits, not 2. The difference is **redundancy**: information both neurons share. Redundant codes are robust to noise and loss, but wasteful; how much redundancy sensory populations carry, and whether it is a bug or a feature, is a long-running question.
+
+<PyCell id="redundancy" title="Two neurons, one signal" tests={String.raw`
+  import numpy as np
+  def test_single():
+      "each neuron alone carries about 1 bit (within 0.03)"
+      assert abs(i_single - 1) < 0.03
+
+  def test_pair():
+      "together they carry about 1.40 bits, so redundancy is about 0.6 bits"
+      assert abs(i_pair - 0.5 * np.log2(7)) < 0.03 and abs(redundancy - (2 - 0.5 * np.log2(7))) < 0.05
+`} prompt="Two neurons respond to a unit-variance signal, each with independent noise of variance 1/3. Estimate the information of one neuron (`i_single`) and of the pair, using their average as the combined response (`i_pair`), from correlations as above. Compute `redundancy` = 2 × i_single − i_pair."
+code={String.raw`
+  s = rng.normal(size=200000)
+  r1 = s + rng.normal(scale=np.sqrt(1 / 3), size=200000)
+  r2 = s + rng.normal(scale=np.sqrt(1 / 3), size=200000)
+  def info_corr(a, b): rho = np.corrcoef(a, b)[0, 1]; return -0.5 * np.log2(1 - rho ** 2)
+  i_single = ...
+  i_pair = ...
+  redundancy = 2 * i_single - i_pair
+  print(f"one neuron {i_single:.3f} bits, both {i_pair:.3f} bits, redundancy {redundancy:.3f} bits")
+`}
+hint="i_single = info_corr(s, r1); i_pair = info_corr(s, (r1 + r2) / 2)."
+solution={String.raw`
+  s = rng.normal(size=200000)
+  r1 = s + rng.normal(scale=np.sqrt(1 / 3), size=200000)
+  r2 = s + rng.normal(scale=np.sqrt(1 / 3), size=200000)
+  def info_corr(a, b): rho = np.corrcoef(a, b)[0, 1]; return -0.5 * np.log2(1 - rho ** 2)
+  i_single = info_corr(s, r1)
+  i_pair = info_corr(s, (r1 + r2) / 2)
+  redundancy = 2 * i_single - i_pair
+  print(f"one neuron {i_single:.3f} bits, both {i_pair:.3f} bits, redundancy {redundancy:.3f} bits")
+`} />
+
+That answers the prediction: more than 1 bit but well short of 2. Averaging works here because the signal is Gaussian and the combination linear; in general, the joint information must be computed from the joint response.
+
+<Step n={3} title="Efficient coding" minutes={20} />
+
+Barlow (1961) proposed that early sensory processing should **reduce redundancy**: re-encode inputs so that neurons carry as much independent information as possible within their limits. Three predictions follow, each of which you have met.
+
+- A single neuron with a limited range should equalise its output histogram, matching its response curve to the input's cumulative distribution (Laughlin, 1981; Week 13).
+- A population receiving correlated inputs should **decorrelate** (whiten) them where the signal is strong, so that neurons do not repeat each other. Atick and Redlich (1990) derived the centre-surround receptive fields of the retina this way, with the twist that at low signal-to-noise ratio the optimal filter averages rather than whitens.
+- For natural images, a sparse, independent code gives oriented, localised filters like V1's (Olshausen and Field, 1996; Week 13).
+
+Efficient coding is a normative theory: it says what an optimal system would do under stated constraints, which makes it testable and also easy to over-claim, since the constraints are chosen by the theorist.
+
+<Step n={4} title="The information bottleneck" minutes={35} />
+
+Efficient coding asks for compression; but compression of what, for whom? The **information bottleneck** (Tishby, Pereira and Bialek, 2000, today's paper) adds relevance. Given an input $X$ and a variable $Y$ that matters, find a representation $T$ of $X$ that minimises
+
+$$
+I(X; T) - \beta\,I(T; Y):
+$$
+
+use as few bits about the input as possible, while keeping as much as possible about what matters. Small $\beta$ favours compression; large $\beta$ favours relevance. By the data processing inequality, $I(T; Y) \le I(X; Y)$: the representation can at best keep all the relevant information.
+
+<PyCell id="bottleneck" title="The best two-word summary" tests={String.raw`
+  import numpy as np
+  def test_ixt():
+      "a deterministic two-cluster summary has I(X; T) at most 1 bit"
+      assert ixt_best <= 1 + 1e-9
+
+  def test_keeps():
+      "the best partition keeps at least 85% of I(X; Y)"
+      assert ity_best >= 0.85 * ixy
+
+  def test_groups():
+      "it groups the x values by their probability of Y = 1: every x in the higher group has p(y = 1 | x) above every x in the lower group"
+      hi, lo = p_y1[best_part == 1], p_y1[best_part == 0]
+      if hi.size and lo.size: assert min(hi.min(), lo.min()) == min(hi.min(), lo.min()) and (hi.min() > lo.max() or lo.min() > hi.max())
+`} prompt="X takes 8 equally likely values; Y is binary with p(Y = 1 | x) given by `p_y1`. Try every split of the 8 values into two non-empty groups (T = 0 or 1), compute I(T; Y) for each, and keep the split with the largest. Store `best_part` (an array of 0s and 1s), `ity_best`, `ixt_best` = I(X; T) and `ixy` = I(X; Y)."
+code={String.raw`
+  from itertools import product
+  p_x = np.full(8, 1 / 8)
+  p_y1 = np.array([0.05, 0.1, 0.12, 0.2, 0.75, 0.8, 0.9, 0.95])
+  joint_xy = np.column_stack([p_x * (1 - p_y1), p_x * p_y1])      # 8 x 2
+
+  def mi(J):
+      J = np.asarray(J, float)
+      return entropy(J.sum(1)) + entropy(J.sum(0)) - entropy(J.ravel())
+
+  ixy = mi(joint_xy)
+  best = (-1, None)
+  for bits in product([0, 1], repeat=8):
+      part = np.array(bits)
+      if part.sum() in (0, 8):
+          continue
+      joint_ty = ...                                  # 2 x 2: rows T, columns Y
+      ity = mi(joint_ty)
+      if ity > best[0]:
+          best = (ity, part)
+  ity_best, best_part = best
+  ixt_best = entropy([p_x[best_part == 0].sum(), p_x[best_part == 1].sum()])   # T is a deterministic function of X
+  print(f"I(X; Y) = {ixy:.3f} bits;  best two-cluster summary keeps {ity_best:.3f} bits using I(X; T) = {ixt_best:.3f} bits;  clusters {best_part}")
+`}
+hint="joint_ty = np.array([joint_xy[part == 0].sum(axis=0), joint_xy[part == 1].sum(axis=0)])."
+solution={String.raw`
+  from itertools import product
+  p_x = np.full(8, 1 / 8)
+  p_y1 = np.array([0.05, 0.1, 0.12, 0.2, 0.75, 0.8, 0.9, 0.95])
+  joint_xy = np.column_stack([p_x * (1 - p_y1), p_x * p_y1])      # 8 x 2
+
+  def mi(J):
+      J = np.asarray(J, float)
+      return entropy(J.sum(1)) + entropy(J.sum(0)) - entropy(J.ravel())
+
+  ixy = mi(joint_xy)
+  best = (-1, None)
+  for bits in product([0, 1], repeat=8):
+      part = np.array(bits)
+      if part.sum() in (0, 8):
+          continue
+      joint_ty = np.array([joint_xy[part == 0].sum(axis=0), joint_xy[part == 1].sum(axis=0)])                                  # 2 x 2: rows T, columns Y
+      ity = mi(joint_ty)
+      if ity > best[0]:
+          best = (ity, part)
+  ity_best, best_part = best
+  ixt_best = entropy([p_x[best_part == 0].sum(), p_x[best_part == 1].sum()])   # T is a deterministic function of X
+  print(f"I(X; Y) = {ixy:.3f} bits;  best two-cluster summary keeps {ity_best:.3f} bits using I(X; T) = {ixt_best:.3f} bits;  clusters {best_part}")
+`} />
+
+Compressing 3 bits of input into 1 bit keeps almost all of the relevant information, because the two groups differ only in irrelevant detail. The best summary is not the one that preserves the most about $X$, but the one that keeps what predicts $Y$. That is the bottleneck's idea of a good representation, and it has been proposed both for sensory neurons predicting the future of their input and for the layers of deep networks.
+
+<Bridge title="Efficient codes in brains and machines"
+  neuro="Efficient coding explains contrast adaptation, centre-surround receptive fields, V1's oriented filters and the shapes of response curves, and it predicts that codes should change with the statistics of the environment. Its limits, such as how to choose the constraints and what counts as relevant, are where the information bottleneck and predictive coding (Part 5) take over."
+  ai="Autoencoders learn compressed codes; variational autoencoders and β-VAEs trade reconstruction against a KL penalty very like the bottleneck's compression term. Contrastive self-supervised learning keeps information shared across views of the same input and discards the rest.">
+
+A good code spends its limited capacity on what is not already known and on what matters.
+
+</Bridge>
+
+<Prove title="Information of a jointly Gaussian pair" task="For $R = S + Z$ with $S \sim \mathcal{N}(0, P)$ and independent noise $Z \sim \mathcal{N}(0, N)$, use the differential entropy of a Gaussian, $h = \tfrac{1}{2}\log_2(2\pi e\sigma^2)$, to show that $I(S; R) = \tfrac{1}{2}\log_2(1 + P/N)$.">
+
+$I(S; R) = h(R) - h(R \mid S)$. Since $R$ is Gaussian with variance $P + N$, $h(R) = \tfrac{1}{2}\log_2(2\pi e(P + N))$.
+
+Given $S$, the only randomness in $R$ is the noise, so $h(R \mid S) = h(Z) = \tfrac{1}{2}\log_2(2\pi eN)$.
+
+Subtracting, $I = \tfrac{1}{2}\log_2\frac{P + N}{N} = \tfrac{1}{2}\log_2(1 + P/N)$. The $2\pi e$ factors cancel, which is why information, unlike differential entropy, does not depend on the units of measurement.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "The Gaussian channel carries...", options: ["P/N bits", "½ log₂(1 + P/N) bits per sample", "log₂ P bits", "Unlimited information"], answer: 1, explain: "Shannon's formula." },
+  { q: "Doubling the SNR at high SNR adds about...", options: ["Double the bits", "Half a bit", "Nothing", "One bit"], answer: 1, explain: "½ log₂ 2." },
+  { q: "For jointly Gaussian variables with correlation ρ, I equals...", options: ["ρ", "−½ log₂(1 − ρ²)", "ρ²", "log₂ ρ"], answer: 1, explain: "Information from correlation." },
+  { q: "Two neurons sharing a signal with independent noise carry together...", options: ["Twice the information", "More than one alone, less than twice (redundancy)", "The same as one", "Less than one"], answer: 1, explain: "Shared information." },
+  { q: "Barlow's efficient coding hypothesis says sensory systems...", options: ["Add redundancy", "Reduce redundancy to use capacity well", "Maximise firing rates", "Ignore statistics"], answer: 1, explain: "Redundancy reduction." },
+  { q: "The information bottleneck minimises...", options: ["I(T; Y)", "I(X; T) − β I(T; Y)", "H(X)", "KL(X ‖ Y)"], answer: 1, explain: "Compress, but keep relevance." },
+  { q: "A representation T of X can keep at most how much information about Y?", options: ["H(Y)", "I(X; Y)", "H(X)", "Unlimited"], answer: 1, explain: "Data processing inequality." },
+]} />
+
+<Flashcards cards={[
+  { front: "Gaussian channel capacity?", back: "½ log₂(1 + P/N) bits per sample." },
+  { front: "Information and correlation (Gaussian)?", back: "$I = -\\tfrac{1}{2}\\log_2(1 - \\rho^2)$." },
+  { front: "Redundancy?", back: "I(S; R1) + I(S; R2) − I(S; R1, R2): information the responses share." },
+  { front: "Efficient coding hypothesis?", back: "Sensory codes reduce redundancy to make the most of limited capacity (Barlow, 1961)." },
+  { front: "Information bottleneck?", back: "Minimise I(X; T) − β I(T; Y): compressed but relevant (Tishby, Pereira and Bialek, 2000)." },
+]} />
+
+<Predict revisit question="Two neurons, 1 bit each, same signal: how much together?" />
+
+<Key title="Before you go">
+<ul>
+<li>A Gaussian channel carries ½ log₂(1 + SNR) bits; extra signal buys information slowly.</li>
+<li>Neurons that share a signal are redundant: together they carry less than the sum.</li>
+<li>Efficient coding predicts equalisation, decorrelation and sparse codes.</li>
+<li>The information bottleneck keeps only what is relevant, in as few bits as possible.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Tishby, Pereira and Bialek (2000), <em>The information bottleneck method</em>, introduction and section 2.</li>
+<li>Joseph Atick and A. Norman Redlich (1990), <em>Towards a theory of early visual processing</em>, Neural Computation 2, 308 to 320.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Choose a sensory system you know. What would 'relevant' mean for it in the information bottleneck sense, and what details of the input would an efficient code throw away?" />

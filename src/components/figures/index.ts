@@ -89,3 +89,8 @@ export { BayesFactor } from "./bayes-factor";
 export { MetropolisWalk } from "./metropolis-walk";
 export { GibbsMixture } from "./gibbs-mixture";
 export { VariationalFit } from "./variational-fit";
+export { EntropyBars } from "./entropy-bars";
+export { MutualInfoTable } from "./mutual-info-table";
+export { InfoBias } from "./info-bias";
+export { KLAsymmetry } from "./kl-asymmetry";
+export { GaussianChannel } from "./gaussian-channel";

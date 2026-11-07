@@ -1,0 +1,289 @@
+export const meta = {
+  title: "Estimating information from spikes",
+  intro: "Yesterday you computed information from exact probabilities. In an experiment you only have a finite number of trials, and plugging observed frequencies into the formulas gives estimates that are systematically wrong: entropy too low, and mutual information too high, so that a neuron with no information at all appears to carry some. Today you measure that bias, learn to correct it with an analytic formula and with shuffled data, and then implement the direct method of Strong and colleagues, which measures how much information a spike train carries about a time-varying stimulus without assuming what the code is. You will see how much more a neuron with precise spike timing conveys than one whose spikes are jittered.",
+  goals: [
+    "Show that plug-in estimates bias mutual information upwards, and estimate the size of the bias",
+    "Correct estimates with the Miller-Madow formula and with a shuffle correction",
+    "Implement the direct method: total entropy minus noise entropy of spike words",
+    "Compare the information carried by precisely timed and jittered spike trains",
+  ],
+  plan: [
+    { label: "Predict and the plug-in bias", minutes: 30 },
+    { label: "Corrections", minutes: 25 },
+    { label: "The direct method", minutes: 35 },
+    { label: "Choices that matter", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "strong-1998",
+};
+
+<Predict question="A neuron's response (one of 16 count bins) is completely unrelated to which of 8 stimuli was shown. You record 20 trials per stimulus and compute mutual information by plugging in the observed frequencies. Will you get about 0 bits, a small positive value like 0.05 bits, or a substantial value like 0.5 bits?" />
+
+<Step n={1} title="The plug-in bias" minutes={30} />
+
+The **plug-in** (or naive) estimator replaces probabilities by observed frequencies. Because rare outcomes are often missed and chance fluctuations look like structure, it underestimates entropy (Week 20 figure) and overestimates mutual information. For large samples the bias of the information is approximately
+
+$$
+\text{bias} \approx \frac{(S - 1)(R - 1)}{2N\ln 2}\ \text{bits},
+$$
+
+for $S$ stimuli, $R$ response bins and $N$ trials in total (Treves and Panzeri, 1995). It grows with the number of response categories and shrinks only like $1/N$, which is why measuring information in rich spike patterns from limited data is hard.
+
+<Figure caption="Plug-in and corrected entropy estimates against the number of samples. The bias is worst with many possible responses and few samples." credit="Interactive figure by Engram.">
+  <InfoBias />
+</Figure>
+
+<Video id="Xjy-jj-6Oz0" title="Calculating entropy from pmf" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's walk-through of estimating entropy from a histogram of a neuron's interspike intervals, the plug-in method whose bias you meet today." />
+
+<PyCell id="bias" title="Information from nothing" tests={String.raw`
+  import numpy as np
+  def test_positive():
+      "the plug-in information of independent data is clearly positive on average (above 0.2 bits)"
+      assert np.mean(naive) > 0.2
+
+  def test_formula():
+      "the average bias is within 25% of (S - 1)(R - 1) / (2 N ln 2)"
+      pred = 7 * 15 / (2 * 160 * np.log(2))
+      assert abs(np.mean(naive) - pred) / pred < 0.25
+`} prompt="Write `plugin_mi(s, r, S, R)` that builds the joint frequency table from integer arrays of stimuli and responses and returns its mutual information. For 500 simulated experiments with 8 stimuli × 20 trials and responses drawn uniformly from 16 bins, independently of the stimulus, store the estimates in `naive` and compare their mean with the formula."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1998)
+
+  def entropy(p):
+      p = np.asarray(p, float); p = p[p > 0]
+      return -np.sum(p * np.log2(p))
+
+  def plugin_mi(s, r, S, R):
+      J = np.zeros((S, R))
+      np.add.at(J, (s, r), 1)
+      J /= J.sum()
+      return ...                                     # H(S) + H(R) - H(S, R)
+
+  S, R, n_per = 8, 16, 20
+  s = np.repeat(np.arange(S), n_per)
+  naive = np.array([plugin_mi(s, rng.integers(0, R, len(s)), S, R) for _ in range(500)])
+  print(f"plug-in information of unrelated data: {naive.mean():.3f} bits (formula {7 * 15 / (2 * 160 * np.log(2)):.3f})")
+`}
+hint="return entropy(J.sum(1)) + entropy(J.sum(0)) - entropy(J.ravel())."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1998)
+
+  def entropy(p):
+      p = np.asarray(p, float); p = p[p > 0]
+      return -np.sum(p * np.log2(p))
+
+  def plugin_mi(s, r, S, R):
+      J = np.zeros((S, R))
+      np.add.at(J, (s, r), 1)
+      J /= J.sum()
+      return entropy(J.sum(1)) + entropy(J.sum(0)) - entropy(J.ravel())                                     # H(S) + H(R) - H(S, R)
+
+  S, R, n_per = 8, 16, 20
+  s = np.repeat(np.arange(S), n_per)
+  naive = np.array([plugin_mi(s, rng.integers(0, R, len(s)), S, R) for _ in range(500)])
+  print(f"plug-in information of unrelated data: {naive.mean():.3f} bits (formula {7 * 15 / (2 * 160 * np.log(2)):.3f})")
+`} />
+
+A neuron with no information at all appears to carry about half a bit, which answers the prediction: a substantial value, from nothing but sampling noise. With 8 stimuli the most any neuron could carry is 3 bits, so this bias is large enough to mislead.
+
+<Step n={2} title="Corrections" minutes={25} />
+
+Two widely used corrections.
+
+- **Analytic**: subtract the bias formula (the Miller-Madow correction, applied to each entropy), counting only response bins that were actually observed.
+- **Shuffle**: compute the information again after randomly shuffling the stimulus labels many times, which destroys any real relationship but keeps the sampling bias, and subtract the average shuffled value. Because shuffled information still contains the bias, this removes it without a formula. Its distribution also gives a permutation test (Week 18) for whether any information is present.
+
+<PyCell id="correct" title="Shuffle correction on a tuned neuron" tests={String.raw`
+  import numpy as np
+  def test_naive_high():
+      "with 10 trials per stimulus, the naive estimate overshoots the true information by more than 0.15 bits"
+      assert naive_est[10] - true_info > 0.15
+
+  def test_corrected():
+      "the naive estimate overshoots at every sample size; with 40 trials the correction brings it closer to the truth, and with 160 both are within 0.06 bits"
+      assert all(naive_est[n] > true_info for n in naive_est)
+      assert abs(corrected[40] - true_info) < abs(naive_est[40] - true_info) and abs(corrected[160] - true_info) < 0.06
+`} prompt="A tuned neuron's count (capped at 15) depends on 8 orientations. For 10, 40 and 160 trials per stimulus, compute the naive plug-in information (`naive_est[n]`) and the shuffle-corrected value (`corrected[n]`, naive minus the mean of 100 shuffles). Compare with `true_info` computed from the exact joint table."
+code={String.raw`
+  from math import lgamma
+  rates = 2 + 8 * np.exp(2 * (np.cos(np.deg2rad(2 * (np.arange(8) * 22.5 - 90))) - 1))
+  kk = np.arange(16)
+  P = np.exp(kk[None] * np.log(rates[:, None]) - rates[:, None] - np.array([lgamma(k + 1) for k in kk])[None])
+  P[:, -1] += 1 - P.sum(axis=1)                       # lump counts of 15 or more into the last bin
+  J_true = P / 8
+  true_info = entropy(J_true.sum(1)) + entropy(J_true.sum(0)) - entropy(J_true.ravel())
+
+  r_c = np.random.default_rng(160)
+  naive_est, corrected = {}, {}
+  for n_per in (10, 40, 160):
+      s = np.repeat(np.arange(8), n_per)
+      r = np.minimum(r_c.poisson(rates[s]), 15)
+      naive_est[n_per] = plugin_mi(s, r, 8, 16)
+      shuffled = [plugin_mi(r_c.permutation(s), r, 8, 16) for _ in range(100)]
+      corrected[n_per] = ...
+  print(f"true information {true_info:.3f} bits")
+  for n_per in naive_est: print(f"{n_per:4d} trials per stimulus: naive {naive_est[n_per]:.3f}, shuffle-corrected {corrected[n_per]:.3f}")
+`}
+hint="corrected[n_per] = naive_est[n_per] - np.mean(shuffled)."
+solution={String.raw`
+  from math import lgamma
+  rates = 2 + 8 * np.exp(2 * (np.cos(np.deg2rad(2 * (np.arange(8) * 22.5 - 90))) - 1))
+  kk = np.arange(16)
+  P = np.exp(kk[None] * np.log(rates[:, None]) - rates[:, None] - np.array([lgamma(k + 1) for k in kk])[None])
+  P[:, -1] += 1 - P.sum(axis=1)                       # lump counts of 15 or more into the last bin
+  J_true = P / 8
+  true_info = entropy(J_true.sum(1)) + entropy(J_true.sum(0)) - entropy(J_true.ravel())
+
+  r_c = np.random.default_rng(160)
+  naive_est, corrected = {}, {}
+  for n_per in (10, 40, 160):
+      s = np.repeat(np.arange(8), n_per)
+      r = np.minimum(r_c.poisson(rates[s]), 15)
+      naive_est[n_per] = plugin_mi(s, r, 8, 16)
+      shuffled = [plugin_mi(r_c.permutation(s), r, 8, 16) for _ in range(100)]
+      corrected[n_per] = naive_est[n_per] - np.mean(shuffled)
+  print(f"true information {true_info:.3f} bits")
+  for n_per in naive_est: print(f"{n_per:4d} trials per stimulus: naive {naive_est[n_per]:.3f}, shuffle-corrected {corrected[n_per]:.3f}")
+`} />
+
+The naive estimate is too high at every sample size: about 1.1 bits with 10 trials per stimulus against a true 0.61, still 0.63 with 160. The shuffle correction overshoots in the other direction: 0.30 with 10 trials, 0.56 with 160. Shuffled data have no structure, so their responses spread over more response bins and their bias is larger than that of the real data; subtracting it removes too much. Each correction brackets the truth from one side, and with too few trials neither rescues the experiment: the honest answer is then a range, not a number.
+
+<Step n={3} title="The direct method" minutes={35} />
+
+For a time-varying stimulus, Strong and colleagues (1998, today's paper) measured information without choosing a code in advance. Show the same long stimulus many times. Cut the spike trains into words of $L$ bins.
+
+- The **total entropy** $H_{\text{total}}$ is the entropy of all words, pooled over time and repeats: the variety of the neuron's responses.
+- The **noise entropy** $H_{\text{noise}}$ is the entropy of the words at one fixed moment of the stimulus, across repeats, averaged over moments: the variability that is not caused by the stimulus.
+- The **information** is $H_{\text{total}} - H_{\text{noise}}$, divided by the word duration for a rate in bits per second.
+
+<PyCell id="direct" title="Precise and jittered spike timing" tests={String.raw`
+  import numpy as np
+  def test_positive():
+      "both neurons carry positive information, below their total entropy"
+      assert all(0 < info[k] < Htot[k] for k in info)
+
+  def test_precise_more():
+      "the precisely timed neuron carries at least 1.5 times as much information as the jittered one"
+      assert info["precise"] > 1.5 * info["jittered"]
+`} prompt="A neuron fires at stimulus-locked times (a fixed pattern of 400 events in 4 s, 2 ms bins), on 200 repeats, missing some events and adding a few random spikes. The precise neuron's spikes keep their times; the jittered neuron's are moved by about ±3 bins. Write `direct_info(trains, L)` returning total entropy, noise entropy and information (bits per word), and compare the two neurons with words of 4 bins."
+code={String.raw`
+  r_d = np.random.default_rng(1997)
+  T_bins, reps, L = 2000, 200, 4
+  events = np.sort(r_d.choice(T_bins, 400, replace=False))       # times the stimulus drives a spike
+
+  def make_trains(jitter):
+      trains = np.zeros((reps, T_bins), int)
+      for k in range(reps):
+          keep = events[r_d.random(len(events)) < 0.8]
+          t = np.clip(keep + np.round(jitter * r_d.normal(size=len(keep))).astype(int), 0, T_bins - 1)
+          trains[k, t] = 1
+          trains[k, r_d.random(T_bins) < 0.01] = 1               # a few spontaneous spikes
+      return trains
+
+  def direct_info(trains, L):
+      n_words = trains.shape[1] // L
+      words = trains[:, :n_words * L].reshape(trains.shape[0], n_words, L) @ (2 ** np.arange(L))   # repeats x times
+      H_total = entropy(np.bincount(words.ravel(), minlength=2 ** L) / words.size)
+      H_noise = ...                                  # mean over time of the entropy of words across repeats
+      return H_total, H_noise, H_total - H_noise
+
+  info, Htot = {}, {}
+  for name, jit in [("precise", 0.0), ("jittered", 3.0)]:
+      Ht, Hn, I = direct_info(make_trains(jit), L)
+      info[name], Htot[name] = I, Ht
+      print(f"{name:9s}: total {Ht:.3f}, noise {Hn:.3f}, information {I:.3f} bits per 8 ms word ({I / 0.008:.0f} bits/s)")
+`}
+hint="H_noise = np.mean([entropy(np.bincount(words[:, t], minlength=2 ** L) / words.shape[0]) for t in range(n_words)])."
+solution={String.raw`
+  r_d = np.random.default_rng(1997)
+  T_bins, reps, L = 2000, 200, 4
+  events = np.sort(r_d.choice(T_bins, 400, replace=False))       # times the stimulus drives a spike
+
+  def make_trains(jitter):
+      trains = np.zeros((reps, T_bins), int)
+      for k in range(reps):
+          keep = events[r_d.random(len(events)) < 0.8]
+          t = np.clip(keep + np.round(jitter * r_d.normal(size=len(keep))).astype(int), 0, T_bins - 1)
+          trains[k, t] = 1
+          trains[k, r_d.random(T_bins) < 0.01] = 1               # a few spontaneous spikes
+      return trains
+
+  def direct_info(trains, L):
+      n_words = trains.shape[1] // L
+      words = trains[:, :n_words * L].reshape(trains.shape[0], n_words, L) @ (2 ** np.arange(L))   # repeats x times
+      H_total = entropy(np.bincount(words.ravel(), minlength=2 ** L) / words.size)
+      H_noise = np.mean([entropy(np.bincount(words[:, t], minlength=2 ** L) / words.shape[0]) for t in range(n_words)])                                  # mean over time of the entropy of words across repeats
+      return H_total, H_noise, H_total - H_noise
+
+  info, Htot = {}, {}
+  for name, jit in [("precise", 0.0), ("jittered", 3.0)]:
+      Ht, Hn, I = direct_info(make_trains(jit), L)
+      info[name], Htot[name] = I, Ht
+      print(f"{name:9s}: total {Ht:.3f}, noise {Hn:.3f}, information {I:.3f} bits per 8 ms word ({I / 0.008:.0f} bits/s)")
+`} />
+
+The two neurons fire about the same number of spikes, yet precise timing carries far more information, because the noise entropy across repeats is much lower when each spike lands at the same moment every time. Strong and colleagues found that the fly's motion-sensitive neuron H1 conveyed about half of its total entropy as information, at millisecond resolution: timing matters there.
+
+<Step n={4} title="Choices that matter" minutes={15} />
+
+The direct method still involves choices: the bin width $\Delta t$ (too coarse loses timing information; too fine creates many sparsely sampled words), the word length $L$ (longer words capture correlations between bins but multiply the number of possible words, $2^L$, and with it the bias), and the stimulus ensemble. Strong and colleagues handled the bias by extrapolating estimates computed on fractions of the data to infinite data, and by extrapolating in $1/L$. Modern estimators, such as the NSB method (Nemenman, Shafee and Bialek, 2002), use Bayesian priors over distributions to do better with less data.
+
+<Bridge title="Estimating information in brains and machines"
+  neuro="Information estimates across sensory systems, of rate against timing codes and of single neurons against populations, all depend on bias correction. Results without it, or with very rich response spaces and few trials, should be treated with caution."
+  ai="Estimating mutual information between high-dimensional variables, such as a network's layer and its input, is even harder, and claims about information in deep networks have been sensitive to the estimator used. Neural estimators such as MINE and InfoNCE give bounds rather than exact values.">
+
+A finite sample always looks more structured than the truth: correct for it, or shuffle to measure it.
+
+</Bridge>
+
+<Prove title="Why the plug-in entropy is biased downwards" task="Use Jensen's inequality to show that the expected plug-in entropy is at most the true entropy, $\mathbb{E}[H(\hat{p})] \le H(p)$, where $\hat{p}$ are frequencies from N independent samples.">
+
+Each frequency is unbiased: $\mathbb{E}[\hat{p}] = p$.
+
+Entropy is a concave function of the probability vector (it is a sum of the concave terms $-x\log x$). Jensen's inequality for a concave function $H$ gives $\mathbb{E}[H(\hat{p})] \le H(\mathbb{E}[\hat{p}]) = H(p)$.
+
+The fluctuations of $\hat{p}$ around $p$ therefore lower the average entropy. Mutual information is a difference of entropies, $H(S) + H(R) - H(S, R)$, and the joint entropy has the most cells and so the largest downward bias, which is why the information is biased upwards.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "Plug-in estimates of entropy are biased...", options: ["Upwards", "Downwards", "Not at all", "Randomly"], answer: 1, explain: "Concavity and missed rare outcomes." },
+  { q: "Plug-in estimates of mutual information are biased...", options: ["Upwards", "Downwards", "Not at all", "Only for Gaussians"], answer: 0, explain: "Chance structure looks like information." },
+  { q: "The information bias grows with...", options: ["The number of trials", "The number of response categories", "The true information", "The bin width only"], answer: 1, explain: "(S − 1)(R − 1)/(2N ln 2)." },
+  { q: "A shuffle correction subtracts...", options: ["The true information", "The average information after shuffling stimulus labels", "The entropy", "A constant 0.1"], answer: 1, explain: "Shuffling keeps the bias, kills the signal." },
+  { q: "In the direct method, information equals...", options: ["Total entropy plus noise entropy", "Total entropy minus noise entropy", "Noise entropy only", "Firing rate times bits"], answer: 1, explain: "Strong and colleagues (1998)." },
+  { q: "Noise entropy is measured from...", options: ["Different stimuli", "Repeats of the same stimulus at a fixed time", "Shuffled spikes", "The prior"], answer: 1, explain: "Variability not caused by the stimulus." },
+  { q: "Longer spike words...", options: ["Remove bias", "Capture correlations but increase bias", "Have no effect", "Lower the entropy always"], answer: 1, explain: "2^L possible words." },
+]} />
+
+<Flashcards cards={[
+  { front: "Plug-in information bias?", back: "About (S − 1)(R − 1)/(2N ln 2) bits upwards." },
+  { front: "Miller-Madow correction?", back: "Add (K − 1)/(2N ln 2) bits to each plug-in entropy, K the number of observed bins." },
+  { front: "Shuffle correction?", back: "Subtract the mean information computed with shuffled stimulus labels." },
+  { front: "Direct method?", back: "Information = total word entropy − noise word entropy across repeats (Strong and colleagues, 1998)." },
+  { front: "Trade-off in word length?", back: "Longer words capture more structure but need far more data." },
+]} />
+
+<Predict revisit question="Unrelated data, 20 trials per stimulus: how much information does the plug-in estimate report?" />
+
+<Key title="Before you go">
+<ul>
+<li>Finite samples make information look larger than it is; the bias grows with response richness.</li>
+<li>Correct analytically or by subtracting shuffled estimates, which also give a significance test.</li>
+<li>The direct method measures information as total minus noise entropy without assuming a code.</li>
+<li>Bin width, word length and stimulus set all shape the answer.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Strong, Koberle, de Ruyter van Steveninck and Bialek (1998), <em>Entropy and information in neural spike trains</em>.</li>
+<li>Liam Paninski (2003), <em>Estimation of entropy and mutual information</em>, Neural Computation 15, 1191 to 1253, for the theory of the bias.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="You want to know whether spike timing or spike count carries more information in a recording with 30 repeats of each stimulus. Describe how you would compute both, which biases you would worry about, and how you would correct for them." />

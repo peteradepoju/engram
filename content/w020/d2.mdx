@@ -1,0 +1,271 @@
+export const meta = {
+  title: "Mutual information: what a response says about a stimulus",
+  intro: "Entropy measures how much a neuron could say; mutual information measures how much it actually says about something in particular. It is the reduction in uncertainty about the stimulus once you see the response, or equivalently how far the joint distribution of stimulus and response is from independence. It needs no assumption about which feature of the response matters, which is why it became the standard currency for comparing neural codes. Today you compute mutual information from joint tables, measure how much a tuned Poisson neuron conveys as its counting window grows, and prove that no amount of processing can create information that was not already there.",
+  goals: [
+    "Define mutual information in three equivalent ways and compute it from a joint table",
+    "Compute the information a Poisson neuron's count carries about the stimulus, in bits and bits per spike",
+    "Explain how information depends on the stimulus distribution, noise and counting window",
+    "State and check the data processing inequality",
+  ],
+  plan: [
+    { label: "Predict and the definition", minutes: 25 },
+    { label: "A tuned neuron", minutes: 35 },
+    { label: "Processing cannot add information", minutes: 30 },
+    { label: "What information does and does not tell you", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "borst-1999",
+};
+
+<Predict question="A neuron's spike count tells you about which of 8 orientations was shown. You double the counting window from 0.25 s to 0.5 s, doubling the expected number of spikes. Will the information double, increase by less than double, or stay the same?" />
+
+<Step n={1} title="The definition" minutes={25} />
+
+The **mutual information** between a stimulus $S$ and a response $R$ is the reduction in uncertainty about one from knowing the other:
+
+$$
+I(S; R) = H(R) - H(R \mid S) = H(S) - H(S \mid R) = \sum_{s, r} p(s, r)\log_2\frac{p(s, r)}{p(s)\,p(r)}.
+$$
+
+The first form reads: the variety of responses, minus the variety that remains when the stimulus is fixed (the **noise entropy**). The second: what you knew about the stimulus, minus what you still do not know after seeing the response. The third: how far the joint distribution is from the product of the marginals, the KL divergence of Day 4 between $p(s, r)$ and $p(s)p(r)$. Mutual information is symmetric, never negative, zero exactly when $S$ and $R$ are independent, and at most $\min(H(S), H(R))$. Unlike correlation, it detects any kind of dependence, not just linear.
+
+<Figure caption="Four stimuli and a neuron's count. Increase the response noise and watch the rows overlap and the information fall from 2 bits." credit="Interactive figure by Engram.">
+  <MutualInfoTable />
+</Figure>
+
+<Video id="v68zYyaEmEA" title="Solving Wordle using information theory" by="3Blue1Brown" note="Grant Sanderson uses expected information to choose the best guess in Wordle, a playful tour of entropy and how much an observation tells you." />
+
+<PyCell id="mi" title="Mutual information from a joint table" tests={String.raw`
+  import numpy as np
+  def test_independent():
+      "independent variables have zero mutual information"
+      assert abs(mutual_info(np.outer([0.3, 0.7], [0.5, 0.5]))) < 1e-12
+
+  def test_identical():
+      "a variable shares its full entropy with itself"
+      assert abs(mutual_info(np.diag([0.25] * 4)) - 2) < 1e-12
+
+  def test_forms():
+      "H(R) - H(R | S) gives the same value as the double sum"
+      J = np.array([[0.3, 0.1], [0.05, 0.55]])
+      pr, ps = J.sum(0), J.sum(1)
+      h_r_given_s = sum(ps[i] * entropy(J[i] / ps[i]) for i in range(2))
+      assert abs(mutual_info(J) - (entropy(pr) - h_r_given_s)) < 1e-12
+`} prompt="Write `entropy(p)` (as yesterday) and `mutual_info(joint)` using the double-sum form, skipping zero entries."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from math import lgamma
+
+  def entropy(p):
+      p = np.asarray(p, float); p = p[p > 0]
+      return -np.sum(p * np.log2(p))
+
+  def mutual_info(joint):
+      joint = np.asarray(joint, float)
+      ps, pr = joint.sum(axis=1, keepdims=True), joint.sum(axis=0, keepdims=True)
+      nz = joint > 0
+      return ...
+
+  print(mutual_info(np.array([[0.3, 0.1], [0.05, 0.55]])))
+`}
+hint="return np.sum(joint[nz] * np.log2(joint[nz] / (ps @ pr)[nz]))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from math import lgamma
+
+  def entropy(p):
+      p = np.asarray(p, float); p = p[p > 0]
+      return -np.sum(p * np.log2(p))
+
+  def mutual_info(joint):
+      joint = np.asarray(joint, float)
+      ps, pr = joint.sum(axis=1, keepdims=True), joint.sum(axis=0, keepdims=True)
+      nz = joint > 0
+      return np.sum(joint[nz] * np.log2(joint[nz] / (ps @ pr)[nz]))
+
+  print(mutual_info(np.array([[0.3, 0.1], [0.05, 0.55]])))
+`} />
+
+<Step n={2} title="A tuned neuron" minutes={35} />
+
+For a neuron with tuning curve $f(\theta)$ (spikes per second) and a counting window $T$, the count given orientation $\theta$ is Poisson with mean $f(\theta)T$. With 8 equally likely orientations, you can build the joint table of orientation and count exactly from the Poisson probabilities, and compute the information. Dividing by the mean number of spikes gives **bits per spike**, a measure of how efficiently the spikes are used.
+
+<PyCell id="window" title="Information and the counting window" tests={String.raw`
+  import numpy as np
+  def test_joint():
+      "joint_table returns a normalised 8 x K table"
+      J = joint_table(0.5)
+      assert J.shape[0] == 8 and abs(J.sum() - 1) < 1e-9
+
+  def test_sublinear():
+      "information rises with the window but less than doubles from 0.25 to 0.5 s, and never exceeds 3 bits"
+      i1, i2 = info[windows.index(0.25)], info[windows.index(0.5)]
+      assert i1 < i2 < 2 * i1 and max(info) <= 3
+
+  def test_bps():
+      "bits per spike fall as the window grows"
+      assert bits_per_spike[0] > bits_per_spike[-1]
+`} prompt="Write `joint_table(T)` for 8 equally likely orientations and a neuron with f(θ) = 2 + 30 exp(2(cos 2(θ − 90°) − 1)) spikes per second, using Poisson probabilities for counts 0 to 80 (computed with `lgamma` in logs). For windows 0.05, 0.1, 0.25, 0.5 and 1 s, compute the information `info` and the bits per spike `bits_per_spike`."
+code={String.raw`
+  thetas = np.arange(8) * 22.5
+  f = 2 + 30 * np.exp(2 * (np.cos(np.deg2rad(2 * (thetas - 90))) - 1))
+  kk = np.arange(81)
+  log_fact = np.array([lgamma(k + 1) for k in kk])
+
+  def joint_table(T):
+      lam = f * T
+      logp = kk[None, :] * np.log(lam[:, None]) - lam[:, None] - log_fact[None, :]
+      P = np.exp(logp)
+      return ...                                     # each row is P(count | theta) / 8
+
+  windows = [0.05, 0.1, 0.25, 0.5, 1.0]
+  info = [mutual_info(joint_table(T)) for T in windows]
+  bits_per_spike = ...
+  print("information (bits):", np.round(info, 3)); print("bits per spike:   ", np.round(bits_per_spike, 3))
+`}
+hint="return P / P.sum(axis=1, keepdims=True) / 8. bits_per_spike = [i / (f.mean() * T) for i, T in zip(info, windows)]."
+solution={String.raw`
+  thetas = np.arange(8) * 22.5
+  f = 2 + 30 * np.exp(2 * (np.cos(np.deg2rad(2 * (thetas - 90))) - 1))
+  kk = np.arange(81)
+  log_fact = np.array([lgamma(k + 1) for k in kk])
+
+  def joint_table(T):
+      lam = f * T
+      logp = kk[None, :] * np.log(lam[:, None]) - lam[:, None] - log_fact[None, :]
+      P = np.exp(logp)
+      return P / P.sum(axis=1, keepdims=True) / 8                                     # each row is P(count | theta) / 8
+
+  windows = [0.05, 0.1, 0.25, 0.5, 1.0]
+  info = [mutual_info(joint_table(T)) for T in windows]
+  bits_per_spike = [i / (f.mean() * T) for i, T in zip(info, windows)]
+  print("information (bits):", np.round(info, 3)); print("bits per spike:   ", np.round(bits_per_spike, 3))
+`} />
+
+Information grows with the window, but less than proportionally, and it can never exceed $\log_2 8 = 3$ bits, the entropy of the stimulus. That answers the prediction. Each extra spike adds less, because the neuron cannot tell apart orientations with identical rates on either side of its peak, however many spikes it fires. A single neuron is a poor reporter; populations do better (Week 36).
+
+<Step n={3} title="Processing cannot add information" minutes={30} />
+
+If a downstream variable $Z$ is computed from $R$ alone, so that $S \to R \to Z$ forms a chain, then
+
+$$
+I(S; Z) \le I(S; R).
+$$
+
+This is the **data processing inequality**: no decoder, network or brain area can create information about the stimulus that its input did not carry. Processing can only keep it or lose it, though it can make the information easier to read out.
+
+<PyCell id="dpi" title="Decoding loses information" tests={String.raw`
+  import numpy as np
+  def test_dpi():
+      "the decoded label carries less information than the two counts, and at least some"
+      assert 0 < info_decoded < info_counts
+
+  def test_both_neurons():
+      "two neurons together carry more information than either alone"
+      assert info_counts > max(info_n1, info_n2)
+`} prompt="Two neurons with preferred orientations 45° and 135° respond to 8 orientations (window 0.25 s, counts 0 to 30). Build the joint table of orientation and the pair of counts (flatten the pair into one response index), compute `info_counts`, the information of each neuron alone (`info_n1`, `info_n2`), and the information carried by a maximum-likelihood decoded label (`info_decoded`)."
+code={String.raw`
+  kk2 = np.arange(31); lf2 = np.array([lgamma(k + 1) for k in kk2])
+  def pois_rows(rates, T=0.25):
+      lam = rates * T
+      P = np.exp(kk2[None] * np.log(lam[:, None]) - lam[:, None] - lf2[None])
+      return P / P.sum(axis=1, keepdims=True)
+  f1 = 2 + 30 * np.exp(2 * (np.cos(np.deg2rad(2 * (thetas - 45))) - 1))
+  f2 = 2 + 30 * np.exp(2 * (np.cos(np.deg2rad(2 * (thetas - 135))) - 1))
+  P1, P2 = pois_rows(f1), pois_rows(f2)                         # 8 x 31 each
+  joint_pair = (P1[:, :, None] * P2[:, None, :]).reshape(8, -1) / 8     # independent given theta
+  info_counts = mutual_info(joint_pair)
+  info_n1, info_n2 = mutual_info(P1 / 8), mutual_info(P2 / 8)
+
+  decoded = ...                                       # for each response pair, the theta index with the largest likelihood
+  joint_dec = np.zeros((8, 8))
+  for d in range(8):
+      joint_dec[:, d] = joint_pair[:, decoded == d].sum(axis=1)
+  info_decoded = mutual_info(joint_dec)
+  print(f"neuron 1 alone {info_n1:.3f}, neuron 2 alone {info_n2:.3f}, both {info_counts:.3f}, decoded label {info_decoded:.3f} bits")
+`}
+hint="decoded = np.argmax(joint_pair, axis=0) (with equal priors, the largest joint probability is the largest likelihood)."
+solution={String.raw`
+  kk2 = np.arange(31); lf2 = np.array([lgamma(k + 1) for k in kk2])
+  def pois_rows(rates, T=0.25):
+      lam = rates * T
+      P = np.exp(kk2[None] * np.log(lam[:, None]) - lam[:, None] - lf2[None])
+      return P / P.sum(axis=1, keepdims=True)
+  f1 = 2 + 30 * np.exp(2 * (np.cos(np.deg2rad(2 * (thetas - 45))) - 1))
+  f2 = 2 + 30 * np.exp(2 * (np.cos(np.deg2rad(2 * (thetas - 135))) - 1))
+  P1, P2 = pois_rows(f1), pois_rows(f2)                         # 8 x 31 each
+  joint_pair = (P1[:, :, None] * P2[:, None, :]).reshape(8, -1) / 8     # independent given theta
+  info_counts = mutual_info(joint_pair)
+  info_n1, info_n2 = mutual_info(P1 / 8), mutual_info(P2 / 8)
+
+  decoded = np.argmax(joint_pair, axis=0)                                       # for each response pair, the theta index with the largest likelihood
+  joint_dec = np.zeros((8, 8))
+  for d in range(8):
+      joint_dec[:, d] = joint_pair[:, decoded == d].sum(axis=1)
+  info_decoded = mutual_info(joint_dec)
+  print(f"neuron 1 alone {info_n1:.3f}, neuron 2 alone {info_n2:.3f}, both {info_counts:.3f}, decoded label {info_decoded:.3f} bits")
+`} />
+
+The decoder's single best guess throws away information that the counts contained, such as how confident the guess should be. Information is a ceiling on what any readout could achieve, not what a particular readout does achieve.
+
+<Step n={4} title="What information does and does not tell you" minutes={15} />
+
+Mutual information depends on the **stimulus distribution**: the same neuron conveys different amounts for different stimulus sets, so information values are only comparable under the same stimulus ensemble. It says how much, not **what**: two neurons with the same information may encode entirely different features. It says nothing about whether downstream neurons **use** the information. And it is hard to **estimate** from limited data, tomorrow's subject. Borst and Theunissen (1999, this week's deep read) review how these issues play out across sensory systems.
+
+<Bridge title="Information in brains and machines"
+  neuro="Information-theoretic measures compare codes without assuming what matters: rate against timing, single neurons against populations, natural against artificial stimuli. Many sensory neurons carry a few bits per spike, more for natural stimuli (Borst and Theunissen, 1999)."
+  ai="Mutual information is used to select features, to measure what a network's layer represents about its input or labels, and in self-supervised learning, where objectives such as InfoNCE maximise a bound on the information between two views of the same data.">
+
+Mutual information is how much seeing one thing reduces your uncertainty about another, and no processing can increase it.
+
+</Bridge>
+
+<Prove title="Mutual information is symmetric" task="Starting from $I(S; R) = H(R) - H(R \mid S)$, show that it equals $H(S) - H(S \mid R)$, using the chain rule $H(S, R) = H(S) + H(R \mid S) = H(R) + H(S \mid R)$.">
+
+From the chain rule written both ways, $H(S) + H(R \mid S) = H(R) + H(S \mid R)$.
+
+Rearranging: $H(R) - H(R \mid S) = H(S) - H(S \mid R)$.
+
+So the reduction in uncertainty about the response from knowing the stimulus equals the reduction in uncertainty about the stimulus from knowing the response. Both equal $H(S) + H(R) - H(S, R)$, the amount by which the joint entropy falls short of the sum of the marginal entropies.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "I(S; R) = H(R) − ...", options: ["H(S)", "H(R | S), the noise entropy", "H(S, R)", "log₂ n"], answer: 1, explain: "Response variety minus noise." },
+  { q: "Mutual information is zero exactly when...", options: ["The variables are correlated", "The variables are independent", "One is Gaussian", "The noise is large"], answer: 1, explain: "Joint equals product of marginals." },
+  { q: "Unlike correlation, mutual information...", options: ["Is only for Gaussians", "Detects any kind of dependence", "Can be negative", "Has units of the data"], answer: 1, explain: "Not just linear." },
+  { q: "With 8 equally likely stimuli, the information can never exceed...", options: ["8 bits", "3 bits", "1 bit", "Unlimited"], answer: 1, explain: "H(S) = log₂ 8." },
+  { q: "Doubling the counting window usually makes the information...", options: ["Exactly double", "Rise by less than double", "Fall", "Stay the same"], answer: 1, explain: "Diminishing returns." },
+  { q: "The data processing inequality says...", options: ["Processing adds information", "I(S; Z) ≤ I(S; R) when Z is computed from R", "Decoders are optimal", "Entropy always increases"], answer: 1, explain: "No new information downstream." },
+  { q: "Mutual information values are comparable only...", options: ["Across species", "Under the same stimulus distribution", "For single neurons", "For Gaussian data"], answer: 1, explain: "Information depends on p(s)." },
+]} />
+
+<Flashcards cards={[
+  { front: "Mutual information?", back: "$I(S; R) = H(R) - H(R \\mid S) = \\sum p(s, r)\\log_2\\frac{p(s, r)}{p(s)p(r)}$." },
+  { front: "Noise entropy?", back: "$H(R \\mid S)$: variability of responses to a fixed stimulus." },
+  { front: "Bounds on I?", back: "$0 \\le I(S; R) \\le \\min(H(S), H(R))$." },
+  { front: "Data processing inequality?", back: "If S → R → Z, then I(S; Z) ≤ I(S; R)." },
+  { front: "Bits per spike?", back: "Information divided by the mean number of spikes." },
+]} />
+
+<Predict revisit question="Doubling the counting window: does the information double?" />
+
+<Key title="Before you go">
+<ul>
+<li>Mutual information is the reduction in uncertainty, symmetric and zero only for independence.</li>
+<li>Compute it from a joint table; for a tuned Poisson neuron it saturates at the stimulus entropy.</li>
+<li>Processing cannot create information; decoding to a single label loses some.</li>
+<li>Information depends on the stimulus set and says how much, not what or whether it is used.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>This week's deep read: Borst and Theunissen (1999), <em>Information theory and neural coding</em>. Start the first pass today.</li>
+<li>Thomas Cover and Joy Thomas, <em>Elements of Information Theory</em> (second edition, 2006), chapter 2.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Two labs measure the information a neuron carries about visual stimuli and get very different numbers. List three differences in their experiments or analyses that could explain it without either being wrong." />

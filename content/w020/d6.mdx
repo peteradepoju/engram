@@ -1,0 +1,233 @@
+export const meta = {
+  title: "Forge: Week 20 challenge, quiz and deep read",
+  intro: "This week gave you the vocabulary for asking how much neurons say: entropy, mutual information, its estimation from finite data, the KL divergence and cross-entropy, channel capacity, efficient coding and the information bottleneck. Today's challenge uses them on three questions from neural coding. Does the information lie in how many spikes a neuron fires, or in when? Can two neurons together say something that neither says alone? And does Laughlin's equalised response curve still win when the output is noisy? Then the quiz and a critique of the classic review that brought information theory into neuroscience.",
+  goals: [
+    "Compare the information in spike counts and spike latencies, with bias correction",
+    "Construct and measure synergy: information carried by a pair but by neither neuron alone",
+    "Show by simulation that matching a response curve to the input distribution maximises information with output noise",
+    "Critique the use of information theory to study neural codes",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "borst-1999",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. The entropy of a fair 6-sided die?
+2. The information of a Gaussian channel with SNR 15?
+3. KL(Bernoulli(0.5) ‖ Bernoulli(0.25)) in bits?
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  print("1. log2 6 =", round(np.log2(6), 3))
+  print("2. 0.5 log2(16) =", 0.5 * np.log2(16))
+  print("3.", round(0.5 * np.log2(0.5 / 0.25) + 0.5 * np.log2(0.5 / 0.75), 4))
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: count or timing?** A neuron responds to four stimuli. Each evokes about the same number of spikes, but the first spike comes at a different latency for each (10, 20, 30 or 40 ms, with 4 ms of jitter). With 50 trials per stimulus, compare the information in the spike count and in the first-spike latency (in 5 ms bins), correcting both by shuffling.
+
+<PyCell code={String.raw`
+  rng = np.random.default_rng(1999)
+  def entropy(p):
+      p = np.asarray(p, float); p = p[p > 0]
+      return -np.sum(p * np.log2(p))
+  def plugin_mi(s, r, S, R):
+      J = np.zeros((S, R)); np.add.at(J, (s, r), 1); J /= J.sum()
+      return entropy(J.sum(1)) + entropy(J.sum(0)) - entropy(J.ravel())
+  def corrected_mi(s, r, S, R, rng, n_shuf=200):
+      return plugin_mi(s, r, S, R) - np.mean([plugin_mi(rng.permutation(s), r, S, R) for _ in range(n_shuf)])
+
+  S, n_per = 4, 50
+  stim = np.repeat(np.arange(S), n_per)
+  latency = 10 + 10 * stim + 4 * rng.normal(size=len(stim))          # ms
+  count = rng.poisson(6, len(stim))                                  # the same mean count for every stimulus
+`} />
+
+<PyCell id="partA" title="Part A: the information is in the timing" tests={String.raw`
+  import numpy as np
+  def test_count():
+      "the corrected count information is close to zero (below 0.1 bits)"
+      assert info_count < 0.1
+
+  def test_latency():
+      "the corrected latency information is above 1 bit (out of a possible 2)"
+      assert info_latency > 1.0
+`} prompt="Bin the latency into 5 ms bins from 0 to 60 ms (12 bins, clipping), cap the count at 15, and compute the shuffle-corrected information of each, storing `info_count` and `info_latency`."
+code={String.raw`
+  lat_bin = ...
+  cnt_bin = ...
+  info_count = corrected_mi(stim, cnt_bin, S, 16, rng)
+  info_latency = ...
+  print(f"information in the count {info_count:.3f} bits, in the first-spike latency {info_latency:.3f} bits (maximum 2)")
+`}
+hint="lat_bin = np.clip((latency // 5).astype(int), 0, 11); cnt_bin = np.minimum(count, 15); info_latency = corrected_mi(stim, lat_bin, S, 12, rng)."
+solution={String.raw`
+  lat_bin = np.clip((latency // 5).astype(int), 0, 11)
+  cnt_bin = np.minimum(count, 15)
+  info_count = corrected_mi(stim, cnt_bin, S, 16, rng)
+  info_latency = corrected_mi(stim, lat_bin, S, 12, rng)
+  print(f"information in the count {info_count:.3f} bits, in the first-spike latency {info_latency:.3f} bits (maximum 2)")
+`} />
+
+An analysis that only counted spikes would conclude this neuron says nothing. Information measures do not presuppose the code, but they only find information in the variables you give them: choosing the response variables is a scientific decision. Latency codes of this kind have been reported in the retina and somatosensory system.
+
+**Part B: synergy.** Mutual information about a stimulus can be more than the sum of its parts. Suppose a stimulus bit $S$ is encoded by two neurons: neuron 1 fires at random ($R_1$ a fair coin), and neuron 2 fires when exactly one of $S$ and $R_1$ is 1 ($R_2 = S \oplus R_1$). Compute the information each neuron carries alone and together, exactly from the joint table.
+
+<PyCell id="partB" title="Part B: two neurons, each silent alone" tests={String.raw`
+  import numpy as np
+  def test_alone():
+      "each neuron alone carries no information about S"
+      assert abs(i_r1) < 1e-12 and abs(i_r2) < 1e-12
+
+  def test_together():
+      "together they carry the full 1 bit"
+      assert abs(i_pair - 1) < 1e-12
+`} prompt="Build the joint table of S (rows, 2 values) against the pair (R1, R2) (4 columns) for equally likely S and R1, with R2 = S XOR R1. Compute `i_pair`, and the information of each neuron alone (`i_r1`, `i_r2`) by summing the table over the other neuron."
+code={String.raw`
+  J = np.zeros((2, 4))                     # columns index r1 * 2 + r2
+  for s_ in (0, 1):
+      for r1 in (0, 1):
+          r2 = s_ ^ r1
+          J[s_, r1 * 2 + r2] += 0.25
+  def mi_table(T): return entropy(T.sum(1)) + entropy(T.sum(0)) - entropy(T.ravel())
+  i_pair = mi_table(J)
+  J_r1 = ...                               # 2 x 2: S against R1
+  J_r2 = ...                               # 2 x 2: S against R2
+  i_r1, i_r2 = mi_table(J_r1), mi_table(J_r2)
+  print(f"I(S; R1) = {i_r1:.3f}, I(S; R2) = {i_r2:.3f}, I(S; R1, R2) = {i_pair:.3f} bits")
+`}
+hint="J_r1 = np.column_stack([J[:, 0] + J[:, 1], J[:, 2] + J[:, 3]]); J_r2 = np.column_stack([J[:, 0] + J[:, 2], J[:, 1] + J[:, 3]])."
+solution={String.raw`
+  J = np.zeros((2, 4))                     # columns index r1 * 2 + r2
+  for s_ in (0, 1):
+      for r1 in (0, 1):
+          r2 = s_ ^ r1
+          J[s_, r1 * 2 + r2] += 0.25
+  def mi_table(T): return entropy(T.sum(1)) + entropy(T.sum(0)) - entropy(T.ravel())
+  i_pair = mi_table(J)
+  J_r1 = np.column_stack([J[:, 0] + J[:, 1], J[:, 2] + J[:, 3]])                               # 2 x 2: S against R1
+  J_r2 = np.column_stack([J[:, 0] + J[:, 2], J[:, 1] + J[:, 3]])                               # 2 x 2: S against R2
+  i_r1, i_r2 = mi_table(J_r1), mi_table(J_r2)
+  print(f"I(S; R1) = {i_r1:.3f}, I(S; R2) = {i_r2:.3f}, I(S; R1, R2) = {i_pair:.3f} bits")
+`} />
+
+Each neuron alone is useless; together they carry the stimulus perfectly. This is **synergy**, the opposite of Day 5's redundancy. It means that studying neurons one at a time can miss information entirely, and that a population's information is not the sum of its members'. Separating redundant, unique and synergistic information in populations is an active research area (partial information decomposition).
+
+**Part C: equalisation with noise.** Return to Laughlin's problem (Week 13) with a noisy output. Inputs are skewed (gamma distributed). The response is a curve $g(x)$ with range 0 to 1, plus Gaussian noise of sd 0.08. Compare a linear curve with the input's CDF by estimating the information between input and response from 200,000 samples on a fine grid.
+
+<PyCell id="partC" title="Part C: the CDF curve transmits more" tests={String.raw`
+  import numpy as np
+  def test_cdf_better():
+      "the CDF-matched response carries at least 0.3 bits more than the linear one"
+      assert info["cdf"] > info["linear"] + 0.3
+
+  def test_bound():
+      "both stay below the capacity of a 0 to 1 output with noise sd 0.08, about log2(1 / (0.08 sqrt(2 pi e))) + 0.5"
+      assert all(v < np.log2(1 / (0.08 * np.sqrt(2 * np.pi * np.e))) + 0.5 for v in info.values())
+`} prompt="Draw 200,000 inputs from a gamma distribution (shape 2), compute both responses (linear: x scaled so the 99.5th percentile is 1 and clipped; CDF: the empirical CDF), add noise, and estimate the information with a 40 × 40 joint histogram of input quantile and response (plug-in; the bias is small with this many samples). Store the values in `info['linear']` and `info['cdf']`."
+code={String.raw`
+  r_c = np.random.default_rng(1981)
+  x = r_c.gamma(2.0, 1.0, 200000)
+  g = {"linear": np.clip(x / np.percentile(x, 99.5), 0, 1),
+       "cdf": np.searchsorted(np.sort(x), x) / len(x)}
+  x_bin = np.minimum((np.searchsorted(np.sort(x), x) / len(x) * 40).astype(int), 39)    # input in 40 equal-probability bins
+  info = {}
+  for name, resp in g.items():
+      r = resp + 0.08 * r_c.normal(size=len(x))
+      r_bin = ...                                  # response in 40 equal-width bins between -0.3 and 1.3, clipped
+      info[name] = plugin_mi(x_bin, r_bin, 40, 40)
+  print({k: round(v, 3) for k, v in info.items()}, " bits")
+`}
+hint="r_bin = np.clip(((r + 0.3) / 1.6 * 40).astype(int), 0, 39)."
+solution={String.raw`
+  r_c = np.random.default_rng(1981)
+  x = r_c.gamma(2.0, 1.0, 200000)
+  g = {"linear": np.clip(x / np.percentile(x, 99.5), 0, 1),
+       "cdf": np.searchsorted(np.sort(x), x) / len(x)}
+  x_bin = np.minimum((np.searchsorted(np.sort(x), x) / len(x) * 40).astype(int), 39)    # input in 40 equal-probability bins
+  info = {}
+  for name, resp in g.items():
+      r = resp + 0.08 * r_c.normal(size=len(x))
+      r_bin = np.clip(((r + 0.3) / 1.6 * 40).astype(int), 0, 39)                                  # response in 40 equal-width bins between -0.3 and 1.3, clipped
+      info[name] = plugin_mi(x_bin, r_bin, 40, 40)
+  print({k: round(v, 3) for k, v in info.items()}, " bits")
+`} />
+
+With output noise the equalising curve still wins: it spreads the common inputs across the output range, where the noise cannot blur them together, instead of crowding them into a small part of it. With very high noise the optimum changes, and the best curve becomes flatter, the same twist Atick and Redlich found for receptive fields.
+
+**Part D (written).** Answer in your journal: in Parts A and B, what would a study that only measured firing rates of single neurons have concluded, and how would you design one that could not miss these effects?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. Mutual information is a KL divergence" task="Show that $I(S; R) = \mathrm{KL}\left(p(s, r)\,\|\,p(s)p(r)\right)$, and deduce from Gibbs' inequality that $I(S; R) \ge 0$, with equality only for independence.">
+
+By definition, $\mathrm{KL}(p(s, r)\,\|\,p(s)p(r)) = \sum_{s, r} p(s, r)\log_2\frac{p(s, r)}{p(s)p(r)}$, which is exactly the double-sum form of the mutual information (Day 2).
+
+Gibbs' inequality (Day 4) says a KL divergence is non-negative and zero only when its two arguments are equal. So $I(S; R) \ge 0$, with $I = 0$ only when $p(s, r) = p(s)p(r)$ for all $s, r$: independence.
+
+This also gives the most useful reading of mutual information: how many extra bits you would pay if you coded stimulus-response pairs assuming they were unrelated.
+
+</Prove>
+
+<Prove title="2. Synergy cannot be seen pair by pair" task="In Part B, show without a table that $I(S; R_1) = 0$ but $I(S; R_1, R_2) = 1$ bit.">
+
+$R_1$ is a fair coin chosen independently of $S$, so $I(S; R_1) = 0$. $R_2 = S \oplus R_1$: for either value of $S$, $R_2$ is also a fair coin (it is $R_1$ or its flip), so $I(S; R_2) = 0$ too.
+
+Given both responses, $S = R_1 \oplus R_2$ exactly, so $H(S \mid R_1, R_2) = 0$ and $I(S; R_1, R_2) = H(S) - 0 = 1$ bit.
+
+Any analysis that adds up single-neuron information would report 0 bits for a pair that carries the stimulus perfectly. The information is in the relationship between the neurons.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 20 quiz (15 questions)" questions={[
+  { q: "The surprise of an outcome with probability 1/16 is...", options: ["16 bits", "4 bits", "1/16 bit", "2 bits"], answer: 1, explain: "−log₂(1/16)." },
+  { q: "Entropy is maximised by...", options: ["A certain outcome", "The uniform distribution", "A Gaussian always", "Any bimodal distribution"], answer: 1, explain: "log₂ n for n outcomes." },
+  { q: "The source coding theorem says the average code length is at least...", options: ["The entropy", "1 bit", "log₂ n", "The KL divergence"], answer: 0, explain: "Huffman gets within a bit." },
+  { q: "Refractoriness makes spike-word entropy...", options: ["Higher", "Lower", "Unchanged", "Negative"], answer: 1, explain: "Fewer possible words." },
+  { q: "I(S; R) = H(R) − ...", options: ["H(S)", "H(R | S)", "H(S, R)", "KL"], answer: 1, explain: "Noise entropy." },
+  { q: "Mutual information is zero only when...", options: ["Variables are correlated", "Variables are independent", "Noise is low", "Stimuli are many"], answer: 1, explain: "Joint equals product." },
+  { q: "The data processing inequality says processing can...", options: ["Create information", "Only keep or lose information", "Double information", "Reverse information"], answer: 1, explain: "I(S; Z) ≤ I(S; R)." },
+  { q: "Plug-in mutual information from few trials is biased...", options: ["Down", "Up", "Not at all", "Randomly"], answer: 1, explain: "Chance structure." },
+  { q: "The direct method computes information as...", options: ["Total entropy minus noise entropy", "Rate times time", "Correlation squared", "KL of stimuli"], answer: 0, explain: "Strong and colleagues (1998)." },
+  { q: "KL(p ‖ q) is...", options: ["Symmetric", "Non-negative and asymmetric", "Always below 1", "A distance metric"], answer: 1, explain: "Gibbs' inequality." },
+  { q: "Minimising cross-entropy over a model is the same as...", options: ["Maximising entropy", "Maximum likelihood", "Minimising variance", "Bootstrapping"], answer: 1, explain: "KL from the data." },
+  { q: "A Gaussian channel with SNR 3 carries...", options: ["3 bits", "1 bit", "1.5 bits", "0.5 bits"], answer: 1, explain: "½ log₂ 4." },
+  { q: "Two neurons with the same signal and independent noise are...", options: ["Synergistic", "Redundant", "Independent", "Silent"], answer: 1, explain: "Shared information." },
+  { q: "Synergy means a pair carries...", options: ["Less than either alone", "More than the sum of each alone", "Exactly the sum", "Nothing"], answer: 1, explain: "Part B." },
+  { q: "The information bottleneck trades...", options: ["Bias against variance", "Compression of X against information about Y", "Speed against accuracy", "Prior against likelihood"], answer: 1, explain: "Tishby, Pereira and Bialek (2000)." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Borst and Theunissen (1999) its third pass and write your critique under the five headings. Focus on one question: **does measuring how many bits a neuron carries tell us how the brain encodes information?** Consider that information depends on the stimulus ensemble and on the response variables chosen (Part A); that it says nothing about whether downstream neurons read the information (the data processing inequality); that single-neuron measures can miss population effects such as synergy (Part B); that estimates are biased with limited data (Day 3); and what has changed since 1999 with recordings of thousands of neurons.
+
+<Callout kind="research">
+
+Partial information decomposition, which tries to split a population's information into redundant, unique and synergistic parts, has no single agreed definition yet. Read about one proposal, then design a simulated population in which redundancy and synergy coexist, and say what a good decomposition should report for it.
+
+</Callout>
+
+<Key title="Week 20 review checklist">
+<ul>
+<li>I can compute entropy, explain its properties and relate it to compression.</li>
+<li>I can compute mutual information from tables and explain what it does and does not tell us.</li>
+<li>I can estimate information from limited data with bias corrections and the direct method.</li>
+<li>I can compute KL divergence and cross-entropy and relate them to maximum likelihood.</li>
+<li>I can compute Gaussian channel capacity, redundancy and synergy, and explain efficient coding and the information bottleneck.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part D: what would a rates-only, single-neuron study have concluded in Parts A and B, and how would you design one that could not miss these effects? Then outline your redundancy-and-synergy simulation." />
