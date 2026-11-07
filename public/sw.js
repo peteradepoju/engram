@@ -1,6 +1,6 @@
 /* Engram service worker: makes the installed app quick to open and lets lessons you have visited open offline.
    Pages always come from the network first, so new lessons appear straight away; the cache is only a fallback. */
-const VERSION = "engram-v1";
+const VERSION = "engram-v2";
 const STATIC = `${VERSION}-static`;
 const PAGES = `${VERSION}-pages`;
 const MAX_PAGES = 120;

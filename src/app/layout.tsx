@@ -10,7 +10,15 @@ export const metadata: Metadata = {
   applicationName: "Engram",
   appleWebApp: { capable: true, title: "Engram", statusBarStyle: "default" },
   formatDetection: { telephone: false },
-  icons: { apple: "/icons/apple-touch-icon.png" },
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/icons/favicon-32.png", sizes: "32x32", type: "image/png" },
+    ],
+    shortcut: "/favicon.ico",
+    apple: "/icons/apple-touch-icon.png",
+  },
 };
 
 export const viewport: Viewport = {
