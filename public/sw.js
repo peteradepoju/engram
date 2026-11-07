@@ -1,6 +1,6 @@
 /* Engram service worker: makes the installed app quick to open and lets lessons you have visited open offline.
    Pages always come from the network first, so new lessons appear straight away; the cache is only a fallback. */
-const VERSION = "engram-v2";
+const VERSION = "engram-v3";
 const STATIC = `${VERSION}-static`;
 const PAGES = `${VERSION}-pages`;
 const MAX_PAGES = 120;
@@ -59,5 +59,30 @@ self.addEventListener("fetch", (event) => {
       if (req.mode === "navigate") return new Response(OFFLINE_HTML, { headers: { "content-type": "text/html; charset=utf-8" } });
       return Response.error();
     }
+  })());
+});
+
+// Morning reminders. The server sends { title, body, url, tag }; tapping the notification opens the lesson.
+self.addEventListener("push", (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch { data = { body: event.data ? event.data.text() : "" }; }
+  event.waitUntil(self.registration.showNotification(data.title || "Engram", {
+    body: data.body || "Today's lesson is ready.",
+    icon: "/icons/icon-192.png",
+    badge: "/icons/favicon-32.png",
+    tag: data.tag || "engram",
+    data: { url: data.url || "/today" },
+  }));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = new URL((event.notification.data && event.notification.data.url) || "/today", self.location.origin).href;
+  event.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const w of wins) {
+      if (new URL(w.url).origin === self.location.origin && "focus" in w) { await w.navigate(url).catch(() => {}); return w.focus(); }
+    }
+    return self.clients.openWindow(url);
   })());
 });

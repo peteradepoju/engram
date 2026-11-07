@@ -195,3 +195,70 @@ begin
 end $$;
 revoke all on function public.bump_tutor_usage() from public, anon;
 grant execute on function public.bump_tutor_usage() to authenticated;
+
+-- Morning reminders: push subscriptions per device, a reminder time per learner, and a job that runs every
+-- 15 minutes. The job finds learners whose local reminder time has just passed and hands their subscriptions
+-- to /api/push/morning, which works out the day's lesson and sends the notification.
+create extension if not exists pg_cron;
+create extension if not exists pg_net;
+
+alter table public.profiles
+  add column if not exists reminders_enabled boolean not null default true,
+  add column if not exists reminder_time time not null default '06:30',
+  add column if not exists last_reminder_on date;
+alter table public.profiles drop constraint if exists reminder_time_morning;
+alter table public.profiles add constraint reminder_time_morning check (reminder_time between '04:00' and '11:00');
+
+create table if not exists public.push_subscriptions (
+  endpoint text primary key,
+  user_id uuid not null references auth.users on delete cascade,
+  p256dh text not null,
+  auth text not null,
+  created_at timestamptz not null default now()
+);
+alter table public.push_subscriptions enable row level security;
+drop policy if exists own_push on public.push_subscriptions;
+create policy own_push on public.push_subscriptions for all to authenticated
+  using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
+create index if not exists push_subscriptions_user on public.push_subscriptions (user_id);
+
+-- Called by the sender when the push service says a subscription has expired. Knowing the endpoint is the capability.
+create or replace function public.forget_push_subscription(p_endpoint text) returns void
+language sql security definer set search_path = '' as $$
+  delete from public.push_subscriptions where endpoint = p_endpoint;
+$$;
+revoke all on function public.forget_push_subscription(text) from public;
+grant execute on function public.forget_push_subscription(text) to anon, authenticated;
+
+create or replace function public.dispatch_morning_reminders() returns int
+language plpgsql security definer set search_path = '' as $$
+declare items jsonb;
+begin
+  with due as (
+    select p.id, p.timezone, p.start_date, (now() at time zone p.timezone)::date as local_day
+    from public.profiles p
+    where p.reminders_enabled
+      and (now() at time zone p.timezone)::time >= p.reminder_time
+      and (now() at time zone p.timezone)::time < p.reminder_time + interval '2 hours'
+      and (p.last_reminder_on is null or p.last_reminder_on < (now() at time zone p.timezone)::date)
+      and (now() at time zone p.timezone)::date >= p.start_date
+      and exists (select 1 from public.push_subscriptions s where s.user_id = p.id)
+  ), marked as (
+    update public.profiles pr set last_reminder_on = due.local_day from due where pr.id = due.id returning pr.id
+  )
+  select jsonb_agg(jsonb_build_object('endpoint', s.endpoint, 'p256dh', s.p256dh, 'auth', s.auth,
+                                      'start_date', due.start_date, 'local_day', due.local_day))
+    into items
+    from due join marked m on m.id = due.id join public.push_subscriptions s on s.user_id = due.id;
+  if items is null then return 0; end if;
+  perform net.http_post(
+    url := 'https://engram-neuroai.vercel.app/api/push/morning',
+    body := jsonb_build_object('items', items),
+    headers := '{"Content-Type": "application/json"}'::jsonb,
+    timeout_milliseconds := 20000);
+  return jsonb_array_length(items);
+end $$;
+revoke all on function public.dispatch_morning_reminders() from public, anon, authenticated;
+
+select cron.unschedule('engram-morning-reminders') where exists (select 1 from cron.job where jobname = 'engram-morning-reminders');
+select cron.schedule('engram-morning-reminders', '*/15 * * * *', 'select public.dispatch_morning_reminders()');

@@ -9,6 +9,7 @@ import {
 } from "@/lib/curriculum";
 import { papersForWeek } from "@/data/papers";
 import { InstallApp } from "@/components/install-app";
+import { ReminderNudge } from "@/components/reminder-nudge";
 
 const href = (w: number, d: number) => `/learn/w${String(w).padStart(3, "0")}/d${d}`;
 
@@ -45,6 +46,7 @@ export function TodayView() {
     <div className="mx-auto max-w-5xl px-4 pt-6 sm:pt-8">
       <div className="eyebrow">{new Date(info.today + "T12:00:00Z").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" })}</div>
       <h1 className="mt-1 text-3xl font-semibold" style={{ fontFamily: "var(--font-serif)" }}>{name ? `Good to see you, ${name}.` : "Your day"}</h1>
+      <ReminderNudge />
 
       <div className="mt-6 grid gap-4 md:grid-cols-[1.6fr_1fr]">
         <section className="card p-5">

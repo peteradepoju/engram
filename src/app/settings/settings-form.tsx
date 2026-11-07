@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { useProfile } from "@/lib/hooks/use-user";
+import { Reminders } from "./reminders";
 
 const ZONES = ["Africa/Lagos", "Africa/Johannesburg", "Africa/Nairobi", "Africa/Cairo", "Europe/London", "Europe/Paris", "Europe/Berlin", "America/Toronto", "America/Vancouver", "America/New_York", "Asia/Kolkata", "Asia/Singapore", "Australia/Sydney", "Australia/Perth", "UTC"];
 
@@ -44,6 +45,9 @@ export function SettingsForm() {
         </label>
         {msg ? <p className="text-sm text-ink-3">{msg}</p> : null}
       </section>
+
+      <Reminders userId={user.id} enabled={profile.reminders_enabled ?? true} time={(profile.reminder_time ?? "06:30").slice(0, 5)}
+        onChange={(patch) => setProfile({ ...profile, ...patch })} />
 
       <section className="card p-5">
         <h2 className="font-semibold">Calendar reminders</h2>

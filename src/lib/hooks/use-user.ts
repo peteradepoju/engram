@@ -12,6 +12,8 @@ export type Profile = {
   start_date: string;
   calendar_token: string;
   tutor_enabled: boolean;
+  reminders_enabled?: boolean;
+  reminder_time?: string;
 };
 
 /** The signed-in user (or null), plus a loading flag. */
