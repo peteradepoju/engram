@@ -1,0 +1,253 @@
+export const meta = {
+  title: "Markov chains and the noisy ion channel",
+  intro: "In the Hodgkin-Huxley equations, a gating variable such as n is a smooth number between 0 and 1. Look at a single potassium channel through a patch-clamp pipette, though, and there is nothing smooth about it: it is either open or shut, and it flips between the two at random moments. Today you model it as a Markov chain, a process whose future depends only on its present state. You will find the long-run behaviour of a chain from an eigenvector, simulate a single channel exactly, and show that the smooth gating equation is what you get from many channels, with noise that shrinks like one over the square root of their number.",
+  goals: [
+    "Define a Markov chain by its transition matrix and find its stationary distribution",
+    "Describe continuous-time chains with transition rates, and show that dwell times are exponential",
+    "Simulate a single ion channel exactly with the Gillespie algorithm",
+    "Show that the open fraction of N channels fluctuates with standard deviation √(p(1 − p)/N)",
+  ],
+  plan: [
+    { label: "Predict and Markov chains", minutes: 25 },
+    { label: "Continuous time and dwell times", minutes: 25 },
+    { label: "Simulating one channel exactly", minutes: 30 },
+    { label: "From one channel to many", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "colquhoun-1981",
+};
+
+<Predict question="A small patch of membrane contains 100 potassium channels, each open 30% of the time on average. The fraction open fluctuates around 0.3. How large are the fluctuations (their standard deviation): about 0.005, 0.05 or 0.3? And how many channels would you need to make them ten times smaller?" />
+
+<Step n={1} title="Markov chains" minutes={25} />
+
+A **Markov chain** moves between a set of states, and the probability of its next move depends only on where it is now, not on how it got there. In discrete time it is described by a transition matrix $P$, whose entry $P_{ij}$ is the probability of going from state $i$ to state $j$ in one step; each row sums to 1. If $\boldsymbol\pi_n$ is the row vector of probabilities of being in each state at step $n$, then
+
+$$
+\boldsymbol\pi_{n + 1} = \boldsymbol\pi_nP.
+$$
+
+Under mild conditions (every state can reach every other, and the chain is not trapped in a cycle), $\boldsymbol\pi_n$ converges to a unique **stationary distribution** $\boldsymbol\pi$ with $\boldsymbol\pi = \boldsymbol\pi P$, whatever the start. That makes $\boldsymbol\pi$ a left eigenvector of $P$ with eigenvalue 1 (Week 6): the column eigenvector of $P^\top$. It also gives the long-run fraction of time a single realisation spends in each state.
+
+<Video id="xZO6GbU48ns" title="Markov Process" by="Neuromatch Academy" note="Neuromatch's tutorial video introducing Markov processes, with an ion channel switching between open and closed states as the example." />
+
+<PyCell id="stationary" title="The stationary distribution" tests={String.raw`
+  import numpy as np
+  def test_pi():
+      "pi is a probability vector with pi P = pi"
+      assert abs(pi.sum() - 1) < 1e-12 and np.all(pi >= 0) and np.abs(pi @ P - pi).max() < 1e-12
+
+  def test_sim():
+      "the fraction of time spent in each state over the simulation is within 0.02 of pi"
+      assert np.abs(frac - pi).max() < 0.02
+`} prompt="Find `pi` as the eigenvector of P transposed with eigenvalue closest to 1, normalised to sum to 1. Then simulate 200,000 steps of the chain from state 0, choosing each next state by comparing a uniform random number with the cumulative sums of the current row, and store the fraction of time in each state in `frac`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  P = np.array([[0.90, 0.10, 0.00],
+                [0.05, 0.85, 0.10],
+                [0.00, 0.20, 0.80]])
+  lam, vecs = np.linalg.eig(P.T)
+  v = np.real(vecs[:, np.argmin(np.abs(lam - 1))])
+  pi = ...
+
+  r_m = np.random.default_rng(1981)
+  u = r_m.random(200000); cum = np.cumsum(P, axis=1)
+  state, counts = 0, np.zeros(3)
+  for k in range(200000):
+      counts[state] += 1
+      state = ...                                  # first j with u[k] below cum[state, j]
+  frac = counts / counts.sum()
+  print("stationary pi:", pi.round(4), " simulated fractions:", frac.round(4))
+`}
+hint="pi = v / v.sum(); state = int(np.searchsorted(cum[state], u[k], side='right'))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  P = np.array([[0.90, 0.10, 0.00],
+                [0.05, 0.85, 0.10],
+                [0.00, 0.20, 0.80]])
+  lam, vecs = np.linalg.eig(P.T)
+  v = np.real(vecs[:, np.argmin(np.abs(lam - 1))])
+  pi = v / v.sum()
+
+  r_m = np.random.default_rng(1981)
+  u = r_m.random(200000); cum = np.cumsum(P, axis=1)
+  state, counts = 0, np.zeros(3)
+  for k in range(200000):
+      counts[state] += 1
+      state = int(np.searchsorted(cum[state], u[k], side='right'))                                  # first j with u[k] below cum[state, j]
+  frac = counts / counts.sum()
+  print("stationary pi:", pi.round(4), " simulated fractions:", frac.round(4))
+`} />
+
+The stationary distribution is (0.25, 0.5, 0.25), and over 200,000 steps the chain spends fractions 0.251, 0.503 and 0.246 of its time in the three states. A single long run explores the states in proportion to their stationary probabilities, which is what lets MCMC (Week 19) estimate a posterior from one chain.
+
+<Step n={2} title="Continuous time and dwell times" minutes={25} />
+
+An ion channel does not wait for a clock tick; it can switch at any instant. In a **continuous-time Markov chain**, each possible transition $i \to j$ has a rate $k_{ij}$: in a short interval $\Delta t$ it happens with probability $k_{ij}\Delta t$. For a channel that opens at rate $\alpha$ and closes at rate $\beta$,
+
+$$
+\text{closed} \underset{\beta}{\overset{\alpha}{\rightleftharpoons}} \text{open}, \qquad \frac{\mathrm dp}{\mathrm dt} = \alpha(1 - p) - \beta p,
+$$
+
+where $p$ is the probability of being open. This is exactly the Hodgkin-Huxley gating equation of Week 21, with $\alpha$ and $\beta$ depending on voltage. It relaxes to $p_\infty = \alpha/(\alpha + \beta)$ with time constant $1/(\alpha + \beta)$.
+
+How long does the channel stay open? In every short interval it closes with the same probability $\beta\Delta t$, whatever has happened before, so the open time has no memory: it is **exponentially distributed** with mean $1/\beta$. Likewise shut times have mean $1/\alpha$. This memorylessness is the defining feature of a Markov state, and it is testable: Colquhoun and Hawkes (1981, today's paper) showed that a shut-time histogram that needs two exponentials reveals two distinct shut states.
+
+<Figure caption="Two-state channels. Top: one channel flickering between closed and open. Bottom: the fraction open among many, with its mean α/(α + β) dashed. Change the rates and the number of channels." credit="Interactive figure by Engram.">
+  <MarkovChannel />
+</Figure>
+
+<Step n={3} title="Simulating one channel exactly" minutes={30} />
+
+Because dwell times are exponential, a channel can be simulated without any time step: draw how long it stays in its current state, jump to the other state, repeat. This is the **Gillespie algorithm** (1977), exact for any continuous-time Markov chain: with several possible transitions, the total rate sets the exponential waiting time, and the individual rates set the probabilities of which one happens.
+
+<PyCell id="gillespie" title="An exact single-channel record" tests={String.raw`
+  import numpy as np
+  def test_dwell():
+      "mean open time is within 5% of 1/beta = 2 ms and mean shut time within 5% of 1/alpha = 5 ms"
+      assert abs(open_t.mean() - 2) / 2 < 0.05 and abs(shut_t.mean() - 5) / 5 < 0.05
+
+  def test_popen():
+      "the fraction of time open is within 0.02 of alpha / (alpha + beta)"
+      assert abs(p_open - 0.2 / 0.7) < 0.02
+
+  def test_exponential():
+      "open times are exponential: their standard deviation is within 7% of their mean"
+      assert abs(open_t.std() / open_t.mean() - 1) < 0.07
+`} prompt="With alpha = 0.2 /ms and beta = 0.5 /ms, start shut and generate 20,000 dwell times, alternating shut and open, each drawn from an exponential with mean 1/(rate out of the current state). Store the open dwell times in `open_t`, the shut ones in `shut_t`, and the fraction of total time open in `p_open`."
+code={String.raw`
+  alpha, beta = 0.2, 0.5
+  r_g = np.random.default_rng(1977)
+  open_t, shut_t, is_open = [], [], False
+  for _ in range(20000):
+      rate = beta if is_open else alpha
+      d = ...
+      (open_t if is_open else shut_t).append(d)
+      is_open = not is_open
+  open_t, shut_t = np.array(open_t), np.array(shut_t)
+  p_open = ...
+  print(f"mean open {open_t.mean():.3f} ms, mean shut {shut_t.mean():.3f} ms, fraction open {p_open:.4f} (theory {alpha / (alpha + beta):.4f})")
+  plt.hist(open_t, 60, density=True, alpha=0.6, label="open"); tt = np.linspace(0, 12, 200); plt.plot(tt, beta * np.exp(-beta * tt))
+  plt.xlabel("dwell time (ms)"); plt.legend(); plt.show()
+`}
+hint="d = r_g.exponential(1 / rate); p_open = open_t.sum() / (open_t.sum() + shut_t.sum())."
+solution={String.raw`
+  alpha, beta = 0.2, 0.5
+  r_g = np.random.default_rng(1977)
+  open_t, shut_t, is_open = [], [], False
+  for _ in range(20000):
+      rate = beta if is_open else alpha
+      d = r_g.exponential(1 / rate)
+      (open_t if is_open else shut_t).append(d)
+      is_open = not is_open
+  open_t, shut_t = np.array(open_t), np.array(shut_t)
+  p_open = open_t.sum() / (open_t.sum() + shut_t.sum())
+  print(f"mean open {open_t.mean():.3f} ms, mean shut {shut_t.mean():.3f} ms, fraction open {p_open:.4f} (theory {alpha / (alpha + beta):.4f})")
+  plt.hist(open_t, 60, density=True, alpha=0.6, label="open"); tt = np.linspace(0, 12, 200); plt.plot(tt, beta * np.exp(-beta * tt))
+  plt.xlabel("dwell time (ms)"); plt.legend(); plt.show()
+`} />
+
+Over 10,000 openings, the mean open time is 2.00 ms and the mean shut time 5.05 ms, matching $1/\beta$ and $1/\alpha$, and the channel is open 28.3% of the time against the predicted 28.6%. The open times' standard deviation equals their mean, as it must for an exponential, and the histogram follows $\beta e^{-\beta t}$: most openings are brief, a few are long.
+
+<Step n={4} title="From one channel to many" minutes={25} />
+
+A patch of membrane holds many independent channels. At any moment, the number open is a sum of independent yes-or-no variables, each open with probability $p$, so it is binomial: the fraction open has mean $p$ and standard deviation $\sqrt{p(1 - p)/N}$. As $N$ grows the fluctuations shrink and the fraction follows the smooth gating equation, which is why Hodgkin and Huxley's deterministic model works for a large axon. In a small neuron or a thin dendrite, with only hundreds of channels, the noise is large enough to cause spontaneous spikes and jitter in their timing.
+
+<PyCell id="many" title="Channel noise shrinks as one over the square root of N" tests={String.raw`
+  import numpy as np
+  def test_sd():
+      "for each N the measured sd is within 10% of sqrt(p (1 - p) / N)"
+      pinf = 0.3
+      for N in (10, 100, 1000):
+          assert abs(sds[N] - np.sqrt(pinf * (1 - pinf) / N)) / np.sqrt(pinf * (1 - pinf) / N) < 0.10
+`} prompt="With alpha = 0.3 /ms and beta = 0.7 /ms (so p = 0.3), simulate N = 10, 100 and 1,000 channels in steps of dt = 0.01 ms: each step, the number of shut channels that open is binomial(n_shut, alpha dt) and the number of open ones that close is binomial(n_open, beta dt). After 2,000 steps of settling, record the fraction open for 100,000 steps and store its standard deviation in `sds[N]`."
+code={String.raw`
+  a2, b2, dt = 0.3, 0.7, 0.01
+  r_n = np.random.default_rng(1952)
+  sds = {}
+  for N in (10, 100, 1000):
+      n_open = int(0.3 * N); rec = []
+      for k in range(102000):
+          opening = r_n.binomial(N - n_open, a2 * dt)
+          closing = ...
+          n_open += opening - closing
+          if k >= 2000: rec.append(n_open / N)
+      sds[N] = ...
+  print({N: round(float(s), 4) for N, s in sds.items()}, " measured;", {N: round(float(np.sqrt(0.21 / N)), 4) for N in sds}, " theory")
+`}
+hint="closing = r_n.binomial(n_open, b2 * dt); sds[N] = np.std(rec)."
+solution={String.raw`
+  a2, b2, dt = 0.3, 0.7, 0.01
+  r_n = np.random.default_rng(1952)
+  sds = {}
+  for N in (10, 100, 1000):
+      n_open = int(0.3 * N); rec = []
+      for k in range(102000):
+          opening = r_n.binomial(N - n_open, a2 * dt)
+          closing = r_n.binomial(n_open, b2 * dt)
+          n_open += opening - closing
+          if k >= 2000: rec.append(n_open / N)
+      sds[N] = np.std(rec)
+  print({N: round(float(s), 4) for N, s in sds.items()}, " measured;", {N: round(float(np.sqrt(0.21 / N)), 4) for N in sds}, " theory")
+`} />
+
+The measured standard deviations are 0.145, 0.047 and 0.0144 for 10, 100 and 1,000 channels, against $\sqrt{0.21/N}$ = 0.145, 0.046 and 0.0145. That answers the prediction: for 100 channels the fluctuations are about 0.05, a sixth of the mean, and making them ten times smaller needs a hundred times as many channels, 10,000.
+
+<Bridge title="Markov chains in brains and machines"
+  neuro="Ion channels, synaptic vesicle release and receptor binding are all modelled as Markov chains, and channel noise sets a lower limit on how reliable small neurons can be. At a larger scale, hidden Markov models describe animals switching between behavioural states, and neural populations switching between activity patterns."
+  ai="Markov chains are everywhere in machine learning: Markov chain Monte Carlo (Week 19) samples a posterior by designing a chain whose stationary distribution is the target, PageRank is the stationary distribution of a random surfer, and a language model generating text is a (very high-order) chain over tokens.">
+
+Memoryless jumps between states give exponential dwell times, and many of them average into smooth equations.
+
+</Bridge>
+
+<Prove title="Dwell times are exponential" task="A channel leaves the open state at rate $\beta$: in any short interval $\Delta t$ it closes with probability $\beta\Delta t$, independently of the past. Let $S(t)$ be the probability that it is still open at time $t$ after opening. Show that $S(t + \Delta t) = S(t)(1 - \beta\Delta t)$, deduce $S'(t) = -\beta S(t)$, and conclude that the open time has density $\beta e^{-\beta t}$ and mean $1/\beta$.">
+
+To still be open at $t + \Delta t$, the channel must be open at $t$ (probability $S(t)$) and then not close in the next interval (probability $1 - \beta\Delta t$, independent of the past by the Markov property). So $S(t + \Delta t) = S(t)(1 - \beta\Delta t)$.
+
+Rearranging, $\frac{S(t + \Delta t) - S(t)}{\Delta t} = -\beta S(t)$, and letting $\Delta t \to 0$ gives $S'(t) = -\beta S(t)$ with $S(0) = 1$, so $S(t) = e^{-\beta t}$.
+
+The density of the open time is $-S'(t) = \beta e^{-\beta t}$, and its mean is $\int_0^\infty S(t)\,\mathrm dt = 1/\beta$. The same argument for any single state shows that dwell times in it are exponential with mean one over the total rate of leaving it.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "The Markov property says the future depends on...", options: ["The whole past", "Only the present state", "Nothing", "The average state"], answer: 1, explain: "Memorylessness." },
+  { q: "The stationary distribution π of a chain with matrix P satisfies...", options: ["Pπ = 0", "πP = π", "P = π", "π = 1"], answer: 1, explain: "A left eigenvector with eigenvalue 1." },
+  { q: "Dwell times in a single Markov state are...", options: ["Gaussian", "Exponential", "Uniform", "Fixed"], answer: 1, explain: "Constant hazard." },
+  { q: "For a channel opening at rate α and closing at rate β, the open probability is...", options: ["α/β", "α/(α + β)", "β/(α + β)", "αβ"], answer: 1, explain: "The steady state of the gating equation." },
+  { q: "The Gillespie algorithm...", options: ["Uses a fixed time step", "Draws exponential waiting times and jumps exactly", "Approximates with Gaussians", "Only works for two states"], answer: 1, explain: "Exact simulation." },
+  { q: "The sd of the open fraction of N channels is...", options: ["p/N", "√(p(1 − p)/N)", "p(1 − p)", "1/N"], answer: 1, explain: "Binomial." },
+  { q: "A shut-time histogram needing two exponentials suggests...", options: ["Measurement error", "Two distinct shut states", "Two channels", "No Markov property"], answer: 1, explain: "Colquhoun and Hawkes (1981)." },
+]} />
+
+<Flashcards cards={[
+  { front: "Markov chain?", back: "Next state depends only on the current one; transition matrix P with rows summing to 1." },
+  { front: "Stationary distribution?", back: "π = πP; the left eigenvector of P with eigenvalue 1." },
+  { front: "Two-state channel?", back: "dp/dt = α(1 − p) − βp; p∞ = α/(α + β), τ = 1/(α + β)." },
+  { front: "Gillespie algorithm?", back: "Wait an exponential time with the total rate, then pick a transition with probability proportional to its rate." },
+  { front: "Channel noise?", back: "Open fraction sd √(p(1 − p)/N)." },
+]} />
+
+<Predict revisit question="How large are the fluctuations in the open fraction of 100 channels with p = 0.3, and how many channels make them ten times smaller?" />
+
+<Key title="Before you go">
+<ul>
+<li>A Markov chain's long-run behaviour is its stationary distribution, an eigenvector of the transition matrix.</li>
+<li>In continuous time, dwell times in each state are exponential with mean one over the exit rate.</li>
+<li>The Gillespie algorithm simulates a channel exactly by drawing those waiting times.</li>
+<li>Many channels average into the Hodgkin-Huxley gating equation, with noise shrinking like 1/√N.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Colquhoun and Hawkes (1981), <em>On the stochastic properties of single ion channels</em>.</li>
+<li>Faisal, Selen and Wolpert (2008), <em>Noise in the nervous system</em>, Nature Reviews Neuroscience 9(4), 292 to 303.</li>
+<li>Neuromatch Academy, computational neuroscience course, W2D3 Tutorial 2, on Markov processes and ion channels.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Thin axons in the brain can be as narrow as 0.1 μm and contain few channels per node. Using today's result, estimate how channel noise changes as an axon gets thinner, and suggest why evolution might not make axons arbitrarily thin to save space." />

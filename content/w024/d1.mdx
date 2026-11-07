@@ -1,0 +1,243 @@
+export const meta = {
+  title: "Random walks and diffusion",
+  intro: "The last two weeks were deterministic: the same start always gave the same future. Real neurons are buffeted by thousands of random synaptic inputs, ion channels open by chance, and evidence arrives noisily. This week adds randomness to dynamics. Today's starting point is the simplest stochastic process of all, the random walk. You will see that its spread grows like the square root of time, that adding a drift turns it into a model of a neuron's voltage climbing noisily to threshold, and that the time it takes to get there explains the irregular, long-tailed intervals between spikes.",
+  goals: [
+    "Simulate random walks and show that their variance grows in proportion to time",
+    "Relate the discrete random walk to diffusion and to Brownian motion",
+    "Model spiking as the first passage of a drifting random walk to a threshold, and check its mean and variance",
+    "Show that without drift the walk still reaches threshold, but with a heavy-tailed waiting time",
+  ],
+  plan: [
+    { label: "Predict and the random walk", minutes: 25 },
+    { label: "From walk to diffusion", minutes: 20 },
+    { label: "A neuron as a random walk", minutes: 35 },
+    { label: "No drift, long waits", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "gerstein-1964",
+};
+
+<Predict question="A random walker takes 100 steps of size 1, each up or down at random, and ends on average about 8 from where it started. How far from the start, on average, will it be after 400 steps: 16, 32 or 400?" />
+
+<Step n={1} title="The random walk" minutes={25} />
+
+Start at 0. At each step, move up by 1 or down by 1 with equal probability. After $n$ steps the position is $X_n = \sum_{k = 1}^{n}\xi_k$, a sum of independent steps with mean 0 and variance 1. Means and variances of independent variables add (Week 15), so
+
+$$
+\mathbb{E}[X_n] = 0, \qquad \mathrm{Var}(X_n) = n, \qquad \mathrm{sd}(X_n) = \sqrt n.
+$$
+
+The walker does not drift anywhere on average, but its typical distance from the start grows like $\sqrt n$: to go twice as far takes four times as long. By the central limit theorem, $X_n$ is approximately Gaussian for large $n$. This square-root law is the signature of diffusion, and it is why diffusion is fast over the 20 nm of a synaptic cleft and hopelessly slow over the length of an axon.
+
+<Video id="VHwTBCQJjfw" title="E. coli and Random Walks" by="Neuromatch Academy" note="Neuromatch's tutorial video on random walks, using the swimming of E. coli bacteria as an example, and the growth of their spread with time." />
+
+<Figure caption="Four hundred random walkers: 25 paths, the mean ± 2√t envelope, and the distribution of positions at the chosen time against a Gaussian. Add a drift and watch it overtake the spread." credit="Interactive figure by Engram.">
+  <RandomWalkSpread />
+</Figure>
+
+<PyCell id="walk" title="The square-root law" tests={String.raw`
+  import numpy as np
+  def test_var():
+      "the variance across walkers at step 400 is within 5% of 400"
+      assert abs(X[:, 399].var() - 400) / 400 < 0.05
+
+  def test_slope():
+      "the mean squared displacement grows with slope 1 per step (within 3%)"
+      assert abs(msd_slope - 1) < 0.03
+`} prompt="Simulate 10,000 walkers of 400 steps each at once: draw the steps as ±1 and take the cumulative sum along each row to get `X` (10,000 × 400). Compute the mean squared displacement at each step and fit a straight line to get `msd_slope`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r_w = np.random.default_rng(1964)
+  steps = r_w.choice([-1, 1], size=(10000, 400))
+  X = ...
+  msd = np.mean(X ** 2, axis=0)
+  n = np.arange(1, 401)
+  msd_slope = ...
+  print(f"variance at 100 steps {X[:, 99].var():.1f}, at 400 steps {X[:, 399].var():.1f};  MSD slope {msd_slope:.3f}")
+  print(f"mean distance from the start: {np.abs(X[:, 99]).mean():.2f} after 100 steps, {np.abs(X[:, 399]).mean():.2f} after 400")
+  plt.plot(n, msd); plt.xlabel("steps"); plt.ylabel("mean squared displacement"); plt.show()
+`}
+hint="X = np.cumsum(steps, axis=1); msd_slope = np.polyfit(n, msd, 1)[0]."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r_w = np.random.default_rng(1964)
+  steps = r_w.choice([-1, 1], size=(10000, 400))
+  X = np.cumsum(steps, axis=1)
+  msd = np.mean(X ** 2, axis=0)
+  n = np.arange(1, 401)
+  msd_slope = np.polyfit(n, msd, 1)[0]
+  print(f"variance at 100 steps {X[:, 99].var():.1f}, at 400 steps {X[:, 399].var():.1f};  MSD slope {msd_slope:.3f}")
+  print(f"mean distance from the start: {np.abs(X[:, 99]).mean():.2f} after 100 steps, {np.abs(X[:, 399]).mean():.2f} after 400")
+  plt.plot(n, msd); plt.xlabel("steps"); plt.ylabel("mean squared displacement"); plt.show()
+`} />
+
+The variance is 98.9 after 100 steps and 399.3 after 400, and the mean squared displacement rises with slope 1.007 per step. The mean distance from the start is 7.92 after 100 steps and 15.98 after 400: four times the steps, twice the distance. That answers the prediction: about 16. (The mean distance is $\sqrt{2n/\pi}$, slightly less than the standard deviation $\sqrt n$.)
+
+<Step n={2} title="From walk to diffusion" minutes={20} />
+
+Make the steps small and frequent: in each interval $\Delta t$, move by a normal random amount with mean $\mu\Delta t$ and variance $\sigma^2\Delta t$. Then
+
+$$
+X(t + \Delta t) = X(t) + \mu\Delta t + \sigma\sqrt{\Delta t}\,\xi, \qquad \xi \sim \mathcal N(0, 1),
+$$
+
+and after time $t$ the position has mean $\mu t$ and variance $\sigma^2t$, whatever $\Delta t$ is. As $\Delta t \to 0$ this defines **Brownian motion with drift**. The $\sqrt{\Delta t}$ is essential: it is what keeps the variance proportional to $t$, and it is why the noise term in Week 21's integrate-and-fire neuron and Week 22's line attractor carried a square root. Brownian paths are continuous but so jagged that they have no derivative anywhere, so "$\mathrm dX/\mathrm dt$" is a convenient fiction; Day 4 makes it precise.
+
+The density of many walkers obeys the **diffusion equation**, $\partial_tp = -\mu\,\partial_xp + \frac{\sigma^2}{2}\partial_x^2p$, whose solution from a point is a Gaussian that drifts and spreads: the same picture seen from the crowd rather than from one walker.
+
+<Step n={3} title="A neuron as a random walk" minutes={35} />
+
+Gerstein and Mandelbrot (1964, today's paper) modelled a neuron's membrane potential as Brownian motion with drift: excitatory inputs push it up, inhibitory ones down, and the average excess of excitation is the drift. When it reaches a threshold $\theta$ the neuron fires and the potential resets. The interval between spikes is then the **first-passage time** of the walk to $\theta$, and its distribution, the inverse Gaussian, has mean $\theta/\mu$ and variance $\theta\sigma^2/\mu^3$. It is skewed, with a long right tail, like the interval histograms of real neurons.
+
+<PyCell id="fpt" title="Spikes as first passages" tests={String.raw`
+  import numpy as np
+  def test_mean():
+      "the mean first-passage time is within 3% of theta / mu = 20 ms"
+      assert abs(fpt.mean() - 20) / 20 < 0.03
+
+  def test_var():
+      "the variance is within 10% of theta sigma^2 / mu^3 = 320 ms^2"
+      assert abs(fpt.var() - 320) / 320 < 0.10
+
+  def test_skew():
+      "the distribution is right-skewed: the mean exceeds the median"
+      assert fpt.mean() > np.median(fpt)
+`} prompt="Simulate 5,000 neurons at once from V = 0 with drift mu = 0.5 mV/ms and noise sigma = 2 mV/√ms (dt = 0.05 ms, up to 300 ms). Record for each the first time V reaches theta = 10 mV, and store these times in `fpt`."
+code={String.raw`
+  r_f = np.random.default_rng(1965)
+  mu, sigma, theta, dt = 0.5, 2.0, 10.0, 0.05
+  n_neur = 5000
+  V = np.zeros(n_neur); t_hit = np.full(n_neur, np.nan); alive = np.ones(n_neur, bool)
+  for k in range(1, int(300 / dt) + 1):
+      V[alive] += ...
+      crossed = alive & (V >= theta)
+      t_hit[crossed] = k * dt
+      alive &= ~crossed
+      if not alive.any(): break
+  fpt = t_hit[~np.isnan(t_hit)]
+  print(f"{len(fpt)} spikes;  mean {fpt.mean():.2f} ms (theory 20), variance {fpt.var():.0f} (theory 320), median {np.median(fpt):.2f}, CV {fpt.std() / fpt.mean():.2f}")
+  plt.hist(fpt, 80, density=True); plt.xlabel("interspike interval (ms)"); plt.show()
+`}
+hint="V[alive] += mu * dt + sigma * np.sqrt(dt) * r_f.normal(size=alive.sum())."
+solution={String.raw`
+  r_f = np.random.default_rng(1965)
+  mu, sigma, theta, dt = 0.5, 2.0, 10.0, 0.05
+  n_neur = 5000
+  V = np.zeros(n_neur); t_hit = np.full(n_neur, np.nan); alive = np.ones(n_neur, bool)
+  for k in range(1, int(300 / dt) + 1):
+      V[alive] += mu * dt + sigma * np.sqrt(dt) * r_f.normal(size=alive.sum())
+      crossed = alive & (V >= theta)
+      t_hit[crossed] = k * dt
+      alive &= ~crossed
+      if not alive.any(): break
+  fpt = t_hit[~np.isnan(t_hit)]
+  print(f"{len(fpt)} spikes;  mean {fpt.mean():.2f} ms (theory 20), variance {fpt.var():.0f} (theory 320), median {np.median(fpt):.2f}, CV {fpt.std() / fpt.mean():.2f}")
+  plt.hist(fpt, 80, density=True); plt.xlabel("interspike interval (ms)"); plt.show()
+`} />
+
+All 5,000 model neurons fire. The mean interval is 20.4 ms against the theoretical 20 (the small excess comes from checking the threshold only every 0.05 ms, so crossings are detected slightly late), the variance 321 against 320, and the median, 15.0 ms, is well below the mean: the distribution has the long right tail of real interval histograms. The coefficient of variation is 0.88, close to the value of 1 for a Poisson process, from a model in which every neuron is identical and the only randomness is in its input.
+
+<Step n={4} title="No drift, long waits" minutes={25} />
+
+What if excitation and inhibition balance exactly, so that $\mu = 0$? A one-dimensional random walk is **recurrent**: it eventually reaches any level, so the neuron still fires. But the waiting time has a tail so heavy that its mean is infinite. The probability of not yet having reached $\theta$ by time $t$ falls only like $t^{-1/2}$, so there are always some very long intervals. Gerstein and Mandelbrot used this to explain the occasional enormous gaps in spike trains.
+
+<PyCell id="nodrift" title="The heavy tail" tests={String.raw`
+  import numpy as np
+  def test_slope():
+      "the survival probability falls with a log-log slope within 0.08 of -0.5"
+      assert abs(surv_slope + 0.5) < 0.08
+
+  def test_all():
+      "survival is still above 10% at 1,600 ms"
+      assert surv[-1] > 0.10
+`} prompt="Repeat with mu = 0 for 4,000 neurons and dt = 0.2 ms up to 1,600 ms. At each of t = 100, 200, 400, 800 and 1,600 ms record the fraction not yet absorbed in `surv`, and fit log surv against log t to get `surv_slope`."
+code={String.raw`
+  r_z = np.random.default_rng(1966)
+  dt0 = 0.2; n_z = 4000
+  V = np.zeros(n_z); alive = np.ones(n_z, bool)
+  checks = [100, 200, 400, 800, 1600]; surv = []
+  for k in range(1, int(1600 / dt0) + 1):
+      V[alive] += sigma * np.sqrt(dt0) * r_z.normal(size=alive.sum())
+      alive &= V < theta
+      if any(abs(k * dt0 - c) < 1e-9 for c in checks):
+          surv.append(...)
+  surv = np.array(surv)
+  surv_slope = ...
+  print("fraction still silent:", dict(zip(checks, [round(float(v), 3) for v in surv])), f";  slope {surv_slope:.3f}")
+`}
+hint="surv.append(alive.mean()); surv_slope = np.polyfit(np.log(checks), np.log(surv), 1)[0]."
+solution={String.raw`
+  r_z = np.random.default_rng(1966)
+  dt0 = 0.2; n_z = 4000
+  V = np.zeros(n_z); alive = np.ones(n_z, bool)
+  checks = [100, 200, 400, 800, 1600]; surv = []
+  for k in range(1, int(1600 / dt0) + 1):
+      V[alive] += sigma * np.sqrt(dt0) * r_z.normal(size=alive.sum())
+      alive &= V < theta
+      if any(abs(k * dt0 - c) < 1e-9 for c in checks):
+          surv.append(alive.mean())
+  surv = np.array(surv)
+  surv_slope = np.polyfit(np.log(checks), np.log(surv), 1)[0]
+  print("fraction still silent:", dict(zip(checks, [round(float(v), 3) for v in surv])), f";  slope {surv_slope:.3f}")
+`} />
+
+Without drift, 39.5% of neurons are still silent at 100 ms, 20.4% at 400 ms and 10.1% at 1,600 ms: each quadrupling of time only halves the survivors, a log-log slope of −0.494. Every neuron will fire eventually, but the average wait is infinite, dominated by rare, very long intervals.
+
+<Bridge title="Random walks in brains and machines"
+  neuro="Random walks describe molecules diffusing in synapses, the voltage of a neuron under random input, the position of a foraging animal and, on Day 3, the accumulation of evidence in a decision. The first-passage time to a threshold is the common thread: a spike, a decision and a reaction time are all first passages."
+  ai="Stochastic gradient descent is a random walk with drift on the loss landscape, the drift being the gradient and the noise coming from mini-batches; its square-root spread sets how far a trained network wanders. Diffusion models (Day 5) are built on Brownian motion run forwards and backwards.">
+
+Random steps add up to a spread that grows like the square root of time.
+
+</Bridge>
+
+<Prove title="Mean first-passage time with drift" task="Let $T(x)$ be the mean time for Brownian motion with drift $\mu > 0$ and noise $\sigma$ to reach $\theta$ from $x \lt \theta$. Accept that $T$ satisfies $\mu T'(x) + \frac{\sigma^2}{2}T''(x) = -1$, with $T(\theta) = 0$ and $T$ not growing exponentially as $x \to -\infty$. Show that $T(x) = (\theta - x)/\mu$.">
+
+Try $T(x) = (\theta - x)/\mu$. Then $T'(x) = -1/\mu$ and $T''(x) = 0$, so $\mu T' + \frac{\sigma^2}{2}T'' = -1$. The equation holds, and $T(\theta) = 0$.
+
+The general solution adds solutions of the homogeneous equation $\mu T' + \frac{\sigma^2}{2}T'' = 0$, which are $A + Be^{-2\mu x/\sigma^2}$. The constant $A$ must be zero to keep $T(\theta) = 0$ once $B$ is fixed, and $B$ must be zero, because $e^{-2\mu x/\sigma^2}$ grows exponentially as $x \to -\infty$.
+
+So the mean time is distance divided by drift, exactly as without noise. Noise does not change the average, only the spread: the variance $\theta\sigma^2/\mu^3$ grows rapidly as the drift weakens, and at $\mu = 0$ the mean becomes infinite.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "After n steps of ±1, the variance of a random walk is...", options: ["1", "n", "n²", "√n"], answer: 1, explain: "Variances of independent steps add." },
+  { q: "The typical distance from the start grows like...", options: ["n", "√n", "log n", "It stays constant"], answer: 1, explain: "The square-root law." },
+  { q: "In the continuum limit, the noise per step must scale like...", options: ["Δt", "√Δt", "Δt²", "1"], answer: 1, explain: "To keep variance proportional to time." },
+  { q: "In the Gerstein-Mandelbrot model, a spike is...", options: ["A fixed-interval event", "The first passage of a drifting random walk to threshold", "A Poisson event", "A limit cycle"], answer: 1, explain: "First-passage time." },
+  { q: "The mean first-passage time with drift μ to a threshold θ away is...", options: ["θμ", "θ/μ", "θ²/σ²", "Infinite"], answer: 1, explain: "Distance over drift." },
+  { q: "With zero drift, the waiting time to threshold...", options: ["Is zero", "Is finite with probability 1 but has an infinite mean", "Is infinite always", "Is exponential"], answer: 1, explain: "Survival falls like t^(−1/2)." },
+  { q: "First-passage time distributions of drifting walks are...", options: ["Symmetric", "Right-skewed with a long tail", "Uniform", "Bimodal"], answer: 1, explain: "Inverse Gaussian." },
+]} />
+
+<Flashcards cards={[
+  { front: "Random walk variance?", back: "Var(X_n) = n for unit steps; sd √n." },
+  { front: "Brownian motion with drift?", back: "$X(t + \\Delta t) = X(t) + \\mu\\Delta t + \\sigma\\sqrt{\\Delta t}\\,\\xi$; mean μt, variance σ²t." },
+  { front: "First-passage time?", back: "Time for a process to first reach a level; models spikes, decisions and reaction times." },
+  { front: "Inverse Gaussian moments?", back: "Mean θ/μ, variance θσ²/μ³." },
+  { front: "Zero-drift first passage?", back: "Certain to happen, infinite mean; survival falls like $t^{-1/2}$." },
+]} />
+
+<Predict revisit question="If a random walker is about 8 from the start after 100 steps, how far is it after 400?" />
+
+<Key title="Before you go">
+<ul>
+<li>A random walk's spread grows like √t; the distribution of positions becomes Gaussian.</li>
+<li>Brownian motion with drift has mean μt and variance σ²t; its noise scales with √Δt.</li>
+<li>Spikes can be modelled as first passages to a threshold, with mean θ/μ and a long right tail.</li>
+<li>Without drift the threshold is still reached, but waiting times have an infinite mean.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Gerstein and Mandelbrot (1964), <em>Random walk models for the spike activity of a single neuron</em>.</li>
+<li>Berg, <em>Random Walks in Biology</em> (Princeton University Press), chapters 1 and 2, on diffusion in cells.</li>
+<li>Gerstner, Kistler, Naud and Paninski, <em>Neuronal Dynamics</em>, chapter 8, on noisy input models.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="The Gerstein-Mandelbrot neuron has no leak: its voltage can wander arbitrarily far below rest. Describe how adding a leak (Day 4) would change the interval distribution when the drift is weak, and why real neurons with balanced input might still fire irregularly." />

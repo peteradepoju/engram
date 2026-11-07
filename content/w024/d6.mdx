@@ -1,0 +1,278 @@
+export const meta = {
+  title: "Forge: Week 24 challenge, quiz and deep read",
+  intro: "This week added randomness to dynamics: random walks and first passages, Markov chains and channel noise, accumulation of evidence to a bound, the Ornstein-Uhlenbeck process and Langevin sampling, and diffusion models that generate by reversing noise. Today's challenge combines them with the deterministic tools of the last three weeks. You will show how noise makes a neuron fire regularly or irregularly depending on how it is driven, recover the hidden parameters of a decision maker from behaviour alone, and find how long noise takes to flip a bistable memory. Then the quiz and a critique of the review that linked decisions to accumulating neurons.",
+  goals: [
+    "Distinguish mean-driven and fluctuation-driven firing by the variability of interspike intervals",
+    "Fit the drift diffusion model to accuracy and decision times and recover its parameters",
+    "Measure noise-induced escape from a bistable state and its exponential dependence on noise",
+    "Critique the evidence that parietal neurons accumulate evidence to a bound",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "gold-2007",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. The standard deviation of a ±1 random walk after 900 steps?
+2. The stationary standard deviation of an OU process with $\tau = 8$ and $\sigma = 0.5$?
+3. The accuracy of the drift diffusion model with $\mu = 1$, $a = 1.5$, $\sigma = 1$?
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  print("1. sqrt(900) =", np.sqrt(900))
+  print("2. sigma sqrt(tau / 2) =", 0.5 * np.sqrt(8 / 2))
+  print("3.", round(1 / (1 + np.exp(-2 * 1 * 1.5)), 4))
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: regular or irregular?** Put Day 4's OU process under Week 21's threshold and you have the noisy leaky integrate-and-fire neuron: $\mathrm dV = \frac{-V + RI}{\tau}\mathrm dt + \sigma\sqrt{2/\tau}\,\mathrm dW$, with a spike and reset when $V$ reaches $\theta$. (With the noise written this way, the free voltage fluctuates with standard deviation $\sigma$.) Compare a neuron driven above threshold with little noise against one driven below threshold with more noise, by the coefficient of variation (CV) of their interspike intervals: 0 for a clock, 1 for a Poisson process.
+
+<PyCell id="partA" title="Part A: mean-driven and fluctuation-driven firing" tests={String.raw`
+  import numpy as np
+  def test_regular():
+      "mean-driven firing (RI = 20, sigma = 1) is regular: CV below 0.3"
+      assert cv["mean"] < 0.3
+
+  def test_irregular():
+      "fluctuation-driven firing (RI = 8, sigma = 5) is irregular: CV above 0.7"
+      assert cv["fluct"] > 0.7
+
+  def test_rates():
+      "both regimes fire at least 5 Hz"
+      assert rate["mean"] > 5 and rate["fluct"] > 5
+`} prompt="Simulate 50 neurons at once for each regime (tau = 20 ms, theta = 15 mV, refractory 2 ms, dt = 0.1 ms, 5 s). Collect every neuron's interspike intervals, and store the pooled CV in `cv[name]` and the mean rate in Hz in `rate[name]`."
+code={String.raw`
+  tau, theta, tref, dt = 20.0, 15.0, 2.0, 0.1
+  r_a = np.random.default_rng(1964)
+  cv, rate = {}, {}
+  for name, RI, sig in (("mean", 20.0, 1.0), ("fluct", 8.0, 5.0)):
+      n = 50; V = np.zeros(n); refr = np.zeros(n); last = np.full(n, np.nan); isis = []; n_sp = 0
+      for k in range(int(5000 / dt)):
+          free = refr <= 0
+          V[free] += ...                            # Euler-Maruyama step of the OU voltage
+          refr -= dt
+          spk = V >= theta
+          t = k * dt
+          for i in np.where(spk)[0]:
+              if not np.isnan(last[i]): isis.append(t - last[i])
+              last[i] = t
+          n_sp += spk.sum(); V[spk] = 0.0; refr[spk] = tref
+      isis = np.array(isis)
+      cv[name] = ...
+      rate[name] = n_sp / (n * 5.0)
+  print({k: round(float(v), 3) for k, v in cv.items()}, " CV;", {k: round(float(v), 1) for k, v in rate.items()}, " Hz")
+`}
+hint="V[free] += dt / tau * (-V[free] + RI) + sig * np.sqrt(2 * dt / tau) * r_a.normal(size=free.sum()); cv[name] = isis.std() / isis.mean()."
+solution={String.raw`
+  tau, theta, tref, dt = 20.0, 15.0, 2.0, 0.1
+  r_a = np.random.default_rng(1964)
+  cv, rate = {}, {}
+  for name, RI, sig in (("mean", 20.0, 1.0), ("fluct", 8.0, 5.0)):
+      n = 50; V = np.zeros(n); refr = np.zeros(n); last = np.full(n, np.nan); isis = []; n_sp = 0
+      for k in range(int(5000 / dt)):
+          free = refr <= 0
+          V[free] += dt / tau * (-V[free] + RI) + sig * np.sqrt(2 * dt / tau) * r_a.normal(size=free.sum())                            # Euler-Maruyama step of the OU voltage
+          refr -= dt
+          spk = V >= theta
+          t = k * dt
+          for i in np.where(spk)[0]:
+              if not np.isnan(last[i]): isis.append(t - last[i])
+              last[i] = t
+          n_sp += spk.sum(); V[spk] = 0.0; refr[spk] = tref
+      isis = np.array(isis)
+      cv[name] = isis.std() / isis.mean()
+      rate[name] = n_sp / (n * 5.0)
+  print({k: round(float(v), 3) for k, v in cv.items()}, " CV;", {k: round(float(v), 1) for k, v in rate.items()}, " Hz")
+`} />
+
+Driven above threshold ($RI = 20$) with small noise, the neuron fires at about 34 Hz with a CV of 0.13: nearly a clock, each interval set mainly by the deterministic charging time. Driven well below threshold ($RI = 8$) with larger noise, it still fires, at about 9 Hz, but with a CV of 0.81, close to a Poisson process: each spike waits for a lucky fluctuation. Cortical neurons in awake animals typically fire with CVs near 1, one of the main arguments that they operate in the fluctuation-driven regime.
+
+**Part B: reading a mind from behaviour.** An observer judges the direction of moving dots at three motion strengths $c$. Assume a drift diffusion model whose drift is proportional to strength, $\mu = kc$, with bound $a$ and $\sigma = 1$. From the accuracy and mean decision time at each strength, recover $k$ and $a$. The data below are simulated with $k = 2$ and $a = 1$, which you should pretend not to know.
+
+<PyCell id="partB" title="Part B: fitting the drift diffusion model" tests={String.raw`
+  import numpy as np
+  def test_k():
+      "the recovered k is within 10% of 2"
+      assert abs(k_fit - 2) / 2 < 0.10
+
+  def test_a():
+      "the recovered bound is within 10% of 1"
+      assert abs(a_fit - 1) < 0.10
+`} prompt="Simulate the observer (1,000 trials per strength, dt = 0.001) to get `acc_obs` and `rt_obs`. Then, on a grid of k from 0.5 to 4 and a from 0.5 to 2 (steps of 0.01), compute the predicted accuracy and mean time from Day 3's formulas, and choose the pair minimising the sum over strengths of (accuracy error / 0.02)² + (time error / (0.05 · observed time))². Store them in `k_fit` and `a_fit`."
+code={String.raw`
+  cohs = np.array([0.1, 0.25, 0.5])
+  r_b = np.random.default_rng(2007)
+  acc_obs, rt_obs = [], []
+  for c in cohs:
+      mu = 2.0 * c
+      x = np.zeros(1000); th = np.zeros(1000); won = np.zeros(1000, bool); live = np.ones(1000, bool); t = 0.0
+      while live.any():
+          t += 0.001
+          x[live] += mu * 0.001 + np.sqrt(0.001) * r_b.normal(size=live.sum())
+          up, dn = live & (x >= 1), live & (x <= -1)
+          won[up] = True; th[up | dn] = t; live &= ~(up | dn)
+      acc_obs.append(won.mean()); rt_obs.append(th.mean())
+  acc_obs, rt_obs = np.array(acc_obs), np.array(rt_obs)
+
+  K, A_ = np.meshgrid(np.arange(0.5, 4.0001, 0.01), np.arange(0.5, 2.0001, 0.01), indexing="ij")
+  loss = np.zeros_like(K)
+  for c, acc_o, rt_o in zip(cohs, acc_obs, rt_obs):
+      mu = K * c
+      acc_p = 1 / (1 + np.exp(-2 * mu * A_))
+      rt_p = ...
+      loss += ...
+  i, j = np.unravel_index(np.argmin(loss), loss.shape)
+  k_fit, a_fit = K[i, j], A_[i, j]
+  print("observed accuracy", acc_obs.round(3), " mean time", rt_obs.round(3)); print(f"recovered k = {k_fit:.2f}, a = {a_fit:.2f}")
+`}
+hint="rt_p = A_ / mu * np.tanh(mu * A_); loss += ((acc_p - acc_o) / 0.02) ** 2 + ((rt_p - rt_o) / (0.05 * rt_o)) ** 2."
+solution={String.raw`
+  cohs = np.array([0.1, 0.25, 0.5])
+  r_b = np.random.default_rng(2007)
+  acc_obs, rt_obs = [], []
+  for c in cohs:
+      mu = 2.0 * c
+      x = np.zeros(1000); th = np.zeros(1000); won = np.zeros(1000, bool); live = np.ones(1000, bool); t = 0.0
+      while live.any():
+          t += 0.001
+          x[live] += mu * 0.001 + np.sqrt(0.001) * r_b.normal(size=live.sum())
+          up, dn = live & (x >= 1), live & (x <= -1)
+          won[up] = True; th[up | dn] = t; live &= ~(up | dn)
+      acc_obs.append(won.mean()); rt_obs.append(th.mean())
+  acc_obs, rt_obs = np.array(acc_obs), np.array(rt_obs)
+
+  K, A_ = np.meshgrid(np.arange(0.5, 4.0001, 0.01), np.arange(0.5, 2.0001, 0.01), indexing="ij")
+  loss = np.zeros_like(K)
+  for c, acc_o, rt_o in zip(cohs, acc_obs, rt_obs):
+      mu = K * c
+      acc_p = 1 / (1 + np.exp(-2 * mu * A_))
+      rt_p = A_ / mu * np.tanh(mu * A_)
+      loss += ((acc_p - acc_o) / 0.02) ** 2 + ((rt_p - rt_o) / (0.05 * rt_o)) ** 2
+  i, j = np.unravel_index(np.argmin(loss), loss.shape)
+  k_fit, a_fit = K[i, j], A_[i, j]
+  print("observed accuracy", acc_obs.round(3), " mean time", rt_obs.round(3)); print(f"recovered k = {k_fit:.2f}, a = {a_fit:.2f}")
+`} />
+
+The simulated observer is 59%, 75% and 87% correct at the three strengths, with mean decision times of 1.04, 0.98 and 0.77 s. The grid search recovers $k = 2.00$ and $a = 1.02$, close to the true values; the bound comes out slightly high because the simulated times carry the small discretisation delay seen on Day 3. Two numbers per condition, accuracy and speed, are enough to separate how good the evidence is from how cautious the observer is, which is why the model is so widely used to interpret behaviour.
+
+**Part C: how long does a memory last?** Week 22's bistable population stored a bit in one of two stable states. With noise, the state will eventually hop over the barrier. Model this as Langevin dynamics in the double well $U(x) = 2(x^2 - 1)^2$, whose barrier has height $\Delta U = 2$, with noise strength $D$: $\mathrm dx = -U'(x)\mathrm dt + \sqrt{2D}\,\mathrm dW$. Kramers (1940) predicted that the mean time to escape grows as $e^{\Delta U/D}$.
+
+<PyCell id="partC" title="Part C: Kramers escape" tests={String.raw`
+  import numpy as np
+  def test_order():
+      "less noise means longer escape times"
+      assert np.all(np.diff(T_esc) > 0)
+
+  def test_slope():
+      "log escape time against 1/D has slope within 0.3 of the barrier height 2"
+      assert abs(slope_C - 2) < 0.3
+`} prompt="For D = 0.6, 0.5 and 0.4, start 300 particles at x = −1 and simulate (dt = 0.005) until each first reaches x = +1. Store the mean times in `T_esc`, and the slope of log T_esc against 1/D in `slope_C`."
+code={String.raw`
+  Ds = np.array([0.6, 0.5, 0.4])
+  U_grad = lambda x: 8 * x * (x ** 2 - 1)
+  r_c = np.random.default_rng(1940)
+  T_esc = []
+  for D in Ds:
+      x = -np.ones(300); t_hit = np.zeros(300); live = np.ones(300, bool); k = 0
+      while live.any():
+          k += 1
+          x[live] += ...
+          h = live & (x >= 1); t_hit[h] = k * 0.005; live &= ~h
+      T_esc.append(t_hit.mean())
+  T_esc = np.array(T_esc)
+  slope_C = ...
+  print("mean escape times", T_esc.round(1), f";  slope of log T against 1/D: {slope_C:.2f} (barrier 2)")
+`}
+hint="x[live] += -U_grad(x[live]) * 0.005 + np.sqrt(2 * D * 0.005) * r_c.normal(size=live.sum()); slope_C = np.polyfit(1 / Ds, np.log(T_esc), 1)[0]."
+solution={String.raw`
+  Ds = np.array([0.6, 0.5, 0.4])
+  U_grad = lambda x: 8 * x * (x ** 2 - 1)
+  r_c = np.random.default_rng(1940)
+  T_esc = []
+  for D in Ds:
+      x = -np.ones(300); t_hit = np.zeros(300); live = np.ones(300, bool); k = 0
+      while live.any():
+          k += 1
+          x[live] += -U_grad(x[live]) * 0.005 + np.sqrt(2 * D * 0.005) * r_c.normal(size=live.sum())
+          h = live & (x >= 1); t_hit[h] = k * 0.005; live &= ~h
+      T_esc.append(t_hit.mean())
+  T_esc = np.array(T_esc)
+  slope_C = np.polyfit(1 / Ds, np.log(T_esc), 1)[0]
+  print("mean escape times", T_esc.round(1), f";  slope of log T against 1/D: {slope_C:.2f} (barrier 2)")
+`} />
+
+The mean escape times are 18, 33 and 92 time units for $D = 0.6$, 0.5 and 0.4, and the slope of their logarithm against $1/D$ is 1.96, close to the barrier height of 2. Reducing the noise by a third multiplied the memory's lifetime by five. This exponential sensitivity is why a bistable memory can be either fleeting or practically permanent with only a modest change in noise or in barrier height, the depth of the wells set by recurrent excitation.
+
+**Part D (written).** Answer in your journal: Parts A and C show noise as both a nuisance (it erases memories) and a resource (it lets neurons respond to weak inputs). Give one more example of each from this week, and say how a circuit could turn its own noise level up or down.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The OU variance equation" task="For $\mathrm dx = -\frac{x}{\tau}\mathrm dt + \sigma\,\mathrm dW$, use one Euler-Maruyama step, $x_{k + 1} = (1 - \Delta t/\tau)x_k + \sigma\sqrt{\Delta t}\,\xi_k$, with $\xi_k$ independent of $x_k$, to show that $v = \mathrm{Var}(x)$ obeys $\dot v = -\frac{2}{\tau}v + \sigma^2$ as $\Delta t \to 0$, and find its stationary value.">
+
+Because $\xi_k$ is independent of $x_k$, variances add: $v_{k + 1} = (1 - \Delta t/\tau)^2v_k + \sigma^2\Delta t$.
+
+Expanding, $(1 - \Delta t/\tau)^2 = 1 - 2\Delta t/\tau + (\Delta t/\tau)^2$, so $\frac{v_{k + 1} - v_k}{\Delta t} = -\frac{2}{\tau}v_k + \sigma^2 + O(\Delta t)$. Letting $\Delta t \to 0$ gives $\dot v = -\frac{2}{\tau}v + \sigma^2$.
+
+At stationarity $\dot v = 0$, so $v = \sigma^2\tau/2$, and from $v(0) = 0$ the solution is $v(t) = \frac{\sigma^2\tau}{2}(1 - e^{-2t/\tau})$. The variance relaxes twice as fast as the mean, because it depends on the square of the deviation.
+
+</Prove>
+
+<Prove title="2. Why escape is exponentially slow" task="In Langevin dynamics with noise $D$, the stationary density is $p \propto e^{-U/D}$. Explain, using the ratio of the density at the barrier top to the density at the bottom of a well, why the escape rate should scale as $e^{-\Delta U/D}$.">
+
+The stationary density is $p(x) = Ce^{-U(x)/D}$, so the ratio of the probability density at the top of the barrier to that at the bottom of a well is $e^{-(U_\text{top} - U_\text{min})/D} = e^{-\Delta U/D}$.
+
+To escape, a particle must be at the top, and the rate of escape is proportional to how often particles are found there relative to how many are in the well, multiplied by a rate of crossing that depends on the curvatures of $U$ but not on $D$ to leading order. So the escape rate scales as $e^{-\Delta U/D}$ and the mean escape time as $e^{\Delta U/D}$: Kramers' law. Part C's slope estimates $\Delta U$; the prefactor, about $2\pi/\sqrt{U''_\text{min}|U''_\text{top}|}$, explains why it is slightly less than 2 at these noise levels.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 24 quiz (15 questions)" questions={[
+  { q: "The variance of a ±1 random walk after n steps is...", options: ["1", "n", "√n", "n²"], answer: 1, explain: "Variances add." },
+  { q: "Brownian noise over a step Δt has standard deviation proportional to...", options: ["Δt", "√Δt", "1", "Δt²"], answer: 1, explain: "Variance Δt." },
+  { q: "The mean first-passage time to θ with drift μ is...", options: ["θμ", "θ/μ", "θ²", "Infinite"], answer: 1, explain: "Distance over drift." },
+  { q: "With zero drift, the mean first-passage time is...", options: ["Zero", "Finite", "Infinite", "θ"], answer: 2, explain: "Heavy tail." },
+  { q: "The stationary distribution of a Markov chain is...", options: ["Any row of P", "A left eigenvector of P with eigenvalue 1", "The first state", "Uniform always"], answer: 1, explain: "π = πP." },
+  { q: "Dwell times in a Markov state are...", options: ["Gaussian", "Exponential", "Fixed", "Uniform"], answer: 1, explain: "Memorylessness." },
+  { q: "Channel noise in the open fraction scales as...", options: ["1/N", "1/√N", "N", "Constant"], answer: 1, explain: "Binomial." },
+  { q: "The SPRT accumulates...", options: ["Samples", "Log likelihood ratios", "Squared errors", "Probabilities"], answer: 1, explain: "Wald." },
+  { q: "In the DDM, raising the bound...", options: ["Speeds up and lowers accuracy", "Slows down and raises accuracy", "Has no effect", "Changes the drift"], answer: 1, explain: "Speed-accuracy trade-off." },
+  { q: "The OU stationary variance is...", options: ["σ²", "σ²τ/2", "τ", "Infinite"], answer: 1, explain: "Leak balances noise." },
+  { q: "Langevin dynamics samples a density using its...", options: ["Normaliser", "Score", "Mean", "Mode only"], answer: 1, explain: "∇ log p." },
+  { q: "A diffusion model's network is commonly trained to predict...", options: ["The label", "The added noise", "The time", "The variance"], answer: 1, explain: "Ho and colleagues (2020)." },
+  { q: "The exact score of a finite training set makes the reverse process...", options: ["Generate novel data", "Reproduce training points", "Diverge", "Output noise"], answer: 1, explain: "Memorisation." },
+  { q: "Fluctuation-driven firing is...", options: ["Regular, CV near 0", "Irregular, CV near 1", "Silent", "Periodic"], answer: 1, explain: "Part A." },
+  { q: "Kramers' law says escape time grows as...", options: ["ΔU/D", "e^{ΔU/D}", "D/ΔU", "√D"], answer: 1, explain: "Part C." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Gold and Shadlen (2007) its third pass and write your critique under the five headings. Focus on one question: **do LIP neurons accumulate evidence to a bound?** Consider that the ramping is usually seen in averages over trials, and that Latimer and colleagues (2015) argued that single-trial activity in LIP looks more like a step at a random time than a gradual ramp; that inactivating LIP in later experiments often left decisions largely intact, suggesting that it may reflect rather than cause the decision; that bounded accumulation could happen in many areas at once; that the model's fit to behaviour does not by itself identify the neurons that implement it; and what kind of experiment could separate accumulation from stepping.
+
+<Callout kind="research">
+
+Collapsing bounds, which shrink over time within a trial, have been proposed as the optimal policy when evidence strength varies unpredictably from trial to trial. Modify Day 3's simulation so that the bound falls linearly with time, and compare the reward rate with the best fixed bound when the drift is drawn at random on each trial from several strengths. When does the collapsing bound win?
+
+</Callout>
+
+<Key title="Week 24 review checklist">
+<ul>
+<li>I can simulate random walks and use first-passage times to model spikes and decisions.</li>
+<li>I can find stationary distributions of Markov chains and simulate ion channels exactly.</li>
+<li>I can derive and check the drift diffusion model's accuracy and decision time, and fit it to data.</li>
+<li>I can simulate SDEs, derive the OU variance and autocorrelation, and sample with Langevin dynamics.</li>
+<li>I can explain how diffusion models generate data by learning the score of noised data.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part D: give one more example from this week of noise as a nuisance and one of noise as a resource, and say how a circuit could turn its own noise up or down. Then note what you found for the collapsing-bound research callout." />

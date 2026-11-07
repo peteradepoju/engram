@@ -1,0 +1,284 @@
+export const meta = {
+  title: "Diffusion models: generating data by reversing noise",
+  intro: "The image generators that appeared in the early 2020s are built from this week's mathematics. Take real data and run a noising process, a discrete Ornstein-Uhlenbeck process, until nothing is left but Gaussian noise. Then learn to run it backwards. Today you build a complete diffusion model for one-dimensional data in plain NumPy: the forward process, the reverse process driven by the score, and a model of the score learned by nothing more than least-squares regression. Along the way you will see why a perfect score would only copy the training data, and why an imperfect one creates.",
+  goals: [
+    "Write the forward noising process and its closed form q(x_t | x_0)",
+    "Explain why reversing the process needs the score, and why predicting the noise gives it",
+    "Run the reverse process with the exact score of the training set and see it reproduce training points",
+    "Train a noise predictor by regression and use it to generate new samples",
+  ],
+  plan: [
+    { label: "Predict and the forward process", minutes: 25 },
+    { label: "Running it backwards", minutes: 25 },
+    { label: "The perfect score memorises", minutes: 25 },
+    { label: "Learning the score", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "ho-2020",
+};
+
+<Predict question="Suppose you knew the score of the noised training data exactly, for a dataset of 1,000 images, and ran a diffusion model's reverse process with it. Would it generate new images, or would it reproduce images from the training set?" />
+
+<Step n={1} title="The forward process" minutes={25} />
+
+Fix a schedule of small noise levels $\beta_1, \dots, \beta_T$. At each step, shrink the data slightly and add a little Gaussian noise:
+
+$$
+x_t = \sqrt{1 - \beta_t}\,x_{t - 1} + \sqrt{\beta_t}\,\xi_t.
+$$
+
+This is an Euler-Maruyama step of an OU process (Day 4) whose stationary distribution is the standard normal: the shrinking keeps the variance from growing. Because each step is linear and Gaussian, the steps compose. Writing $\alpha_t = 1 - \beta_t$ and $\bar\alpha_t = \alpha_1\alpha_2\cdots\alpha_t$,
+
+$$
+x_t = \sqrt{\bar\alpha_t}\,x_0 + \sqrt{1 - \bar\alpha_t}\,\varepsilon, \qquad \varepsilon \sim \mathcal N(0, 1),
+$$
+
+so any noise level can be sampled from the data in one go. As $\bar\alpha_t \to 0$ the data are forgotten and $x_T$ is pure noise. Throughout today, $T = 100$ and $\beta_t$ rises linearly from $10^{-4}$ to 0.1, giving $\bar\alpha_T \approx 0.006$. The data are one-dimensional: a mixture of two narrow clusters at $\pm2$.
+
+<Video id="iv-5mZ_9CPY" title="But how do AI images and videos actually work?" by="Welch Labs (guest video on 3Blue1Brown)" note="Stephen Welch's guest video on the 3Blue1Brown channel explaining how diffusion models generate images by learning to reverse a noising process, with the connection to Brownian motion." />
+
+<Figure caption="The forward process on points from a spiral. Drag the step and watch the structure dissolve into a standard normal cloud." credit="Interactive figure by Engram, after Ho, Jain and Abbeel (2020).">
+  <ForwardDiffusion />
+</Figure>
+
+<PyCell id="forward" title="Noising in one step or a hundred" tests={String.raw`
+  import numpy as np
+  def test_closed():
+      "the closed-form x_T has mean within 0.05 of 0 and variance within 0.05 of abar_T var(x0) + 1 - abar_T"
+      target = abar[-1] * x0.var() + 1 - abar[-1]
+      assert abs(xT_closed.mean()) < 0.05 and abs(xT_closed.var() - target) < 0.05
+
+  def test_same():
+      "stepping 100 times gives the same variance as the closed form, within 0.05"
+      assert abs(xT_steps.var() - xT_closed.var()) < 0.05
+`} prompt="Compute `abar` as the cumulative product of alpha = 1 − beta. Draw 20,000 data points with `data(n)`, then make `xT_closed` with the closed form at t = T, and `xT_steps` by applying the one-step update 100 times."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  T = 100
+  beta = np.linspace(1e-4, 0.1, T); alpha = 1 - beta
+  abar = ...
+  r_d = np.random.default_rng(2020)
+  def data(n):
+      return np.where(r_d.random(n) < 0.5, -2.0, 2.0) + 0.1 * r_d.normal(size=n)
+  x0 = data(20000)
+  xT_closed = ...
+  x = x0.copy()
+  for t in range(T):
+      x = ...
+  xT_steps = x
+  print(f"abar_T = {abar[-1]:.4f};  closed form: mean {xT_closed.mean():.3f}, var {xT_closed.var():.3f};  stepped: var {xT_steps.var():.3f}")
+`}
+hint="abar = np.cumprod(alpha); xT_closed = np.sqrt(abar[-1]) * x0 + np.sqrt(1 - abar[-1]) * r_d.normal(size=x0.size); x = np.sqrt(alpha[t]) * x + np.sqrt(beta[t]) * r_d.normal(size=x.size)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  T = 100
+  beta = np.linspace(1e-4, 0.1, T); alpha = 1 - beta
+  abar = np.cumprod(alpha)
+  r_d = np.random.default_rng(2020)
+  def data(n):
+      return np.where(r_d.random(n) < 0.5, -2.0, 2.0) + 0.1 * r_d.normal(size=n)
+  x0 = data(20000)
+  xT_closed = np.sqrt(abar[-1]) * x0 + np.sqrt(1 - abar[-1]) * r_d.normal(size=x0.size)
+  x = x0.copy()
+  for t in range(T):
+      x = np.sqrt(alpha[t]) * x + np.sqrt(beta[t]) * r_d.normal(size=x.size)
+  xT_steps = x
+  print(f"abar_T = {abar[-1]:.4f};  closed form: mean {xT_closed.mean():.3f}, var {xT_closed.var():.3f};  stepped: var {xT_steps.var():.3f}")
+`} />
+
+After 100 steps $\bar\alpha_T = 0.0056$: only $\sqrt{0.0056} = 7\%$ of the original signal remains, buried in noise of standard deviation 0.997. The closed form gives mean 0.001 and variance 1.023 (the theory, $\bar\alpha_T\mathrm{Var}(x_0) + 1 - \bar\alpha_T$, is 1.017), and stepping 100 times gives variance 1.008, the same within sampling error. Two clusters at ±2 have become one featureless Gaussian.
+
+<Step n={2} title="Running it backwards" minutes={25} />
+
+To generate, start from noise and undo one step at a time. Undoing a step means drawing $x_{t - 1}$ given $x_t$, and for small $\beta_t$ that distribution is close to Gaussian, centred on a point that moves $x_t$ a little uphill on the noised data density. What is needed at every step is the **score** of the noised density, $\nabla\log p_t(x)$, exactly as for Langevin dynamics on Day 4.
+
+Ho, Jain and Abbeel (2020, today's paper) found a convenient way to get it. If $x_t = \sqrt{\bar\alpha_t}x_0 + \sqrt{1 - \bar\alpha_t}\,\varepsilon$, the best guess of the added noise given $x_t$ is directly related to the score:
+
+$$
+\nabla\log p_t(x_t) = -\frac{\mathbb E[\varepsilon \mid x_t]}{\sqrt{1 - \bar\alpha_t}}.
+$$
+
+So train a network $\hat\varepsilon(x_t, t)$ to predict the noise, by minimising $\lVert\varepsilon - \hat\varepsilon(x_t, t)\rVert^2$ over data and noise levels, and the score comes for free. Sampling then repeats
+
+$$
+x_{t - 1} = \frac{1}{\sqrt{\alpha_t}}\left(x_t - \frac{\beta_t}{\sqrt{1 - \bar\alpha_t}}\hat\varepsilon(x_t, t)\right) + \sqrt{\beta_t}\,z, \qquad z \sim \mathcal N(0, 1),
+$$
+
+from $t = T$ down to 1, with no noise on the last step.
+
+<Step n={3} title="The perfect score memorises" minutes={25} />
+
+Suppose the training set is just two points, $-2$ and $+2$, equally often. Then the noised density is a mixture of two Gaussians and its exact noise predictor can be written down: given $x_t$, the posterior mean of $x_0$ is $2\tanh\left(\frac{2\sqrt{\bar\alpha_t}\,x_t}{1 - \bar\alpha_t}\right)$, and $\mathbb E[\varepsilon \mid x_t] = \frac{x_t - \sqrt{\bar\alpha_t}\,\mathbb E[x_0 \mid x_t]}{\sqrt{1 - \bar\alpha_t}}$. Run the reverse process with it.
+
+<PyCell id="exact" title="Sampling with the exact score" tests={String.raw`
+  import numpy as np
+  def test_copies():
+      "every sample lands within 1e-6 of a training point, -2 or +2"
+      assert np.all(np.abs(np.abs(x_exact) - 2) < 1e-6)
+
+  def test_balance():
+      "the two training points are produced in roughly equal numbers (40 to 60%)"
+      assert 0.4 < np.mean(x_exact > 0) < 0.6
+`} prompt="Write `eps_exact(x, t)` from the formulas above. Starting from 4,000 standard normal draws, run the reverse update from t = T − 1 down to 0 (indices into the arrays), adding sqrt(beta[t]) times fresh noise except at t = 0, and store the result in `x_exact`."
+code={String.raw`
+  def eps_exact(x, t):
+      a = abar[t]
+      m0 = 2 * np.tanh(2 * np.sqrt(a) * x / (1 - a))     # posterior mean of x0
+      return ...
+
+  r_x = np.random.default_rng(1)
+  x = r_x.normal(size=4000)
+  for t in range(T - 1, -1, -1):
+      x = ...
+      if t > 0:
+          x = x + np.sqrt(beta[t]) * r_x.normal(size=x.size)
+  x_exact = x
+  print(f"distinct values (rounded to 6 places): {np.unique(np.round(x_exact, 6))};  fraction positive {np.mean(x_exact > 0):.3f}")
+`}
+hint="return (x - np.sqrt(a) * m0) / np.sqrt(1 - a); x = (x - beta[t] / np.sqrt(1 - abar[t]) * eps_exact(x, t)) / np.sqrt(alpha[t])."
+solution={String.raw`
+  def eps_exact(x, t):
+      a = abar[t]
+      m0 = 2 * np.tanh(2 * np.sqrt(a) * x / (1 - a))     # posterior mean of x0
+      return (x - np.sqrt(a) * m0) / np.sqrt(1 - a)
+
+  r_x = np.random.default_rng(1)
+  x = r_x.normal(size=4000)
+  for t in range(T - 1, -1, -1):
+      x = (x - beta[t] / np.sqrt(1 - abar[t]) * eps_exact(x, t)) / np.sqrt(alpha[t])
+      if t > 0:
+          x = x + np.sqrt(beta[t]) * r_x.normal(size=x.size)
+  x_exact = x
+  print(f"distinct values (rounded to 6 places): {np.unique(np.round(x_exact, 6))};  fraction positive {np.mean(x_exact > 0):.3f}")
+`} />
+
+Every one of the 4,000 samples lands exactly on −2 or +2, about half on each. That answers the prediction: with the exact score of the training set, the reverse process can only reproduce the training data, because the exact score of a finite set of points pulls everything onto those points. A model that generated only copies would be useless; generation needs a score that is not quite right in a useful way.
+
+<Step n={4} title="Learning the score" minutes={30} />
+
+A real diffusion model never has the exact score. It learns $\hat\varepsilon$ from samples by regression. Here a small model will do: for each noise level $t$, predict the clean value $x_0$ as a weighted sum of a few fixed features of $x_t$ (a constant, $x_t$ itself, and $\tanh(sx_t)$ for several scales $s$), with weights found by least squares on freshly noised data. Since $x_t$ is known, predicting $x_0$ and predicting $\varepsilon$ are equivalent ($\hat\varepsilon = (x_t - \sqrt{\bar\alpha_t}\hat x_0)/\sqrt{1 - \bar\alpha_t}$), but the $x_0$ form lets you clip the prediction to the range the data can take, a safeguard Ho and colleagues also used. Without it, at the smallest noise levels the crude model's errors are divided by a tiny $\sqrt{1 - \bar\alpha_t}$ and the occasional sample is flung far away. The data are now the two clusters of width 0.1, so there is genuine spread to learn.
+
+<PyCell id="learned" title="A diffusion model by least squares" tests={String.raw`
+  import numpy as np
+  def test_modes():
+      "over 95% of generated samples are near a cluster (|x| above 1), split between them 40 to 60%"
+      assert np.mean(np.abs(x_gen) > 1) > 0.95 and 0.4 < np.mean(x_gen > 0) < 0.6
+
+  def test_spread():
+      "the samples have spread about each cluster, with sd of |x| between 0.05 and 0.2, like the data's 0.1"
+      assert 0.05 < np.std(np.abs(x_gen)) < 0.2
+`} prompt="For each t, noise 4,000 fresh data points to level t and fit weights W[t] by np.linalg.lstsq of the features against the clean x0. Then generate 4,000 samples: at each step predict x0, clip it to [−3, 3], convert it to a noise prediction, apply the reverse update, and store the result in `x_gen`."
+code={String.raw`
+  r_l = np.random.default_rng(2006)
+  def data_l(n):
+      return np.where(r_l.random(n) < 0.5, -2.0, 2.0) + 0.1 * r_l.normal(size=n)
+  scales = np.array([0.25, 0.5, 1, 2, 4, 8])
+  feat = lambda x: np.column_stack([np.ones_like(x), x] + [np.tanh(s * x) for s in scales])
+  W = []
+  for t in range(T):
+      x0_t = data_l(4000); e = r_l.normal(size=4000)
+      xt = np.sqrt(abar[t]) * x0_t + np.sqrt(1 - abar[t]) * e
+      W.append(np.linalg.lstsq(feat(xt), x0_t, rcond=None)[0])
+
+  x = r_l.normal(size=4000)
+  for t in range(T - 1, -1, -1):
+      x0_hat = np.clip(feat(x) @ W[t], -3, 3)
+      eps_hat = ...                                 # the noise implied by x and x0_hat
+      x = (x - beta[t] / np.sqrt(1 - abar[t]) * eps_hat) / np.sqrt(alpha[t])
+      if t > 0:
+          x = x + np.sqrt(beta[t]) * r_l.normal(size=x.size)
+  x_gen = x
+  print(f"near a cluster: {np.mean(np.abs(x_gen) > 1):.3f};  positive: {np.mean(x_gen > 0):.3f};  mean |x| {np.abs(x_gen).mean():.3f}, sd of |x| {np.std(np.abs(x_gen)):.3f}")
+  plt.hist(data_l(4000), 80, alpha=0.5, density=True, label="data"); plt.hist(x_gen, 80, alpha=0.5, density=True, label="generated")
+  plt.legend(); plt.show()
+`}
+hint="eps_hat = (x - np.sqrt(abar[t]) * x0_hat) / np.sqrt(1 - abar[t])."
+solution={String.raw`
+  r_l = np.random.default_rng(2006)
+  def data_l(n):
+      return np.where(r_l.random(n) < 0.5, -2.0, 2.0) + 0.1 * r_l.normal(size=n)
+  scales = np.array([0.25, 0.5, 1, 2, 4, 8])
+  feat = lambda x: np.column_stack([np.ones_like(x), x] + [np.tanh(s * x) for s in scales])
+  W = []
+  for t in range(T):
+      x0_t = data_l(4000); e = r_l.normal(size=4000)
+      xt = np.sqrt(abar[t]) * x0_t + np.sqrt(1 - abar[t]) * e
+      W.append(np.linalg.lstsq(feat(xt), x0_t, rcond=None)[0])
+
+  x = r_l.normal(size=4000)
+  for t in range(T - 1, -1, -1):
+      x0_hat = np.clip(feat(x) @ W[t], -3, 3)
+      eps_hat = (x - np.sqrt(abar[t]) * x0_hat) / np.sqrt(1 - abar[t])                                 # the noise implied by x and x0_hat
+      x = (x - beta[t] / np.sqrt(1 - abar[t]) * eps_hat) / np.sqrt(alpha[t])
+      if t > 0:
+          x = x + np.sqrt(beta[t]) * r_l.normal(size=x.size)
+  x_gen = x
+  print(f"near a cluster: {np.mean(np.abs(x_gen) > 1):.3f};  positive: {np.mean(x_gen > 0):.3f};  mean |x| {np.abs(x_gen).mean():.3f}, sd of |x| {np.std(np.abs(x_gen)):.3f}")
+  plt.hist(data_l(4000), 80, alpha=0.5, density=True, label="data"); plt.hist(x_gen, 80, alpha=0.5, density=True, label="generated")
+  plt.legend(); plt.show()
+`} />
+
+All the generated samples lie near one of the two clusters, half of them positive, with mean $|x|$ of 1.997 and a spread of 0.111 around the cluster centres, close to the data's 0.1. They are new values, not copies: the regression saw only noisy samples and learned a smooth predictor, and that smoothness is what lets the reverse process fill in the clusters rather than snap to points. In high dimensions, a neural network's inductive biases play the same role.
+
+<Bridge title="Diffusion in brains and machines"
+  neuro="Some theories propose that the brain generates imagery, memories or predictions by a related process: starting from noisy activity and refining it towards states consistent with learned structure, with noise in neural dynamics serving as a source of samples. Whether cortex implements anything like a learned score is open, but the idea links generative modelling to the sampling hypothesis of Week 19."
+  ai="Diffusion models now generate images, video, audio, molecules and protein structures. The same week's mathematics explains them: an OU forward process, a learned score, Langevin-like reverse steps, and the observation that the gap between a perfect score of the training data and a learned one is what makes generation possible.">
+
+Destroy data with noise in many small steps, learn to predict the noise, and run the steps backwards to create.
+
+</Bridge>
+
+<Prove title="Noise prediction gives the score" task="With $x_t = \sqrt{\bar\alpha}\,x_0 + \sigma\varepsilon$ and $\sigma = \sqrt{1 - \bar\alpha}$, the conditional density is $q(x_t \mid x_0) = \mathcal N(\sqrt{\bar\alpha}\,x_0, \sigma^2)$. Using $p_t(x_t) = \int q(x_t \mid x_0)p(x_0)\,\mathrm dx_0$, show that $\nabla\log p_t(x_t) = -\mathbb E[\varepsilon \mid x_t]/\sigma$.">
+
+Differentiate under the integral: $\nabla p_t(x_t) = \int\nabla_{x_t}q(x_t \mid x_0)\,p(x_0)\,\mathrm dx_0$. For a Gaussian, $\nabla_{x_t}q = -\frac{x_t - \sqrt{\bar\alpha}x_0}{\sigma^2}q$.
+
+Divide by $p_t(x_t)$ and use Bayes' rule, $\frac{q(x_t \mid x_0)p(x_0)}{p_t(x_t)} = p(x_0 \mid x_t)$:
+
+$$
+\nabla\log p_t(x_t) = -\int\frac{x_t - \sqrt{\bar\alpha}x_0}{\sigma^2}\,p(x_0 \mid x_t)\,\mathrm dx_0 = -\frac{\mathbb E\left[x_t - \sqrt{\bar\alpha}x_0 \mid x_t\right]}{\sigma^2}.
+$$
+
+Since $x_t - \sqrt{\bar\alpha}x_0 = \sigma\varepsilon$, this is $-\mathbb E[\varepsilon \mid x_t]/\sigma$. And the function that minimises the squared error $\mathbb E\lVert\varepsilon - \hat\varepsilon(x_t)\rVert^2$ is exactly $\mathbb E[\varepsilon \mid x_t]$ (the conditional mean is the least-squares estimate, Week 17), so training a noise predictor by least squares is training a score estimator.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "The forward process of a diffusion model...", options: ["Learns the data", "Gradually turns data into Gaussian noise", "Removes noise", "Compresses images"], answer: 1, explain: "A fixed noising chain." },
+  { q: "The closed form is x_t = ...", options: ["x_0 + tε", "√ᾱ_t x_0 + √(1 − ᾱ_t) ε", "ᾱ_t x_0", "ε"], answer: 1, explain: "Steps compose." },
+  { q: "Reversing the process needs the noised density's...", options: ["Mean only", "Score", "Normalising constant", "Entropy"], answer: 1, explain: "As in Langevin dynamics." },
+  { q: "Ho and colleagues train the network to predict...", options: ["The clean image directly", "The noise that was added", "The time step", "The label"], answer: 1, explain: "Equivalent to the score." },
+  { q: "The score equals...", options: ["E[ε | x_t]", "−E[ε | x_t]/√(1 − ᾱ_t)", "x_t", "ε²"], answer: 1, explain: "Today's Prove." },
+  { q: "With the exact score of a finite training set, the reverse process...", options: ["Generates novel samples", "Reproduces training points", "Fails to run", "Produces noise"], answer: 1, explain: "Memorisation." },
+  { q: "The forward step x_t = √(1 − β)x + √β ξ is a discretised...", options: ["Random walk", "Ornstein-Uhlenbeck process", "Markov chain on two states", "Logistic map"], answer: 1, explain: "Leak plus noise." },
+]} />
+
+<Flashcards cards={[
+  { front: "Forward diffusion closed form?", back: "$x_t = \\sqrt{\\bar\\alpha_t}x_0 + \\sqrt{1 - \\bar\\alpha_t}\\,\\varepsilon$." },
+  { front: "Noise prediction objective?", back: "Minimise $\\mathbb E\\lVert\\varepsilon - \\hat\\varepsilon(x_t, t)\\rVert^2$." },
+  { front: "Score from noise prediction?", back: "$\\nabla\\log p_t = -\\hat\\varepsilon/\\sqrt{1 - \\bar\\alpha_t}$." },
+  { front: "DDPM reverse step?", back: "$x_{t-1} = (x_t - \\beta_t\\hat\\varepsilon/\\sqrt{1 - \\bar\\alpha_t})/\\sqrt{\\alpha_t} + \\sqrt{\\beta_t}z$." },
+  { front: "Memorisation?", back: "The exact score of a finite training set reverses noise back onto training points." },
+]} />
+
+<Predict revisit question="With the exact score of the training data, would a diffusion model generate new images or reproduce training images?" />
+
+<Key title="Before you go">
+<ul>
+<li>The forward process is a discrete OU process that turns data into Gaussian noise; any step can be sampled directly.</li>
+<li>Reversing it needs the score, which a network learns by predicting the added noise.</li>
+<li>The exact score of a finite training set only reproduces training points.</li>
+<li>A learned, smoothed score generates new samples spread like the data.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Ho, Jain and Abbeel (2020), <em>Denoising diffusion probabilistic models</em>.</li>
+<li>Sohl-Dickstein, Weiss, Maheswaranathan and Ganguli (2015), <em>Deep unsupervised learning using nonequilibrium thermodynamics</em>, Proceedings of the 32nd International Conference on Machine Learning, which introduced diffusion models.</li>
+<li>Song, Sohl-Dickstein, Kingma, Kumar, Ermon and Poole (2021), <em>Score-based generative modeling through stochastic differential equations</em>, International Conference on Learning Representations.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Today's exact score reproduced the training data, while the learned one generated new samples. What does this suggest about why diffusion models trained on huge datasets usually generate new images but sometimes reproduce training images almost exactly? Which property of the training set or the network would make memorisation more likely?" />

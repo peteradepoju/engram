@@ -1,0 +1,271 @@
+export const meta = {
+  title: "Drift diffusion: accumulating evidence to a bound",
+  intro: "A monkey watches a cloud of dots, some fraction drifting coherently left or right, and must say which. When the motion is strong it answers fast and correctly; when weak, slowly and often wrongly. Today you model such decisions as a random walk of accumulated evidence that stops when it reaches a bound, the drift diffusion model. You will start from the statistically optimal procedure, Wald's sequential probability ratio test, derive the model's predictions for accuracy and decision time, and use them to find the most rewarding level of caution. Then you meet the neurons whose firing appears to trace the walk.",
+  goals: [
+    "Implement the sequential probability ratio test and relate its bounds to error rates",
+    "Show that the drift diffusion model is the continuous limit of the SPRT",
+    "Check the model's formulas for accuracy and mean decision time by simulation",
+    "Find the bound that maximises reward rate, and explain the speed-accuracy trade-off",
+  ],
+  plan: [
+    { label: "Predict and the SPRT", minutes: 30 },
+    { label: "The drift diffusion model", minutes: 30 },
+    { label: "Speed against accuracy", minutes: 25 },
+    { label: "Neurons that accumulate", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "gold-2007",
+};
+
+<Predict question="In a drift diffusion model, you double the bound (the amount of evidence needed before deciding) while the evidence strength stays the same. Roughly what happens to the mean decision time when the evidence is strong: does it double, quadruple or stay the same? And when the evidence is very weak?" />
+
+<Step n={1} title="The sequential probability ratio test" minutes={30} />
+
+Suppose samples $x_1, x_2, \dots$ arrive one at a time, from one of two hypotheses, $H_+$ or $H_-$, and you must decide which, as quickly as possible for a given error rate. After each sample, add its log likelihood ratio to a running total:
+
+$$
+L_n = \sum_{k = 1}^{n}\ln\frac{p(x_k \mid H_+)}{p(x_k \mid H_-)}.
+$$
+
+Stop and choose $H_+$ when $L_n \ge A$, or $H_-$ when $L_n \le -A$; otherwise take another sample. Wald showed that this **sequential probability ratio test** needs, on average, fewer samples than any other test with the same error rates, and that a bound of $A = \ln\frac{1 - \alpha}{\alpha}$ gives error rates of about $\alpha$ (slightly less, because the total overshoots the bound). For Gaussian samples with means $\pm m$ and standard deviation $s$, each sample contributes $2mx_k/s^2$: the total is a random walk with drift.
+
+<Video id="vv0yukRSTT0" title="Sequential Probability Ratio Test" by="Neuromatch Academy" note="Neuromatch's tutorial video on the sequential probability ratio test, accumulating log likelihood ratios to a threshold, and its link to the drift diffusion model." />
+
+<PyCell id="sprt" title="Wald's test in action" tests={String.raw`
+  import numpy as np
+  def test_error():
+      "the error rate is between 0.02 and 0.06 for a target of 0.05"
+      assert 0.02 < err_rate < 0.06
+
+  def test_faster():
+      "the SPRT needs fewer samples on average than the fixed-sample test that achieves the same error rate"
+      assert mean_n < n_fixed
+`} prompt="Simulate 5,000 SPRT trials with the truth H+ (samples of mean 0.2, sd 1) and bound A = ln(19). Accumulate the log likelihood ratio sample by sample for all trials at once until each crosses ±A, and store the error rate in `err_rate` and the mean number of samples in `mean_n`. A fixed-sample test that averages n samples errs with probability Φ(−0.2√n); store in `n_fixed` the smallest n giving the same error rate."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from math import erf, sqrt, log
+  m, s_, A = 0.2, 1.0, log(19)
+  r_s = np.random.default_rng(1947)
+  n_tr = 5000
+  L = np.zeros(n_tr); n_used = np.zeros(n_tr, int); done = np.zeros(n_tr, bool); choice = np.zeros(n_tr, int)
+  while not done.all():
+      act = ~done
+      x = r_s.normal(m, s_, act.sum())
+      L[act] += ...                                 # log likelihood ratio of each sample
+      n_used[act] += 1
+      hit_up, hit_dn = act & (L >= A), act & (L <= -A)
+      choice[hit_up], choice[hit_dn] = 1, -1
+      done |= hit_up | hit_dn
+  err_rate = np.mean(choice == -1)
+  mean_n = n_used.mean()
+  Phi = lambda z: 0.5 * (1 + erf(z / sqrt(2)))
+  n_fixed = ...                                     # smallest n with Phi(-0.2 sqrt(n)) at most err_rate
+  print(f"error rate {err_rate:.3f};  SPRT uses {mean_n:.1f} samples on average, a fixed test needs {n_fixed}")
+`}
+hint="L[act] += 2 * m * x / s_ ** 2; n_fixed = next(n for n in range(1, 2000) if Phi(-0.2 * sqrt(n)) <= err_rate)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from math import erf, sqrt, log
+  m, s_, A = 0.2, 1.0, log(19)
+  r_s = np.random.default_rng(1947)
+  n_tr = 5000
+  L = np.zeros(n_tr); n_used = np.zeros(n_tr, int); done = np.zeros(n_tr, bool); choice = np.zeros(n_tr, int)
+  while not done.all():
+      act = ~done
+      x = r_s.normal(m, s_, act.sum())
+      L[act] += 2 * m * x / s_ ** 2                                 # log likelihood ratio of each sample
+      n_used[act] += 1
+      hit_up, hit_dn = act & (L >= A), act & (L <= -A)
+      choice[hit_up], choice[hit_dn] = 1, -1
+      done |= hit_up | hit_dn
+  err_rate = np.mean(choice == -1)
+  mean_n = n_used.mean()
+  Phi = lambda z: 0.5 * (1 + erf(z / sqrt(2)))
+  n_fixed = next(n for n in range(1, 2000) if Phi(-0.2 * sqrt(n)) <= err_rate)                                     # smallest n with Phi(-0.2 sqrt(n)) at most err_rate
+  print(f"error rate {err_rate:.3f};  SPRT uses {mean_n:.1f} samples on average, a fixed test needs {n_fixed}")
+`} />
+
+The error rate is 0.037, a little below the target of 0.05 because the total jumps past the bound rather than landing on it. The SPRT needs 37 samples on average; a test that always takes the same number of samples needs 80 to be as accurate. Stopping as soon as the evidence is enough more than halves the cost, and on easy trials the saving is far larger.
+
+<Step n={2} title="The drift diffusion model" minutes={30} />
+
+Let the samples become infinitely frequent and small, and the accumulated evidence becomes Brownian motion with drift (Day 1): $\mathrm dx = \mu\,\mathrm dt + \sigma\,\mathrm dW$, starting at 0, stopping at $+a$ (correct) or $-a$ (error). This is the **drift diffusion model** of Ratcliff (1978). The drift $\mu$ measures the strength of the evidence, the bound $a$ the decision maker's caution. Solving first-passage problems like Day 1's gives two classic formulas:
+
+$$
+P(\text{correct}) = \frac{1}{1 + e^{-2\mu a/\sigma^2}}, \qquad \mathbb E[\text{decision time}] = \frac{a}{\mu}\tanh\frac{\mu a}{\sigma^2}.
+$$
+
+Accuracy is a logistic function of evidence strength, the psychometric function measured in countless experiments; decision time falls as evidence strengthens, the chronometric function.
+
+<Figure caption="The drift diffusion model: a dozen evidence traces between two bounds, with histograms of when each bound was reached. Change the drift and the bound and compare accuracy and decision time with the formulas." credit="Interactive figure by Engram, after Ratcliff (1978) and Gold and Shadlen (2007).">
+  <DriftDiffusion />
+</Figure>
+
+<PyCell id="ddm" title="Formulas against simulation" tests={String.raw`
+  import numpy as np
+  def test_acc():
+      "simulated accuracy is within 0.02 of the formula for every drift"
+      assert all(abs(acc_sim[mu] - acc_th(mu)) < 0.02 for mu in mus)
+
+  def test_dt():
+      "simulated mean decision time is within 5% of the formula for every drift"
+      assert all(abs(dt_sim[mu] - dt_th(mu)) / dt_th(mu) < 0.05 for mu in mus)
+`} prompt="Write the formulas `acc_th(mu)` and `dt_th(mu)` for a = 1 and sigma = 1. Then, for mu = 0.5, 1 and 2, simulate 4,000 trials at once (dt = 0.001) until all hit a bound, and store the accuracy in `acc_sim[mu]` and the mean decision time in `dt_sim[mu]`."
+code={String.raw`
+  a_b, sig = 1.0, 1.0
+  def acc_th(mu): return ...
+  def dt_th(mu): return ...
+  mus = (0.5, 1.0, 2.0)
+  acc_sim, dt_sim = {}, {}
+  r_d = np.random.default_rng(1978)
+  for mu in mus:
+      x = np.zeros(4000); t_hit = np.zeros(4000); won = np.zeros(4000, bool); live = np.ones(4000, bool); t = 0.0
+      while live.any():
+          t += 0.001
+          x[live] += mu * 0.001 + sig * np.sqrt(0.001) * r_d.normal(size=live.sum())
+          up, dn = live & (x >= a_b), live & (x <= -a_b)
+          won[up] = True; t_hit[up | dn] = t; live &= ~(up | dn)
+      acc_sim[mu], dt_sim[mu] = won.mean(), t_hit.mean()
+  for mu in mus:
+      print(f"mu = {mu}: accuracy {acc_sim[mu]:.3f} (theory {acc_th(mu):.3f}), mean time {dt_sim[mu]:.3f} (theory {dt_th(mu):.3f})")
+`}
+hint="acc_th: 1 / (1 + np.exp(-2 * mu * a_b / sig ** 2)); dt_th: a_b / mu * np.tanh(mu * a_b / sig ** 2)."
+solution={String.raw`
+  a_b, sig = 1.0, 1.0
+  def acc_th(mu): return 1 / (1 + np.exp(-2 * mu * a_b / sig ** 2))
+  def dt_th(mu): return a_b / mu * np.tanh(mu * a_b / sig ** 2)
+  mus = (0.5, 1.0, 2.0)
+  acc_sim, dt_sim = {}, {}
+  r_d = np.random.default_rng(1978)
+  for mu in mus:
+      x = np.zeros(4000); t_hit = np.zeros(4000); won = np.zeros(4000, bool); live = np.ones(4000, bool); t = 0.0
+      while live.any():
+          t += 0.001
+          x[live] += mu * 0.001 + sig * np.sqrt(0.001) * r_d.normal(size=live.sum())
+          up, dn = live & (x >= a_b), live & (x <= -a_b)
+          won[up] = True; t_hit[up | dn] = t; live &= ~(up | dn)
+      acc_sim[mu], dt_sim[mu] = won.mean(), t_hit.mean()
+  for mu in mus:
+      print(f"mu = {mu}: accuracy {acc_sim[mu]:.3f} (theory {acc_th(mu):.3f}), mean time {dt_sim[mu]:.3f} (theory {dt_th(mu):.3f})")
+`} />
+
+Accuracy matches the formula within 0.006 for all three drifts (0.737, 0.883, 0.987 against 0.731, 0.881, 0.982). Mean decision times are 0.965, 0.788 and 0.487 against 0.924, 0.762 and 0.482: a few per cent long, because checking the bound only every millisecond misses crossings that happen between checks, which acts like a slightly higher bound (by about $0.58\sigma\sqrt{\Delta t}$, a known correction). Weak evidence makes decisions both slower and less accurate.
+
+The formula also answers the prediction. With strong evidence, $\tanh(\mu a/\sigma^2) \approx 1$ and the decision time is $a/\mu$, so doubling the bound doubles it. With very weak evidence, $\tanh(u) \approx u$ and the time is $a^2/\sigma^2$, so doubling the bound quadruples it: pure diffusion, the square-root law of Day 1 run backwards.
+
+<Step n={3} title="Speed against accuracy" minutes={25} />
+
+A higher bound buys accuracy with time. Which bound is best depends on what the decision maker wants. If correct answers are rewarded and every trial also costs a fixed time $T_0$ (for moving, waiting for the next trial, and the non-decision parts of the response), a natural goal is to maximise the **reward rate**, correct answers per second:
+
+$$
+RR(a) = \frac{P(\text{correct})}{\mathbb E[\text{decision time}] + T_0}.
+$$
+
+Bogacz and colleagues (2006) showed that people often come close to the optimal bound in such tasks, though they tend to be more cautious than reward rate alone would dictate.
+
+<PyCell id="rr" title="The most rewarding caution" tests={String.raw`
+  import numpy as np
+  def test_opt():
+      "the optimal bound lies strictly inside the range, between 0.3 and 1.5"
+      assert 0.3 < a_opt < 1.5
+
+  def test_peak():
+      "the reward rate at the optimum beats both a very low (0.05) and a very high (3) bound"
+      assert RR(a_opt) > RR(0.05) and RR(a_opt) > RR(3.0)
+
+  def test_T0():
+      "a longer delay between trials (T0 = 3 s) makes the optimal bound higher"
+      assert a_opt_slow > a_opt
+`} prompt="With mu = 1, sigma = 1 and T0 = 1 s, write `RR(a, T0=1.0)` from the formulas, evaluate it on a grid of a from 0.01 to 3 in steps of 0.001, and store the best a in `a_opt`. Repeat with T0 = 3 to get `a_opt_slow`."
+code={String.raw`
+  def RR(a, T0=1.0, mu=1.0):
+      acc = 1 / (1 + np.exp(-2 * mu * a))
+      dt_ = a / mu * np.tanh(mu * a)
+      return ...
+  grid = np.arange(0.01, 3.0, 0.001)
+  a_opt = ...
+  a_opt_slow = grid[np.argmax([RR(a, 3.0) for a in grid])]
+  print(f"best bound {a_opt:.3f} (accuracy {1 / (1 + np.exp(-2 * a_opt)):.3f}) with T0 = 1 s;  {a_opt_slow:.3f} with T0 = 3 s")
+  plt.plot(grid, [RR(a) for a in grid], label="T0 = 1"); plt.plot(grid, [RR(a, 3.0) for a in grid], label="T0 = 3")
+  plt.xlabel("bound a"); plt.ylabel("reward rate"); plt.legend(); plt.show()
+`}
+hint="return acc / (dt_ + T0); a_opt = grid[np.argmax([RR(a) for a in grid])]."
+solution={String.raw`
+  def RR(a, T0=1.0, mu=1.0):
+      acc = 1 / (1 + np.exp(-2 * mu * a))
+      dt_ = a / mu * np.tanh(mu * a)
+      return acc / (dt_ + T0)
+  grid = np.arange(0.01, 3.0, 0.001)
+  a_opt = grid[np.argmax([RR(a) for a in grid])]
+  a_opt_slow = grid[np.argmax([RR(a, 3.0) for a in grid])]
+  print(f"best bound {a_opt:.3f} (accuracy {1 / (1 + np.exp(-2 * a_opt)):.3f}) with T0 = 1 s;  {a_opt_slow:.3f} with T0 = 3 s")
+  plt.plot(grid, [RR(a) for a in grid], label="T0 = 1"); plt.plot(grid, [RR(a, 3.0) for a in grid], label="T0 = 3")
+  plt.xlabel("bound a"); plt.ylabel("reward rate"); plt.legend(); plt.show()
+`} />
+
+With one second between trials, the best bound is 0.40, which gives only 69% accuracy: when trials are cheap it pays to answer quickly and accept errors. With three seconds between trials the best bound rises to 0.84, because each trial now costs more and should be made to count. Bounds that are too low waste trials on guesses; bounds that are too high waste time on certainty.
+
+<Step n={4} title="Neurons that accumulate" minutes={20} />
+
+Gold and Shadlen (2007, today's deep read) review the evidence that the brain implements something like this. In the moving-dots task, neurons in the middle temporal area (MT) respond to motion in their preferred direction, and their difference is the momentary evidence. Neurons in the lateral intraparietal area (LIP), which plan the eye movement that reports the choice, ramp up their firing during the decision, faster for stronger motion, and reach a common level just before the eyes move, whatever the motion strength: a bound. The rise looks like an accumulated drift, the common level like the bound. Week 22's winner-take-all circuit and line attractor are candidate mechanisms for both the accumulation and the commitment. The interpretation is debated: averaged ramps might hide steps that occur at random times in individual trials, and silencing LIP does not always impair the decision. The Forge returns to these questions.
+
+<Bridge title="Accumulation in brains and machines"
+  neuro="The drift diffusion model fits accuracy and reaction-time distributions in perception, memory and value-based choice, and its parameters change in sensible ways with instructions (emphasising speed lowers the bound) and with difficulty (weaker evidence lowers the drift). It links a behavioural law, the speed-accuracy trade-off, to a neural computation."
+  ai="Sequential testing is the logic of early stopping in A/B tests and of adaptive computation in neural networks that decide how many steps to spend on an input. Large models that think for longer on harder problems face the same trade-off between the cost of time and the value of accuracy.">
+
+Add up noisy evidence until it is enough: the bound sets the balance between speed and accuracy.
+
+</Bridge>
+
+<Prove title="Accuracy of the drift diffusion model" task="Let $P(x)$ be the probability of hitting $+a$ before $-a$ starting from $x$. Accept that $\mu P'(x) + \frac{\sigma^2}{2}P''(x) = 0$, with $P(a) = 1$ and $P(-a) = 0$. Solve it and show that $P(0) = \frac{1}{1 + e^{-2\mu a/\sigma^2}}$.">
+
+Let $k = 2\mu/\sigma^2$. The equation is $P'' + kP' = 0$, whose solutions are $P(x) = A + Be^{-kx}$.
+
+The boundary conditions give $A + Be^{-ka} = 1$ and $A + Be^{ka} = 0$. Subtracting, $B(e^{-ka} - e^{ka}) = 1$, so $B = -1/(e^{ka} - e^{-ka})$, and $A = -Be^{ka} = e^{ka}/(e^{ka} - e^{-ka})$.
+
+At $x = 0$: $P(0) = A + B = \frac{e^{ka} - 1}{e^{ka} - e^{-ka}} = \frac{e^{ka} - 1}{e^{-ka}(e^{2ka} - 1)} = \frac{e^{ka}}{e^{ka} + 1} = \frac{1}{1 + e^{-ka}}$.
+
+With $k = 2\mu/\sigma^2$ this is $\frac{1}{1 + e^{-2\mu a/\sigma^2}}$: a logistic function of $\mu a/\sigma^2$, which is the total log likelihood ratio needed to decide. Doubling the bound has the same effect on accuracy as doubling the evidence strength.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "The SPRT accumulates...", options: ["Raw samples", "Log likelihood ratios of the samples", "Probabilities", "Squared errors"], answer: 1, explain: "Wald's test." },
+  { q: "For a target error rate α, the SPRT bound is about...", options: ["α", "ln((1 − α)/α)", "1/α", "√α"], answer: 1, explain: "Log odds of being right." },
+  { q: "Compared with a fixed-sample test of the same accuracy, the SPRT needs...", options: ["More samples on average", "Fewer samples on average", "Exactly the same", "Infinitely many"], answer: 1, explain: "Wald's optimality." },
+  { q: "In the drift diffusion model, the drift represents...", options: ["Caution", "Evidence strength", "Motor delay", "Noise"], answer: 1, explain: "μ." },
+  { q: "Accuracy in the DDM is...", options: ["Linear in μ", "A logistic function of 2μa/σ²", "Always 1", "Independent of a"], answer: 1, explain: "The psychometric function." },
+  { q: "Raising the bound...", options: ["Speeds decisions and lowers accuracy", "Slows decisions and raises accuracy", "Changes nothing", "Changes only the drift"], answer: 1, explain: "Speed-accuracy trade-off." },
+  { q: "LIP neurons during the dots task...", options: ["Fire at a constant rate", "Ramp up faster for stronger motion and reach a common level before the choice", "Respond only to reward", "Are silent"], answer: 1, explain: "Gold and Shadlen (2007)." },
+]} />
+
+<Flashcards cards={[
+  { front: "SPRT?", back: "Accumulate log likelihood ratios; stop at ±A with A ≈ ln((1 − α)/α)." },
+  { front: "Drift diffusion model?", back: "dx = μ dt + σ dW from 0 until ±a." },
+  { front: "DDM accuracy?", back: "$1/(1 + e^{-2\\mu a/\\sigma^2})$." },
+  { front: "DDM mean decision time?", back: "$(a/\\mu)\\tanh(\\mu a/\\sigma^2)$." },
+  { front: "Reward rate?", back: "Accuracy / (mean decision time + T0); maximised at an intermediate bound." },
+]} />
+
+<Predict revisit question="Doubling the bound: what happens to mean decision time with strong evidence, and with very weak evidence?" />
+
+<Key title="Before you go">
+<ul>
+<li>The SPRT accumulates log likelihood ratios to a bound and is the fastest test for given error rates.</li>
+<li>Its continuous limit is the drift diffusion model, with drift for evidence and bound for caution.</li>
+<li>Accuracy is logistic in μa/σ², and mean decision time is (a/μ) tanh(μa/σ²).</li>
+<li>An intermediate bound maximises reward rate; LIP activity looks like accumulation to a bound.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper (deep read): Gold and Shadlen (2007), <em>The neural basis of decision making</em>.</li>
+<li>Bogacz, Brown, Moehlis, Holmes and Cohen (2006), <em>The physics of optimal decision making</em>, Psychological Review 113(4), 700 to 765.</li>
+<li>Ratcliff (1978), <em>A theory of memory retrieval</em>, Psychological Review 85(2), 59 to 108.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="In the simple drift diffusion model, errors and correct responses have the same distribution of times, but in real experiments errors are often slower than correct responses. Propose a change to the model that would make errors slower, and explain why it works." />

@@ -1,0 +1,265 @@
+export const meta = {
+  title: "The Ornstein-Uhlenbeck process and stochastic differential equations",
+  intro: "A random walk wanders without limit. A neuron's voltage does not: its leak pulls it back towards rest while random synaptic inputs push it about. Add the leak to Brownian motion and you get the Ornstein-Uhlenbeck process, the noisy version of Week 21's membrane equation. Today you learn to write and simulate stochastic differential equations, derive how far the OU process spreads and how long it remembers, and then turn the idea around: by choosing the drift cleverly, a stochastic differential equation can be made to sample from any distribution you like. That trick is the engine of tomorrow's diffusion models.",
+  goals: [
+    "Write a stochastic differential equation and simulate it with the Euler-Maruyama method",
+    "Derive and check the variance of the Ornstein-Uhlenbeck process as it relaxes to its stationary value",
+    "Measure the autocorrelation of the OU process and relate its time constant to the membrane's",
+    "Use Langevin dynamics to sample from a bimodal distribution using only its score",
+  ],
+  plan: [
+    { label: "Predict and stochastic differential equations", minutes: 25 },
+    { label: "How far it spreads", minutes: 25 },
+    { label: "How long it remembers", minutes: 25 },
+    { label: "Sampling with Langevin dynamics", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "uhlenbeck-1930",
+};
+
+<Predict question="A neuron's membrane (time constant 10 ms) is bombarded by random input. You double the membrane time constant to 20 ms, keeping the input noise the same. Do the voltage fluctuations get larger, smaller or stay the same size? By roughly what factor?" />
+
+<Step n={1} title="Stochastic differential equations" minutes={25} />
+
+A **stochastic differential equation** (SDE) adds a noise term to an ordinary one:
+
+$$
+\mathrm dx = f(x)\,\mathrm dt + g(x)\,\mathrm dW,
+$$
+
+where $\mathrm dW$ is the increment of Brownian motion over $\mathrm dt$: Gaussian, mean 0, variance $\mathrm dt$. The drift $f$ is the deterministic push; $g$ sets the size of the random kicks. Because Brownian paths have no derivative, the equation is really shorthand for its simulation rule, the **Euler-Maruyama method**:
+
+$$
+x_{k + 1} = x_k + f(x_k)\Delta t + g(x_k)\sqrt{\Delta t}\,\xi_k, \qquad \xi_k \sim \mathcal N(0, 1).
+$$
+
+It is Euler's method from Week 21 with a random kick whose size scales as $\sqrt{\Delta t}$, as on Day 1. The **Ornstein-Uhlenbeck process** (Uhlenbeck and Ornstein, 1930, today's paper) is the linear case, a leak plus constant noise:
+
+$$
+\mathrm dx = -\frac{x}{\tau}\,\mathrm dt + \sigma\,\mathrm dW.
+$$
+
+For a neuron, $x$ is the voltage relative to its mean and $\tau$ the membrane time constant; the noise stands for the summed effect of many random synaptic inputs.
+
+<Video id="pDNfs5p38fI" title="Combining Deterministic and Stochastic Processes" by="Neuromatch Academy" note="Neuromatch's tutorial video on adding noise to a leaky deterministic system, which produces the Ornstein-Uhlenbeck process, and how its variance settles." />
+
+<Figure caption="An Ornstein-Uhlenbeck process and a random walk driven by exactly the same noise. The band shows ±2 stationary standard deviations. Change τ and σ." credit="Interactive figure by Engram.">
+  <OUProcess />
+</Figure>
+
+<Step n={2} title="How far it spreads" minutes={25} />
+
+Starting from $x = 0$, the OU process's variance obeys a simple equation. Over one small step, the leak shrinks the existing variance by the factor $(1 - \Delta t/\tau)^2 \approx 1 - 2\Delta t/\tau$, and the noise adds $\sigma^2\Delta t$. So $\frac{\mathrm d}{\mathrm dt}\mathrm{Var} = -\frac{2}{\tau}\mathrm{Var} + \sigma^2$, whose solution relaxes to a stationary value:
+
+$$
+\mathrm{Var}(x_t) = \frac{\sigma^2\tau}{2}\left(1 - e^{-2t/\tau}\right) \to \frac{\sigma^2\tau}{2}.
+$$
+
+The balance between the leak removing variance and the noise adding it sets the spread. A longer time constant means a weaker leak and so larger fluctuations.
+
+<PyCell id="spread" title="Variance relaxes to σ²τ/2" tests={String.raw`
+  import numpy as np
+  def test_relax():
+      "the variance at t = tau is within 5% of (sigma^2 tau / 2)(1 - e^-2)"
+      assert abs(var_tau - 5 * (1 - np.exp(-2))) / (5 * (1 - np.exp(-2))) < 0.05
+
+  def test_stationary():
+      "the variance at t = 60 ms is within 5% of sigma^2 tau / 2 = 5"
+      assert abs(var_end - 5) / 5 < 0.05
+`} prompt="Simulate 20,000 OU paths at once with tau = 10 ms and sigma = 1 (Euler-Maruyama, dt = 0.01 ms) from x = 0 for 60 ms. Store the variance across paths at t = 10 ms in `var_tau` and at 60 ms in `var_end`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  tau, sigma, dt = 10.0, 1.0, 0.01
+  r_o = np.random.default_rng(1930)
+  x = np.zeros(20000); var_t = []
+  for k in range(1, 6001):
+      x = ...
+      var_t.append(x.var())
+  var_t = np.array(var_t)
+  var_tau, var_end = var_t[999], var_t[-1]
+  print(f"variance at t = tau: {var_tau:.3f} (theory {5 * (1 - np.exp(-2)):.3f});  at 60 ms: {var_end:.3f} (theory 5)")
+  ts = np.arange(1, 6001) * dt
+  plt.plot(ts, var_t); plt.plot(ts, 5 * (1 - np.exp(-2 * ts / tau)), "--"); plt.xlabel("ms"); plt.ylabel("variance"); plt.show()
+`}
+hint="x = x - x / tau * dt + sigma * np.sqrt(dt) * r_o.normal(size=x.size)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  tau, sigma, dt = 10.0, 1.0, 0.01
+  r_o = np.random.default_rng(1930)
+  x = np.zeros(20000); var_t = []
+  for k in range(1, 6001):
+      x = x - x / tau * dt + sigma * np.sqrt(dt) * r_o.normal(size=x.size)
+      var_t.append(x.var())
+  var_t = np.array(var_t)
+  var_tau, var_end = var_t[999], var_t[-1]
+  print(f"variance at t = tau: {var_tau:.3f} (theory {5 * (1 - np.exp(-2)):.3f});  at 60 ms: {var_end:.3f} (theory 5)")
+  ts = np.arange(1, 6001) * dt
+  plt.plot(ts, var_t); plt.plot(ts, 5 * (1 - np.exp(-2 * ts / tau)), "--"); plt.xlabel("ms"); plt.ylabel("variance"); plt.show()
+`} />
+
+At $t = \tau$ the variance is 4.320 against the predicted 4.323, and by 60 ms it has settled at 4.98, against $\sigma^2\tau/2 = 5$. That answers the prediction: doubling $\tau$ doubles the variance, so the voltage fluctuations grow by a factor of $\sqrt2$, about 40%. A neuron with a long time constant integrates its noisy input over a longer window, and the noise accumulates further before the leak catches up.
+
+<Step n={3} title="How long it remembers" minutes={25} />
+
+In the stationary state, how related is the value now to the value a time $s$ later? Between the two, the leak shrinks the old value by $e^{-s/\tau}$ while fresh noise, independent of the past, is added. So the **autocorrelation** is
+
+$$
+\rho(s) = \frac{\mathrm{Cov}(x_t, x_{t + s})}{\mathrm{Var}(x_t)} = e^{-|s|/\tau}.
+$$
+
+The membrane time constant is the time over which the voltage remembers its inputs. In the frequency domain (Week 11), this exponential correlation is a Lorentzian power spectrum, flat at low frequencies and falling as $1/f^2$ above $1/(2\pi\tau)$: the membrane is a low-pass filter for noise, as it was for signals.
+
+<PyCell id="acf" title="The correlation time" tests={String.raw`
+  import numpy as np
+  def test_tau():
+      "the fitted correlation time is within 10% of tau = 10 ms"
+      assert abs(tau_fit - 10) / 10 < 0.10
+
+  def test_acf1():
+      "the autocorrelation at lag 10 ms is within 0.05 of e^-1"
+      assert abs(acf[100] - np.exp(-1)) < 0.05
+`} prompt="Simulate one long OU path (tau = 10 ms, sigma = 1, dt = 0.1 ms, 400,000 steps, starting from a draw from the stationary distribution). Compute its autocorrelation `acf` at lags of 0 to 30 ms (0 to 300 steps), and fit the slope of log acf over lags 0 to 20 ms to get `tau_fit`."
+code={String.raw`
+  r_a = np.random.default_rng(1931)
+  dt2, n2 = 0.1, 400000
+  noise = r_a.normal(size=n2) * sigma * np.sqrt(dt2)
+  xs = np.empty(n2); xs[0] = r_a.normal() * np.sqrt(5)
+  for k in range(1, n2):
+      xs[k] = xs[k - 1] - xs[k - 1] / tau * dt2 + noise[k]
+  xc = xs - xs.mean()
+  acf = np.array([np.mean(xc[:n2 - L] * xc[L:]) for L in range(301)]) / np.mean(xc ** 2)
+  lags = np.arange(301) * dt2
+  tau_fit = ...
+  print(f"autocorrelation at 10 ms {acf[100]:.3f} (e^-1 = {np.exp(-1):.3f});  fitted correlation time {tau_fit:.2f} ms")
+  plt.plot(lags, acf); plt.plot(lags, np.exp(-lags / tau), "--"); plt.xlabel("lag (ms)"); plt.ylabel("autocorrelation"); plt.show()
+`}
+hint="tau_fit = -1 / np.polyfit(lags[:201], np.log(acf[:201]), 1)[0]."
+solution={String.raw`
+  r_a = np.random.default_rng(1931)
+  dt2, n2 = 0.1, 400000
+  noise = r_a.normal(size=n2) * sigma * np.sqrt(dt2)
+  xs = np.empty(n2); xs[0] = r_a.normal() * np.sqrt(5)
+  for k in range(1, n2):
+      xs[k] = xs[k - 1] - xs[k - 1] / tau * dt2 + noise[k]
+  xc = xs - xs.mean()
+  acf = np.array([np.mean(xc[:n2 - L] * xc[L:]) for L in range(301)]) / np.mean(xc ** 2)
+  lags = np.arange(301) * dt2
+  tau_fit = -1 / np.polyfit(lags[:201], np.log(acf[:201]), 1)[0]
+  print(f"autocorrelation at 10 ms {acf[100]:.3f} (e^-1 = {np.exp(-1):.3f});  fitted correlation time {tau_fit:.2f} ms")
+  plt.plot(lags, acf); plt.plot(lags, np.exp(-lags / tau), "--"); plt.xlabel("lag (ms)"); plt.ylabel("autocorrelation"); plt.show()
+`} />
+
+The autocorrelation at a lag of 10 ms is 0.367, almost exactly $e^{-1}$, and fitting the decay gives a correlation time of 10.15 ms. One trajectory, watched for long enough, reveals the time constant of the process that generated it, which is how membrane and network time constants are estimated from recordings.
+
+<Step n={4} title="Sampling with Langevin dynamics" minutes={30} />
+
+The OU process settles into a Gaussian distribution. Change the drift and it settles into something else. For any density $p(x) \propto e^{-U(x)}$, the SDE
+
+$$
+\mathrm dx = \nabla\log p(x)\,\mathrm dt + \sqrt2\,\mathrm dW = -U'(x)\,\mathrm dt + \sqrt2\,\mathrm dW
+$$
+
+has $p$ as its stationary distribution. This is **Langevin dynamics**: gradient ascent on $\log p$, which pulls samples towards likely regions, plus exactly enough noise to keep them spread out in the right proportions. (The OU process is the case $U = x^2/2$.) It needs only the gradient of the log density, the **score**, and never the normalising constant, which is why it is used to sample from posteriors in Bayesian inference and why tomorrow's diffusion models train a network to estimate the score. Some have proposed that noisy neural dynamics sample from posterior distributions in the same way.
+
+<PyCell id="langevin" title="Sampling a double well" tests={String.raw`
+  import numpy as np
+  def test_tv():
+      "the histogram of the chains matches the target density with total variation distance below 0.05"
+      assert tv < 0.05
+
+  def test_both():
+      "both wells are populated, each with between 40% and 60% of the samples"
+      assert 0.4 < np.mean(samples > 0) < 0.6
+`} prompt="For U(x) = 2(x² − 1)², run 4,000 Langevin chains at once from x = 0 (dt = 0.001, 5,000 steps) and store their final positions in `samples`. Compare a 30-bin histogram on [−2, 2] with the target density (exp(−U) normalised on the same bins) and store the total variation distance, half the sum of absolute differences in bin probabilities, in `tv`."
+code={String.raw`
+  U_grad = lambda x: 8 * x * (x ** 2 - 1)
+  r_l = np.random.default_rng(1908)
+  x = np.zeros(4000); dtl = 0.001
+  for _ in range(5000):
+      x = ...
+  samples = x
+  edges = np.linspace(-2, 2, 31); mids = (edges[:-1] + edges[1:]) / 2
+  p_emp = np.histogram(samples, edges)[0] / len(samples)
+  p_true = np.exp(-2 * (mids ** 2 - 1) ** 2); p_true /= p_true.sum()
+  tv = ...
+  print(f"total variation distance {tv:.3f};  fraction in the right-hand well {np.mean(samples > 0):.3f}")
+  plt.bar(mids, p_emp, width=edges[1] - edges[0], alpha=0.6, label="Langevin samples"); plt.plot(mids, p_true, "k", label="target")
+  plt.legend(); plt.show()
+`}
+hint="x = x - U_grad(x) * dtl + np.sqrt(2 * dtl) * r_l.normal(size=x.size); tv = 0.5 * np.abs(p_emp - p_true).sum()."
+solution={String.raw`
+  U_grad = lambda x: 8 * x * (x ** 2 - 1)
+  r_l = np.random.default_rng(1908)
+  x = np.zeros(4000); dtl = 0.001
+  for _ in range(5000):
+      x = x - U_grad(x) * dtl + np.sqrt(2 * dtl) * r_l.normal(size=x.size)
+  samples = x
+  edges = np.linspace(-2, 2, 31); mids = (edges[:-1] + edges[1:]) / 2
+  p_emp = np.histogram(samples, edges)[0] / len(samples)
+  p_true = np.exp(-2 * (mids ** 2 - 1) ** 2); p_true /= p_true.sum()
+  tv = 0.5 * np.abs(p_emp - p_true).sum()
+  print(f"total variation distance {tv:.3f};  fraction in the right-hand well {np.mean(samples > 0):.3f}")
+  plt.bar(mids, p_emp, width=edges[1] - edges[0], alpha=0.6, label="Langevin samples"); plt.plot(mids, p_true, "k", label="target")
+  plt.legend(); plt.show()
+`} />
+
+Starting all 4,000 chains at the top of the barrier, $x = 0$, after 5 time units their histogram matches the double-well density with a total variation distance of 0.028, about what sampling error alone would give, and 51% of the chains sit in the right-hand well. The algorithm never knew the normalising constant of the density, only the slope of its logarithm.
+
+<Bridge title="Stochastic dynamics in brains and machines"
+  neuro="The OU process is the standard description of a neuron's membrane under synaptic bombardment, and of slowly fluctuating population activity. Adding a threshold to it gives the leaky integrate-and-fire neuron with noise of Week 21, whose firing statistics come from the first-passage time of an OU process."
+  ai="Langevin dynamics underlies stochastic gradient Langevin dynamics for Bayesian deep learning and score-based generative models. Tomorrow's diffusion models run an OU-like process forwards to destroy data, and a learned Langevin-like process backwards to create it.">
+
+A leak and noise balance at a spread of σ²τ/2; replace the leak by a score and the noise samples any distribution.
+
+</Bridge>
+
+<Prove title="The stationary distribution of Langevin dynamics" task="The density $p(x, t)$ of an SDE $\mathrm dx = f(x)\mathrm dt + \sqrt2\,\mathrm dW$ obeys the Fokker-Planck equation $\partial_tp = -\partial_x(fp) + \partial_x^2p$. Show that with $f = -U'$, the density $p_\infty \propto e^{-U}$ is stationary.">
+
+Write the right-hand side as $-\partial_xJ$ with probability flux $J = fp - \partial_xp$. A density is stationary if $\partial_xJ = 0$; it is enough that $J = 0$ everywhere.
+
+For $p_\infty = Ce^{-U}$, $\partial_xp_\infty = -U'Ce^{-U} = -U'p_\infty$. So $J = -U'p_\infty - (-U'p_\infty) = 0$.
+
+The drift's flow down the gradient of $U$ exactly cancels the diffusive flow from crowded to sparse regions, at every point. For the OU process, $U = x^2/(2v)$ with $v = \sigma^2\tau/2$ after rescaling time and noise, which gives back the Gaussian of Step 2.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "In the Euler-Maruyama method the noise term per step scales as...", options: ["Δt", "√Δt", "Δt²", "1"], answer: 1, explain: "Brownian increments have variance Δt." },
+  { q: "The OU process is...", options: ["A random walk without leak", "Brownian motion with a leak back to zero", "A Markov chain on two states", "Deterministic"], answer: 1, explain: "dx = −x/τ dt + σ dW." },
+  { q: "The stationary variance of the OU process is...", options: ["σ²", "σ²τ/2", "τ/σ²", "Infinite"], answer: 1, explain: "Leak balances noise." },
+  { q: "Doubling τ with the same noise makes the voltage sd...", options: ["Halve", "Grow by √2", "Double", "Unchanged"], answer: 1, explain: "Variance ∝ τ." },
+  { q: "The OU autocorrelation at lag s is...", options: ["e^{−s²/τ²}", "e^{−|s|/τ}", "1 − s/τ", "cos(s/τ)"], answer: 1, explain: "Memory fades over τ." },
+  { q: "Langevin dynamics needs the target density's...", options: ["Normalising constant", "Score, the gradient of its log", "Mean only", "Samples"], answer: 1, explain: "∇ log p." },
+  { q: "Langevin dynamics with f = −U′ and noise √2 has stationary density...", options: ["Uniform", "∝ e^{−U}", "Gaussian always", "∝ U"], answer: 1, explain: "Zero flux." },
+]} />
+
+<Flashcards cards={[
+  { front: "SDE?", back: "dx = f(x) dt + g(x) dW; simulate with Euler-Maruyama." },
+  { front: "Euler-Maruyama step?", back: "$x_{k+1} = x_k + f\\Delta t + g\\sqrt{\\Delta t}\\,\\xi_k$." },
+  { front: "OU process?", back: "dx = −x/τ dt + σ dW; stationary variance σ²τ/2; autocorrelation $e^{-|s|/\\tau}$." },
+  { front: "Langevin dynamics?", back: "dx = ∇ log p dt + √2 dW samples from p." },
+  { front: "Score?", back: "The gradient of the log density, ∇ log p(x)." },
+]} />
+
+<Predict revisit question="If you double the membrane time constant with the same input noise, what happens to the voltage fluctuations?" />
+
+<Key title="Before you go">
+<ul>
+<li>SDEs add Brownian noise to ODEs and are simulated with Euler-Maruyama, noise scaling as √Δt.</li>
+<li>The OU process relaxes to variance σ²τ/2: longer time constants mean larger fluctuations.</li>
+<li>Its autocorrelation decays as e^(−|s|/τ): the membrane remembers its input for about τ.</li>
+<li>Langevin dynamics samples any density from its score alone.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Uhlenbeck and Ornstein (1930), <em>On the theory of the Brownian motion</em>.</li>
+<li>Gardiner, <em>Stochastic Methods</em> (Springer), chapters 3 and 4, for the mathematics of SDEs.</li>
+<li>Higham (2001), <em>An algorithmic introduction to numerical simulation of stochastic differential equations</em>, SIAM Review 43(3), 525 to 546.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="In an awake animal, cortical neurons receive so much synaptic input that their effective membrane time constant can shrink to a few milliseconds. Using today's results, describe how this would change the size and the timescale of their voltage fluctuations, and what it might mean for how precisely they can time spikes." />

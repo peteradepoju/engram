@@ -109,3 +109,8 @@ export { HopfCycle } from "./hopf-cycle";
 export { KuramotoSync } from "./kuramoto-sync";
 export { LogisticMap } from "./logistic-map";
 export { LorenzButterfly } from "./lorenz-butterfly";
+export { RandomWalkSpread } from "./random-walk-spread";
+export { MarkovChannel } from "./markov-channel";
+export { DriftDiffusion } from "./drift-diffusion";
+export { OUProcess } from "./ou-process";
+export { ForwardDiffusion } from "./forward-diffusion";
