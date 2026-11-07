@@ -1,0 +1,241 @@
+export const meta = {
+  title: "Linearisation, nullclines and the inhibition-stabilised network",
+  intro: "Real circuits are non-linear, but close to a fixed point every smooth system looks linear, and yesterday's trace-determinant map then tells you what it does. Today you combine the two: draw the nullclines of the Wilson-Cowan model of excitatory and inhibitory populations to find its fixed points, linearise around each with the Jacobian, and classify them. Then you use the same analysis to derive one of the most surprising predictions in systems neuroscience, that giving inhibitory neurons more drive can make them fire less, and see how it was found in visual cortex.",
+  goals: [
+    "Find fixed points of a non-linear two-dimensional system as intersections of nullclines",
+    "Compute the Jacobian and classify each fixed point by linearisation",
+    "Analyse the Wilson-Cowan excitatory-inhibitory model",
+    "Derive and simulate the paradoxical response of an inhibition-stabilised network",
+  ],
+  plan: [
+    { label: "Predict and nullclines", minutes: 20 },
+    { label: "Linearisation and the Jacobian", minutes: 25 },
+    { label: "The Wilson-Cowan model", minutes: 30 },
+    { label: "The inhibition-stabilised network", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "ozeki-2009",
+};
+
+<Predict question="In a circuit of excitatory and inhibitory neurons, you use optogenetics to excite only the inhibitory neurons a little more. Their firing rate, measured once the circuit settles, goes up, goes down or stays the same?" />
+
+<Step n={1} title="Nullclines" minutes={20} />
+
+For a system $\dot x = f(x, y)$, $\dot y = g(x, y)$, the **$x$-nullcline** is the curve where $f = 0$, where the flow is purely vertical, and the **$y$-nullcline** is where $g = 0$, where the flow is purely horizontal. Fixed points are where the nullclines cross. Drawing them is usually the fastest way to understand a non-linear system: they divide the plane into regions in which the flow points in a fixed general direction (up-right, down-left and so on), and their shape shows how many fixed points there are and how they appear or vanish as parameters change.
+
+<Video id="jIx26iQ69ps" title="Fixed points and their stability" by="Neuromatch Academy" note="Neuromatch's tutorial video on the fixed points of the Wilson-Cowan model, their Jacobian and their stability, followed in their notebook by the inhibition-stabilised network." />
+
+<Step n={2} title="Linearisation and the Jacobian" minutes={25} />
+
+Near a fixed point $(x^*, y^*)$, write the state as the fixed point plus a small deviation $\boldsymbol\delta$. A first-order Taylor expansion of both equations gives a linear system,
+
+$$
+\dot{\boldsymbol\delta} \approx J\boldsymbol\delta, \qquad J = \begin{pmatrix}\partial f/\partial x & \partial f/\partial y \\ \partial g/\partial x & \partial g/\partial y\end{pmatrix}_{(x^*, y^*)},
+$$
+
+where $J$ is the **Jacobian**: the matrix of partial derivatives (Week 9) evaluated at the fixed point. Its trace and determinant classify the fixed point exactly as on Day 2. A theorem of Hartman and Grobman guarantees that this classification is correct for the non-linear system near the fixed point, provided no eigenvalue has zero real part; when one does, the linearisation is inconclusive, and that is where the bifurcations of Week 23 happen.
+
+<Step n={3} title="The Wilson-Cowan model" minutes={30} />
+
+Wilson and Cowan (1972) described a patch of cortex by the mean rates of its excitatory and inhibitory populations:
+
+$$
+\tau_E\dot r_E = -r_E + F_E(w_{EE}r_E - w_{EI}r_I + I_E), \qquad \tau_I\dot r_I = -r_I + F_I(w_{IE}r_E - w_{II}r_I + I_I),
+$$
+
+with sigmoid activation functions $F_E$ and $F_I$. The parameters below are those of the Neuromatch Academy tutorial: time is in units of $\tau_E$, and the activation functions are shifted so that $F(0) = 0$.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  tE, aE, thE, tI, aI, thI = 1.0, 1.2, 2.8, 2.0, 1.0, 4.0
+  wEE, wEI, wIE, wII = 9.0, 4.0, 13.0, 11.0
+  def Fs(x, a, th): return 1 / (1 + np.exp(-a * (x - th))) - 1 / (1 + np.exp(a * th))
+  def wc(x, IE=0.0, II=0.0):
+      rE, rI = x
+      return np.array([(-rE + Fs(wEE * rE - wEI * rI + IE, aE, thE)) / tE,
+                       (-rI + Fs(wIE * rE - wII * rI + II, aI, thI)) / tI])
+  def classify(A):
+      T, D = np.trace(A), np.linalg.det(A)
+      if D < 0: return "saddle"
+      if T ** 2 >= 4 * D: return "stable node" if T < 0 else "unstable node"
+      return "stable spiral" if T < 0 else "unstable spiral"
+  print("flow at (0.5, 0.5):", wc(np.array([0.5, 0.5])).round(3))
+`} />
+
+<PyCell id="wc" title="Fixed points of Wilson-Cowan" tests={String.raw`
+  import numpy as np
+  def test_jac():
+      "jacobian matches the analytic derivative of the first equation with respect to rE at (0.3, 0.2)"
+      x = np.array([0.3, 0.2]); u = wEE * 0.3 - wEI * 0.2
+      s = 1 / (1 + np.exp(-aE * (u - thE))); dF = aE * s * (1 - s)
+      assert abs(jacobian(x)[0, 0] - (-1 + wEE * dF) / tE) < 1e-5
+
+  def test_fps():
+      "three fixed points: a stable one at rest, a saddle and a stable high state"
+      kinds = [classify(jacobian(p)) for p in fps]
+      assert len(fps) == 3 and kinds[1] == "saddle" and kinds[0].startswith("stable") and kinds[2].startswith("stable")
+      assert np.abs(fps[0]).max() < 1e-6 and fps[2][0] > 0.9
+`} prompt="Complete `jacobian(x)` by central differences (step 1e-6, one column per variable) and the Newton step in `newton(x)`, which solves J Δ = −f. Starting from (0, 0), (0.4, 0.1) and (0.9, 0.6), store the three fixed points in `fps` in that order."
+code={String.raw`
+  def jacobian(x, h=1e-6):
+      J = np.zeros((2, 2))
+      for j in range(2):
+          e = np.zeros(2); e[j] = h
+          J[:, j] = ...
+      return J
+
+  def newton(x):
+      for _ in range(50):
+          x = ...
+      return x
+
+  fps = [newton(np.array(g, float)) for g in [(0, 0), (0.4, 0.1), (0.9, 0.6)]]
+  for p in fps:
+      J = jacobian(p)
+      print(p.round(4), classify(J), " eigenvalues", np.linalg.eigvals(J).round(3), " J_EE =", round(J[0, 0], 3))
+  rE = np.linspace(-0.05, 1, 200); rI = np.linspace(-0.05, 1, 200)
+  RE, RI = np.meshgrid(rE, rI); G = np.array([[wc(np.array([a, b])) for a in rE] for b in rI])
+  plt.contour(RE, RI, G[..., 0], [0], colors="C0"); plt.contour(RE, RI, G[..., 1], [0], colors="C1")
+  for p in fps: plt.plot(*p, "ko")
+  plt.xlabel("r_E"); plt.ylabel("r_I"); plt.show()
+`}
+hint="J[:, j] = (wc(x + e) - wc(x - e)) / (2 * h); x = x - np.linalg.solve(jacobian(x), wc(x))."
+solution={String.raw`
+  def jacobian(x, h=1e-6):
+      J = np.zeros((2, 2))
+      for j in range(2):
+          e = np.zeros(2); e[j] = h
+          J[:, j] = (wc(x + e) - wc(x - e)) / (2 * h)
+      return J
+
+  def newton(x):
+      for _ in range(50):
+          x = x - np.linalg.solve(jacobian(x), wc(x))
+      return x
+
+  fps = [newton(np.array(g, float)) for g in [(0, 0), (0.4, 0.1), (0.9, 0.6)]]
+  for p in fps:
+      J = jacobian(p)
+      print(p.round(4), classify(J), " eigenvalues", np.linalg.eigvals(J).round(3), " J_EE =", round(J[0, 0], 3))
+  rE = np.linspace(-0.05, 1, 200); rI = np.linspace(-0.05, 1, 200)
+  RE, RI = np.meshgrid(rE, rI); G = np.array([[wc(np.array([a, b])) for a in rE] for b in rI])
+  plt.contour(RE, RI, G[..., 0], [0], colors="C0"); plt.contour(RE, RI, G[..., 1], [0], colors="C1")
+  for p in fps: plt.plot(*p, "ko")
+  plt.xlabel("r_E"); plt.ylabel("r_I"); plt.show()
+`} />
+
+The model has three fixed points. Rest, at (0, 0), is a weakly damped stable spiral. The middle one, at (0.337, 0.168), is a saddle with eigenvalues 1.057 and −0.873: it is the threshold between the two basins, as the unstable point was on Day 1, but in two dimensions the boundary is a curve, the saddle's stable direction extended. The high state, at (0.938, 0.673), is a stable node. Note $J_{EE}$ at each: −0.65 at rest, +1.52 at the saddle and −0.71 at the high state. At this high state the excitatory population would be stable on its own, because its sigmoid is nearly saturated there; at the saddle, it would not.
+
+<Step n={4} title="The inhibition-stabilised network" minutes={30} />
+
+The top-left entry of the Jacobian, $J_{EE}$, says what the excitatory population would do on its own if inhibition were frozen. If $J_{EE} > 0$, excitation alone is unstable, and the network is held in check only by inhibition: an **inhibition-stabilised network** (ISN). Tsodyks, Skaggs, Sejnowski and McNaughton (1997) pointed out a strange consequence. Give the inhibitory population extra drive. It fires more at first and suppresses the excitatory cells; but because excitation is self-amplifying, the excitatory rate falls so far that the excitatory input to the inhibitory cells drops by more than the extra drive added. The inhibitory rate ends **lower** than before.
+
+You can derive this from the linearised steady state. With extra input $\Delta\mathbf{I}$, the steady-state change is $\Delta\mathbf{r} = -J^{-1}\Delta\mathbf{I}$ (scaled by the time constants), and for extra drive to the inhibitory cells only, the sign of $\Delta r_I$ turns out to be the sign of $-J_{EE}$: it falls exactly when the network is an ISN.
+
+<Figure caption="An excitatory-inhibitory network receives extra drive to its inhibitory cells at 200 ms. Raise the recurrent excitation past 1 and the inhibitory rate falls instead of rising." credit="Interactive figure by Engram, after Tsodyks and colleagues (1997) and Ozeki and colleagues (2009).">
+  <ISNParadox />
+</Figure>
+
+<PyCell id="isn" title="The paradox, predicted and simulated" tests={String.raw`
+  import numpy as np
+  def test_predict():
+      "the linear prediction gives a rise in r_I for wEE = 0.5 and a fall for wEE = 2.2"
+      assert pred[0.5][1] > 0 and pred[2.2][1] < 0
+
+  def test_sim():
+      "the simulated changes have the same signs and are within 1e-3 of the prediction"
+      for w in (0.5, 2.2):
+          assert np.all(np.sign(sim[w]) == np.sign(pred[w])) and np.abs(sim[w] - pred[w]).max() < 1e-3
+`} prompt="For the threshold-linear network of the figure (wEI = wIE = 2.5, wII = 1.5, inputs IE = 2 and II = 1, tau_E = 20 and tau_I = 10 ms), compute for wEE = 0.5 and 2.2 the predicted steady-state change `pred[w]` = solve(I − W, ΔI) for ΔI = (0, 0.5), and the simulated change `sim[w]` (Euler, dt = 0.1 ms, 400 ms before and 400 ms after the extra drive)."
+code={String.raw`
+  wEI_, wIE_, wII_, IE_, II_, tE_, tI_ = 2.5, 2.5, 1.5, 2.0, 1.0, 20.0, 10.0
+  pred, sim = {}, {}
+  for w in (0.5, 2.2):
+      W = np.array([[w, -wEI_], [wIE_, -wII_]])
+      pred[w] = ...                                  # steady-state change for extra input (0, 0.5)
+      r = np.zeros(2); dt = 0.1; before = None
+      for k in range(8000):
+          extra = 0.5 if k >= 4000 else 0.0
+          u = W @ r + np.array([IE_, II_ + extra])
+          r = r + dt * (-r + np.maximum(u, 0)) / np.array([tE_, tI_])
+          if k == 3999: before = r.copy()
+      sim[w] = ...
+      print(f"wEE = {w}: predicted change (E, I) {pred[w].round(4)}, simulated {sim[w].round(4)}")
+`}
+hint="pred[w] = np.linalg.solve(np.eye(2) - W, np.array([0.0, 0.5])); sim[w] = r - before."
+solution={String.raw`
+  wEI_, wIE_, wII_, IE_, II_, tE_, tI_ = 2.5, 2.5, 1.5, 2.0, 1.0, 20.0, 10.0
+  pred, sim = {}, {}
+  for w in (0.5, 2.2):
+      W = np.array([[w, -wEI_], [wIE_, -wII_]])
+      pred[w] = np.linalg.solve(np.eye(2) - W, np.array([0.0, 0.5]))                                  # steady-state change for extra input (0, 0.5)
+      r = np.zeros(2); dt = 0.1; before = None
+      for k in range(8000):
+          extra = 0.5 if k >= 4000 else 0.0
+          u = W @ r + np.array([IE_, II_ + extra])
+          r = r + dt * (-r + np.maximum(u, 0)) / np.array([tE_, tI_])
+          if k == 3999: before = r.copy()
+      sim[w] = r - before
+      print(f"wEE = {w}: predicted change (E, I) {pred[w].round(4)}, simulated {sim[w].round(4)}")
+`} />
+
+With weak recurrent excitation ($w_{EE} = 0.5$), extra drive of 0.5 to the inhibitory cells raises their rate by 0.033 and lowers the excitatory rate by 0.167, as intuition says. With $w_{EE} = 2.2$ the excitatory rate falls by more, 0.385, and the inhibitory rate falls too, by 0.185, despite its extra drive. The simulation matches the linear prediction to four decimal places, because the threshold-linear network is exactly linear while both rates stay positive. That answers the prediction: in an inhibition-stabilised network the inhibitory rate goes down.
+
+<Bridge title="Inhibitory stabilisation in brains and machines"
+  neuro="Ozeki and colleagues (2009, today's deep read) found the ISN signature in cat visual cortex: during surround suppression both excitatory and inhibitory conductances fell. Later optogenetic experiments that drove inhibitory cells directly found paradoxical responses in mouse cortex too, so cortex appears to operate with strong recurrent excitation held in check by inhibition."
+  ai="Normalisation layers and gating in artificial networks play a similar stabilising role: they let a network use strong recurrent or residual amplification without blowing up. The ISN is a reminder that a circuit's response to a perturbation of one component depends on the whole loop, which is also why ablating single units in a trained network can give counterintuitive results.">
+
+In a loop, pushing on one part can make it move the other way.
+
+</Bridge>
+
+<Prove title="The sign of the paradox" task="For the linear steady state $(I - W)\Delta\mathbf{r} = (0, \Delta I)^\top$ with $W = \begin{pmatrix}w_{EE} & -w_{EI} \\ w_{IE} & -w_{II}\end{pmatrix}$, show that $\Delta r_I = (1 - w_{EE})\Delta I/\det(I - W)$, and deduce that if the network is stable, the inhibitory rate falls exactly when $w_{EE} > 1$.">
+
+Write $M = I - W = \begin{pmatrix}1 - w_{EE} & w_{EI} \\ -w_{IE} & 1 + w_{II}\end{pmatrix}$. By the 2 × 2 inverse formula, $M^{-1} = \frac{1}{\det M}\begin{pmatrix}1 + w_{II} & -w_{EI} \\ w_{IE} & 1 - w_{EE}\end{pmatrix}$.
+
+So $\Delta\mathbf{r} = M^{-1}(0, \Delta I)^\top$ gives $\Delta r_E = -w_{EI}\Delta I/\det M$ and $\Delta r_I = (1 - w_{EE})\Delta I/\det M$.
+
+Stability of the linear network needs $\det M > 0$ (the determinant of the Jacobian, up to positive time-constant factors, must be positive). Then $\Delta r_E \lt 0$ always, as expected, and $\Delta r_I$ has the sign of $1 - w_{EE}$: negative when $w_{EE} > 1$, that is, when the excitatory population on its own would be unstable.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "An x-nullcline is the curve where...", options: ["x = 0", "ẋ = 0", "ẏ = 0", "x = y"], answer: 1, explain: "The flow there is vertical." },
+  { q: "Fixed points of a 2D system lie...", options: ["On one nullcline only", "Where the two nullclines cross", "At the origin", "Anywhere"], answer: 1, explain: "Both derivatives vanish." },
+  { q: "The Jacobian at a fixed point is...", options: ["The matrix of second derivatives", "The matrix of first partial derivatives", "The identity", "The vector field"], answer: 1, explain: "It defines the linearisation." },
+  { q: "Linearisation can fail to determine stability when...", options: ["The determinant is negative", "An eigenvalue has zero real part", "The trace is negative", "The system is non-linear"], answer: 1, explain: "Hartman-Grobman needs no eigenvalue on the imaginary axis." },
+  { q: "The middle fixed point of the bistable Wilson-Cowan model is...", options: ["A stable node", "A saddle", "A centre", "A stable spiral"], answer: 1, explain: "It separates the two basins." },
+  { q: "A network is inhibition-stabilised when...", options: ["Inhibition is weak", "The excitatory population alone would be unstable", "There is no excitation", "All weights are symmetric"], answer: 1, explain: "J_EE greater than 0." },
+  { q: "In an ISN, extra drive to inhibitory cells makes their steady rate...", options: ["Rise", "Fall", "Oscillate", "Unchanged"], answer: 1, explain: "The paradoxical effect." },
+]} />
+
+<Flashcards cards={[
+  { front: "Nullcline?", back: "Curve where one variable's derivative is zero; fixed points are crossings." },
+  { front: "Jacobian?", back: "Matrix of partial derivatives at a fixed point; $\\dot\\delta \\approx J\\delta$." },
+  { front: "Hartman-Grobman?", back: "Near a fixed point with no eigenvalue on the imaginary axis, the linearisation gives the correct picture." },
+  { front: "Wilson-Cowan model?", back: "Rate equations for coupled excitatory and inhibitory populations with sigmoid activation." },
+  { front: "ISN paradox?", back: "Extra drive to inhibitory cells lowers their rate when recurrent excitation alone is unstable." },
+]} />
+
+<Predict revisit question="When you excite inhibitory neurons a little more, does their settled firing rate go up, down or stay the same?" />
+
+<Key title="Before you go">
+<ul>
+<li>Nullclines locate fixed points and organise the flow of a 2D system.</li>
+<li>The Jacobian linearises a non-linear system at a fixed point; its trace and determinant classify it.</li>
+<li>The Wilson-Cowan model can be bistable, with a saddle between rest and a high-activity state.</li>
+<li>In an inhibition-stabilised network, extra drive to inhibition paradoxically lowers inhibitory firing.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper (deep read): Ozeki, Finn, Schaffer, Miller and Ferster (2009), <em>Inhibitory stabilization of the cortical network underlies visual surround suppression</em>.</li>
+<li>Tsodyks, Skaggs, Sejnowski and McNaughton (1997), <em>Paradoxical effects of external modulation of inhibitory interneurons</em>, Journal of Neuroscience 17(11), 4382 to 4388.</li>
+<li>Wilson and Cowan (1972), <em>Excitatory and inhibitory interactions in localized populations of model neurons</em>, Biophysical Journal 12(1), 1 to 24.</li>
+<li>Neuromatch Academy, computational neuroscience course, W2D5 Tutorials 2 and 3, the source of today's Wilson-Cowan parameters.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="You stimulate inhibitory neurons optogenetically and their rate falls. Write down two explanations other than an inhibition-stabilised network (think about what else the light could do, and which cells you are recording), and an experiment that would tell them apart." />

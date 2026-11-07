@@ -1,0 +1,259 @@
+export const meta = {
+  title: "Excitability: the FitzHugh-Nagumo neuron",
+  intro: "The Hodgkin-Huxley model of last week's Forge has four variables, too many to picture. FitzHugh kept only two, a fast voltage-like variable and a slow recovery variable, and found that threshold, all-or-none spikes, refractoriness and repetitive firing can all be read from two curves on a plane. Today you build his model, find its resting state, show that its threshold is not a fixed voltage but a feature of the flow, and locate exactly the input at which rest gives way to rhythmic firing.",
+  goals: [
+    "Write the FitzHugh-Nagumo model and draw its nullclines",
+    "Find the resting state and its stability by linearisation",
+    "Explain the all-or-none spike and the threshold as consequences of the phase-plane geometry",
+    "Find the input current at which the resting state loses stability and the neuron starts to fire repetitively",
+  ],
+  plan: [
+    { label: "Predict and the model", minutes: 20 },
+    { label: "Rest and its stability", minutes: 25 },
+    { label: "Threshold and the all-or-none spike", minutes: 30 },
+    { label: "From rest to rhythm", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "fitzhugh-1961",
+};
+
+<Predict question="You give a FitzHugh-Nagumo neuron at rest an instantaneous kick in voltage, and gradually increase the size of the kick. Does the peak of the response grow smoothly with the kick, or does it jump?" />
+
+<Step n={1} title="The model" minutes={20} />
+
+FitzHugh (1961, today's paper) noticed that in the Hodgkin-Huxley equations, the voltage $V$ and the sodium activation $m$ change fast, while sodium inactivation $h$ and potassium activation $n$ change slowly. Lumping the fast pair into one variable $v$ and the slow pair into one recovery variable $w$, he wrote
+
+$$
+\dot v = v - \frac{v^3}{3} - w + I, \qquad \dot w = \varepsilon(v + a - bw),
+$$
+
+with $a = 0.7$, $b = 0.8$ and $\varepsilon = 0.08$. The cubic gives the fast positive feedback of sodium channels: a small rise in $v$ makes $v$ rise faster. The slow variable $w$ builds up when $v$ is high and pulls it back down, like potassium activation and sodium inactivation. The small $\varepsilon$ makes $w$ about ten times slower than $v$. Nagumo and colleagues built the same equations as an electronic circuit in 1962, which is why the model carries both names.
+
+The $v$-nullcline is the cubic $w = v - v^3/3 + I$ and the $w$-nullcline is the straight line $w = (v + a)/b$. Their crossing is the resting state.
+
+<Video id="V2SBAK2Xf8Y" title="Nullclines and Vector Fields" by="Neuromatch Academy" note="Neuromatch's tutorial video on drawing nullclines and vector fields for a two-variable system, the tools you use on the FitzHugh-Nagumo plane today." />
+
+<Step n={2} title="Rest and its stability" minutes={25} />
+
+<PyCell id="rest" title="Find the resting state" tests={String.raw`
+  import numpy as np
+  def test_rest():
+      "the resting state at I = 0 is near v = -1.199, w = -0.624, and both derivatives vanish there"
+      x = rest(0.0)
+      assert abs(x[0] + 1.1994) < 1e-3 and abs(x[1] + 0.6243) < 1e-3 and np.abs(fhn(x, 0.0)).max() < 1e-9
+
+  def test_jac():
+      "the Jacobian at rest has trace about -0.503 and the state is a stable spiral"
+      J = jac(rest(0.0))
+      assert abs(np.trace(J) + 0.5026) < 1e-3 and np.all(np.linalg.eigvals(J).real < 0) and np.any(np.abs(np.linalg.eigvals(J).imag) > 0)
+`} prompt="Write `rest(I)`: substitute the w-nullcline into the v-nullcline to get a cubic in v, find its real root with np.roots, and return (v, w). Then write the analytic Jacobian `jac(x)`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  a, b, eps = 0.7, 0.8, 0.08
+  def fhn(x, I=0.0):
+      v, w = x
+      return np.array([v - v ** 3 / 3 - w + I, eps * (v + a - b * w)])
+
+  def rest(I):
+      # v - v^3/3 - (v + a)/b + I = 0, written as a cubic in v
+      roots = np.roots([-1 / 3, 0, ..., ...])
+      v = roots[np.abs(roots.imag) < 1e-9].real[0]
+      return np.array([v, (v + a) / b])
+
+  def jac(x):
+      v, w = x
+      return np.array([[..., -1.0], [eps, -eps * b]])
+
+  x0 = rest(0.0); J = jac(x0)
+  print("rest:", x0.round(4), " trace", round(np.trace(J), 4), " det", round(np.linalg.det(J), 4), " eigenvalues", np.linalg.eigvals(J).round(4))
+`}
+hint="The cubic is -v^3/3 + (1 - 1/b) v + (I - a/b) = 0, so the coefficients are [-1/3, 0, 1 - 1/b, I - a/b]; d(v - v^3/3)/dv = 1 - v**2."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  a, b, eps = 0.7, 0.8, 0.08
+  def fhn(x, I=0.0):
+      v, w = x
+      return np.array([v - v ** 3 / 3 - w + I, eps * (v + a - b * w)])
+
+  def rest(I):
+      # v - v^3/3 - (v + a)/b + I = 0, written as a cubic in v
+      roots = np.roots([-1 / 3, 0, 1 - 1 / b, I - a / b])
+      v = roots[np.abs(roots.imag) < 1e-9].real[0]
+      return np.array([v, (v + a) / b])
+
+  def jac(x):
+      v, w = x
+      return np.array([[1 - v ** 2, -1.0], [eps, -eps * b]])
+
+  x0 = rest(0.0); J = jac(x0)
+  print("rest:", x0.round(4), " trace", round(np.trace(J), 4), " det", round(np.linalg.det(J), 4), " eigenvalues", np.linalg.eigvals(J).round(4))
+`} />
+
+The resting state sits at $v \approx -1.20$, $w \approx -0.62$, on the left branch of the cubic, where its slope $1 - v^2$ is negative. Its Jacobian has trace −0.503 and determinant 0.108, so it is a stable spiral: small disturbances die away with a slight wobble. Linearisation says nothing more. The interesting behaviour comes from disturbances that are not small.
+
+<Step n={3} title="Threshold and the all-or-none spike" minutes={30} />
+
+The middle branch of the cubic, where its slope is positive, is where the fast positive feedback lives. A kick that leaves $v$ to the left of it lets $v$ fall straight back to the left branch. A kick that carries $v$ past it sends $v$ racing right, to the far branch of the cubic, because $w$ is too slow to stop it. On the right branch $w$ slowly grows, sliding the state up until it falls off the top knee of the cubic and races back to the left branch, then creeps down to rest. That journey is the spike.
+
+<Figure caption="The FitzHugh-Nagumo phase plane. Drag the starting point across the middle branch of the cubic nullcline and the response jumps from a small return to a full spike; raise the input to make the neuron fire repetitively." credit="Interactive figure by Engram, after FitzHugh (1961).">
+  <FitzHughNagumo />
+</Figure>
+
+<PyCell id="threshold" title="All or none" tests={String.raw`
+  import numpy as np
+  def test_jump():
+      "peak v is below 0 for a kick of 0.4 and above 1.5 for a kick of 0.8"
+      assert peaks[list(kicks).index(0.4)] < 0 and peaks[list(kicks).index(0.8)] > 1.5
+
+  def test_threshold():
+      "the bisected threshold kick lies between 0.5 and 0.6"
+      assert 0.5 < kick_th < 0.6
+`} prompt="Write `peak(dv)`, which kicks v by dv from rest and returns the largest v in the next 100 time units (RK4, dt = 0.05). Compute `peaks` for the kicks given, then bisect between 0.4 and 0.8 (30 halvings, using peak above 1 as the test) to find `kick_th`."
+code={String.raw`
+  def simulate(x0, I=0.0, T=100.0, dt=0.05):
+      x = np.array(x0, float); vs = np.empty(int(T / dt))
+      for k in range(len(vs)):
+          k1 = fhn(x, I); k2 = fhn(x + dt / 2 * k1, I); k3 = fhn(x + dt / 2 * k2, I); k4 = fhn(x + dt * k3, I)
+          x = x + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4); vs[k] = x[0]
+      return vs
+
+  def peak(dv):
+      return ...
+
+  kicks = np.round(np.arange(0.1, 1.51, 0.1), 2)
+  peaks = np.array([peak(d) for d in kicks])
+  lo, hi = 0.4, 0.8
+  for _ in range(30):
+      mid = (lo + hi) / 2
+      if ...: hi = mid
+      else: lo = mid
+  kick_th = (lo + hi) / 2
+  print("peaks:", dict(zip(kicks.tolist(), peaks.round(2).tolist())))
+  print(f"threshold kick {kick_th:.4f}")
+  plt.plot(kicks, peaks, "o-"); plt.xlabel("kick in v"); plt.ylabel("peak v"); plt.show()
+`}
+hint="return simulate(rest(0.0) + np.array([dv, 0.0])).max(); if peak(mid) > 1: hi = mid."
+solution={String.raw`
+  def simulate(x0, I=0.0, T=100.0, dt=0.05):
+      x = np.array(x0, float); vs = np.empty(int(T / dt))
+      for k in range(len(vs)):
+          k1 = fhn(x, I); k2 = fhn(x + dt / 2 * k1, I); k3 = fhn(x + dt / 2 * k2, I); k4 = fhn(x + dt * k3, I)
+          x = x + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4); vs[k] = x[0]
+      return vs
+
+  def peak(dv):
+      return simulate(rest(0.0) + np.array([dv, 0.0])).max()
+
+  kicks = np.round(np.arange(0.1, 1.51, 0.1), 2)
+  peaks = np.array([peak(d) for d in kicks])
+  lo, hi = 0.4, 0.8
+  for _ in range(30):
+      mid = (lo + hi) / 2
+      if peak(mid) > 1: hi = mid
+      else: lo = mid
+  kick_th = (lo + hi) / 2
+  print("peaks:", dict(zip(kicks.tolist(), peaks.round(2).tolist())))
+  print(f"threshold kick {kick_th:.4f}")
+  plt.plot(kicks, peaks, "o-"); plt.xlabel("kick in v"); plt.ylabel("peak v"); plt.show()
+`} />
+
+Kicks of 0.1 to 0.5 give peaks that rise gently from −1.1 to −0.67, the voltage simply relaxing back. Between 0.5 and 0.6 the response jumps to a full spike peaking at 1.71, and larger kicks barely change it (1.83 at a kick of 1.5). The bisection puts the threshold at a kick of 0.556. That answers the prediction: the response jumps. Strictly, FitzHugh showed that there is a very narrow band of intermediate responses around the threshold, which he called a quasi-threshold, but it is far narrower than the noise in any real neuron, so in practice the spike is all or none.
+
+<Step n={4} title="From rest to rhythm" minutes={30} />
+
+Increasing the input $I$ lifts the cubic nullcline, so the crossing slides right along the line $w = (v + a)/b$. While the crossing is on the left branch of the cubic, rest is stable. When it reaches the region near the knee where the cubic's slope $1 - v^2$ exceeds $\varepsilon b$, the trace of the Jacobian, $1 - v^2 - \varepsilon b$, becomes positive, the stable spiral turns into an unstable one, and the trajectory spirals out onto a large closed orbit: repetitive firing. The exact input where the trace crosses zero is where the neuron's behaviour changes qualitatively, a **bifurcation**; this kind, where a complex pair of eigenvalues crosses the imaginary axis, is called a Hopf bifurcation, the subject of Week 23.
+
+<PyCell id="hopf" title="Where rest gives way" tests={String.raw`
+  import numpy as np
+  def test_ihopf():
+      "I_hopf is about 0.3313"
+      assert abs(I_hopf - 0.3313) < 1e-3
+
+  def test_trace():
+      "the trace of the Jacobian at rest is negative just below I_hopf and positive just above"
+      assert np.trace(jac(rest(I_hopf - 0.01))) < 0 < np.trace(jac(rest(I_hopf + 0.01)))
+
+  def test_osc():
+      "the late swing of v is below 0.01 at I = 0.25 and above 3 at I = 0.4"
+      assert swing[0.25] < 0.01 and swing[0.4] > 3
+`} prompt="The trace vanishes where 1 − v² = εb. Take the root on the left side, v_h = −√(1 − εb), and compute the input `I_hopf` that puts the resting state there (from the v-nullcline, using w = (v + a)/b). Then simulate 400 time units at I = 0.25 and 0.4 from just beside rest and store the range (max minus min) of v over the last 200 in `swing[I]`."
+code={String.raw`
+  v_h = -np.sqrt(1 - eps * b)
+  I_hopf = ...
+  swing = {}
+  for I in (0.25, 0.4):
+      vs = simulate(rest(I) + np.array([0.01, 0.0]), I, T=400.0)
+      swing[I] = ...
+  print(f"I_hopf = {I_hopf:.4f};  swing of v: {({k: round(float(v), 4) for k, v in swing.items()})}")
+`}
+hint="On the v-nullcline w = v - v^3/3 + I, so I = (v_h + a) / b - v_h + v_h ** 3 / 3; swing[I] = vs[4000:].max() - vs[4000:].min()."
+solution={String.raw`
+  v_h = -np.sqrt(1 - eps * b)
+  I_hopf = (v_h + a) / b - v_h + v_h ** 3 / 3
+  swing = {}
+  for I in (0.25, 0.4):
+      vs = simulate(rest(I) + np.array([0.01, 0.0]), I, T=400.0)
+      swing[I] = vs[4000:].max() - vs[4000:].min()
+  print(f"I_hopf = {I_hopf:.4f};  swing of v: {({k: round(float(v), 4) for k, v in swing.items()})}")
+`} />
+
+The trace crosses zero at $I = 0.3313$. Below it, at $I = 0.25$, a small nudge dies away and $v$ settles to rest (its late swing is about $3 \times 10^{-8}$). Above it, at $I = 0.4$, the same nudge grows into sustained spiking, with $v$ swinging over 3.8 units every cycle. Push $I$ much higher, to about 1.42, and the crossing moves past the right knee onto the right branch, where rest is stable again: the neuron is stuck in a depolarised state, a model of depolarisation block.
+
+<Bridge title="Excitability in brains and machines"
+  neuro="Excitability, a stable rest that a large enough push turns into a stereotyped excursion, appears far beyond neurons: in heart cells, in calcium waves and in the spread of activity across cortex. FitzHugh's plane shows why all such systems share a threshold, a refractory period and all-or-none responses: a fast positive feedback and a slow negative one."
+  ai="A spike is a large, stereotyped output triggered by crossing a threshold, a kind of hard non-linearity. Neuromorphic hardware builds such excitable units directly into circuits, much as Nagumo did with tunnel diodes in 1962, because they compute with brief events and use energy only when they fire.">
+
+A fast positive feedback and a slow negative feedback make a spike.
+
+</Bridge>
+
+<Prove title="Why rest destabilises near the knee" task="Show that the trace of the FitzHugh-Nagumo Jacobian at any point is $1 - v^2 - \varepsilon b$ and its determinant is $\varepsilon(1 - b(1 - v^2))$, and deduce that a resting state on the left branch with $v^2 > 1$ is always stable.">
+
+The Jacobian is $J = \begin{pmatrix}1 - v^2 & -1 \\ \varepsilon & -\varepsilon b\end{pmatrix}$, so $T = 1 - v^2 - \varepsilon b$ and $D = -\varepsilon b(1 - v^2) + \varepsilon = \varepsilon(1 - b(1 - v^2))$.
+
+If $v^2 > 1$ then $1 - v^2 \lt 0$, so $T \lt -\varepsilon b \lt 0$, and $D > \varepsilon > 0$. Both conditions for stability (Day 2) hold.
+
+Instability needs $T > 0$, that is $1 - v^2 > \varepsilon b$: the resting state must lie on the rising middle part of the cubic, where its slope exceeds the small number $\varepsilon b$. Because $\varepsilon$ is small, this happens almost as soon as the crossing passes the knee at $v = -1$.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "In the FitzHugh-Nagumo model, v and w represent...", options: ["Two neurons", "A fast voltage-like variable and a slow recovery variable", "Excitation and inhibition", "Sodium and calcium"], answer: 1, explain: "Fast and slow." },
+  { q: "The v-nullcline is...", options: ["A straight line", "A cubic", "A circle", "Vertical"], answer: 1, explain: "w = v − v³/3 + I." },
+  { q: "The threshold of the FitzHugh-Nagumo neuron is set by...", options: ["A fixed voltage written into the model", "The middle branch of the cubic nullcline", "The w-nullcline only", "ε alone"], answer: 1, explain: "It is a feature of the flow." },
+  { q: "The spike is all-or-none because...", options: ["The response is linear", "Past the middle branch the fast positive feedback carries v to the far branch", "w is fast", "Noise"], answer: 1, explain: "Geometry of the fast variable." },
+  { q: "Increasing I moves...", options: ["The w-nullcline up", "The cubic nullcline up, sliding the crossing right", "Nothing", "ε"], answer: 1, explain: "I is added to the v-equation." },
+  { q: "Repetitive firing begins when the trace of the Jacobian at rest...", options: ["Becomes negative", "Becomes positive", "Equals the determinant", "Is zero for all I"], answer: 1, explain: "A Hopf bifurcation." },
+  { q: "The small parameter ε makes w...", options: ["Faster than v", "About ten times slower than v", "Constant", "Oscillate"], answer: 1, explain: "Separation of timescales." },
+]} />
+
+<Flashcards cards={[
+  { front: "FitzHugh-Nagumo model?", back: "$\\dot v = v - v^3/3 - w + I$, $\\dot w = \\varepsilon(v + a - bw)$." },
+  { front: "Excitability?", back: "A stable rest from which a large enough perturbation triggers a large stereotyped excursion." },
+  { front: "Threshold in FitzHugh-Nagumo?", back: "The middle (rising) branch of the cubic v-nullcline." },
+  { front: "Onset of repetitive firing?", back: "Trace of J at rest crosses zero: $1 - v^2 = \\varepsilon b$; a Hopf bifurcation." },
+  { front: "Timescale separation?", back: "Small ε: v jumps quickly between cubic branches while w drifts slowly." },
+]} />
+
+<Predict revisit question="As you increase the kick to a FitzHugh-Nagumo neuron at rest, does the peak response grow smoothly or jump?" />
+
+<Key title="Before you go">
+<ul>
+<li>FitzHugh-Nagumo keeps a fast voltage and a slow recovery variable; its nullclines are a cubic and a line.</li>
+<li>Rest on the left branch is a stable spiral; linearisation cannot see the spike.</li>
+<li>The middle branch of the cubic is the threshold, and the response jumps from small to full spike across it.</li>
+<li>Raising the input moves rest onto the middle branch, the trace turns positive, and the neuron fires rhythmically.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: FitzHugh (1961), <em>Impulses and physiological states in theoretical models of nerve membrane</em>.</li>
+<li>Izhikevich, <em>Dynamical Systems in Neuroscience</em> (MIT Press, 2007), chapters 4 and 7, on phase planes and excitability.</li>
+<li>Gerstner, Kistler, Naud and Paninski, <em>Neuronal Dynamics</em>, chapter 4, on two-dimensional neuron models.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="In the FitzHugh-Nagumo model the threshold is not a voltage but a curve in the plane. Describe a situation in which the same voltage kick would trigger a spike at one moment and not at another, and explain it using the slow variable w." />

@@ -99,3 +99,8 @@ export { DampedOscillator } from "./damped-oscillator";
 export { EulerSteps } from "./euler-steps";
 export { CompartmentModes } from "./compartment-modes";
 export { FICurve } from "./fi-curve";
+export { Flow1D } from "./flow-1d";
+export { TraceDeterminant } from "./trace-determinant";
+export { ISNParadox } from "./isn-paradox";
+export { FitzHughNagumo } from "./fitzhugh-nagumo";
+export { IntegratorTuning } from "./integrator-tuning";

@@ -1,0 +1,285 @@
+export const meta = {
+  title: "Attractors, integrators and what trained networks learn",
+  intro: "On Day 1 a fixed point stored one bit. Today you store a number. If a network has not isolated fixed points but a whole line of them, a line attractor, then any position along the line is a stable memory, and inputs that nudge the state along it are added up: the network integrates. You will see why this needs fine tuning, why noise makes the stored value drift like a random walk, and then use a numerical search for fixed points to open up a recurrent network and find the line attractor inside it, the method that revealed how trained networks count.",
+  goals: [
+    "Relate the memory time of a recurrent loop to the eigenvalue of its connectivity",
+    "Build a line attractor from two neurons and use it to integrate inputs",
+    "Show that noise makes a stored value diffuse along the line but not off it",
+    "Find the fixed points of a non-linear network by minimising the speed, and recover its line attractor",
+  ],
+  plan: [
+    { label: "Predict and tuned feedback", minutes: 25 },
+    { label: "A line attractor", minutes: 25 },
+    { label: "Noise on the line", minutes: 25 },
+    { label: "Opening the black box", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "maheswaranathan-2019",
+};
+
+<Predict question="A neuron with a 20 ms time constant excites itself through a loop of strength w. If w = 0.99, roughly how long does it remember a brief input: 20 ms, 200 ms or 2 seconds?" />
+
+<Step n={1} title="Tuned feedback" minutes={25} />
+
+Look to one side and hold your gaze there. The motor neurons driving your eye muscles must keep firing at a rate that encodes the eye's position, long after the brief burst that moved it. The brainstem computes this position by integrating the velocity commands, and holds the result for many seconds, although each neuron involved forgets in tens of milliseconds. How?
+
+The simplest answer is positive feedback. A unit with time constant $\tau$ that feeds its output back with weight $w$ obeys $\tau\dot r = -r + wr + I = -(1 - w)r + I$. Its effective time constant is $\tau/(1 - w)$: as $w$ approaches 1 the eigenvalue $(w - 1)/\tau$ approaches zero and the memory grows without limit. At exactly $w = 1$ the unit is a perfect integrator, $\tau\dot r = I$. This is a fixed point that is neither attracting nor repelling along one direction, an eigenvalue of zero.
+
+<Figure caption="A recurrent unit receives three brief pulses. Tuned to w = 1 it adds them up and holds the total; mistuned, it leaks or runs away." credit="Interactive figure by Engram, after Seung (1996).">
+  <IntegratorTuning />
+</Figure>
+
+<PyCell id="tuned" title="Memory time from the eigenvalue" tests={String.raw`
+  import numpy as np
+  def test_match():
+      "the measured time constants are within 2% of tau / (1 - w)"
+      for w in (0.9, 0.99):
+          assert abs(tau_eff[w] - 20 / (1 - w)) / (20 / (1 - w)) < 0.02
+`} prompt="For w = 0.9 and 0.99, start a unit (tau = 20 ms) at r = 1, simulate 2 s with Euler steps of 1 ms and no input, and measure `tau_eff[w]` from the slope of log r."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  tau = 20.0
+  tau_eff = {}
+  for w in (0.9, 0.99):
+      ts = np.arange(0, 2000, 1.0); r = np.empty(len(ts)); r[0] = 1.0
+      for k in range(1, len(ts)):
+          r[k] = ...
+      tau_eff[w] = ...
+      plt.semilogy(ts, r, label=f"w = {w}")
+  print({w: round(float(t), 1) for w, t in tau_eff.items()}, " ms measured;", {w: round(tau / (1 - w), 1) for w in tau_eff}, " ms predicted")
+  plt.xlabel("ms"); plt.legend(); plt.show()
+`}
+hint="r[k] = r[k - 1] + 1.0 / tau * (-r[k - 1] + w * r[k - 1]); tau_eff[w] = -1 / np.polyfit(ts, np.log(r), 1)[0]."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  tau = 20.0
+  tau_eff = {}
+  for w in (0.9, 0.99):
+      ts = np.arange(0, 2000, 1.0); r = np.empty(len(ts)); r[0] = 1.0
+      for k in range(1, len(ts)):
+          r[k] = r[k - 1] + 1.0 / tau * (-r[k - 1] + w * r[k - 1])
+      tau_eff[w] = -1 / np.polyfit(ts, np.log(r), 1)[0]
+      plt.semilogy(ts, r, label=f"w = {w}")
+  print({w: round(float(t), 1) for w, t in tau_eff.items()}, " ms measured;", {w: round(tau / (1 - w), 1) for w in tau_eff}, " ms predicted")
+  plt.xlabel("ms"); plt.legend(); plt.show()
+`} />
+
+The measured memory times are 199.5 ms for $w = 0.9$ and 1,999.5 ms for $w = 0.99$, matching $\tau/(1 - w)$ = 200 and 2,000 ms. That answers the prediction: about 2 seconds, a hundred times the neuron's own time constant. But notice the sensitivity. Moving $w$ from 0.99 to 0.98 halves the memory, and moving it to 1.01 makes the activity grow without bound. The oculomotor integrator holds the eyes with a time constant of 20 seconds or more, which in this simple model would need the feedback tuned to better than one part in a thousand.
+
+<Video id="Y8Ke6HCGqhc" title="The neural coding of internal states underlying innate social behaviors" by="David Anderson" note="A research talk (2024) by David Anderson on how a population of hypothalamic neurons holds a persistent internal state, and on the evidence, from modelling and perturbations, that it does so with an approximate line attractor. It is long; the line attractor work comes in the second half." />
+
+<Step n={2} title="A line attractor" minutes={25} />
+
+With many neurons, the same idea gives a **line attractor**. Take two neurons that excite each other equally, with $W = \begin{pmatrix}0.5 & 0.5 \\ 0.5 & 0.5\end{pmatrix}$. Its eigenvalues are 1, with eigenvector $(1, 1)$, and 0, with eigenvector $(1, -1)$. So in $\tau\dot{\mathbf r} = -\mathbf r + W\mathbf r + \mathbf I$, the component along $(1, 1)$ has eigenvalue zero and integrates, while the component along $(1, -1)$ decays with time constant $\tau$. Every point on the line $r_1 = r_2$ is a fixed point, and the network quickly returns to the line after any disturbance and then stays wherever on the line it was put.
+
+<PyCell id="line" title="Integrating on a line" tests={String.raw`
+  import numpy as np
+  def test_on_line():
+      "after the inputs end the state is on the line r1 = r2 to within 1e-3"
+      assert abs(R[-1, 0] - R[-1, 1]) < 1e-3
+
+  def test_sum():
+      "the position along the line equals the integral of the input along (1, 1) / 2 to within 1%"
+      assert abs(R[-1].mean() - target) / abs(target) < 0.01
+`} prompt="Simulate 1 s with tau = 20 ms and dt = 0.1 ms, giving input (2, 0) from 100 to 150 ms, (0, 1) from 400 to 420 ms and (−1, −1) from 700 to 710 ms. Store the trajectory in `R`. The final mean of r1 and r2 should equal `target`, the time integral of the mean input divided by tau: compute it."
+code={String.raw`
+  W2 = np.array([[0.5, 0.5], [0.5, 0.5]])
+  dt = 0.1; ts = np.arange(0, 1000, dt)
+  def inp(t):
+      if 100 <= t < 150: return np.array([2.0, 0.0])
+      if 400 <= t < 420: return np.array([0.0, 1.0])
+      if 700 <= t < 710: return np.array([-1.0, -1.0])
+      return np.zeros(2)
+  R = np.zeros((len(ts), 2))
+  for k in range(1, len(ts)):
+      R[k] = ...
+  target = ...                                      # (50 * 1 + 20 * 0.5 + 10 * (-1)) / tau
+  print(f"final state {R[-1].round(4)}, predicted position on the line {target:.4f}")
+  plt.plot(R[:, 0], R[:, 1]); plt.plot([-1, 3], [-1, 3], "k:"); plt.xlabel("r1"); plt.ylabel("r2"); plt.axis("equal"); plt.show()
+`}
+hint="R[k] = R[k - 1] + dt / tau * (-R[k - 1] + W2 @ R[k - 1] + inp(ts[k - 1])); target = (50 * 1.0 + 20 * 0.5 + 10 * (-1.0)) / tau."
+solution={String.raw`
+  W2 = np.array([[0.5, 0.5], [0.5, 0.5]])
+  dt = 0.1; ts = np.arange(0, 1000, dt)
+  def inp(t):
+      if 100 <= t < 150: return np.array([2.0, 0.0])
+      if 400 <= t < 420: return np.array([0.0, 1.0])
+      if 700 <= t < 710: return np.array([-1.0, -1.0])
+      return np.zeros(2)
+  R = np.zeros((len(ts), 2))
+  for k in range(1, len(ts)):
+      R[k] = R[k - 1] + dt / tau * (-R[k - 1] + W2 @ R[k - 1] + inp(ts[k - 1]))
+  target = (50 * 1.0 + 20 * 0.5 + 10 * (-1.0)) / tau                                      # (50 * 1 + 20 * 0.5 + 10 * (-1)) / tau
+  print(f"final state {R[-1].round(4)}, predicted position on the line {target:.4f}")
+  plt.plot(R[:, 0], R[:, 1]); plt.plot([-1, 3], [-1, 3], "k:"); plt.xlabel("r1"); plt.ylabel("r2"); plt.axis("equal"); plt.show()
+`} />
+
+The network ends at (2.5, 2.5), exactly the predicted position. The first input went only to neuron 1, but the state quickly relaxed back onto the line, keeping only the part of the input along $(1, 1)$. The three inputs were added up and their total held, including the negative one, which moved the state back down the line.
+
+<Step n={3} title="Noise on the line" minutes={25} />
+
+A line attractor has a price. Along the line nothing pulls the state back, so every random fluctuation is integrated too, and the stored value performs a random walk: its variance grows in proportion to time. Off the line, fluctuations are pulled back, and their variance settles to a constant. This is one reason working memories for continuous quantities, such as a remembered location, degrade steadily with delay, and it is the first of the stochastic processes of Week 24.
+
+<PyCell id="noise" title="Diffusion along, not across" tests={String.raw`
+  import numpy as np
+  def test_along():
+      "variance along the line roughly doubles from 500 to 1000 ms (ratio between 1.6 and 2.4)"
+      assert 1.6 < var_along[-1] / var_along[len(var_along) // 2] < 2.4
+
+  def test_across():
+      "variance across the line has saturated (ratio between 0.8 and 1.25)"
+      assert 0.8 < var_across[-1] / var_across[len(var_across) // 2] < 1.25
+`} prompt="Simulate 2,000 independent trials of the two-neuron line attractor at once for 1 s (dt = 0.1 ms) with independent noise of size sigma = 0.05 added to each neuron as sigma √dt times a normal draw. Every 1 ms, store the variance across trials of the component along (1, 1)/√2 in `var_along` and along (1, −1)/√2 in `var_across`."
+code={String.raw`
+  r_n = np.random.default_rng(1996)
+  n_tr, sigma = 2000, 0.05
+  X = np.zeros((n_tr, 2)); var_along, var_across = [], []
+  u_along, u_across = np.array([1, 1]) / np.sqrt(2), np.array([1, -1]) / np.sqrt(2)
+  for k in range(10000):
+      X = X + dt / tau * (-X + X @ W2.T) + ...
+      if k % 10 == 9:
+          var_along.append(np.var(X @ u_along)); var_across.append(...)
+  var_along, var_across = np.array(var_along), np.array(var_across)
+  print(f"along the line: variance {var_along[499]:.4f} at 500 ms, {var_along[-1]:.4f} at 1 s;  across: {var_across[499]:.5f} and {var_across[-1]:.5f}")
+  plt.plot(var_along, label="along"); plt.plot(var_across, label="across"); plt.xlabel("ms"); plt.ylabel("variance"); plt.legend(); plt.show()
+`}
+hint="X = X + dt / tau * (-X + X @ W2.T) + sigma * np.sqrt(dt) * r_n.normal(size=X.shape); var_across.append(np.var(X @ u_across))."
+solution={String.raw`
+  r_n = np.random.default_rng(1996)
+  n_tr, sigma = 2000, 0.05
+  X = np.zeros((n_tr, 2)); var_along, var_across = [], []
+  u_along, u_across = np.array([1, 1]) / np.sqrt(2), np.array([1, -1]) / np.sqrt(2)
+  for k in range(10000):
+      X = X + dt / tau * (-X + X @ W2.T) + sigma * np.sqrt(dt) * r_n.normal(size=X.shape)
+      if k % 10 == 9:
+          var_along.append(np.var(X @ u_along)); var_across.append(np.var(X @ u_across))
+  var_along, var_across = np.array(var_along), np.array(var_across)
+  print(f"along the line: variance {var_along[499]:.4f} at 500 ms, {var_along[-1]:.4f} at 1 s;  across: {var_across[499]:.5f} and {var_across[-1]:.5f}")
+  plt.plot(var_along, label="along"); plt.plot(var_across, label="across"); plt.xlabel("ms"); plt.ylabel("variance"); plt.legend(); plt.show()
+`} />
+
+Across trials, the variance along the line grows from 1.23 at 500 ms to 2.55 at 1 s, in proportion to time, as for a random walk (the prediction $\sigma^2t$ gives 1.25 and 2.5). Across the line it has already settled at about 0.025, which is $\sigma^2\tau/2$, and stays there. A memory stored on a line attractor is robust to disturbances off the line but accumulates every disturbance along it.
+
+<Step n={4} title="Opening the black box" minutes={30} />
+
+A trained recurrent network is a large non-linear dynamical system, $\dot{\mathbf x} = F(\mathbf x)$, and its weights alone say little. Sussillo and Barak (2013) suggested asking where it rests: search for points where the speed $q(\mathbf x) = \tfrac{1}{2}\lVert F(\mathbf x)\rVert^2$ is zero or nearly so, by gradient descent on $q$ from many starting states, then linearise around each. Maheswaranathan and colleagues (2019, today's paper) did this for networks trained to judge whether movie reviews were positive or negative, and found in every architecture an approximate line attractor: each word pushes the state along the line, and the final position is the verdict.
+
+Here you do the same for a 20-neuron network $\dot{\mathbf x} = -\mathbf x + W\tanh(\mathbf x)$ whose weights hide a line attractor along an unknown direction $\mathbf u$, mixed with random connections.
+
+<PyCell id="slow" title="Find the hidden line" tests={String.raw`
+  import numpy as np
+  def test_found():
+      "at least 10 of the 40 searches end at points with q below 1e-5"
+      assert len(found) >= 10
+
+  def test_line():
+      "the found points lie on a line: the first singular vector explains over 99% and aligns with u (|cos| above 0.99)"
+      S = np.linalg.svd(found, compute_uv=False)
+      assert S[0] ** 2 / np.sum(S ** 2) > 0.99 and abs(pc1 @ u_hidden) > 0.99
+`} prompt="Write `grad_q(x)` = Jᵀ F(x), where J = −I + W diag(1 − tanh²(x)) is the Jacobian of F. Run 2,000 gradient steps of size 0.2 from each of 40 random starts, keep the end points with q below 1e-5 in `found`, and store the first right singular vector of `found` in `pc1`."
+code={String.raw`
+  r_s = np.random.default_rng(2013); N = 20
+  u_hidden = r_s.normal(size=N); u_hidden /= np.linalg.norm(u_hidden)
+  P = np.eye(N) - np.outer(u_hidden, u_hidden)
+  W = np.outer(u_hidden, u_hidden) + 0.5 * P @ (r_s.normal(size=(N, N)) / np.sqrt(N)) @ P
+  Fn = lambda x: -x + W @ np.tanh(x)
+  q = lambda x: 0.5 * np.sum(Fn(x) ** 2)
+
+  def grad_q(x):
+      J = ...
+      return J.T @ Fn(x)
+
+  ends = []
+  for _ in range(40):
+      x = r_s.normal(size=N)
+      for _ in range(2000):
+          x = x - 0.2 * grad_q(x)
+      ends.append(x)
+  found = np.array([x for x in ends if q(x) < 1e-5])
+  pc1 = ...
+  print(f"{len(found)} slow points;  |cos(pc1, u)| = {abs(pc1 @ u_hidden):.4f};  positions along u: {np.sort(found @ u_hidden).round(2)}")
+`}
+hint="J = -np.eye(N) + W * (1 - np.tanh(x) ** 2)[None, :]; pc1 = np.linalg.svd(found, full_matrices=False)[2][0]."
+solution={String.raw`
+  r_s = np.random.default_rng(2013); N = 20
+  u_hidden = r_s.normal(size=N); u_hidden /= np.linalg.norm(u_hidden)
+  P = np.eye(N) - np.outer(u_hidden, u_hidden)
+  W = np.outer(u_hidden, u_hidden) + 0.5 * P @ (r_s.normal(size=(N, N)) / np.sqrt(N)) @ P
+  Fn = lambda x: -x + W @ np.tanh(x)
+  q = lambda x: 0.5 * np.sum(Fn(x) ** 2)
+
+  def grad_q(x):
+      J = -np.eye(N) + W * (1 - np.tanh(x) ** 2)[None, :]
+      return J.T @ Fn(x)
+
+  ends = []
+  for _ in range(40):
+      x = r_s.normal(size=N)
+      for _ in range(2000):
+          x = x - 0.2 * grad_q(x)
+      ends.append(x)
+  found = np.array([x for x in ends if q(x) < 1e-5])
+  pc1 = np.linalg.svd(found, full_matrices=False)[2][0]
+  print(f"{len(found)} slow points;  |cos(pc1, u)| = {abs(pc1 @ u_hidden):.4f};  positions along u: {np.sort(found @ u_hidden).round(2)}")
+`} />
+
+Of 40 searches, 24 end at slow points, and they all lie on one straight line through the origin: its direction matches the hidden $\mathbf u$ to four decimal places. The points spread from about −0.44 to 0.49 along it. Further out, the tanh saturates, the feedback along $\mathbf u$ falls below 1 and the state drifts back, so the network's line attractor is a segment, approximate like the trained networks' ones. Without knowing $\mathbf u$ in advance, the search found it from the dynamics alone.
+
+<Bridge title="Integration in brains and machines"
+  neuro="Line attractors have been proposed for the oculomotor integrator (Seung, 1996), for accumulating evidence in decisions, and recently for persistent internal states such as aggression in the hypothalamus (Nair and colleagues, 2023). Ring attractors, a line bent into a circle, hold head direction in the fly and the mammal."
+  ai="Trained networks rediscover these solutions: a line attractor to count sentiment, rings and planes for other tasks. Fixed point analysis has become a standard tool of mechanistic interpretability for recurrent networks, a way of asking not what the weights are but what dynamics they create.">
+
+Store a number by building a line of fixed points, then read the network by finding them.
+
+</Bridge>
+
+<Prove title="Why the component along the line integrates" task="For $\tau\dot{\mathbf r} = -\mathbf r + W\mathbf r + \mathbf I(t)$ with $W$ symmetric, $W\mathbf u = \mathbf u$ and $\lVert\mathbf u\rVert = 1$, show that $a(t) = \mathbf u^\top\mathbf r(t)$ satisfies $\tau\dot a = \mathbf u^\top\mathbf I(t)$, so that $a(t) = a(0) + \frac{1}{\tau}\int_0^t\mathbf u^\top\mathbf I(s)\,\mathrm ds$.">
+
+Multiply the equation on the left by $\mathbf u^\top$: $\tau\dot a = -\mathbf u^\top\mathbf r + \mathbf u^\top W\mathbf r + \mathbf u^\top\mathbf I$.
+
+Because $W$ is symmetric, $\mathbf u^\top W = (W\mathbf u)^\top = \mathbf u^\top$, so the middle term is $\mathbf u^\top\mathbf r = a$, which cancels the leak $-a$.
+
+What remains is $\tau\dot a = \mathbf u^\top\mathbf I(t)$, and integrating both sides gives the result. The leak and the feedback cancel exactly along $\mathbf u$; any mistuning ($W\mathbf u = (1 - \epsilon)\mathbf u$) leaves a leak $-\epsilon a$ and a memory time of $\tau/\epsilon$.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "A unit with time constant τ and self-feedback w has effective time constant...", options: ["τw", "τ/(1 − w)", "τ(1 − w)", "τ + w"], answer: 1, explain: "The eigenvalue is (w − 1)/τ." },
+  { q: "A perfect integrator corresponds to an eigenvalue of...", options: ["−1", "0", "1", "Any negative number"], answer: 1, explain: "Neither decay nor growth." },
+  { q: "A line attractor is...", options: ["A single stable point", "A continuous line of fixed points, attracting from off the line", "A limit cycle", "An unstable manifold"], answer: 1, explain: "Neutral along, stable across." },
+  { q: "Mistuning the feedback by 1% in a 20 ms unit gives a memory of about...", options: ["20 ms", "200 ms", "2 s", "Forever"], answer: 2, explain: "20 / 0.01 = 2,000 ms." },
+  { q: "With noise, the stored value on a line attractor...", options: ["Stays fixed", "Diffuses, with variance growing in proportion to time", "Decays to zero", "Oscillates"], answer: 1, explain: "Nothing pulls it back along the line." },
+  { q: "Sussillo and Barak find fixed points by...", options: ["Solving W x = x", "Minimising the speed q = ½|F(x)|²", "Simulating forward only", "Random guessing"], answer: 1, explain: "Gradient descent on q." },
+  { q: "Networks trained on sentiment were found to contain...", options: ["Chaos", "An approximate line attractor", "Only one fixed point", "A ring attractor"], answer: 1, explain: "Maheswaranathan and colleagues (2019)." },
+]} />
+
+<Flashcards cards={[
+  { front: "Effective time constant with feedback?", back: "τ/(1 − w); infinite at w = 1." },
+  { front: "Line attractor?", back: "A line of fixed points with zero eigenvalue along it and negative eigenvalues across it." },
+  { front: "Fine-tuning problem?", back: "A 1% mistuning shortens a 20 ms neuron's memory to 2 s, or makes it run away." },
+  { front: "Noise on a line attractor?", back: "Random walk along the line: variance grows linearly in time." },
+  { front: "Fixed point finding?", back: "Minimise $q(x) = \\tfrac{1}{2}\\lVert F(x)\\rVert^2$ from many starts; linearise at the minima." },
+]} />
+
+<Predict revisit question="With self-feedback w = 0.99 on a 20 ms neuron, how long is its memory?" />
+
+<Key title="Before you go">
+<ul>
+<li>Feedback with weight w stretches a time constant to τ/(1 − w); w = 1 gives an integrator.</li>
+<li>A line attractor has an eigenvalue of zero along the line and integrates inputs projected onto it.</li>
+<li>Noise makes the stored value diffuse along the line while deviations across it decay.</li>
+<li>Finding slow points by minimising q reveals the attractors hidden inside a recurrent network.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Maheswaranathan, Williams, Golub, Ganguli and Sussillo (2019), <em>Reverse engineering recurrent networks for sentiment classification reveals line attractor dynamics</em>.</li>
+<li>Seung (1996), <em>How the brain keeps the eyes still</em>, Proceedings of the National Academy of Sciences 93(23), 13339 to 13344.</li>
+<li>Sussillo and Barak (2013), <em>Opening the black box: low-dimensional dynamics in high-dimensional recurrent neural networks</em>, Neural Computation 25(3), 626 to 649.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="The tuned line attractor needs its feedback to be exact to within a fraction of a per cent. List two ways a real circuit might achieve or avoid this requirement (think of Day 1's paper, and of learning), and for each, a prediction that would distinguish it from the others." />

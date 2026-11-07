@@ -1,0 +1,312 @@
+export const meta = {
+  title: "Forge: Week 22 challenge, quiz and deep read",
+  intro: "This week you learned to understand dynamical systems by their geometry: fixed points and their stability in one dimension, the phase plane and the trace-determinant map in two, linearisation with the Jacobian, excitability, and line attractors. Today's challenge applies these to a decision. Two populations that inhibit each other must pick a winner; you will find the saddle that makes the choice, show that its unstable eigenvalue sets how long a close decision takes, and then return to last week's Hodgkin-Huxley neuron and find, by linearising four equations, exactly where its resting state gives way. Then the quiz and a critique of this week's deep read.",
+  goals: [
+    "Analyse a winner-take-all circuit: its fixed points, its saddle and its two attractors",
+    "Show that decision time near a saddle grows with the logarithm of the initial difference, at a rate set by the unstable eigenvalue",
+    "Linearise the four-variable Hodgkin-Huxley model and find the current where rest loses stability",
+    "Critique the evidence for inhibition-stabilised cortex",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "ozeki-2009",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. The eigenvalues of $\begin{pmatrix}0 & 1 \\ -4 & 0\end{pmatrix}$, and the type of fixed point?
+2. The memory time of a 20 ms unit with self-feedback 0.95?
+3. The fixed points of $\dot x = x(1 - x)$ and their stability?
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  print("1.", np.linalg.eigvals(np.array([[0, 1], [-4, 0]])), "-> a centre")
+  print("2.", round(20 / (1 - 0.95), 1), "ms")
+  print("3. f'(x) = 1 - 2x: f'(0) =", 1 - 2 * 0, "(unstable), f'(1) =", 1 - 2 * 1, "(stable)")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+Two populations each prefer one of two choices. Each receives the same input and inhibits the other:
+
+$$
+\tau\dot r_1 = -r_1 + F(I_1 - \beta r_2), \qquad \tau\dot r_2 = -r_2 + F(I_2 - \beta r_1), \qquad F(u) = \frac{1}{1 + e^{-(u - 0.5)/0.1}},
+$$
+
+with $\tau = 10$ ms and $I_1 = I_2 = 1$. Models of this kind, reduced from spiking networks, describe how cortical circuits commit to one of two choices (Wang, 2002).
+
+<PyCell code={String.raw`
+  tau = 10.0
+  F = lambda u: 1 / (1 + np.exp(-(u - 0.5) / 0.1))
+  def dec(r, beta, I1=1.0, I2=1.0):
+      return np.array([-r[0] + F(I1 - beta * r[1]), -r[1] + F(I2 - beta * r[0])]) / tau
+  def jac2(r, beta, h=1e-7):
+      J = np.zeros((2, 2))
+      for j in range(2):
+          e = np.zeros(2); e[j] = h; J[:, j] = (dec(r + e, beta) - dec(r - e, beta)) / (2 * h)
+      return J
+  def rk4(f, x, dt):
+      k1 = f(x); k2 = f(x + dt / 2 * k1); k3 = f(x + dt / 2 * k2); k4 = f(x + dt * k3)
+      return x + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+  print("flow at (0.5, 0.5) with beta = 1:", dec(np.array([0.5, 0.5]), 1.0))
+`} />
+
+**Part A: where the decision is made.** By symmetry there is always a fixed point with $r_1 = r_2 = s$. Find it, and classify it for weak inhibition ($\beta = 0.3$) and strong inhibition ($\beta = 1$). For $\beta = 1$, find the fixed point where population 1 has won.
+
+<PyCell id="partA" title="Part A: a saddle between two winners" tests={String.raw`
+  import numpy as np
+  def test_sym():
+      "the symmetric fixed point for beta = 1 is s = 0.5"
+      assert abs(sym_fp(1.0) - 0.5) < 1e-8
+
+  def test_kinds():
+      "the symmetric state is stable for beta = 0.3 and a saddle for beta = 1"
+      e3 = np.linalg.eigvals(jac2(np.array([sym_fp(0.3)] * 2), 0.3)).real
+      e1 = np.linalg.eigvals(jac2(np.array([0.5, 0.5]), 1.0)).real
+      assert e3.max() < 0 and e1.min() < 0 < e1.max()
+
+  def test_winner():
+      "the winner state has r1 above 0.95 and r2 below 0.05, and is stable"
+      assert win[0] > 0.95 and win[1] < 0.05 and np.linalg.eigvals(jac2(win, 1.0)).real.max() < 0
+`} prompt="Write `sym_fp(beta)`, which finds s solving s = F(1 − beta s) by bisection on [0, 1]. Then refine the guess (0.95, 0.05) with Newton's method (50 steps, using jac2) to get the winner state `win` for beta = 1."
+code={String.raw`
+  def sym_fp(beta):
+      g = lambda s: -s + F(1 - beta * s)
+      lo, hi = 0.0, 1.0
+      for _ in range(60):
+          mid = (lo + hi) / 2
+          if ...: hi = mid
+          else: lo = mid
+      return (lo + hi) / 2
+
+  win = np.array([0.95, 0.05])
+  for _ in range(50):
+      win = ...
+  for beta in (0.3, 1.0):
+      s = sym_fp(beta)
+      print(f"beta = {beta}: symmetric state s = {s:.4f}, eigenvalues {np.linalg.eigvals(jac2(np.array([s, s]), beta)).round(4)} per ms")
+  print("winner state:", win.round(4), " eigenvalues", np.linalg.eigvals(jac2(win, 1.0)).round(4))
+`}
+hint="if g(lo) * g(mid) <= 0: hi = mid; win = win - np.linalg.solve(jac2(win, 1.0), dec(win, 1.0))."
+solution={String.raw`
+  def sym_fp(beta):
+      g = lambda s: -s + F(1 - beta * s)
+      lo, hi = 0.0, 1.0
+      for _ in range(60):
+          mid = (lo + hi) / 2
+          if g(lo) * g(mid) <= 0: hi = mid
+          else: lo = mid
+      return (lo + hi) / 2
+
+  win = np.array([0.95, 0.05])
+  for _ in range(50):
+      win = win - np.linalg.solve(jac2(win, 1.0), dec(win, 1.0))
+  for beta in (0.3, 1.0):
+      s = sym_fp(beta)
+      print(f"beta = {beta}: symmetric state s = {s:.4f}, eigenvalues {np.linalg.eigvals(jac2(np.array([s, s]), beta)).round(4)} per ms")
+  print("winner state:", win.round(4), " eigenvalues", np.linalg.eigvals(jac2(win, 1.0)).round(4))
+`} />
+
+With weak inhibition the symmetric state, at $s = 0.907$, is a stable node: both populations stay active and nothing is decided. With $\beta = 1$ the symmetric state, at $s = 0.5$, is a saddle with eigenvalues 0.15 and −0.35 per ms, and two new stable states exist, such as the winner state (0.993, 0.007). The saddle's stable direction, the diagonal $r_1 = r_2$, divides the plane: whichever population starts ahead wins.
+
+**Part B: hard decisions are slow.** Start exactly at the saddle, but tip the balance by a tiny amount $\delta$: $r_1 = s + \delta$, $r_2 = s - \delta$. Measure the time until the two rates differ by 0.5, for $\delta$ from $10^{-2}$ down to $10^{-6}$. Near the saddle the difference grows as $\delta e^{\lambda_+t}$, so the time should grow with $\ln(1/\delta)$, with slope $1/\lambda_+$.
+
+<PyCell id="partB" title="Part B: decision time and the unstable eigenvalue" tests={String.raw`
+  import numpy as np
+  def test_slope():
+      "the slope of decision time against ln(1/delta) is within 3% of 1 / lambda_plus"
+      assert abs(slope_B - 1 / lam_plus) * lam_plus < 0.03
+
+  def test_order():
+      "smaller tips take longer"
+      assert np.all(np.diff(T_dec) > 0)
+`} prompt="Compute `lam_plus`, the positive eigenvalue at the saddle (beta = 1). For each delta, integrate with RK4 (dt = 0.01 ms) until |r1 − r2| exceeds 0.5 and store the times in `T_dec`. Fit T_dec against ln(1/delta) and store the slope in `slope_B`."
+code={String.raw`
+  lam_plus = ...
+  deltas = np.array([1e-2, 1e-3, 1e-4, 1e-5, 1e-6])
+  T_dec = []
+  for d in deltas:
+      r, t, dt = np.array([0.5 + d, 0.5 - d]), 0.0, 0.01
+      while abs(r[0] - r[1]) < ...:
+          r = rk4(lambda x: dec(x, 1.0), r, dt); t += dt
+      T_dec.append(t)
+  T_dec = np.array(T_dec)
+  slope_B = np.polyfit(np.log(1 / deltas), T_dec, 1)[0]
+  print("decision times (ms):", T_dec.round(2), f";  slope {slope_B:.3f} ms, 1/lambda+ = {1 / lam_plus:.3f} ms")
+  plt.semilogx(deltas, T_dec, "o-"); plt.xlabel("initial difference delta"); plt.ylabel("decision time (ms)"); plt.show()
+`}
+hint="lam_plus = np.linalg.eigvals(jac2(np.array([0.5, 0.5]), 1.0)).real.max(); the loop runs while abs(r[0] - r[1]) is below 0.5."
+solution={String.raw`
+  lam_plus = np.linalg.eigvals(jac2(np.array([0.5, 0.5]), 1.0)).real.max()
+  deltas = np.array([1e-2, 1e-3, 1e-4, 1e-5, 1e-6])
+  T_dec = []
+  for d in deltas:
+      r, t, dt = np.array([0.5 + d, 0.5 - d]), 0.0, 0.01
+      while abs(r[0] - r[1]) < 0.5:
+          r = rk4(lambda x: dec(x, 1.0), r, dt); t += dt
+      T_dec.append(t)
+  T_dec = np.array(T_dec)
+  slope_B = np.polyfit(np.log(1 / deltas), T_dec, 1)[0]
+  print("decision times (ms):", T_dec.round(2), f";  slope {slope_B:.3f} ms, 1/lambda+ = {1 / lam_plus:.3f} ms")
+  plt.semilogx(deltas, T_dec, "o-"); plt.xlabel("initial difference delta"); plt.ylabel("decision time (ms)"); plt.show()
+`} />
+
+Decision times grow from 24.8 ms for $\delta = 10^{-2}$ to 86.2 ms for $\delta = 10^{-6}$, adding about 15.35 ms for every factor of ten. The fitted slope, 6.667 ms, equals $1/\lambda_+$ to three decimal places. Close decisions are slow, and the unstable eigenvalue of the saddle sets exactly how slow.
+
+**Part C: where Hodgkin-Huxley rest gives way.** Last week's Forge found that the Hodgkin-Huxley neuron jumps into firing. Now linearise it. At rest each gating variable sits at its steady state for the resting voltage, so the resting voltage solves a single equation: $\dot V = 0$ with $n$, $m$ and $h$ at their steady-state values. Find it for each input current, compute the 4 × 4 Jacobian there, and find the current at which an eigenvalue first crosses into the right half-plane.
+
+<PyCell code={String.raw`
+  gNa, gK, gL, ENa, EK, EL, C = 120.0, 36.0, 0.3, 50.0, -77.0, -54.387, 1.0
+  def hh_rates(V):
+      an = 0.01 * (V + 55) / (1 - np.exp(-(V + 55) / 10)); bn = 0.125 * np.exp(-(V + 65) / 80)
+      am = 0.1 * (V + 40) / (1 - np.exp(-(V + 40) / 10)); bm = 4.0 * np.exp(-(V + 65) / 18)
+      ah = 0.07 * np.exp(-(V + 65) / 20); bh = 1 / (1 + np.exp(-(V + 35) / 10))
+      return an, bn, am, bm, ah, bh
+  def hh_rhs(y, I):
+      V, n, m, h = y
+      an, bn, am, bm, ah, bh = hh_rates(V)
+      dV = (I - gNa * m ** 3 * h * (V - ENa) - gK * n ** 4 * (V - EK) - gL * (V - EL)) / C
+      return np.array([dV, an * (1 - n) - bn * n, am * (1 - m) - bm * m, ah * (1 - h) - bh * h])
+  def steady(V):
+      an, bn, am, bm, ah, bh = hh_rates(V)
+      return np.array([V, an / (an + bn), am / (am + bm), ah / (ah + bh)])
+  print("dV/dt at V = -65 with gates at steady state, I = 0:", round(hh_rhs(steady(-65.0), 0.0)[0], 4))
+`} />
+
+<PyCell id="partC" title="Part C: the Hopf point of Hodgkin-Huxley" tests={String.raw`
+  import numpy as np
+  def test_rest():
+      "the resting voltage at I = 0 is within 0.05 mV of -65"
+      assert abs(hh_rest(0.0)[0] + 65) < 0.05
+
+  def test_crit():
+      "rest loses stability between 9.5 and 10 uA/cm2, through a complex pair (frequency 80 to 110 Hz)"
+      assert 9.5 < I_crit < 10.0 and 80 < f_crit < 110
+`} prompt="Write `hh_rest(I)` (bisection for V in [−75, −50] on dV/dt of steady(V)) and `hh_jac(y, I)` (central differences, step 1e-6). Scan I from 0 to 12 in steps of 0.02, and store in `I_crit` the first current where the largest real part of an eigenvalue is positive, and in `f_crit` the frequency (Hz) of that eigenvalue."
+code={String.raw`
+  def hh_rest(I):
+      g = lambda V: hh_rhs(steady(V), I)[0]
+      lo, hi = -75.0, -50.0
+      for _ in range(60):
+          mid = (lo + hi) / 2
+          if g(lo) * g(mid) <= 0: hi = mid
+          else: lo = mid
+      return steady((lo + hi) / 2)
+
+  def hh_jac(y, I, h=1e-6):
+      J = np.zeros((4, 4))
+      for j in range(4):
+          e = np.zeros(4); e[j] = h
+          J[:, j] = ...
+      return J
+
+  I_crit = f_crit = None; top = []
+  for I in np.arange(0, 12.0001, 0.02):
+      ev = np.linalg.eigvals(hh_jac(hh_rest(I), I))
+      k = np.argmax(ev.real); top.append(ev[k].real)
+      if ev[k].real > 0 and I_crit is None:
+          I_crit, f_crit = ..., ...                  # time is in ms
+  print(f"rest at I = 0: {hh_rest(0.0)[0]:.3f} mV;  rest loses stability at I = {I_crit:.2f} uA/cm2, frequency {f_crit:.1f} Hz")
+  plt.plot(np.arange(0, 12.0001, 0.02), top); plt.axhline(0, c="k", lw=0.8); plt.xlabel("I"); plt.ylabel("largest Re(eigenvalue)"); plt.show()
+`}
+hint="J[:, j] = (hh_rhs(y + e, I) - hh_rhs(y - e, I)) / (2 * h); I_crit, f_crit = I, abs(ev[k].imag) / (2 * np.pi) * 1000."
+solution={String.raw`
+  def hh_rest(I):
+      g = lambda V: hh_rhs(steady(V), I)[0]
+      lo, hi = -75.0, -50.0
+      for _ in range(60):
+          mid = (lo + hi) / 2
+          if g(lo) * g(mid) <= 0: hi = mid
+          else: lo = mid
+      return steady((lo + hi) / 2)
+
+  def hh_jac(y, I, h=1e-6):
+      J = np.zeros((4, 4))
+      for j in range(4):
+          e = np.zeros(4); e[j] = h
+          J[:, j] = (hh_rhs(y + e, I) - hh_rhs(y - e, I)) / (2 * h)
+      return J
+
+  I_crit = f_crit = None; top = []
+  for I in np.arange(0, 12.0001, 0.02):
+      ev = np.linalg.eigvals(hh_jac(hh_rest(I), I))
+      k = np.argmax(ev.real); top.append(ev[k].real)
+      if ev[k].real > 0 and I_crit is None:
+          I_crit, f_crit = I, abs(ev[k].imag) / (2 * np.pi) * 1000                  # time is in ms
+  print(f"rest at I = 0: {hh_rest(0.0)[0]:.3f} mV;  rest loses stability at I = {I_crit:.2f} uA/cm2, frequency {f_crit:.1f} Hz")
+  plt.plot(np.arange(0, 12.0001, 0.02), top); plt.axhline(0, c="k", lw=0.8); plt.xlabel("I"); plt.ylabel("largest Re(eigenvalue)"); plt.show()
+`} />
+
+At zero input, rest is at −64.996 mV. As the current rises, the leading eigenvalues are a complex pair whose real part climbs towards zero, and at 9.78 μA/cm² it crosses: rest becomes unstable, through a Hopf bifurcation with a frequency of about 93 Hz. Last week you saw repetitive firing from 6.5 μA/cm², well below this point. Between about 6.3 and 9.8 μA/cm² both rest and firing are stable, a bistability that linearisation at rest cannot see; Week 23 explains it, as a subcritical Hopf bifurcation.
+
+**Part D (written).** Answer in your journal: in Part B, decision time depends on how close the start is to the saddle. Real decisions are made with noisy inputs. Predict how noise would change the relation between decision time and the strength of the evidence, and how you would test the prediction in Week 24's drift diffusion model.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. Escape from a saddle" task="Near a saddle with unstable eigenvalue $\lambda_+ > 0$, the component of the deviation along the unstable eigenvector obeys $\dot y = \lambda_+ y$. Show that the time to grow from $y(0) = \delta$ to a fixed size $Y$ is $\frac{1}{\lambda_+}\ln\frac{Y}{\delta}$.">
+
+The solution is $y(t) = \delta e^{\lambda_+t}$. Set $y(T) = Y$: $e^{\lambda_+T} = Y/\delta$, so $T = \frac{1}{\lambda_+}\ln\frac{Y}{\delta}$.
+
+Halving $\delta$ adds a fixed $\ln 2/\lambda_+$ to the decision time, however small $\delta$ already is: there is no limit to how long a perfectly balanced decision can take. In Part B the linear approximation breaks down before the difference reaches 0.5, which adds a constant to every time but leaves the slope, $1/\lambda_+$, unchanged.
+
+</Prove>
+
+<Prove title="2. The symmetric state of the decision circuit" task="At the symmetric fixed point $r_1 = r_2 = s$, show that the Jacobian is $\frac{1}{\tau}\begin{pmatrix}-1 & -\beta F' \\ -\beta F' & -1\end{pmatrix}$ with $F' = F'(1 - \beta s)$, that its eigenvalues are $\frac{-1 \pm \beta F'}{\tau}$ with eigenvectors $(1, -1)$ and $(1, 1)$, and that the state becomes a saddle when $\beta F' > 1$.">
+
+Differentiate $\dot r_1 = (-r_1 + F(1 - \beta r_2))/\tau$: $\partial/\partial r_1 = -1/\tau$ and $\partial/\partial r_2 = -\beta F'(1 - \beta r_2)/\tau$. By symmetry the second row is the mirror image, which gives the matrix.
+
+A symmetric matrix of the form $\begin{pmatrix}a & b \\ b & a\end{pmatrix}$ has eigenvectors $(1, 1)$ with eigenvalue $a + b$ and $(1, -1)$ with eigenvalue $a - b$. Here $a = -1/\tau$ and $b = -\beta F'/\tau$, so the eigenvalues are $(-1 - \beta F')/\tau$ along $(1, 1)$, always negative, and $(-1 + \beta F')/\tau$ along $(1, -1)$.
+
+The second is positive when $\beta F' > 1$. Then the symmetric state is a saddle: stable to changes in the total activity, unstable to any difference between the two populations, which is exactly what a decision needs. For $\beta = 1$ and $s = 0.5$, $F' = 1/(4 \times 0.1) = 2.5$, giving eigenvalues $0.15$ and $-0.35$ per ms.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 22 quiz (15 questions)" questions={[
+  { q: "A fixed point of ẋ = f(x) with f′(x*) greater than 0 is...", options: ["Stable", "Unstable", "A centre", "A spiral"], answer: 1, explain: "The flow points away." },
+  { q: "One-dimensional flows cannot...", options: ["Have fixed points", "Oscillate", "Be non-linear", "Be bistable"], answer: 1, explain: "Trajectories are monotonic." },
+  { q: "A bistable population can store...", options: ["Nothing", "One bit", "A continuous value", "Only noise"], answer: 1, explain: "Two stable states." },
+  { q: "The determinant of a 2 × 2 matrix equals...", options: ["The sum of the eigenvalues", "The product of the eigenvalues", "The largest eigenvalue", "Zero for stable systems"], answer: 1, explain: "λ₁λ₂." },
+  { q: "A 2 × 2 system with T = −1 and D = 2 is...", options: ["A saddle", "A stable spiral", "An unstable node", "A centre"], answer: 1, explain: "D greater than 0, T less than 0, T² less than 4D." },
+  { q: "Symmetric connectivity rules out...", options: ["Fixed points", "Oscillations", "Stability", "Saddles"], answer: 1, explain: "Real eigenvalues, decreasing energy." },
+  { q: "The Jacobian linearises a system...", options: ["Globally", "Near a fixed point", "Only for linear systems", "At infinity"], answer: 1, explain: "First-order Taylor expansion." },
+  { q: "In the Wilson-Cowan model, the fixed point separating rest from high activity is...", options: ["A stable node", "A saddle", "A centre", "An unstable spiral"], answer: 1, explain: "Its stable direction is the basin boundary." },
+  { q: "An inhibition-stabilised network has...", options: ["J_EE less than 0", "J_EE greater than 0", "No inhibition", "Symmetric weights"], answer: 1, explain: "Excitation alone would be unstable." },
+  { q: "The FitzHugh-Nagumo threshold is...", options: ["A fixed voltage", "The middle branch of the cubic nullcline", "The w-nullcline", "ε"], answer: 1, explain: "Geometry of the flow." },
+  { q: "FitzHugh-Nagumo rest loses stability when the trace of the Jacobian...", options: ["Becomes negative", "Becomes positive", "Equals D", "Equals 1"], answer: 1, explain: "A Hopf bifurcation." },
+  { q: "Feedback w on a unit of time constant τ gives a memory of...", options: ["τ", "τ/(1 − w)", "τw", "1/w"], answer: 1, explain: "The eigenvalue moves towards zero." },
+  { q: "Noise on a line attractor makes the stored value...", options: ["Decay", "Diffuse along the line", "Jump between points", "Oscillate"], answer: 1, explain: "A random walk." },
+  { q: "Decision time from near a saddle grows like...", options: ["1/δ", "ln(1/δ)/λ₊", "δ²", "A constant"], answer: 1, explain: "Exponential escape." },
+  { q: "The Hodgkin-Huxley resting state loses stability at about 9.8 μA/cm² through...", options: ["A real eigenvalue crossing zero", "A complex pair crossing the imaginary axis", "A saddle", "A centre"], answer: 1, explain: "Part C: a Hopf bifurcation." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Ozeki, Finn, Schaffer, Miller and Ferster (2009) its third pass and write your critique under the five headings. Focus on one question: **does a fall in inhibitory conductance during surround suppression show that cortex is inhibition-stabilised?** Consider how excitatory and inhibitory conductances were separated in a single neuron, and the assumptions that separation needs; whether a decrease in inhibition onto one cell implies a decrease in the firing of inhibitory cells; whether reduced input from outside the local circuit could produce the same result without an ISN; what later experiments that drove inhibitory neurons directly with light found; and whether a linear two-population model is an adequate description of a cortical column with several types of inhibitory neuron.
+
+<Callout kind="research">
+
+Cortex has several types of inhibitory neuron (parvalbumin, somatostatin and VIP cells, among others) that inhibit each other as well as excitatory cells. Extend Day 3's threshold-linear model to three populations, E, PV and SOM, choose plausible connections, and work out which population must be stimulated to see a paradoxical response. Is the answer the same whichever inhibitory type you drive?
+
+</Callout>
+
+<Key title="Week 22 review checklist">
+<ul>
+<li>I can find fixed points of one-dimensional systems and classify them from the slope.</li>
+<li>I can classify 2 × 2 linear systems with the trace-determinant plane and predict oscillation frequencies.</li>
+<li>I can draw nullclines, compute Jacobians and classify fixed points of non-linear systems.</li>
+<li>I can explain excitability, threshold and the onset of repetitive firing in the FitzHugh-Nagumo model.</li>
+<li>I can explain line attractors, their tuning and noise, and find fixed points of a network numerically.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part D: how would noise change the relation between decision time and strength of evidence in the winner-take-all circuit? Then note the result of your three-population model from the research callout." />

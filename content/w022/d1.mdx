@@ -1,0 +1,270 @@
+export const meta = {
+  title: "One-dimensional flows: fixed points and their stability",
+  intro: "Last week you solved differential equations. This week you learn to understand them without solving them, by drawing pictures. For a single variable, one plot says everything: the rate of change against the variable itself. Where it crosses zero the system rests; the slope there says whether it returns after a nudge or runs away. Today you use this to analyse a population of neurons that excite each other, and find that strong recurrent excitation gives it two stable states and so a memory: a brief input can switch it on, and it stays on.",
+  goals: [
+    "Read the flow, fixed points and stability of ẋ = f(x) from a plot of f",
+    "Find fixed points numerically and classify them from the slope f′(x*)",
+    "Predict how quickly a perturbation decays near a stable fixed point",
+    "Show that a population with strong recurrent excitation is bistable and stores a memory",
+  ],
+  plan: [
+    { label: "Predict and flows on a line", minutes: 25 },
+    { label: "A population that excites itself", minutes: 30 },
+    { label: "Linear stability and timescales", minutes: 25 },
+    { label: "A switch that remembers", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "koulakov-2002",
+};
+
+<Predict question="A population of neurons excites itself strongly. It sits at a low firing rate. A 20 ms pulse of extra input arrives and then stops. What does the population's rate do after the pulse: return to low, stay high, or oscillate?" />
+
+<Step n={1} title="Flows on a line" minutes={25} />
+
+A one-variable system $\dot{x} = f(x)$ can be pictured as a flow along a line. At each point $x$, the value $f(x)$ is a velocity: positive means $x$ moves right, negative means it moves left. So plot $f(x)$ against $x$ and you can read off the whole behaviour, for every starting point, without solving anything.
+
+Points where $f(x^*) = 0$ are **fixed points**: start there and you stay there. Whether you return after a small nudge depends on the flow nearby. If $f$ crosses zero going downwards ($f'(x^*) \lt 0$), the flow points towards $x^*$ from both sides and the fixed point is **stable**. If it crosses going upwards ($f'(x^*) > 0$), the flow points away and it is **unstable**. Trajectories move monotonically towards a stable fixed point or off to infinity; on a line they can never overshoot or oscillate, because to turn round they would need to pass through a point where $f = 0$, and that point is a fixed point they can never leave.
+
+<Video id="Ox3ELd1UFyo" title="Fixed point" by="Neuromatch Academy" note="Neuromatch's tutorial video on finding the fixed points of a population rate model with recurrent excitation, the model you analyse today." />
+
+<Step n={2} title="A population that excites itself" minutes={30} />
+
+Describe a population of excitatory neurons by its average firing rate $r$, scaled so that 1 is the maximum. The population receives external input $I$ and its own output through recurrent connections of strength $w$, and its rate relaxes towards a sigmoid function of the total input:
+
+$$
+\tau\frac{\mathrm{d}r}{\mathrm{d}t} = -r + F(wr + I), \qquad F(u) = \frac{1}{1 + e^{-(u - 4)}}.
+$$
+
+The sigmoid is a smoothed f-I curve (Week 21). Throughout today, $\tau = 10$ ms.
+
+<Figure caption="The rate of change against the rate for the self-exciting population. Fixed points are where the curve crosses zero. Raise the recurrent weight until a second stable state appears." credit="Interactive figure by Engram, after the rate model in the Neuromatch Academy dynamical systems tutorial.">
+  <Flow1D />
+</Figure>
+
+<PyCell id="fixed" title="Find and classify the fixed points" tests={String.raw`
+  import numpy as np
+  def test_three():
+      "with w = 8 and I = 0 there are three fixed points, stable, unstable, stable"
+      fps = fixed_points(8.0, 0.0)
+      assert len(fps) == 3 and [s for _, s in fps] == [True, False, True]
+
+  def test_values():
+      "each fixed point really satisfies f(r) = 0 to 1e-8"
+      assert all(abs(f(r, 8.0, 0.0)) < 1e-8 for r, _ in fixed_points(8.0, 0.0))
+
+  def test_weak():
+      "with w = 2 there is a single stable fixed point"
+      fps = fixed_points(2.0, 0.0)
+      assert len(fps) == 1 and fps[0][1]
+`} prompt="Write `fixed_points(w, I)`: scan r from −0.1 to 1.1 on a fine grid, find every sign change of f, refine each root by bisection, and return a list of (r*, stable) pairs, where stable is True when the slope of f at r* is negative."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  tau = 10.0
+  F = lambda u: 1 / (1 + np.exp(-(u - 4)))
+  def f(r, w, I): return -r + F(w * r + I)
+
+  def fixed_points(w, I):
+      grid = np.linspace(-0.1, 1.1, 2001)
+      vals = f(grid, w, I)
+      out = []
+      for k in np.where(np.sign(vals[:-1]) != np.sign(vals[1:]))[0]:
+          a, b = grid[k], grid[k + 1]
+          for _ in range(60):                          # bisection
+              m = (a + b) / 2
+              if ...: b = m
+              else: a = m
+          r = (a + b) / 2
+          slope = (f(r + 1e-6, w, I) - f(r - 1e-6, w, I)) / 2e-6
+          out.append((r, ...))
+      return out
+
+  for w in (2.0, 8.0):
+      print(f"w = {w}:", [(round(float(r), 4), 'stable' if s else 'unstable') for r, s in fixed_points(w, 0.0)])
+  rr = np.linspace(-0.1, 1.1, 300)
+  for w in (2.0, 8.0): plt.plot(rr, f(rr, w, 0.0), label=f"w = {w}")
+  plt.axhline(0, c="k", lw=0.8); plt.xlabel("r"); plt.ylabel("tau dr/dt"); plt.legend(); plt.show()
+`}
+hint="if f(a, w, I) * f(m, w, I) <= 0: b = m; out.append((r, slope < 0))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  tau = 10.0
+  F = lambda u: 1 / (1 + np.exp(-(u - 4)))
+  def f(r, w, I): return -r + F(w * r + I)
+
+  def fixed_points(w, I):
+      grid = np.linspace(-0.1, 1.1, 2001)
+      vals = f(grid, w, I)
+      out = []
+      for k in np.where(np.sign(vals[:-1]) != np.sign(vals[1:]))[0]:
+          a, b = grid[k], grid[k + 1]
+          for _ in range(60):                          # bisection
+              m = (a + b) / 2
+              if f(a, w, I) * f(m, w, I) <= 0: b = m
+              else: a = m
+          r = (a + b) / 2
+          slope = (f(r + 1e-6, w, I) - f(r - 1e-6, w, I)) / 2e-6
+          out.append((r, slope < 0))
+      return out
+
+  for w in (2.0, 8.0):
+      print(f"w = {w}:", [(round(float(r), 4), 'stable' if s else 'unstable') for r, s in fixed_points(w, 0.0)])
+  rr = np.linspace(-0.1, 1.1, 300)
+  for w in (2.0, 8.0): plt.plot(rr, f(rr, w, 0.0), label=f"w = {w}")
+  plt.axhline(0, c="k", lw=0.8); plt.xlabel("r"); plt.ylabel("tau dr/dt"); plt.legend(); plt.show()
+`} />
+
+With weak recurrence ($w = 2$) there is one stable state, a low rate of about 0.02. With $w = 8$ there are three fixed points: a low stable state at 0.021, an unstable one at exactly 0.5 (where $8r - 4 = 0$ puts the sigmoid at its midpoint), and a high stable state at 0.979. Strong recurrent excitation has created a second stable state, in which the population's own output keeps it firing.
+
+<Step n={3} title="Linear stability and timescales" minutes={25} />
+
+Near a fixed point, write $r = r^* + \delta$ with $\delta$ small. A first-order Taylor expansion (Week 8) gives
+
+$$
+\tau\dot{\delta} = f(r^* + \delta) \approx f(r^*) + f'(r^*)\delta = f'(r^*)\delta,
+$$
+
+which is the membrane equation of Week 21 with solution $\delta(t) = \delta(0)e^{f'(r^*)t/\tau}$. So the slope is not just a sign: a stable fixed point pulls perturbations back with time constant $\tau/|f'(r^*)|$, and a shallow crossing means slow recovery. This is **linearisation**, and it is the tool for the rest of the week.
+
+<PyCell id="decay" title="Predicting the recovery time" tests={String.raw`
+  import numpy as np
+  def test_slope():
+      "slope_hi is the derivative of f at the high fixed point, to 1e-4"
+      r_hi = fixed_points(8.0, 0.0)[-1][0]
+      assert abs(slope_hi - (f(r_hi + 1e-6, 8.0, 0.0) - f(r_hi - 1e-6, 8.0, 0.0)) / 2e-6) < 1e-4
+
+  def test_match():
+      "the time constant measured from the simulation is within 5% of the prediction"
+      assert abs(tau_measured - tau_pred) / tau_pred < 0.05
+`} prompt="At the high stable fixed point for w = 8, compute the slope `slope_hi` and the predicted recovery time constant `tau_pred` = tau / |slope|. Then start the simulation 0.01 below the fixed point, integrate with Euler steps of 0.01 ms for 100 ms, and measure `tau_measured` from the slope of log |r − r*| over the first 30 ms."
+code={String.raw`
+  r_hi = fixed_points(8.0, 0.0)[-1][0]
+  slope_hi = ...
+  tau_pred = ...
+  dt = 0.01
+  ts = np.arange(0, 100, dt)
+  r = np.empty(len(ts)); r[0] = r_hi - 0.01
+  for k in range(1, len(ts)):
+      r[k] = r[k - 1] + dt / tau * f(r[k - 1], 8.0, 0.0)
+  early = ts < 30
+  tau_measured = ...
+  print(f"high fixed point {r_hi:.4f}, slope {slope_hi:.3f}: predicted {tau_pred:.2f} ms, measured {tau_measured:.2f} ms")
+`}
+hint="slope_hi = (f(r_hi + 1e-6, 8.0, 0.0) - f(r_hi - 1e-6, 8.0, 0.0)) / 2e-6; tau_pred = tau / abs(slope_hi); tau_measured = -1 / np.polyfit(ts[early], np.log(np.abs(r[early] - r_hi)), 1)[0]."
+solution={String.raw`
+  r_hi = fixed_points(8.0, 0.0)[-1][0]
+  slope_hi = (f(r_hi + 1e-6, 8.0, 0.0) - f(r_hi - 1e-6, 8.0, 0.0)) / 2e-6
+  tau_pred = tau / abs(slope_hi)
+  dt = 0.01
+  ts = np.arange(0, 100, dt)
+  r = np.empty(len(ts)); r[0] = r_hi - 0.01
+  for k in range(1, len(ts)):
+      r[k] = r[k - 1] + dt / tau * f(r[k - 1], 8.0, 0.0)
+  early = ts < 30
+  tau_measured = -1 / np.polyfit(ts[early], np.log(np.abs(r[early] - r_hi)), 1)[0]
+  print(f"high fixed point {r_hi:.4f}, slope {slope_hi:.3f}: predicted {tau_pred:.2f} ms, measured {tau_measured:.2f} ms")
+`} />
+
+The slope at the high state is −0.834, so linearisation predicts a recovery time constant of $10/0.834 = 12.0$ ms, and the simulation gives 12.02 ms. Note that this is longer than the 10 ms time constant of the population on its own: recurrent excitation partly cancels the leak and slows the recovery, an effect you will push to its limit on Day 5.
+
+<Step n={4} title="A switch that remembers" minutes={25} />
+
+Two stable states separated by an unstable one make the population a switch. The unstable fixed point is a threshold: start below it and the rate falls to the low state; start above it and it climbs to the high one. A brief input that pushes the rate past the threshold switches the population on, and it stays on after the input ends, because the high state is self-sustaining. Persistent activity of this kind, in which neurons keep firing during a delay after a stimulus has gone, is seen in prefrontal cortex during working memory tasks, and recurrent excitation is one of its proposed mechanisms.
+
+<PyCell id="switch" title="Switching the population on" tests={String.raw`
+  import numpy as np
+  def test_off_on():
+      "the rate starts low (below 0.1) and ends high (above 0.9) after the strong pulse"
+      assert r_strong[int(40 / dt)] < 0.1 and r_strong[-1] > 0.9
+
+  def test_weak():
+      "a pulse too weak to cross the threshold leaves the rate low at the end"
+      assert r_weak[-1] < 0.1
+`} prompt="Write `run(amp)`, which simulates 300 ms from r = 0 with w = 8, adding an input of size amp from 50 to 70 ms. Store the results for amp = 3 in `r_strong` and amp = 1 in `r_weak`."
+code={String.raw`
+  ts = np.arange(0, 300, dt)
+  def run(amp):
+      r = np.zeros(len(ts))
+      for k in range(1, len(ts)):
+          I = ...                                       # amp between 50 and 70 ms, 0 otherwise
+          r[k] = r[k - 1] + dt / tau * f(r[k - 1], 8.0, I)
+      return r
+  r_strong, r_weak = run(3.0), run(1.0)
+  print(f"before the pulse {r_strong[int(40 / dt)]:.3f};  at 300 ms: strong pulse {r_strong[-1]:.3f}, weak pulse {r_weak[-1]:.3f}")
+  plt.plot(ts, r_strong, label="pulse 3"); plt.plot(ts, r_weak, label="pulse 1")
+  plt.axvspan(50, 70, color="orange", alpha=0.2); plt.xlabel("ms"); plt.ylabel("r"); plt.legend(); plt.show()
+`}
+hint="I = amp if 50 <= ts[k] < 70 else 0.0."
+solution={String.raw`
+  ts = np.arange(0, 300, dt)
+  def run(amp):
+      r = np.zeros(len(ts))
+      for k in range(1, len(ts)):
+          I = amp if 50 <= ts[k] < 70 else 0.0                                       # amp between 50 and 70 ms, 0 otherwise
+          r[k] = r[k - 1] + dt / tau * f(r[k - 1], 8.0, I)
+      return r
+  r_strong, r_weak = run(3.0), run(1.0)
+  print(f"before the pulse {r_strong[int(40 / dt)]:.3f};  at 300 ms: strong pulse {r_strong[-1]:.3f}, weak pulse {r_weak[-1]:.3f}")
+  plt.plot(ts, r_strong, label="pulse 3"); plt.plot(ts, r_weak, label="pulse 1")
+  plt.axvspan(50, 70, color="orange", alpha=0.2); plt.xlabel("ms"); plt.ylabel("r"); plt.legend(); plt.show()
+`} />
+
+Before the pulse the rate sits at 0.021. A pulse of strength 3 carries it past the threshold at 0.5, and 230 ms after the pulse has ended it is still at 0.979. A pulse of strength 1 does not cross the threshold, and the rate falls back to 0.021. That answers the prediction: the population stays high, and it does not oscillate, because a one-variable system cannot.
+
+<Bridge title="Fixed points as memories"
+  neuro="Bistable populations are a candidate mechanism for working memory and for decisions that, once made, stick. Koulakov and colleagues (2002, today's paper) built a graded memory, an integrator, out of many bistable units, so that each unit's stability protects the stored value."
+  ai="A recurrent network that stores information does so in its stable states. Hopfield networks (Day 2's paper) make this explicit, and trained recurrent networks used for memory tasks turn out, when analysed, to have fixed points where they hold what they remember (Day 5).">
+
+A fixed point that the system returns to after a nudge is a state it can remember.
+
+</Bridge>
+
+<Prove title="Stability from the slope" task="For $\dot x = f(x)$ with $f(x^*) = 0$ and $f'(x^*) \ne 0$, show that a small perturbation $\delta$ obeys $\dot\delta \approx f'(x^*)\delta$, and deduce that $x^*$ is stable if $f'(x^*) \lt 0$ and unstable if $f'(x^*) > 0$. Then explain why a one-variable system cannot oscillate.">
+
+Let $x = x^* + \delta$. Then $\dot\delta = \dot x = f(x^* + \delta) = f(x^*) + f'(x^*)\delta + O(\delta^2) = f'(x^*)\delta + O(\delta^2)$.
+
+Dropping the small quadratic term, $\delta(t) = \delta(0)e^{f'(x^*)t}$, which shrinks to zero if $f'(x^*) \lt 0$ and grows if $f'(x^*) > 0$. (If $f'(x^*) = 0$ the linear term vanishes and the quadratic one decides: this is where bifurcations happen, Week 23.)
+
+For oscillation, $x$ would have to go up and later come down, so $\dot x$ would have to change sign. Since $\dot x = f(x)$ depends only on $x$, and $f$ is continuous, the trajectory would have to pass through a point where $f(x) = 0$. But that is a fixed point, and by uniqueness of solutions, a trajectory cannot reach a fixed point in finite time and pass through it. So trajectories on a line are monotonic. Oscillations need at least two dimensions (Day 2).
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "A fixed point of ẋ = f(x) is where...", options: ["f(x) = x", "f(x) = 0", "f′(x) = 0", "x = 0"], answer: 1, explain: "The velocity is zero." },
+  { q: "A fixed point with f′(x*) less than 0 is...", options: ["Unstable", "Stable", "Oscillatory", "Undetermined"], answer: 1, explain: "The flow points towards it from both sides." },
+  { q: "Near a stable fixed point, perturbations decay with time constant...", options: ["τ f′(x*)", "τ / |f′(x*)|", "τ", "1 / x*"], answer: 1, explain: "Linearisation." },
+  { q: "A one-dimensional system ẋ = f(x) can...", options: ["Oscillate", "Only move monotonically", "Be chaotic", "Spiral"], answer: 1, explain: "It cannot turn round without stopping." },
+  { q: "With strong recurrent excitation, the rate model has...", options: ["One stable state", "Two stable states and an unstable one between", "No fixed points", "A limit cycle"], answer: 1, explain: "Bistability." },
+  { q: "In a bistable population, the unstable fixed point acts as...", options: ["A memory", "A threshold between the two states", "An oscillator", "Noise"], answer: 1, explain: "Which side you start on decides where you go." },
+  { q: "A brief pulse that switches a bistable population on leaves it...", options: ["Returning to low", "Staying high after the pulse", "Oscillating", "Silent"], answer: 1, explain: "Persistent activity." },
+]} />
+
+<Flashcards cards={[
+  { front: "Fixed point?", back: "x* with f(x*) = 0." },
+  { front: "Stability in 1D?", back: "Stable if f′(x*) less than 0, unstable if greater than 0." },
+  { front: "Linearisation?", back: "$\\dot\\delta \\approx f'(x^*)\\delta$ near a fixed point; time constant $1/|f'(x^*)|$." },
+  { front: "Bistability?", back: "Two stable fixed points separated by an unstable one, which acts as a threshold." },
+  { front: "Persistent activity?", back: "Firing that continues after a stimulus ends, sustained by recurrent excitation." },
+]} />
+
+<Predict revisit question="After a brief pulse to a strongly self-exciting population, does its rate return to low, stay high or oscillate?" />
+
+<Key title="Before you go">
+<ul>
+<li>For ẋ = f(x), plot f against x: zeros are fixed points, the sign of the slope gives their stability.</li>
+<li>Linearisation gives the recovery time constant near a stable fixed point.</li>
+<li>One-variable flows are monotonic and cannot oscillate.</li>
+<li>Strong recurrent excitation makes a population bistable, so a brief input can switch on persistent activity.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Koulakov, Raghavachari, Kepecs and Lisman (2002), <em>Model for a robust neural integrator</em>.</li>
+<li>Strogatz, <em>Nonlinear Dynamics and Chaos</em>, chapter 2, flows on the line.</li>
+<li>Neuromatch Academy, computational neuroscience course, W2D5 Tutorial 1, which builds the same rate model in Python.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A bistable population stores one bit. List three ways this memory could be erased, using today's picture (for example, noise, or a change in input that removes a fixed point). Which would a brain use deliberately, and which would it need to guard against?" />
