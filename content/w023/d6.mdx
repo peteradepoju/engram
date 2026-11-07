@@ -1,0 +1,250 @@
+export const meta = {
+  title: "Forge: Week 23 challenge, quiz and deep read",
+  intro: "This week you watched systems change their character as a parameter moved: fixed points colliding in saddle-nodes, oscillations born in Hopf bifurcations, crowds of oscillators locking, maps doubling their way into chaos, and networks turning chaotic. Today's challenge ties these together. You will find the exact point where order returns inside the logistic map's chaos, measure the bursts of near-regular behaviour just before it and show that their length obeys the same square-root law as Day 1's saddle-node, then find by linearisation where the Lorenz system's steady convection gives way. Then the quiz and a critique of the paper that found chaos in random neural networks.",
+  goals: [
+    "Locate the period-3 window of the logistic map and identify its bifurcation",
+    "Measure intermittency before a saddle-node and its square-root scaling",
+    "Find the Hopf bifurcation of the Lorenz system's convection states by linearisation",
+    "Critique the theory of chaos in random neural networks",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "sompolinsky-1988",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. The period of the theta neuron with $I = 0.25$?
+2. The amplitude of the supercritical Hopf cycle with $\mu = 0.09$?
+3. The critical Kuramoto coupling for Lorentzian frequencies of width $\gamma = 0.2$?
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  print("1. pi / sqrt(0.25) =", round(np.pi / np.sqrt(0.25), 3))
+  print("2. sqrt(0.09) =", round(np.sqrt(0.09), 3))
+  print("3. Kc = 2 gamma =", 2 * 0.2)
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: order inside chaos.** Day 4 found a period-3 orbit at $r = 3.83$, inside the chaotic region. The 3-cycle is born when the third iterate $f^3(x) = f(f(f(x)))$ first touches the diagonal: a saddle-node bifurcation of $f^3$, which theory places at $r = 1 + \sqrt8 \approx 3.8284$. Find it numerically.
+
+<PyCell id="partA" title="Part A: where period 3 begins" tests={String.raw`
+  import numpy as np
+  def test_r3():
+      "the first r in the scan with a period-3 attractor is within 0.0005 of 1 + sqrt(8)"
+      assert abs(r3 - (1 + np.sqrt(8))) < 0.0005
+
+  def test_below():
+      "just below it, at r = 3.827, there is no period-3 attractor"
+      assert period(3.827) != 3
+`} prompt="Write `period(r)` as on Day 4 but with 20,000 settling steps and tolerance 1e-6. Scan r from 3.826 to 3.832 in steps of 0.0001 and store the first r with period 3 in `r3`."
+code={String.raw`
+  def period(r, settle=20000, tol=1e-6):
+      x = 0.5
+      for _ in range(settle): x = r * x * (1 - x)
+      x0 = x
+      for p in range(1, 65):
+          x = r * x * (1 - x)
+          if abs(x - x0) < tol: return p
+      return None
+
+  r3 = None
+  for r in np.arange(3.826, 3.832, 0.0001):
+      if ...:
+          r3 = r; break
+  print(f"period 3 first found at r = {r3:.4f};  1 + sqrt(8) = {1 + np.sqrt(8):.4f}")
+`}
+hint="if period(r) == 3:"
+solution={String.raw`
+  def period(r, settle=20000, tol=1e-6):
+      x = 0.5
+      for _ in range(settle): x = r * x * (1 - x)
+      x0 = x
+      for p in range(1, 65):
+          x = r * x * (1 - x)
+          if abs(x - x0) < tol: return p
+      return None
+
+  r3 = None
+  for r in np.arange(3.826, 3.832, 0.0001):
+      if period(r) == 3:
+          r3 = r; break
+  print(f"period 3 first found at r = {r3:.4f};  1 + sqrt(8) = {1 + np.sqrt(8):.4f}")
+`} />
+
+The scan first finds a 3-cycle at $r = 3.8285$, one step of the scan above $1 + \sqrt8 = 3.82843$. At the window's edge a stable and an unstable 3-cycle are born together, out of nothing, as the hump of $f^3$ touches the diagonal at three points at once: a saddle-node bifurcation of the third iterate. Inside the window, the 3-cycle then period-doubles, 6, 12, 24, back into chaos, a miniature copy of the whole cascade with the same Feigenbaum ratio.
+
+**Part B: intermittency.** Just below $r_c = 1 + \sqrt8$ the 3-cycle does not yet exist, but its ghost does. The orbit behaves almost periodically for long stretches, the **laminar phases**, then bursts into chaos, then is reinjected near the ghost and becomes regular again. Day 1 showed that passage through a saddle-node's bottleneck takes a time proportional to $1/\sqrt{\text{distance}}$. Test whether the laminar phases obey the same law.
+
+<PyCell id="partB" title="Part B: the ghost of a saddle-node" tests={String.raw`
+  import numpy as np
+  def test_longer():
+      "laminar phases get longer as r approaches rc"
+      assert np.all(np.diff(mean_len) > 0)
+
+  def test_exponent():
+      "mean laminar length scales as (rc - r) to a power within 0.1 of -0.5"
+      assert abs(expo_B + 0.5) < 0.1
+`} prompt="For ε = 1e-3, 3e-4, 1e-4 and 3e-5, iterate the map at r = rc − ε for 200,000 steps from 0.3. Mark steps where |x_{n+3} − x_n| is below 0.01 as laminar, find the lengths of runs of laminar steps, keep runs of at least 5, and store their means in `mean_len`. Fit log mean_len against log ε for `expo_B`."
+code={String.raw`
+  rc = 1 + np.sqrt(8)
+  eps_list = np.array([1e-3, 3e-4, 1e-4, 3e-5])
+  mean_len = []
+  for eps in eps_list:
+      r = rc - eps; x = 0.3; xs = np.empty(200000)
+      for k in range(len(xs)):
+          x = r * x * (1 - x); xs[k] = x
+      lam = np.abs(xs[3:] - xs[:-3]) < 0.01
+      edges = np.diff(np.concatenate([[0], lam.astype(int), [0]]))
+      runs = np.where(edges == -1)[0] - np.where(edges == 1)[0]
+      mean_len.append(...)
+  mean_len = np.array(mean_len)
+  expo_B = ...
+  print("mean laminar lengths", mean_len.round(1), f";  exponent {expo_B:.3f}")
+  plt.loglog(eps_list, mean_len, "o-"); plt.xlabel("rc - r"); plt.ylabel("mean laminar length"); plt.show()
+`}
+hint="mean_len.append(runs[runs >= 5].mean()); expo_B = np.polyfit(np.log(eps_list), np.log(mean_len), 1)[0]."
+solution={String.raw`
+  rc = 1 + np.sqrt(8)
+  eps_list = np.array([1e-3, 3e-4, 1e-4, 3e-5])
+  mean_len = []
+  for eps in eps_list:
+      r = rc - eps; x = 0.3; xs = np.empty(200000)
+      for k in range(len(xs)):
+          x = r * x * (1 - x); xs[k] = x
+      lam = np.abs(xs[3:] - xs[:-3]) < 0.01
+      edges = np.diff(np.concatenate([[0], lam.astype(int), [0]]))
+      runs = np.where(edges == -1)[0] - np.where(edges == 1)[0]
+      mean_len.append(runs[runs >= 5].mean())
+  mean_len = np.array(mean_len)
+  expo_B = np.polyfit(np.log(eps_list), np.log(mean_len), 1)[0]
+  print("mean laminar lengths", mean_len.round(1), f";  exponent {expo_B:.3f}")
+  plt.loglog(eps_list, mean_len, "o-"); plt.xlabel("rc - r"); plt.ylabel("mean laminar length"); plt.show()
+`} />
+
+The mean laminar phase lengthens from 16.7 steps at $\varepsilon = 10^{-3}$ to 111.5 at $3 \times 10^{-5}$, with a fitted exponent of −0.54, close to the predicted −0.5 (the threshold of 0.01 for calling a step laminar adds a small bias). This is **type I intermittency** (Pomeau and Manneville, 1980): the orbit squeezes through the ghost of the 3-cycle, exactly the bottleneck that slowed the theta neuron on Day 1.
+
+**Part C: when convection stops being steady.** For $\rho > 1$ the Lorenz system has two fixed points, $C_\pm = (\pm\sqrt{\beta(\rho - 1)}, \pm\sqrt{\beta(\rho - 1)}, \rho - 1)$, steady convection rolls turning one way or the other. Find, by linearisation, the value of $\rho$ at which they lose stability, and compare it with the formula $\rho_H = \sigma(\sigma + \beta + 3)/(\sigma - \beta - 1)$.
+
+<PyCell id="partC" title="Part C: the Lorenz Hopf point" tests={String.raw`
+  import numpy as np
+  def test_rhoH():
+      "rho_H is within 0.02 of the formula, about 24.737"
+      assert abs(rho_H - 24.7368) < 0.02
+
+  def test_complex():
+      "the crossing eigenvalues are a complex pair (imaginary part above 5)"
+      assert omega_H > 5
+`} prompt="Write `lorenz_jac(p, rho)`, the analytic Jacobian of the Lorenz system. Scan ρ from 20 to 30 in steps of 0.001; at each, evaluate the Jacobian at C₊ and store in `rho_H` the first ρ where an eigenvalue has positive real part, and in `omega_H` the absolute imaginary part of that eigenvalue."
+code={String.raw`
+  sig, bet = 10.0, 8 / 3
+  def lorenz_jac(p, rho):
+      x, y, z = p
+      return np.array([[-sig, sig, 0.0],
+                       [..., -1.0, -x],
+                       [y, x, -bet]])
+
+  rho_H = omega_H = None
+  for rho in np.arange(20, 30, 0.001):
+      c = np.sqrt(bet * (rho - 1)); ev = np.linalg.eigvals(lorenz_jac((c, c, rho - 1), rho))
+      k = np.argmax(ev.real)
+      if ev[k].real > 0:
+          rho_H, omega_H = ..., ...
+          break
+  print(f"C+ loses stability at rho = {rho_H:.3f} (formula {sig * (sig + bet + 3) / (sig - bet - 1):.3f}), eigenvalues crossing at +-{omega_H:.2f}i")
+`}
+hint="The middle row starts with rho - z; rho_H, omega_H = rho, abs(ev[k].imag)."
+solution={String.raw`
+  sig, bet = 10.0, 8 / 3
+  def lorenz_jac(p, rho):
+      x, y, z = p
+      return np.array([[-sig, sig, 0.0],
+                       [rho - z, -1.0, -x],
+                       [y, x, -bet]])
+
+  rho_H = omega_H = None
+  for rho in np.arange(20, 30, 0.001):
+      c = np.sqrt(bet * (rho - 1)); ev = np.linalg.eigvals(lorenz_jac((c, c, rho - 1), rho))
+      k = np.argmax(ev.real)
+      if ev[k].real > 0:
+          rho_H, omega_H = rho, abs(ev[k].imag)
+          break
+  print(f"C+ loses stability at rho = {rho_H:.3f} (formula {sig * (sig + bet + 3) / (sig - bet - 1):.3f}), eigenvalues crossing at +-{omega_H:.2f}i")
+`} />
+
+The convection states lose stability at $\rho = 24.737$, matching the formula, through a complex pair crossing at $\pm 9.62i$: a Hopf bifurcation. It is subcritical: the unstable cycles shrink onto $C_\pm$ as $\rho$ rises, and beyond 24.74 trajectories have nowhere nearby to go but the strange attractor. In fact the attractor already exists from about $\rho = 24.06$, so between 24.06 and 24.74 steady convection and chaos coexist, the same bistability as the Hodgkin-Huxley neuron's.
+
+**Part D (written).** Answer in your journal: this week's bifurcations each have a signature that could be looked for in data (hysteresis, critical slowing down, a rhythm starting at zero or at full amplitude, period doubling, intermittency). Choose one neural phenomenon, such as the onset of a seizure, a switch between sleep and waking or the start of a rhythm, and say which signatures you would look for and what each would tell you.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The Hopf point of the Lorenz system" task="The Jacobian at $C_\pm$ has characteristic polynomial $\lambda^3 + (\sigma + \beta + 1)\lambda^2 + \beta(\sigma + \rho)\lambda + 2\sigma\beta(\rho - 1) = 0$. Show that it has a purely imaginary pair of roots $\lambda = \pm i\omega$ exactly when $\rho = \sigma(\sigma + \beta + 3)/(\sigma - \beta - 1)$.">
+
+Write the polynomial as $\lambda^3 + a\lambda^2 + b\lambda + c$. Substitute $\lambda = i\omega$: $-i\omega^3 - a\omega^2 + ib\omega + c = 0$.
+
+The real part gives $c = a\omega^2$ and the imaginary part gives $\omega^2 = b$. Together, $c = ab$.
+
+So $2\sigma\beta(\rho - 1) = (\sigma + \beta + 1)\beta(\sigma + \rho)$. Divide by $\beta$ and collect the terms in $\rho$: $\rho(2\sigma - \sigma - \beta - 1) = 2\sigma + \sigma(\sigma + \beta + 1)$, so $\rho = \frac{\sigma(\sigma + \beta + 3)}{\sigma - \beta - 1}$, which is 24.74 for the standard values. The crossing frequency is $\omega = \sqrt b = \sqrt{\beta(\sigma + \rho_H)}$, about 9.62.
+
+</Prove>
+
+<Prove title="2. The 2-cycle is born where the fixed point fails" task="Show that the logistic map's 2-cycle points, the roots of $f(f(x)) = x$ other than the fixed points, are real only for $r > 3$, and that at $r = 3$ they coincide with the fixed point $1 - 1/r$.">
+
+The points of a 2-cycle satisfy $f(p) = q$, $f(q) = p$. Subtracting the equations $q = rp(1 - p)$ and $p = rq(1 - q)$ gives $q - p = r(p - q) - r(p^2 - q^2) = r(p - q)(1 - p - q)$. For $p \ne q$, divide by $p - q$ to get $-1 = r(1 - p - q)$, so $p + q = \frac{r + 1}{r}$.
+
+Adding the equations similarly gives $pq = \frac{r + 1}{r^2}$. So $p$ and $q$ are the roots of $u^2 - \frac{r + 1}{r}u + \frac{r + 1}{r^2} = 0$, with discriminant $\frac{(r + 1)^2}{r^2} - \frac{4(r + 1)}{r^2} = \frac{(r + 1)(r - 3)}{r^2}$, positive only for $r > 3$.
+
+At $r = 3$ the discriminant is zero and $p = q = \frac{r + 1}{2r} = \frac{2}{3} = 1 - \frac{1}{3}$: the 2-cycle emerges from the fixed point exactly as its multiplier reaches −1.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 23 quiz (15 questions)" questions={[
+  { q: "In a saddle-node bifurcation...", options: ["A fixed point changes stability", "Two fixed points collide and vanish", "A cycle is born", "Chaos begins"], answer: 1, explain: "ẋ = r + x²." },
+  { q: "Hysteresis requires...", options: ["One fixed point", "A range of parameters with two stable states", "Chaos", "Noise"], answer: 1, explain: "An S-shaped diagram." },
+  { q: "Critical slowing down near a saddle-node scales as...", options: ["1/|r|", "1/√|r|", "|r|", "e^{|r|}"], answer: 1, explain: "Slope 2√(−r)." },
+  { q: "A class 1 neuron's rate near onset grows as...", options: ["I", "√(I − I_c)", "A jump", "log I"], answer: 1, explain: "Saddle-node on a circle." },
+  { q: "At a Hopf bifurcation the eigenvalues...", options: ["Are real and cross zero", "Are a complex pair crossing the imaginary axis", "Vanish", "Become infinite"], answer: 1, explain: "μ ± iω." },
+  { q: "A supercritical Hopf cycle's amplitude grows as...", options: ["μ", "√μ", "μ²", "It jumps"], answer: 1, explain: "ρ = √μ." },
+  { q: "A subcritical Hopf gives...", options: ["Gentle onset", "Bistability between rest and oscillation", "No oscillation", "Chaos"], answer: 1, explain: "The Hodgkin-Huxley neuron at 8 μA/cm²." },
+  { q: "Two oscillators lock when...", options: ["K is below |Δω|", "K is at least |Δω|", "Always", "Never"], answer: 1, explain: "φ̇ = Δω − K sin φ." },
+  { q: "The Kuramoto order parameter R...", options: ["Is the mean frequency", "Measures synchrony from 0 to 1", "Is the coupling", "Is always 1"], answer: 1, explain: "Centre of mass of phases." },
+  { q: "For Lorentzian frequencies of width γ, K_c equals...", options: ["γ", "2γ", "γ/2", "π γ"], answer: 1, explain: "2/(π g(0))." },
+  { q: "A fixed point of a map is stable if...", options: ["|f′| is greater than 1", "|f′| is less than 1", "f′ = 1", "f = 0"], answer: 1, explain: "The multiplier." },
+  { q: "Feigenbaum's constant is about...", options: ["2.5", "3.57", "4.669", "0.693"], answer: 2, explain: "Universal ratio." },
+  { q: "The Lyapunov exponent of the logistic map at r = 4 is...", options: ["0", "ln 2", "1", "−ln 2"], answer: 1, explain: "Average log stretching." },
+  { q: "The Lorenz attractor's volume is...", options: ["Infinite", "Zero, because the flow contracts volumes", "Constant", "Growing"], answer: 1, explain: "Divergence −(σ + 1 + β)." },
+  { q: "A random network ẋ = −x + J tanh(x) is chaotic when...", options: ["g is below 1", "g is above 1", "J is symmetric", "N is small"], answer: 1, explain: "Sompolinsky, Crisanti and Sommers (1988)." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Sompolinsky, Crisanti and Sommers (1988) its third pass and write your critique under the five headings. Focus on one question: **is chaos in a random rate network a good model of irregular activity in cortex?** Consider that the model's neurons are rate units with a symmetric, sign-changing tanh, not spiking neurons with positive rates; that the couplings are independent Gaussian, with no Dale's principle and no structure; that the result is exact only as N goes to infinity; that the chaotic fluctuations are slow near g = 1, slower than single-neuron time constants; how later work extended the theory to spiking and to excitatory and inhibitory populations; and what evidence could distinguish chaotic dynamics from noise in real recordings.
+
+<Callout kind="research">
+
+Rajan, Abbott and Sompolinsky (2010) showed that a strong enough input can suppress the chaos in a random network. Using Day 5's code, drive every neuron with a sinusoid of the same frequency and increasing amplitude, and find the amplitude at which the Lyapunov exponent turns negative. How does that amplitude depend on the frequency?
+
+</Callout>
+
+<Key title="Week 23 review checklist">
+<ul>
+<li>I can describe saddle-node bifurcations, hysteresis, critical slowing down and class 1 excitability.</li>
+<li>I can distinguish supercritical and subcritical Hopf bifurcations and recognise their signatures.</li>
+<li>I can analyse phase locking of two oscillators and the Kuramoto transition to synchrony.</li>
+<li>I can follow period doubling into chaos and compute Lyapunov exponents of maps and flows.</li>
+<li>I can explain the transition to chaos in random neural networks.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part D: choose a neural phenomenon and say which bifurcation signatures you would look for and what each would tell you. Then note the result of the chaos-suppression experiment from the research callout." />

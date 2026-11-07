@@ -1,0 +1,260 @@
+export const meta = {
+  title: "Strange attractors, Lyapunov exponents and chaotic networks",
+  intro: "Yesterday's chaos lived in a map. In a continuous flow, chaos needs at least three dimensions, and the first example found, by Edward Lorenz in 1963 in a model of convection, gave chaos its iconic image: the butterfly-shaped strange attractor. Today you simulate it, measure its Lyapunov exponent, and recover the hidden one-dimensional map Lorenz found inside it. Then you return to the random networks of Week 21 and find that a network of rate neurons with strong enough random connections does not explode or fall silent, but becomes chaotic, a source of rich, irregular activity with no noise at all.",
+  goals: [
+    "Simulate the Lorenz system and describe its strange attractor",
+    "Estimate the largest Lyapunov exponent of a flow by tracking two nearby trajectories",
+    "Recover Lorenz's map of successive maxima and explain why it implies chaos",
+    "Show that a random rate network becomes chaotic when its coupling strength passes 1",
+  ],
+  plan: [
+    { label: "Predict and the Lorenz system", minutes: 20 },
+    { label: "Measuring the butterfly effect", minutes: 25 },
+    { label: "The map inside the flow", minutes: 25 },
+    { label: "Chaos in random networks", minutes: 35 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "sompolinsky-1988",
+};
+
+<Predict question="A network of 200 rate neurons, ẋ = −x + J tanh(x), has random connections J of strength g/√200. Week 21's linear network exploded when g passed 1. With the tanh saturating each neuron's output, what happens for g = 3: explosion, silence, regular oscillation or irregular activity that never settles?" />
+
+<Step n={1} title="The Lorenz system" minutes={20} />
+
+In 1963 Edward Lorenz, a meteorologist at MIT, reduced a model of air convection to three equations:
+
+$$
+\dot x = \sigma(y - x), \qquad \dot y = x(\rho - z) - y, \qquad \dot z = xy - \beta z,
+$$
+
+with $\sigma = 10$, $\beta = 8/3$ and $\rho = 28$. Restarting a simulation from rounded numbers printed halfway through, he found the new run soon disagreed completely with the old one. The trajectory loops around one of two unstable fixed points, then switches unpredictably to the other, forever, never repeating and never crossing itself. It stays on a bounded set of zero volume and fractal structure, a **strange attractor**. In two dimensions this is impossible: by the Poincaré-Bendixson theorem a bounded trajectory in the plane must approach a fixed point or a closed orbit. Three dimensions give trajectories room to weave past each other.
+
+<Video id="gscKcPAm-H0" title="MAE5790-17 Chaos in the Lorenz equations" by="Steven Strogatz (Cornell University)" note="Steven Strogatz's lecture on the Lorenz equations: their fixed points, the strange attractor, sensitive dependence and Lorenz's map of successive maxima." />
+
+<Figure caption="Two Lorenz trajectories that start a tiny distance apart, drawn in the x-z plane, with their separation below on a log scale. Change the initial separation and the value of ρ." credit="Interactive figure by Engram, after Lorenz (1963).">
+  <LorenzButterfly />
+</Figure>
+
+<Step n={2} title="Measuring the butterfly effect" minutes={25} />
+
+The Lyapunov exponent of a flow is defined as for a map: the average exponential rate at which a small separation grows. To measure it, follow two trajectories, but renormalise their separation back to its starting size after every step, so that it never grows large enough for the non-linearity to fold it back; the average of the logarithm of the growth factors, divided by the time step, estimates the largest exponent. This is the method of Benettin and colleagues (1980).
+
+<PyCell id="lorenz" title="The largest Lyapunov exponent" tests={String.raw`
+  import numpy as np
+  def test_lyap():
+      "the estimate is within 0.08 of the accepted 0.906"
+      assert abs(lyap_lorenz - 0.906) < 0.08
+
+  def test_bounded():
+      "the trajectory stays bounded (|x| below 30 and z between 0 and 60)"
+      assert np.abs(traj[:, 0]).max() < 30 and traj[:, 2].min() > 0 and traj[:, 2].max() < 60
+`} prompt="After 10 time units of settling (RK4, dt = 0.01), follow a second trajectory starting 1e-8 away in x. At every step add log(d / d0) to a running sum and pull the second trajectory back to distance d0 along the separation. Over 10,000 steps, store the estimate in `lyap_lorenz` and the main trajectory in `traj`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  sig, rho, bet = 10.0, 28.0, 8 / 3
+  lor = lambda p: np.array([sig * (p[1] - p[0]), p[0] * (rho - p[2]) - p[1], p[0] * p[1] - bet * p[2]])
+  def rk4(f, x, dt):
+      k1 = f(x); k2 = f(x + dt / 2 * k1); k3 = f(x + dt / 2 * k2); k4 = f(x + dt * k3)
+      return x + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+
+  x, dt = np.array([1.0, 1.0, 20.0]), 0.01
+  for _ in range(1000): x = rk4(lor, x, dt)
+  d0 = 1e-8; y = x + np.array([d0, 0, 0]); S = 0.0; n = 10000; traj = np.empty((n, 3))
+  for k in range(n):
+      x, y = rk4(lor, x, dt), rk4(lor, y, dt)
+      d = np.linalg.norm(y - x)
+      S += ...
+      y = ...                                      # back to distance d0, same direction
+      traj[k] = x
+  lyap_lorenz = S / (n * dt)
+  print(f"largest Lyapunov exponent about {lyap_lorenz:.3f} per time unit")
+  plt.plot(traj[:, 0], traj[:, 2], lw=0.4); plt.xlabel("x"); plt.ylabel("z"); plt.show()
+`}
+hint="S += np.log(d / d0); y = x + (y - x) * d0 / d."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  sig, rho, bet = 10.0, 28.0, 8 / 3
+  lor = lambda p: np.array([sig * (p[1] - p[0]), p[0] * (rho - p[2]) - p[1], p[0] * p[1] - bet * p[2]])
+  def rk4(f, x, dt):
+      k1 = f(x); k2 = f(x + dt / 2 * k1); k3 = f(x + dt / 2 * k2); k4 = f(x + dt * k3)
+      return x + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+
+  x, dt = np.array([1.0, 1.0, 20.0]), 0.01
+  for _ in range(1000): x = rk4(lor, x, dt)
+  d0 = 1e-8; y = x + np.array([d0, 0, 0]); S = 0.0; n = 10000; traj = np.empty((n, 3))
+  for k in range(n):
+      x, y = rk4(lor, x, dt), rk4(lor, y, dt)
+      d = np.linalg.norm(y - x)
+      S += np.log(d / d0)
+      y = x + (y - x) * d0 / d                                      # back to distance d0, same direction
+      traj[k] = x
+  lyap_lorenz = S / (n * dt)
+  print(f"largest Lyapunov exponent about {lyap_lorenz:.3f} per time unit")
+  plt.plot(traj[:, 0], traj[:, 2], lw=0.4); plt.xlabel("x"); plt.ylabel("z"); plt.show()
+`} />
+
+Over 100 time units the estimate is 0.884, close to the accepted value of 0.906 (longer runs converge on it). A difference of $10^{-8}$ therefore reaches the size of the attractor, about 10, in roughly $\ln(10^9)/0.9 \approx 23$ time units, a couple of dozen loops. Improving the measurement a thousandfold adds less than 8 time units of predictability, which is why weather forecasts lose skill after about two weeks however good the observations.
+
+<Step n={3} title="The map inside the flow" minutes={25} />
+
+Lorenz found order inside the chaos. He recorded each successive maximum of $z$, $z_1, z_2, \dots$, and plotted $z_{n+1}$ against $z_n$. The points fell, not in a cloud, but on a thin curve shaped like a tent: the next maximum is (almost) a function of the last. The flow contains a one-dimensional map. And because the curve's slope is steeper than 1 everywhere, the map stretches every small difference, which, as yesterday, means chaos.
+
+<PyCell id="lmap" title="Lorenz's map of maxima" tests={String.raw`
+  import numpy as np
+  def test_many():
+      "there are more than 100 maxima"
+      assert len(zmax) > 100
+
+  def test_map():
+      "the next maximum is predicted from its nearest neighbour's successor with median error below 0.3, while z_{n+1} itself varies with sd above 2"
+      assert pred_err < 0.3 and np.std(zmax[1:]) > 2
+`} prompt="From `traj`, find the local maxima of z (points higher than both neighbours) and store their values in `zmax`. For each z_n (except the last), find the nearest other z_m and use z_{m+1} as a prediction of z_{n+1}; store the median absolute error in `pred_err`."
+code={String.raw`
+  z = traj[:, 2]
+  idx = np.where((z[1:-1] > z[:-2]) & (z[1:-1] > z[2:]))[0] + 1
+  zmax = z[idx]
+  zn, zn1 = zmax[:-1], zmax[1:]
+  errs = []
+  for k in range(len(zn)):
+      dist = np.abs(zn - zn[k]); dist[k] = np.inf
+      j = ...
+      errs.append(abs(zn1[j] - zn1[k]))
+  pred_err = ...
+  print(f"{len(zmax)} maxima;  nearest-neighbour prediction error {pred_err:.3f};  spread of z_(n+1) {np.std(zn1):.2f}")
+  plt.plot(zn, zn1, ".", ms=3); plt.plot([30, 48], [30, 48], "k:"); plt.xlabel("z_n"); plt.ylabel("z_(n+1)"); plt.show()
+`}
+hint="j = np.argmin(dist); pred_err = np.median(errs)."
+solution={String.raw`
+  z = traj[:, 2]
+  idx = np.where((z[1:-1] > z[:-2]) & (z[1:-1] > z[2:]))[0] + 1
+  zmax = z[idx]
+  zn, zn1 = zmax[:-1], zmax[1:]
+  errs = []
+  for k in range(len(zn)):
+      dist = np.abs(zn - zn[k]); dist[k] = np.inf
+      j = np.argmin(dist)
+      errs.append(abs(zn1[j] - zn1[k]))
+  pred_err = np.median(errs)
+  print(f"{len(zmax)} maxima;  nearest-neighbour prediction error {pred_err:.3f};  spread of z_(n+1) {np.std(zn1):.2f}")
+  plt.plot(zn, zn1, ".", ms=3); plt.plot([30, 48], [30, 48], "k:"); plt.xlabel("z_n"); plt.ylabel("z_(n+1)"); plt.show()
+`} />
+
+In 100 time units there are 134 maxima of $z$. Knowing one, the nearest previous maximum's successor predicts the next to within 0.05 (median), although the next maximum itself varies with a standard deviation of 3.2: the points lie on a thin curve, a cusp-shaped map. The flow is chaotic, but one step ahead it is almost perfectly predictable. It is long-range prediction that fails.
+
+<Step n={4} title="Chaos in random networks" minutes={35} />
+
+Week 21 showed that a linear network $\dot{\mathbf x} = -\mathbf x + J\mathbf x$, with random $J$ of entry variance $g^2/N$, explodes when $g > 1$, because the eigenvalue disc of $J$ then crosses 1. Real neurons saturate. Sompolinsky, Crisanti and Sommers (1988, today's deep read) studied $\dot{\mathbf x} = -\mathbf x + J\tanh(\mathbf x)$ and showed that for large $N$, the silent state $\mathbf x = 0$ is the only attractor when $g \lt 1$, but for $g > 1$ the network settles into self-sustained, irregular activity: chaos. The linear instability is the same, but the saturation turns runaway growth into endless wandering. Near $g = 1$ the fluctuations are slow, and they speed up as $g$ grows.
+
+<PyCell id="network" title="From silence to chaos" tests={String.raw`
+  import numpy as np
+  def test_quiet():
+      "for g = 0.5 activity dies out (sd below 1e-6) and the Lyapunov exponent is negative"
+      assert act_sd[0.5] < 1e-6 and lyap_net[0.5] < 0
+
+  def test_chaos():
+      "for g = 3 activity is sustained (sd above 1) and the Lyapunov exponent is positive (above 0.05)"
+      assert act_sd[3.0] > 1 and lyap_net[3.0] > 0.05
+`} prompt="For g = 0.5 and 3, draw J (N = 200, entries of sd g/√N) and a random start, run 1,000 Euler steps of 0.1 to settle, then 2,000 more while tracking a second trajectory started 1e-8 away (renormalising as in Step 2). Store the final standard deviation of x across neurons in `act_sd[g]` and the exponent in `lyap_net[g]`."
+code={String.raw`
+  act_sd, lyap_net, traces = {}, {}, {}
+  for g in (0.5, 3.0):
+      r_g = np.random.default_rng(1988); N = 200
+      J = r_g.normal(0, g / np.sqrt(N), (N, N))
+      Fn = lambda v: -v + J @ np.tanh(v)
+      x = r_g.normal(size=N); dt = 0.1
+      for _ in range(1000): x = x + dt * Fn(x)
+      y = x + 1e-8 * r_g.normal(size=N) / np.sqrt(N); d0 = np.linalg.norm(y - x); S = 0.0; tr = []
+      for _ in range(2000):
+          x, y = x + dt * Fn(x), y + dt * Fn(y)
+          d = np.linalg.norm(y - x)
+          S += np.log(d / d0); y = x + (y - x) * d0 / d
+          tr.append(x[:3].copy())
+      act_sd[g] = ...
+      lyap_net[g] = ...
+      traces[g] = np.array(tr)
+  print({g: f"{v:.3g}" for g, v in act_sd.items()}, " activity sd;", {g: round(float(v), 3) for g, v in lyap_net.items()}, " Lyapunov exponent")
+  plt.plot(np.arange(2000) * 0.1, traces[3.0]); plt.xlabel("time (units of tau)"); plt.ylabel("x of three neurons, g = 3"); plt.show()
+`}
+hint="act_sd[g] = np.std(x); lyap_net[g] = S / (2000 * dt)."
+solution={String.raw`
+  act_sd, lyap_net, traces = {}, {}, {}
+  for g in (0.5, 3.0):
+      r_g = np.random.default_rng(1988); N = 200
+      J = r_g.normal(0, g / np.sqrt(N), (N, N))
+      Fn = lambda v: -v + J @ np.tanh(v)
+      x = r_g.normal(size=N); dt = 0.1
+      for _ in range(1000): x = x + dt * Fn(x)
+      y = x + 1e-8 * r_g.normal(size=N) / np.sqrt(N); d0 = np.linalg.norm(y - x); S = 0.0; tr = []
+      for _ in range(2000):
+          x, y = x + dt * Fn(x), y + dt * Fn(y)
+          d = np.linalg.norm(y - x)
+          S += np.log(d / d0); y = x + (y - x) * d0 / d
+          tr.append(x[:3].copy())
+      act_sd[g] = np.std(x)
+      lyap_net[g] = S / (2000 * dt)
+      traces[g] = np.array(tr)
+  print({g: f"{v:.3g}" for g, v in act_sd.items()}, " activity sd;", {g: round(float(v), 3) for g, v in lyap_net.items()}, " Lyapunov exponent")
+  plt.plot(np.arange(2000) * 0.1, traces[3.0]); plt.xlabel("time (units of tau)"); plt.ylabel("x of three neurons, g = 3"); plt.show()
+`} />
+
+With $g = 0.5$ the activity decays to about $10^{-69}$, effectively zero, and the Lyapunov exponent is −0.52: everything converges to silence. With $g = 3$ the activity is sustained, with a spread of 2.2 across neurons, the traces wander irregularly, and the exponent is +0.14: nearby states separate. That answers the prediction: neither explosion nor silence but irregular activity that never settles, chaos produced by the network with no noise at all.
+
+<Bridge title="Chaos in brains and machines"
+  neuro="Cortical neurons fire irregularly even when inputs are steady. Chaotic network dynamics is one explanation, alongside the balanced excitation and inhibition of Week 107. Sussillo and Abbott (2009) showed that a chaotic network can be trained, by feeding back a learned readout, to tame its chaos into any desired output pattern."
+  ai="Reservoir computing (echo state networks, Jaeger and Haas, 2004) uses a fixed random recurrent network near the edge of chaos as a rich, high-dimensional memory of its input, and trains only a linear readout. The same g = 1 boundary guides the initialisation of trained recurrent networks.">
+
+Strong random connections plus saturation make a network its own source of irregular activity.
+
+</Bridge>
+
+<Prove title="Volumes shrink in the Lorenz flow" task="For a flow $\dot{\mathbf x} = \mathbf F(\mathbf x)$, a small volume $V$ of initial conditions changes at the rate $\dot V = (\nabla\cdot\mathbf F)V$. Compute the divergence of the Lorenz vector field and show that every volume shrinks exponentially, $V(t) = V(0)e^{-(\sigma + 1 + \beta)t}$. Why does this not contradict a positive Lyapunov exponent?">
+
+The divergence is $\frac{\partial\dot x}{\partial x} + \frac{\partial\dot y}{\partial y} + \frac{\partial\dot z}{\partial z} = -\sigma - 1 - \beta$, a negative constant ($-13.67$ for the standard values).
+
+So $\dot V = -(\sigma + 1 + \beta)V$ and $V(t) = V(0)e^{-(\sigma + 1 + \beta)t}$: any blob of starting points is squeezed to zero volume, which is why the attractor itself has zero volume.
+
+There is no contradiction because volume depends on all three directions together. The sum of the three Lyapunov exponents equals the divergence, $-13.67$. One is positive (about 0.91), one is zero (along the flow) and one is strongly negative (about $-14.57$). A blob is stretched in one direction while being crushed much faster in another, and repeated stretching and folding builds the attractor's fractal layers.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "Chaos in a continuous autonomous flow needs at least...", options: ["One dimension", "Two dimensions", "Three dimensions", "Infinitely many"], answer: 2, explain: "Poincaré-Bendixson forbids it in the plane." },
+  { q: "A strange attractor is...", options: ["An unstable fixed point", "A bounded attracting set with fractal structure on which motion is chaotic", "A limit cycle", "A saddle"], answer: 1, explain: "Lorenz's butterfly." },
+  { q: "The largest Lyapunov exponent of the Lorenz system is about...", options: ["0", "0.9", "−13.7", "28"], answer: 1, explain: "Measured by Benettin's method." },
+  { q: "Lorenz's map plots...", options: ["x against y", "Each maximum of z against the previous one", "z against time", "Energy against time"], answer: 1, explain: "A one-dimensional map inside the flow." },
+  { q: "The Lorenz flow contracts volumes because its divergence is...", options: ["Positive", "Zero", "Negative and constant", "Random"], answer: 2, explain: "−(σ + 1 + β)." },
+  { q: "The random network ẋ = −x + J tanh(x) becomes chaotic when...", options: ["g is below 1", "g is above 1", "N is small", "J is symmetric"], answer: 1, explain: "Sompolinsky, Crisanti and Sommers (1988)." },
+  { q: "Reservoir computing trains...", options: ["All recurrent weights", "Only a linear readout of a fixed random network", "Nothing", "Only input weights"], answer: 1, explain: "Echo state networks." },
+]} />
+
+<Flashcards cards={[
+  { front: "Lorenz equations?", back: "$\\dot x = \\sigma(y - x)$, $\\dot y = x(\\rho - z) - y$, $\\dot z = xy - \\beta z$; σ = 10, β = 8/3, ρ = 28." },
+  { front: "Strange attractor?", back: "Bounded, zero-volume, fractal attracting set with chaotic motion." },
+  { front: "Benettin's method?", back: "Track two nearby trajectories, renormalise the separation each step, average log growth." },
+  { front: "Poincaré-Bendixson?", back: "In the plane, bounded trajectories approach fixed points or closed orbits: no chaos." },
+  { front: "Chaos in random networks?", back: "$\\dot x = -x + J\\tanh x$ with coupling g: silent for g below 1, chaotic above." },
+]} />
+
+<Predict revisit question="For the random tanh network with g = 3, does activity explode, die, oscillate regularly or wander irregularly?" />
+
+<Key title="Before you go">
+<ul>
+<li>The Lorenz system has a strange attractor: bounded, zero volume, chaotic.</li>
+<li>The largest Lyapunov exponent, measured by renormalising two trajectories, is about 0.9.</li>
+<li>Successive maxima of z lie on a stretching one-dimensional map, the source of the chaos.</li>
+<li>A random tanh network is silent for g below 1 and chaotic above it.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper (deep read): Sompolinsky, Crisanti and Sommers (1988), <em>Chaos in random neural networks</em>.</li>
+<li>Lorenz (1963), <em>Deterministic nonperiodic flow</em>, Journal of the Atmospheric Sciences 20(2), 130 to 141.</li>
+<li>Jaeger and Haas (2004), <em>Harnessing nonlinearity: predicting chaotic systems and saving energy in wireless communication</em>, Science 304(5667), 78 to 80.</li>
+<li>Sussillo and Abbott (2009), <em>Generating coherent patterns of activity from chaotic neural networks</em>, Neuron 63(4), 544 to 557.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If cortex were chaotic in Sompolinsky's sense, the same stimulus would never produce exactly the same response twice. Yet some responses are highly reliable. Suggest how a strong input might suppress chaos, and an experiment that could test whether it does." />

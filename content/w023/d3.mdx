@@ -1,0 +1,252 @@
+export const meta = {
+  title: "Coupled oscillators and synchronisation",
+  intro: "Yesterday a single neuron became an oscillator. Brains are full of them, and they rarely oscillate alone: neurons, populations and whole brain areas pull on one another's timing. Today you reduce each oscillator to a single number, its phase, and ask when coupled oscillators fall into step. Two oscillators lock if their coupling beats their difference in natural frequency. A crowd of them, Kuramoto showed, does something more striking: below a critical coupling nothing happens, and above it a synchronised cluster appears and grows, like an audience starting to clap in time.",
+  goals: [
+    "Reduce an oscillator on a limit cycle to a phase",
+    "Find when two coupled oscillators phase-lock, and their beat frequency when they do not",
+    "Simulate the Kuramoto model and measure synchrony with the order parameter",
+    "Compare simulation with the exact critical coupling and order parameter for Lorentzian frequencies",
+  ],
+  plan: [
+    { label: "Predict and phase", minutes: 20 },
+    { label: "Two oscillators", minutes: 30 },
+    { label: "The Kuramoto model", minutes: 30 },
+    { label: "Who joins the cluster", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "strogatz-2000",
+};
+
+<Predict question="A thousand oscillators have natural frequencies spread around a common mean. Each is pulled gently towards the average phase of the group. As you slowly increase the coupling from zero, does synchrony grow gradually from the start, or does nothing happen until a threshold and then a cluster suddenly forms?" />
+
+<Step n={1} title="Phase" minutes={20} />
+
+A stable limit cycle attracts nearby trajectories, so after a short transient an oscillator is always on (or very near) its cycle, and its state is described by a single number: how far round the cycle it is, its **phase** $\theta$. Uncoupled, the phase advances at a steady rate, $\dot\theta = \omega$. When oscillators are weakly coupled, each pushes the others slightly forwards or backwards along their cycles, by an amount that depends on their relative phases. Averaged over a cycle, the effect is a function of the phase difference, and for many systems its simplest form, a sine, captures the essentials:
+
+$$
+\dot\theta_i = \omega_i + \frac{K}{N}\sum_{j = 1}^{N}\sin(\theta_j - \theta_i).
+$$
+
+This is the **Kuramoto model** (1975). Each oscillator speeds up if others are ahead of it and slows down if they are behind.
+
+<Video id="aSNrKS-sCE0" title="How things tend to sync up" by="Steven Strogatz (TED)" note="Steven Strogatz's TED talk on spontaneous synchronisation, from fireflies to the Millennium Bridge, the phenomenon today's model describes." />
+
+<Step n={2} title="Two oscillators" minutes={30} />
+
+With $N = 2$ the model is $\dot\theta_1 = \omega_1 + \frac{K}{2}\sin(\theta_2 - \theta_1)$ and $\dot\theta_2 = \omega_2 + \frac{K}{2}\sin(\theta_1 - \theta_2)$. Subtract to get one equation for the phase difference $\phi = \theta_2 - \theta_1$:
+
+$$
+\dot\phi = \Delta\omega - K\sin\phi, \qquad \Delta\omega = \omega_2 - \omega_1.
+$$
+
+This is a flow on a circle, Day 1's subject. If $|\Delta\omega| \le K$ it has fixed points where $\sin\phi = \Delta\omega/K$; the stable one, $\phi^* = \arcsin(\Delta\omega/K)$, is a locked state in which both oscillators run at the same frequency with a constant lag. If $|\Delta\omega| > K$ there are no fixed points, $\phi$ keeps turning and the oscillators drift past each other, with a beat frequency of $\sqrt{\Delta\omega^2 - K^2}$. Locking appears through a saddle-node bifurcation at $K = |\Delta\omega|$, and just above it the beats become slow, the theta neuron's bottleneck again.
+
+<PyCell id="pair" title="Lock or drift" tests={String.raw`
+  import numpy as np
+  def test_lock():
+      "with K = 2 the phase difference settles within 1e-3 of arcsin(1/2)"
+      assert abs(phi_end[2.0] - np.arcsin(0.5)) < 1e-3
+
+  def test_drift():
+      "with K = 0.8 the phase difference drifts at the beat frequency sqrt(1 - 0.64) = 0.6, within 2%"
+      assert abs(drift_rate - 0.6) / 0.6 < 0.02
+`} prompt="Simulate the two-oscillator model with ω₁ = 0 and ω₂ = 1 (Euler, dt = 0.001, 100 time units) for K = 2 and K = 0.8. Store the final phase difference θ₂ − θ₁ (wrapped to between −π and π) in `phi_end[K]`, and for K = 0.8 the average rate at which the unwrapped difference grows over the second half in `drift_rate`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  w1, w2, dt, steps = 0.0, 1.0, 0.001, 100000
+  phi_end, traces = {}, {}
+  for K in (2.0, 0.8):
+      t1, t2 = 0.0, 0.0; ph = np.empty(steps)
+      for k in range(steps):
+          d1 = w1 + K / 2 * np.sin(t2 - t1)
+          d2 = ...
+          t1 += dt * d1; t2 += dt * d2; ph[k] = t2 - t1
+      traces[K] = ph
+      phi_end[K] = np.angle(np.exp(1j * ph[-1]))
+  half = steps // 2
+  drift_rate = ...
+  print(f"K = 2: locked at {phi_end[2.0]:.4f} (arcsin 0.5 = {np.arcsin(0.5):.4f});  K = 0.8: drifts at {drift_rate:.4f}")
+  for K in traces: plt.plot(np.arange(steps) * dt, traces[K], label=f"K = {K}")
+  plt.xlabel("time"); plt.ylabel("theta2 - theta1"); plt.legend(); plt.show()
+`}
+hint="d2 = w2 + K / 2 * np.sin(t1 - t2); drift_rate = (traces[0.8][-1] - traces[0.8][half]) / ((steps - 1 - half) * dt)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  w1, w2, dt, steps = 0.0, 1.0, 0.001, 100000
+  phi_end, traces = {}, {}
+  for K in (2.0, 0.8):
+      t1, t2 = 0.0, 0.0; ph = np.empty(steps)
+      for k in range(steps):
+          d1 = w1 + K / 2 * np.sin(t2 - t1)
+          d2 = w2 + K / 2 * np.sin(t1 - t2)
+          t1 += dt * d1; t2 += dt * d2; ph[k] = t2 - t1
+      traces[K] = ph
+      phi_end[K] = np.angle(np.exp(1j * ph[-1]))
+  half = steps // 2
+  drift_rate = (traces[0.8][-1] - traces[0.8][half]) / ((steps - 1 - half) * dt)
+  print(f"K = 2: locked at {phi_end[2.0]:.4f} (arcsin 0.5 = {np.arcsin(0.5):.4f});  K = 0.8: drifts at {drift_rate:.4f}")
+  for K in traces: plt.plot(np.arange(steps) * dt, traces[K], label=f"K = {K}")
+  plt.xlabel("time"); plt.ylabel("theta2 - theta1"); plt.legend(); plt.show()
+`} />
+
+With $K = 2$ the phase difference settles at 0.5236, which is $\arcsin(1/2) = \pi/6$: the faster oscillator leads by 30 degrees and both run at the same frequency. With $K = 0.8$, below $\Delta\omega = 1$, the difference keeps growing at about 0.61 per unit time (0.6 in theory; the small excess comes from measuring over a window that is not a whole number of beats). It grows unevenly, lingering where $\sin\phi$ is near its peak, the ghost of the locked state.
+
+<Step n={3} title="The Kuramoto model" minutes={30} />
+
+Kuramoto's insight was to measure the group's synchrony with a single complex number, the **order parameter**,
+
+$$
+Re^{i\psi} = \frac{1}{N}\sum_j e^{i\theta_j},
+$$
+
+the centre of mass of the oscillators drawn as points on a unit circle. $R$ near 0 means the phases are spread out; $R = 1$ means perfect synchrony; $\psi$ is the mean phase. With it the model becomes $\dot\theta_i = \omega_i + KR\sin(\psi - \theta_i)$: each oscillator is pulled towards the mean phase with strength $KR$. The more synchronised the group, the harder it pulls, a feedback that can switch synchrony on suddenly. Kuramoto showed that for a large population with a symmetric, single-peaked frequency distribution $g(\omega)$, synchrony appears at the critical coupling $K_c = 2/(\pi g(0))$. For the Lorentzian distribution of width $\gamma$, everything is exact: $K_c = 2\gamma$ and, above it, $R = \sqrt{1 - K_c/K}$.
+
+<Figure caption="Sixty Kuramoto oscillators on a circle, with the order parameter as an arrow and its history on the right. Raise the coupling past the critical value and a cluster forms." credit="Interactive figure by Engram, after Strogatz (2000).">
+  <KuramotoSync />
+</Figure>
+
+<PyCell id="kuramoto" title="The onset of synchrony" tests={String.raw`
+  import numpy as np
+  def test_below():
+      "below the critical coupling (K = 0.5) the order parameter stays below 0.1"
+      assert R_mean[0.5] < 0.1
+
+  def test_above():
+      "above it, R is within 0.02 of sqrt(1 - Kc / K) for K = 1.5, 2 and 3"
+      for K in (1.5, 2.0, 3.0):
+          assert abs(R_mean[K] - np.sqrt(1 - 1.0 / K)) < 0.02
+`} prompt="Give 1,000 oscillators Lorentzian frequencies of width γ = 0.5 (so Kc = 1), placed at evenly spaced quantiles, ω = γ tan(π(q − ½)). For K = 0.5, 1.5, 2 and 3, start from random phases, simulate with Euler steps of 0.05 for 6,000 steps using the order-parameter form, and store the mean R over the last 3,000 steps in `R_mean[K]`."
+code={String.raw`
+  N, gam = 1000, 0.5
+  q = (np.arange(N) + 0.5) / N
+  om = gam * np.tan(np.pi * (q - 0.5))
+  R_mean, final_th = {}, {}
+  for K in (0.5, 1.5, 2.0, 3.0):
+      r_k = np.random.default_rng(1975)
+      th = r_k.uniform(0, 2 * np.pi, N); Rs = []
+      for k in range(6000):
+          z = np.mean(np.exp(1j * th)); R, psi = abs(z), np.angle(z)
+          th = ...
+          if k >= 3000: Rs.append(R)
+      R_mean[K] = np.mean(Rs); final_th[K] = th
+  print({K: round(float(v), 3) for K, v in R_mean.items()}, " simulated;", {K: round(float(np.sqrt(max(0, 1 - 1 / K))), 3) for K in R_mean}, " theory")
+`}
+hint="th = th + 0.05 * (om + K * R * np.sin(psi - th))."
+solution={String.raw`
+  N, gam = 1000, 0.5
+  q = (np.arange(N) + 0.5) / N
+  om = gam * np.tan(np.pi * (q - 0.5))
+  R_mean, final_th = {}, {}
+  for K in (0.5, 1.5, 2.0, 3.0):
+      r_k = np.random.default_rng(1975)
+      th = r_k.uniform(0, 2 * np.pi, N); Rs = []
+      for k in range(6000):
+          z = np.mean(np.exp(1j * th)); R, psi = abs(z), np.angle(z)
+          th = th + 0.05 * (om + K * R * np.sin(psi - th))
+          if k >= 3000: Rs.append(R)
+      R_mean[K] = np.mean(Rs); final_th[K] = th
+  print({K: round(float(v), 3) for K, v in R_mean.items()}, " simulated;", {K: round(float(np.sqrt(max(0, 1 - 1 / K))), 3) for K in R_mean}, " theory")
+`} />
+
+At $K = 0.5$, half the critical coupling, $R$ stays near 0.03, the level of random scatter among 1,000 phases. At $K = 1.5$, 2 and 3 it settles at 0.571, 0.702 and 0.812, within 0.006 of the exact values 0.577, 0.707 and 0.816. That answers the prediction: nothing happens until the coupling reaches $K_c$, and then synchrony rises steeply, as the square root of the distance past threshold, the same law as yesterday's supercritical Hopf.
+
+<Step n={4} title="Who joins the cluster" minutes={25} />
+
+Above $K_c$ the population splits. In the order-parameter form each oscillator faces the two-oscillator problem of Step 2 with $K$ replaced by $KR$: it locks to the mean phase if $|\omega_i| \le KR$, and drifts otherwise. So the synchronised cluster contains exactly the oscillators whose natural frequency lies within $KR$ of the centre, and as $K$ grows, $R$ grows, and the cluster recruits more. This self-consistency, the cluster's size set by $R$ and $R$ set by the cluster, is the heart of Kuramoto's analysis.
+
+<PyCell id="locked" title="Locked and drifting" tests={String.raw`
+  import numpy as np
+  def test_fraction():
+      "the fraction of oscillators with effective frequency below 0.02 matches the fraction with |omega| at most K R, within 0.03"
+      assert abs(frac_locked - frac_pred) < 0.03
+`} prompt="For K = 2, run the simulation again from the same start for 6,000 steps, storing the phases at step 3,000. The effective frequency of each oscillator is its phase change over the last 3,000 steps divided by the time. Store the fraction with |effective frequency| below 0.02 in `frac_locked`, and the fraction with |ω| ≤ K·R_mean[2] in `frac_pred`."
+code={String.raw`
+  K = 2.0
+  r_k = np.random.default_rng(1975)
+  th = r_k.uniform(0, 2 * np.pi, N)
+  for k in range(6000):
+      z = np.mean(np.exp(1j * th)); R, psi = abs(z), np.angle(z)
+      th = th + 0.05 * (om + K * R * np.sin(psi - th))
+      if k == 2999: th_mid = th.copy()
+  eff = ...                                        # effective frequency of each oscillator
+  frac_locked = ...
+  frac_pred = ...
+  print(f"locked fraction {frac_locked:.3f}, predicted {frac_pred:.3f}")
+  plt.plot(om, eff, ".", ms=2); plt.xlim(-5, 5); plt.xlabel("natural frequency"); plt.ylabel("effective frequency"); plt.show()
+`}
+hint="eff = (th - th_mid) / (3000 * 0.05); frac_locked = np.mean(np.abs(eff) < 0.02); frac_pred = np.mean(np.abs(om) <= K * R_mean[2.0])."
+solution={String.raw`
+  K = 2.0
+  r_k = np.random.default_rng(1975)
+  th = r_k.uniform(0, 2 * np.pi, N)
+  for k in range(6000):
+      z = np.mean(np.exp(1j * th)); R, psi = abs(z), np.angle(z)
+      th = th + 0.05 * (om + K * R * np.sin(psi - th))
+      if k == 2999: th_mid = th.copy()
+  eff = (th - th_mid) / (3000 * 0.05)                                        # effective frequency of each oscillator
+  frac_locked = np.mean(np.abs(eff) < 0.02)
+  frac_pred = np.mean(np.abs(om) <= K * R_mean[2.0])
+  print(f"locked fraction {frac_locked:.3f}, predicted {frac_pred:.3f}")
+  plt.plot(om, eff, ".", ms=2); plt.xlim(-5, 5); plt.xlabel("natural frequency"); plt.ylabel("effective frequency"); plt.show()
+`} />
+
+At $K = 2$, 78.2% of the oscillators have an effective frequency of essentially zero, locked to the mean phase, and exactly 78.2% have natural frequencies within $KR$ of the centre. In the plot, the locked ones form a flat plateau and the drifting ones lie outside it, their effective frequencies pulled towards zero but not to it.
+
+<Bridge title="Synchronisation in brains and machines"
+  neuro="The suprachiasmatic nucleus keeps circadian time by synchronising thousands of individually sloppy cellular clocks; gamma rhythms emerge as neurons lock to a shared inhibitory beat; and coherence between distant brain areas has been proposed as a way of routing information. Too much synchrony is pathological, as in epileptic seizures and the tremor of Parkinson's disease."
+  ai="Kuramoto-style phase coupling has been used as a mechanism in neural network models for binding features into objects, by synchronising the units that belong together, and coupled oscillators are a candidate substrate for analogue and neuromorphic computing hardware.">
+
+When the pull of the crowd beats the spread of frequencies, a cluster locks.
+
+</Bridge>
+
+<Prove title="The locked state of two oscillators" task="For $\dot\phi = \Delta\omega - K\sin\phi$ with $0 \lt \Delta\omega \lt K$, find both fixed points on the circle and show that $\phi^* = \arcsin(\Delta\omega/K)$ is stable and the other unstable. Show also that when they are locked, both oscillators run at the mean frequency $(\omega_1 + \omega_2)/2$.">
+
+Fixed points satisfy $\sin\phi = \Delta\omega/K$, which has two solutions on the circle: $\phi_1 = \arcsin(\Delta\omega/K)$ in $(0, \pi/2)$ and $\phi_2 = \pi - \phi_1$ in $(\pi/2, \pi)$.
+
+The derivative of the right-hand side is $-K\cos\phi$. At $\phi_1$, $\cos\phi_1 > 0$, so the derivative is negative: stable. At $\phi_2$, $\cos\phi_2 \lt 0$: unstable.
+
+When locked, $\sin(\theta_2 - \theta_1) = \Delta\omega/K$, so $\dot\theta_1 = \omega_1 + \frac{K}{2}\cdot\frac{\Delta\omega}{K} = \omega_1 + \frac{\omega_2 - \omega_1}{2} = \frac{\omega_1 + \omega_2}{2}$, and similarly for $\dot\theta_2$. The faster oscillator leads by $\phi_1$ and is held back; the slower one is pulled forwards.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "An oscillator on a stable limit cycle can be described by...", options: ["Its amplitude only", "Its phase", "Its energy", "A fixed point"], answer: 1, explain: "How far round the cycle." },
+  { q: "Two coupled oscillators lock when...", options: ["K is less than |Δω|", "K is at least |Δω|", "Δω = 0 only", "Never"], answer: 1, explain: "Fixed points of φ̇ = Δω − K sin φ exist." },
+  { q: "When they fail to lock, their phase difference drifts at...", options: ["Δω", "√(Δω² − K²)", "K", "Zero"], answer: 1, explain: "The beat frequency." },
+  { q: "The Kuramoto order parameter R measures...", options: ["Mean frequency", "Synchrony, from 0 (spread) to 1 (aligned)", "Coupling", "Noise"], answer: 1, explain: "The centre of mass of the phases on the circle." },
+  { q: "In the large-N Kuramoto model, synchrony appears...", options: ["At any K above 0", "Above a critical coupling K_c = 2/(π g(0))", "Only for identical oscillators", "Never"], answer: 1, explain: "A threshold." },
+  { q: "For Lorentzian frequencies above K_c, R equals...", options: ["K", "√(1 − K_c/K)", "1", "K_c/K"], answer: 1, explain: "Exact result." },
+  { q: "Above K_c, the locked oscillators are those with...", options: ["The largest frequencies", "|ω| at most KR", "Random frequencies", "|ω| greater than K"], answer: 1, explain: "Each faces a two-oscillator problem with coupling KR." },
+]} />
+
+<Flashcards cards={[
+  { front: "Kuramoto model?", back: "$\\dot\\theta_i = \\omega_i + \\frac{K}{N}\\sum_j \\sin(\\theta_j - \\theta_i)$." },
+  { front: "Order parameter?", back: "$Re^{i\\psi} = \\frac{1}{N}\\sum_j e^{i\\theta_j}$." },
+  { front: "Two-oscillator locking?", back: "$\\dot\\phi = \\Delta\\omega - K\\sin\\phi$; lock if K ≥ |Δω| at $\\arcsin(\\Delta\\omega/K)$." },
+  { front: "Critical coupling?", back: "$K_c = 2/(\\pi g(0))$; for a Lorentzian of width γ, $K_c = 2\\gamma$." },
+  { front: "Who locks?", back: "Oscillators with |ω| ≤ KR; the rest drift." },
+]} />
+
+<Predict revisit question="As coupling increases from zero, does synchrony grow from the start or appear only past a threshold?" />
+
+<Key title="Before you go">
+<ul>
+<li>Weakly coupled oscillators on limit cycles reduce to phases.</li>
+<li>Two oscillators lock through a saddle-node on the circle when coupling exceeds their frequency difference.</li>
+<li>In the Kuramoto model, synchrony appears suddenly at a critical coupling, and R grows as √(1 − K_c/K) for Lorentzian frequencies.</li>
+<li>Above threshold, the oscillators with frequencies within KR of the centre lock and the rest drift.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Strogatz (2000), <em>From Kuramoto to Crawford: exploring the onset of synchronization in populations of coupled oscillators</em>.</li>
+<li>Strogatz, <em>Sync: The Emerging Science of Spontaneous Order</em> (2003), a book for general readers.</li>
+<li>Breakspear, Heitmann and Daffertshofer (2010), <em>Generative models of cortical oscillations: neurobiological implications of the Kuramoto model</em>, Frontiers in Human Neuroscience 4, 190.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Parkinsonian tremor has been linked to too much synchrony in the basal ganglia, and deep brain stimulation can reduce it. Using the Kuramoto picture, suggest two different ways a stimulator might push a population out of synchrony, and what each would need to know about the oscillators." />

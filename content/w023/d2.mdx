@@ -1,0 +1,275 @@
+export const meta = {
+  title: "Hopf bifurcations and limit cycles",
+  intro: "Yesterday's bifurcation destroyed fixed points. Today's leaves the fixed point in place but changes its stability: a pair of complex eigenvalues crosses the imaginary axis, the spiral turns outwards, and the trajectory settles onto a closed loop, a limit cycle. This Hopf bifurcation is how many neurons, circuits and brain rhythms start to oscillate. It comes in two flavours. In one, oscillations grow gently from zero; in the other they appear suddenly at full size, and for a range of inputs rest and oscillation coexist. You will see both, and use the second to explain a puzzle left over from the Hodgkin-Huxley model.",
+  goals: [
+    "Define a limit cycle and distinguish it from the closed orbits of a centre",
+    "Describe the Hopf bifurcation and its normal form",
+    "Show that a supercritical Hopf gives oscillations whose amplitude grows as the square root of the distance past the bifurcation",
+    "Show that a subcritical Hopf gives bistability between rest and oscillation, and find it in the Hodgkin-Huxley model",
+  ],
+  plan: [
+    { label: "Predict and limit cycles", minutes: 20 },
+    { label: "The Hopf normal form", minutes: 30 },
+    { label: "Subcritical: a sudden start", minutes: 25 },
+    { label: "Back to Hodgkin and Huxley", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "izhikevich-2000",
+};
+
+<Predict question="A Hodgkin-Huxley neuron receives a steady 8 μA/cm², below the 9.78 μA/cm² at which Week 22 showed its rest becomes unstable. It sits quietly at rest. You give it one brief extra pulse. Does it fire once and return to rest, or keep firing?" />
+
+<Step n={1} title="Limit cycles" minutes={20} />
+
+A **limit cycle** is an isolated closed trajectory: a loop in the phase plane that neighbouring trajectories approach (a stable cycle) or leave (an unstable one). It is the mathematical form of a self-sustained rhythm, such as a neuron firing repetitively or a heartbeat. It differs from the closed orbits around a centre (Week 22, Day 2), which come in continuous families: perturb a centre's orbit and you land on a neighbouring orbit and stay there, whereas a perturbed limit cycle returns to the same loop, with the same amplitude and period. Linear systems cannot have limit cycles; they need non-linearity.
+
+<Video id="oqKAVqe71vw" title="MAE5790-12 Bifurcations in two dimensional systems" by="Steven Strogatz (Cornell University)" note="Steven Strogatz's lecture on bifurcations in the plane, including the supercritical and subcritical Hopf bifurcations covered today." />
+
+<Step n={2} title="The Hopf normal form" minutes={30} />
+
+Near any Hopf bifurcation, after a change of coordinates, the dynamics look like this in polar coordinates $(\rho, \phi)$:
+
+$$
+\dot\rho = \mu\rho - \rho^3, \qquad \dot\phi = \omega.
+$$
+
+The angle turns at a steady rate; the radius obeys a one-dimensional equation that you can analyse with yesterday's tools. For $\mu \lt 0$ the only fixed point of the radius is $\rho = 0$, stable: the origin is a stable spiral. For $\mu > 0$, $\rho = 0$ becomes unstable and a new stable fixed point of the radius appears at $\rho = \sqrt\mu$: a circular limit cycle. In Cartesian form this is $\dot z = (\mu + i\omega)z - |z|^2z$, with eigenvalues $\mu \pm i\omega$ at the origin, crossing the imaginary axis as $\mu$ passes zero. This is a **supercritical Hopf bifurcation**: the oscillation is born with zero amplitude, growing as $\sqrt\mu$, but with a non-zero frequency $\omega$ from the start. That is class 2 excitability's signature, in contrast with yesterday's saddle-node: the rhythm starts at a definite frequency, not at zero.
+
+<Figure caption="The Hopf normal form. Raise μ through zero to see a stable cycle grow from the origin; tick the box for the subcritical version and try different starting radii." credit="Interactive figure by Engram, after Strogatz, Nonlinear Dynamics and Chaos, section 8.2.">
+  <HopfCycle />
+</Figure>
+
+<PyCell id="super" title="Amplitude grows as the square root" tests={String.raw`
+  import numpy as np
+  def test_amp():
+      "the measured amplitudes are within 1% of sqrt(mu)"
+      assert np.all(np.abs(amps - np.sqrt(mus)) / np.sqrt(mus) < 0.01)
+
+  def test_freq():
+      "the oscillation frequency stays at omega / 2 pi within 1% for every mu"
+      assert np.all(np.abs(freqs - 2 / (2 * np.pi)) / (2 / (2 * np.pi)) < 0.01)
+`} prompt="Simulate ż = (μ + iω)z − |z|²z in the complex plane with ω = 2 (RK4, dt = 0.05, 20,000 steps from z = 0.01) for μ = 0.01, 0.04, 0.16 and 0.64. Record the amplitude (the mean |z| over the last 1,000 steps) in `amps`, and the frequency in `freqs`, from the average change of angle per unit time over the same steps."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  mus, omega = np.array([0.01, 0.04, 0.16, 0.64]), 2.0
+  amps, freqs = [], []
+  for mu in mus:
+      f = lambda z: (mu + 1j * omega) * z - abs(z) ** 2 * z
+      z, dt, zs = 0.01 + 0j, 0.05, []
+      for _ in range(20000):
+          k1 = f(z); k2 = f(z + dt / 2 * k1); k3 = f(z + dt / 2 * k2); k4 = f(z + dt * k3)
+          z = z + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4); zs.append(z)
+      zs = np.array(zs[-1000:])
+      amps.append(...)
+      freqs.append(np.mean(np.diff(np.unwrap(np.angle(zs)))) / dt / (2 * np.pi))
+  amps, freqs = np.array(amps), np.array(freqs)
+  print("amplitudes", amps.round(4), " sqrt(mu)", np.sqrt(mus).round(4), ";  frequencies", freqs.round(4))
+  plt.loglog(mus, amps, "o-"); plt.xlabel("mu"); plt.ylabel("amplitude"); plt.show()
+`}
+hint="amps.append(np.mean(np.abs(zs)))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  mus, omega = np.array([0.01, 0.04, 0.16, 0.64]), 2.0
+  amps, freqs = [], []
+  for mu in mus:
+      f = lambda z: (mu + 1j * omega) * z - abs(z) ** 2 * z
+      z, dt, zs = 0.01 + 0j, 0.05, []
+      for _ in range(20000):
+          k1 = f(z); k2 = f(z + dt / 2 * k1); k3 = f(z + dt / 2 * k2); k4 = f(z + dt * k3)
+          z = z + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4); zs.append(z)
+      zs = np.array(zs[-1000:])
+      amps.append(np.mean(np.abs(zs)))
+      freqs.append(np.mean(np.diff(np.unwrap(np.angle(zs)))) / dt / (2 * np.pi))
+  amps, freqs = np.array(amps), np.array(freqs)
+  print("amplitudes", amps.round(4), " sqrt(mu)", np.sqrt(mus).round(4), ";  frequencies", freqs.round(4))
+  plt.loglog(mus, amps, "o-"); plt.xlabel("mu"); plt.ylabel("amplitude"); plt.show()
+`} />
+
+The amplitudes are 0.1, 0.2, 0.4 and 0.8, exactly $\sqrt\mu$: quadrupling $\mu$ doubles the amplitude. The frequency is 0.318 cycles per unit time, $\omega/2\pi$, for every $\mu$. Note too how slowly the smallest oscillation grew: with $\mu = 0.01$ the spiral takes hundreds of time units to reach its cycle, another face of critical slowing down.
+
+<Step n={3} title="Subcritical: a sudden start" minutes={25} />
+
+Flip the sign of the cubic term and add a quintic one to stop runaway growth:
+
+$$
+\dot\rho = \mu\rho + \rho^3 - \rho^5.
+$$
+
+Now the cubic pushes outwards. Setting $\dot\rho = 0$ gives $\rho^2 = \frac{1 \pm \sqrt{1 + 4\mu}}{2}$. For $-\frac{1}{4} \lt \mu \lt 0$ there are two cycles: a small unstable one and a large stable one, with the stable origin inside. Rest and oscillation coexist, and the unstable cycle is the threshold between them. As $\mu$ rises to 0 the unstable cycle shrinks onto the origin and destroys its stability, and the state jumps to the large cycle. This is a **subcritical Hopf bifurcation**. Lower $\mu$ again and the oscillation persists until $\mu = -\frac{1}{4}$, where the two cycles collide and vanish: hysteresis again.
+
+<PyCell id="sub" title="Two outcomes from one parameter" tests={String.raw`
+  import numpy as np
+  def test_two():
+      "at mu = -0.1, a start at 0.2 decays to below 1e-3 and a start at 1.0 settles within 1e-3 of the large cycle"
+      assert final[0.2] < 1e-3 and abs(final[1.0] - r_big) < 1e-3
+
+  def test_threshold():
+      "the unstable cycle separates them: r_small lies between 0.2 and 1.0"
+      assert 0.2 < r_small < 1.0
+`} prompt="For μ = −0.1 compute the radii of the unstable and stable cycles, `r_small` and `r_big`, from the formula. Then integrate the radius equation (Euler, dt = 0.01, 10,000 steps) from ρ = 0.2 and from ρ = 1.0, storing the final radii in `final[start]`."
+code={String.raw`
+  mu = -0.1
+  r_small = ...
+  r_big = ...
+  final = {}
+  for r0 in (0.2, 1.0):
+      rho = r0
+      for _ in range(10000):
+          rho += 0.01 * (mu * rho + rho ** 3 - rho ** 5)
+      final[r0] = rho
+  print(f"unstable cycle at {r_small:.4f}, stable cycle at {r_big:.4f};  final radii {({k: round(v, 4) for k, v in final.items()})}")
+`}
+hint="r_small = np.sqrt((1 - np.sqrt(1 + 4 * mu)) / 2); r_big = np.sqrt((1 + np.sqrt(1 + 4 * mu)) / 2)."
+solution={String.raw`
+  mu = -0.1
+  r_small = np.sqrt((1 - np.sqrt(1 + 4 * mu)) / 2)
+  r_big = np.sqrt((1 + np.sqrt(1 + 4 * mu)) / 2)
+  final = {}
+  for r0 in (0.2, 1.0):
+      rho = r0
+      for _ in range(10000):
+          rho += 0.01 * (mu * rho + rho ** 3 - rho ** 5)
+      final[r0] = rho
+  print(f"unstable cycle at {r_small:.4f}, stable cycle at {r_big:.4f};  final radii {({k: round(v, 4) for k, v in final.items()})}")
+`} />
+
+At $\mu = -0.1$ the unstable cycle is at radius 0.336 and the stable one at 0.942. Started at 0.2, inside the unstable cycle, the radius decays towards rest (below 0.0001 after 100 time units); started at 1.0, it settles on the large cycle at 0.942. The same equations, the same parameter, two different fates, decided by which side of the unstable cycle you start.
+
+<Step n={4} title="Back to Hodgkin and Huxley" minutes={30} />
+
+Week 21's Forge found that the Hodgkin-Huxley neuron fires repetitively from about 6.3 μA/cm², and Week 22's Forge found that its rest only becomes unstable at 9.78 μA/cm². A subcritical Hopf bifurcation reconciles the two. Between them, rest is stable but a large stable limit cycle, repetitive firing, coexists with it, and an unstable cycle separates the two. Izhikevich (2000, today's paper) showed that this arrangement is common among neurons near a Hopf bifurcation, and gives them a property integrators lack: a brief pulse can switch them from rest to firing, and a well-timed one can switch them back.
+
+<PyCell code={String.raw`
+  gNa, gK, gL, ENa, EK, EL, C = 120.0, 36.0, 0.3, 50.0, -77.0, -54.387, 1.0
+  def hh_rates(V):
+      an = 0.01 * (V + 55) / (1 - np.exp(-(V + 55) / 10)); bn = 0.125 * np.exp(-(V + 65) / 80)
+      am = 0.1 * (V + 40) / (1 - np.exp(-(V + 40) / 10)); bm = 4.0 * np.exp(-(V + 65) / 18)
+      ah = 0.07 * np.exp(-(V + 65) / 20); bh = 1 / (1 + np.exp(-(V + 35) / 10))
+      return an, bn, am, bm, ah, bh
+  def hh_rhs(y, I):
+      V, n, m, h = y
+      an, bn, am, bm, ah, bh = hh_rates(V)
+      return np.array([(I - gNa * m ** 3 * h * (V - ENa) - gK * n ** 4 * (V - EK) - gL * (V - EL)) / C,
+                       an * (1 - n) - bn * n, am * (1 - m) - bm * m, ah * (1 - h) - bh * h])
+  def steady(V):
+      an, bn, am, bm, ah, bh = hh_rates(V)
+      return np.array([V, an / (an + bn), am / (am + bm), ah / (ah + bh)])
+  def hh_rest(I):
+      g = lambda V: hh_rhs(steady(V), I)[0]; lo, hi = -75.0, -50.0
+      for _ in range(60):
+          mid = (lo + hi) / 2
+          if g(lo) * g(mid) <= 0: hi = mid
+          else: lo = mid
+      return steady((lo + hi) / 2)
+  count_spikes = lambda V: int(np.sum((V[1:] > 0) & (V[:-1] <= 0)))
+  print("rest at I = 8:", hh_rest(8.0).round(4))
+`} />
+
+<PyCell id="hh" title="Rest and firing, side by side" tests={String.raw`
+  import numpy as np
+  def test_rest():
+      "without the pulse the neuron stays at rest at I = 8 (voltage range below 0.01 mV)"
+      assert np.ptp(V_quiet) < 0.01
+
+  def test_fire():
+      "after the pulse it keeps firing: at least 3 spikes in the last 50 ms"
+      assert count_spikes(V_pulse[5000:]) >= 3
+`} prompt="Write `simulate(Ifun, y, T)` (RK4, dt = 0.01 ms, returning the voltage at every step). Starting from the resting state for I = 8, simulate 100 ms with constant input 8 (`V_quiet`), and with an extra 20 μA/cm² from 10 to 11 ms (`V_pulse`)."
+code={String.raw`
+  def simulate(Ifun, y, T, dt=0.01):
+      Vs = np.empty(int(T / dt))
+      for i in range(len(Vs)):
+          t = i * dt
+          k1 = hh_rhs(y, Ifun(t)); k2 = hh_rhs(y + dt / 2 * k1, Ifun(t + dt / 2))
+          k3 = hh_rhs(y + dt / 2 * k2, Ifun(t + dt / 2)); k4 = hh_rhs(y + dt * k3, Ifun(t + dt))
+          y = ...
+          Vs[i] = y[0]
+      return Vs
+
+  y8 = hh_rest(8.0)
+  V_quiet = simulate(lambda t: 8.0, y8, 100.0)
+  V_pulse = ...
+  print(f"no pulse: {count_spikes(V_quiet)} spikes;  with pulse: {count_spikes(V_pulse)} spikes, {count_spikes(V_pulse[5000:])} in the last 50 ms")
+  ts = np.arange(len(V_pulse)) * 0.01
+  plt.plot(ts, V_quiet, label="no pulse"); plt.plot(ts, V_pulse, label="pulse at 10 ms"); plt.xlabel("ms"); plt.ylabel("V (mV)"); plt.legend(); plt.show()
+`}
+hint="y = y + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4); V_pulse = simulate(lambda t: 8.0 + (20.0 if 10 <= t < 11 else 0.0), y8, 100.0)."
+solution={String.raw`
+  def simulate(Ifun, y, T, dt=0.01):
+      Vs = np.empty(int(T / dt))
+      for i in range(len(Vs)):
+          t = i * dt
+          k1 = hh_rhs(y, Ifun(t)); k2 = hh_rhs(y + dt / 2 * k1, Ifun(t + dt / 2))
+          k3 = hh_rhs(y + dt / 2 * k2, Ifun(t + dt / 2)); k4 = hh_rhs(y + dt * k3, Ifun(t + dt))
+          y = y + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+          Vs[i] = y[0]
+      return Vs
+
+  y8 = hh_rest(8.0)
+  V_quiet = simulate(lambda t: 8.0, y8, 100.0)
+  V_pulse = simulate(lambda t: 8.0 + (20.0 if 10 <= t < 11 else 0.0), y8, 100.0)
+  print(f"no pulse: {count_spikes(V_quiet)} spikes;  with pulse: {count_spikes(V_pulse)} spikes, {count_spikes(V_pulse[5000:])} in the last 50 ms")
+  ts = np.arange(len(V_pulse)) * 0.01
+  plt.plot(ts, V_quiet, label="no pulse"); plt.plot(ts, V_pulse, label="pulse at 10 ms"); plt.xlabel("ms"); plt.ylabel("V (mV)"); plt.legend(); plt.show()
+`} />
+
+Without the pulse the neuron sits at rest for 100 ms. With it, the neuron fires and keeps firing: 6 spikes in all, 3 of them in the last 50 ms, long after the pulse has ended. That answers the prediction. Below 9.78 μA/cm² linearisation correctly says rest is stable, but it cannot see the large limit cycle surrounding it, which the pulse reaches. This is why the f-I curve in Week 21 jumped: the neuron does not slide gradually into firing, it lands on a cycle that already exists at full size.
+
+<Bridge title="Oscillations in brains and machines"
+  neuro="Brain rhythms, from the gamma oscillations of an E-I loop to the respiratory rhythm of the brainstem, start and stop through bifurcations. A neuron near a Hopf bifurcation has damped subthreshold oscillations and responds best to inputs at its own frequency: it is a resonator, unlike the integrators near a saddle-node."
+  ai="Recurrent networks trained to produce rhythms build limit cycles, and fixed point analysis of such networks often finds an unstable fixed point surrounded by a stable cycle. Some sequence models deliberately use oscillatory units, complex eigenvalues held close to the imaginary axis, so that information persists as a phase rather than decaying.">
+
+A stable loop in the phase plane is a rhythm that keeps itself going.
+
+</Bridge>
+
+<Prove title="Cycles of the subcritical normal form" task="For $\dot\rho = \mu\rho + \rho^3 - \rho^5$, find the non-zero fixed points of $\rho$ and determine their stability from the sign of the derivative, for $-\frac{1}{4} \lt \mu \lt 0$.">
+
+Non-zero fixed points satisfy $\mu + \rho^2 - \rho^4 = 0$. Writing $u = \rho^2$, this is $u^2 - u - \mu = 0$, so $u = \frac{1 \pm \sqrt{1 + 4\mu}}{2}$. For $-\frac{1}{4} \lt \mu \lt 0$ the square root is real and less than 1, so both roots are positive: two cycles, at $\rho_\pm = \sqrt{u_\pm}$.
+
+The derivative of $g(\rho) = \mu\rho + \rho^3 - \rho^5$ is $g'(\rho) = \mu + 3\rho^2 - 5\rho^4$. At a cycle, $\mu = \rho^4 - \rho^2$, so $g'(\rho) = 2\rho^2 - 4\rho^4 = 2\rho^2(1 - 2\rho^2) = 2u(1 - 2u)$.
+
+For the small cycle, $u_- \lt \frac{1}{2}$, so $g' > 0$: unstable. For the large one, $u_+ > \frac{1}{2}$, so $g' \lt 0$: stable. The origin has $g'(0) = \mu \lt 0$: stable. So rest and the large cycle coexist, separated by the small unstable one.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "A limit cycle is...", options: ["Any closed orbit", "An isolated closed trajectory that nearby trajectories approach or leave", "A fixed point", "A family of orbits around a centre"], answer: 1, explain: "Isolated, unlike a centre's orbits." },
+  { q: "At a Hopf bifurcation...", options: ["A real eigenvalue crosses zero", "A complex pair of eigenvalues crosses the imaginary axis", "Fixed points collide", "The determinant becomes negative"], answer: 1, explain: "μ ± iω with μ passing zero." },
+  { q: "In a supercritical Hopf, oscillation amplitude grows as...", options: ["μ", "√μ", "μ²", "It jumps"], answer: 1, explain: "ρ = √μ." },
+  { q: "At the onset of a Hopf oscillation, the frequency is...", options: ["Zero", "Non-zero, about ω", "Infinite", "Random"], answer: 1, explain: "Class 2: rhythm starts at a definite frequency." },
+  { q: "A subcritical Hopf gives...", options: ["Gentle onset", "Sudden onset and bistability between rest and oscillation", "Chaos", "No oscillation"], answer: 1, explain: "Unstable cycle as threshold." },
+  { q: "The Hodgkin-Huxley neuron at 8 μA/cm²...", options: ["Has unstable rest", "Has stable rest coexisting with repetitive firing", "Cannot fire", "Is chaotic"], answer: 1, explain: "Subcritical Hopf." },
+  { q: "A neuron near a Hopf bifurcation is called...", options: ["An integrator", "A resonator", "A rectifier", "A buffer"], answer: 1, explain: "It prefers inputs at its own frequency." },
+]} />
+
+<Flashcards cards={[
+  { front: "Limit cycle?", back: "Isolated closed orbit; a self-sustained oscillation." },
+  { front: "Hopf normal form (supercritical)?", back: "$\\dot\\rho = \\mu\\rho - \\rho^3$, $\\dot\\phi = \\omega$; cycle at $\\rho = \\sqrt\\mu$." },
+  { front: "Subcritical Hopf?", back: "$\\dot\\rho = \\mu\\rho + \\rho^3 - \\rho^5$; sudden onset, bistability, hysteresis." },
+  { front: "Class 2 excitability?", back: "Firing starts at a non-zero frequency: a Hopf bifurcation." },
+  { front: "Resonator?", back: "Neuron near a Hopf: damped subthreshold oscillation, frequency preference." },
+]} />
+
+<Predict revisit question="At 8 μA/cm², after one brief pulse, does the Hodgkin-Huxley neuron fire once or keep firing?" />
+
+<Key title="Before you go">
+<ul>
+<li>A limit cycle is an isolated closed orbit, the form of a self-sustained rhythm.</li>
+<li>At a Hopf bifurcation a complex pair of eigenvalues crosses the imaginary axis.</li>
+<li>Supercritical: amplitude grows as √μ from zero, at a fixed frequency. Subcritical: sudden onset and bistability.</li>
+<li>The Hodgkin-Huxley neuron has a subcritical Hopf, so a pulse can switch it from rest to sustained firing.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Izhikevich (2000), <em>Neural excitability, spiking and bursting</em>.</li>
+<li>Strogatz, <em>Nonlinear Dynamics and Chaos</em>, sections 7.1 and 8.2, limit cycles and Hopf bifurcations.</li>
+<li>Izhikevich, <em>Dynamical Systems in Neuroscience</em> (MIT Press, 2007), chapter 6, bifurcations of the resting state.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A neuron near a subcritical Hopf bifurcation can be switched on by one pulse and, in principle, off by another well-timed one. Sketch, in the phase plane, where the second pulse would have to push the state, and suggest what use a circuit could make of such a switch." />

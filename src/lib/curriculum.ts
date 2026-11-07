@@ -215,6 +215,14 @@ export const DAY_TITLES: Record<number, string[]> = {
     "Attractors, integrators and what trained networks learn",
     "Forge: Week 22 challenge, quiz and deep read",
   ],
+  23: [
+    "Bifurcations in one dimension: saddle-nodes and hysteresis",
+    "Hopf bifurcations and limit cycles",
+    "Coupled oscillators and synchronisation",
+    "Chaos from a simple rule: the logistic map",
+    "Strange attractors, Lyapunov exponents and chaotic networks",
+    "Forge: Week 23 challenge, quiz and deep read",
+  ],
 };
 
 export const DAYS_PER_WEEK = 6;
@@ -243,7 +251,7 @@ export function dayTitle(w: number, d: number): string {
 }
 
 /** Weeks whose lesson files exist. Kept in sync by hand as content is written. */
-export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22];
+export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23];
 export const isWritten = (w: number) => WRITTEN_WEEKS.includes(w);
 
 /** Every lesson that is published, in order. */

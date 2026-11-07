@@ -1,0 +1,259 @@
+export const meta = {
+  title: "Chaos from a simple rule: the logistic map",
+  intro: "Can a deterministic rule with one variable and one line of arithmetic produce behaviour that never repeats and cannot be predicted far ahead? Robert May's answer, in a 1976 paper he thought every student should read, was yes. Today you explore the logistic map, x → r x (1 − x). As r rises, its steady state splits into a cycle of two, then four, then eight, at a rate set by a universal constant, and then dissolves into chaos. You will compute that constant yourself, and measure chaos with the Lyapunov exponent, the rate at which nearby futures separate.",
+  goals: [
+    "Find the fixed points of a map and their stability from the multiplier",
+    "Follow the period-doubling cascade and measure the period of the attractor",
+    "Estimate Feigenbaum's constant from superstable parameter values",
+    "Compute the Lyapunov exponent and use it to distinguish order from chaos",
+  ],
+  plan: [
+    { label: "Predict and maps", minutes: 20 },
+    { label: "Period doubling", minutes: 30 },
+    { label: "Feigenbaum's constant", minutes: 30 },
+    { label: "Measuring chaos", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "may-1976",
+};
+
+<Predict question="Two copies of the logistic map with r = 4 start at values that differ by one part in ten billion (10⁻¹⁰). Roughly how many steps until their values differ completely: about 10, about 35, about 1,000, or never?" />
+
+<Step n={1} title="Maps" minutes={20} />
+
+A **map** updates a state in discrete steps, $x_{n+1} = f(x_n)$, rather than continuously. Maps describe populations with yearly generations, and also arise from continuous systems, by recording the state once per cycle. The logistic map,
+
+$$
+x_{n+1} = rx_n(1 - x_n), \qquad 0 \le x \le 1, \quad 0 \lt r \le 4,
+$$
+
+models a population (as a fraction of its maximum) that grows by a factor $r$ when sparse and is held back as it approaches the maximum.
+
+Fixed points satisfy $x^* = f(x^*)$: here $x^* = 0$ and $x^* = 1 - 1/r$. Stability works as for flows, with one change. A small deviation $\delta$ becomes $f'(x^*)\delta$ after one step, so it shrinks if the **multiplier** $|f'(x^*)| \lt 1$. For the non-zero fixed point, $f'(x^*) = r(1 - 2x^*) = 2 - r$, so it is stable for $1 \lt r \lt 3$. Beyond $r = 3$ the multiplier passes −1: the deviation flips sign each step and grows, and the orbit settles into alternating between two values instead.
+
+<Video id="ovJcsL7vyrk" title="This equation will change how you see the world (the logistic map)" by="Veritasium" note="Derek Muller's video on the logistic map, period doubling, Feigenbaum's constant and its appearance in real experiments, with visualisations by Jonny Hyman." />
+
+<Step n={2} title="Period doubling" minutes={30} />
+
+<Figure caption="The logistic map: a cobweb of one orbit on the left, and on the right the long-run values for every r from 2.8 to 4. Move r and watch the cobweb settle, alternate or wander." credit="Interactive figure by Engram, after May (1976).">
+  <LogisticMap />
+</Figure>
+
+<PyCell id="period" title="The period of the attractor" tests={String.raw`
+  import numpy as np
+  def test_cascade():
+      "periods are 1, 2, 4, 8 at r = 2.8, 3.2, 3.5, 3.55, and 3 at r = 3.83"
+      assert [period(r) for r in (2.8, 3.2, 3.5, 3.55, 3.83)] == [1, 2, 4, 8, 3]
+
+  def test_chaos():
+      "at r = 3.9 no period up to 64 is found"
+      assert period(3.9) is None
+`} prompt="Write `period(r)`: iterate from x = 0.5 for 5,000 steps to settle on the attractor, then iterate up to 64 more times and return the first p at which x returns within 1e-8 of where it was, or None."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  def period(r):
+      x = 0.5
+      for _ in range(5000):
+          x = r * x * (1 - x)
+      x0 = x
+      for p in range(1, 65):
+          x = ...
+          if ...:
+              return p
+      return None
+
+  for r in (2.8, 3.2, 3.5, 3.55, 3.83, 3.9):
+      print(f"r = {r}: period {period(r)}")
+`}
+hint="x = r * x * (1 - x); if abs(x - x0) < 1e-8: return p."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  def period(r):
+      x = 0.5
+      for _ in range(5000):
+          x = r * x * (1 - x)
+      x0 = x
+      for p in range(1, 65):
+          x = r * x * (1 - x)
+          if abs(x - x0) < 1e-8:
+              return p
+      return None
+
+  for r in (2.8, 3.2, 3.5, 3.55, 3.83, 3.9):
+      print(f"r = {r}: period {period(r)}")
+`} />
+
+The steady state at $r = 2.8$ becomes a 2-cycle at 3.2, a 4-cycle at 3.5 and an 8-cycle at 3.55. Each doubling happens when the cycle's multiplier passes −1, a **period-doubling bifurcation**. At 3.9 nothing repeats within 64 steps: the orbit is chaotic. But chaos is not the end of the story: at 3.83 the period is 3, inside one of the windows of order that interrupt the chaotic region.
+
+<Step n={3} title="Feigenbaum's constant" minutes={30} />
+
+The doublings come faster and faster. In 1975 Mitchell Feigenbaum noticed that the gaps between successive bifurcation values shrink by the same ratio each time, about 4.669, and then that the same ratio appears for every map with a single smooth hump, not just the logistic one. It was later measured in convection, electronic circuits and lasers. Bifurcation points are awkward to compute because convergence is slow near them; the **superstable** parameters $R_n$, where the point $x = \frac12$ (the top of the hump, with multiplier zero) lies on the $2^n$-cycle, are easier. They interleave the bifurcations and shrink at the same rate.
+
+<PyCell id="feig" title="Computing the universal ratio" tests={String.raw`
+  import numpy as np
+  def test_R():
+      "R[1] = 1 + sqrt(5) and R[2] is about 3.49856"
+      assert abs(R[1] - (1 + np.sqrt(5))) < 1e-9 and abs(R[2] - 3.49856) < 1e-5
+
+  def test_delta():
+      "the last ratio is within 0.01 of Feigenbaum's 4.6692"
+      assert abs(ratios[-1] - 4.6692) < 0.01
+`} prompt="With g(r, n) = f_r applied 2ⁿ times to 0.5, minus 0.5, find R[n] for n = 2 to 6 by Newton's method (50 steps, derivative by central difference with h = 1e-9), starting from the guess R[n−1] + (R[n−1] − R[n−2]) / 4.7. Then compute `ratios`, the successive ratios (R[n] − R[n−1]) / (R[n+1] − R[n])."
+code={String.raw`
+  def g(r, n):
+      x = 0.5
+      for _ in range(2 ** n):
+          x = r * x * (1 - x)
+      return x - 0.5
+
+  R = [2.0, 1 + np.sqrt(5)]
+  for n in range(2, 7):
+      r = R[-1] + (R[-1] - R[-2]) / 4.7
+      for _ in range(50):
+          h = 1e-9
+          r = ...
+      R.append(r)
+  R = np.array(R)
+  ratios = ...
+  print("superstable r:", R.round(6)); print("ratios:", ratios.round(4))
+`}
+hint="r = r - g(r, n) / ((g(r + h, n) - g(r - h, n)) / (2 * h)); ratios = (R[1:-1] - R[:-2]) / (R[2:] - R[1:-1])."
+solution={String.raw`
+  def g(r, n):
+      x = 0.5
+      for _ in range(2 ** n):
+          x = r * x * (1 - x)
+      return x - 0.5
+
+  R = [2.0, 1 + np.sqrt(5)]
+  for n in range(2, 7):
+      r = R[-1] + (R[-1] - R[-2]) / 4.7
+      for _ in range(50):
+          h = 1e-9
+          r = r - g(r, n) / ((g(r + h, n) - g(r - h, n)) / (2 * h))
+      R.append(r)
+  R = np.array(R)
+  ratios = (R[1:-1] - R[:-2]) / (R[2:] - R[1:-1])
+  print("superstable r:", R.round(6)); print("ratios:", ratios.round(4))
+`} />
+
+The superstable values are 2, 3.2361 ($1 + \sqrt5$), 3.4986, 3.5546, 3.5667, 3.5692 and 3.5698, crowding towards the onset of chaos near 3.5699. The ratios of successive gaps are 4.709, 4.681, 4.663, 4.668 and 4.669, converging on Feigenbaum's $\delta = 4.6692$. Because $\delta$ is the same for every smooth single-humped map, it can be predicted for systems whose equations nobody knows, and it was: experiments on fluid convection found period doublings shrinking at close to this rate.
+
+<Step n={4} title="Measuring chaos" minutes={25} />
+
+What makes an orbit chaotic is not that it looks irregular but that it is **sensitive to initial conditions**: nearby orbits separate exponentially. After $n$ steps, a tiny difference $\delta_0$ has become roughly $\delta_0e^{\lambda n}$, where
+
+$$
+\lambda = \lim_{n \to \infty}\frac{1}{n}\sum_{k = 0}^{n - 1}\ln|f'(x_k)|
+$$
+
+is the **Lyapunov exponent**, the average logarithmic stretching per step along the orbit. $\lambda \lt 0$ means nearby orbits converge (a stable cycle); $\lambda > 0$ means they diverge (chaos).
+
+<PyCell id="lyap" title="The Lyapunov exponent" tests={String.raw`
+  import numpy as np
+  def test_values():
+      "lambda(4) is within 0.01 of ln 2; lambda is negative at 3.2 and 3.83 and positive at 3.7"
+      assert abs(lyapunov(4.0) - np.log(2)) < 0.01 and lyapunov(3.2) < 0 and lyapunov(3.83) < 0 and lyapunov(3.7) > 0
+
+  def test_split():
+      "two orbits 1e-10 apart at r = 4 first differ by more than 0.1 after 25 to 45 steps"
+      assert 25 <= n_split <= 45
+`} prompt="Write `lyapunov(r)`: from x = 0.3, iterate 20,000 times and average ln|r(1 − 2x)| over all but the first 1,000 steps. Then iterate two orbits at r = 4 from 0.3 and 0.3 + 1e-10 and store in `n_split` the first step at which they differ by more than 0.1."
+code={String.raw`
+  def lyapunov(r):
+      x, s = 0.3, 0.0
+      for k in range(20000):
+          x = r * x * (1 - x)
+          if k >= 1000:
+              s += ...
+      return s / 19000
+
+  a, b, n_split = 0.3, 0.3 + 1e-10, None
+  for n in range(1, 200):
+      a, b = 4 * a * (1 - a), 4 * b * (1 - b)
+      if ...:
+          n_split = n; break
+  print({r: round(float(lyapunov(r)), 4) for r in (3.2, 3.7, 3.83, 4.0)}, f";  ln 2 = {np.log(2):.4f};  orbits split after {n_split} steps")
+  rs = np.linspace(2.8, 4, 80); plt.plot(rs, [lyapunov(r) for r in rs]); plt.axhline(0, c="k", lw=0.8)
+  plt.xlabel("r"); plt.ylabel("Lyapunov exponent"); plt.show()
+`}
+hint="s += np.log(abs(r * (1 - 2 * x))); if abs(a - b) > 0.1:"
+solution={String.raw`
+  def lyapunov(r):
+      x, s = 0.3, 0.0
+      for k in range(20000):
+          x = r * x * (1 - x)
+          if k >= 1000:
+              s += np.log(abs(r * (1 - 2 * x)))
+      return s / 19000
+
+  a, b, n_split = 0.3, 0.3 + 1e-10, None
+  for n in range(1, 200):
+      a, b = 4 * a * (1 - a), 4 * b * (1 - b)
+      if abs(a - b) > 0.1:
+          n_split = n; break
+  print({r: round(float(lyapunov(r)), 4) for r in (3.2, 3.7, 3.83, 4.0)}, f";  ln 2 = {np.log(2):.4f};  orbits split after {n_split} steps")
+  rs = np.linspace(2.8, 4, 80); plt.plot(rs, [lyapunov(r) for r in rs]); plt.axhline(0, c="k", lw=0.8)
+  plt.xlabel("r"); plt.ylabel("Lyapunov exponent"); plt.show()
+`} />
+
+At $r = 4$ the exponent is 0.6931, exactly $\ln 2$: on average each step doubles a small difference. It is positive at 3.7 (0.354) and negative in the stable 2-cycle at 3.2 (−0.916) and in the period-3 window at 3.83 (−0.370). Two orbits started $10^{-10}$ apart at $r = 4$ differ by more than 0.1 after 31 steps, close to $\ln(10^{9})/\ln 2 \approx 30$. That answers the prediction: about 30 steps. Measuring the start a thousand times more precisely would buy only 10 more steps.
+
+<Bridge title="Chaos in brains and machines"
+  neuro="Irregular activity in the brain need not come from noise: deterministic networks can generate it themselves (Day 5). Population models with yearly generations, like May's, also changed how ecologists interpret erratic data, and the same question, noise or chaos, is asked of neural recordings."
+  ai="Iterated maps are what recurrent networks and deep networks compute, layer after layer. Their Lyapunov exponents decide whether signals and gradients explode (positive) or vanish (negative) as they pass through many steps, which is why careful initialisation aims to keep the exponents near zero: the edge of chaos.">
+
+One line of arithmetic, iterated, can be as unpredictable as a coin.
+
+</Bridge>
+
+<Prove title="Stability of the 2-cycle" task="Let $p$ and $q$ form a 2-cycle of a map $f$ ($f(p) = q$, $f(q) = p$). Show that the cycle's multiplier, the derivative of $f(f(x))$ at $p$, is $f'(p)f'(q)$, the same at both points. For the logistic map, the 2-cycle points satisfy $p + q = (r + 1)/r$ and $pq = (r + 1)/r^2$; deduce that the multiplier is $4 + 2r - r^2$ and that the 2-cycle is stable for $3 \lt r \lt 1 + \sqrt6$.">
+
+By the chain rule, $\frac{\mathrm d}{\mathrm dx}f(f(x)) = f'(f(x))f'(x)$, which at $x = p$ is $f'(q)f'(p)$. The same product arises at $q$.
+
+For the logistic map $f'(x) = r(1 - 2x)$, so the multiplier is $r^2(1 - 2p)(1 - 2q) = r^2\left(1 - 2(p + q) + 4pq\right) = r^2 - 2r(r + 1) + 4(r + 1) = -r^2 + 2r + 4$.
+
+Stability needs $-1 \lt 4 + 2r - r^2 \lt 1$. At $r = 3$ the multiplier is 1, where the cycle is born. It reaches −1 when $r^2 - 2r - 5 = 0$, at $r = 1 + \sqrt6 \approx 3.449$, where the 2-cycle itself period-doubles into a 4-cycle.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "A fixed point of a map is stable when the multiplier |f′(x*)| is...", options: ["Greater than 1", "Less than 1", "Equal to 0 only", "Negative"], answer: 1, explain: "Deviations shrink each step." },
+  { q: "For the logistic map, the non-zero fixed point is stable for...", options: ["0 to 1", "1 to 3", "3 to 4", "All r"], answer: 1, explain: "Multiplier 2 − r." },
+  { q: "At r = 3 the logistic map undergoes...", options: ["A saddle-node", "A period doubling", "A Hopf", "Chaos"], answer: 1, explain: "The multiplier passes −1." },
+  { q: "Feigenbaum's constant, about 4.669, describes...", options: ["The largest r", "The ratio of successive gaps between period doublings", "The Lyapunov exponent", "The period-3 window"], answer: 1, explain: "Universal for single-humped maps." },
+  { q: "A positive Lyapunov exponent means...", options: ["A stable cycle", "Nearby orbits separate exponentially", "A fixed point", "Noise"], answer: 1, explain: "Sensitive dependence." },
+  { q: "At r = 4 the Lyapunov exponent is...", options: ["0", "ln 2", "1", "−1"], answer: 1, explain: "Two-fold stretching on average." },
+  { q: "Inside the chaotic region there are...", options: ["Only chaotic orbits", "Windows of periodic behaviour, such as period 3", "No orbits", "Fixed points only"], answer: 1, explain: "Order reappears." },
+]} />
+
+<Flashcards cards={[
+  { front: "Logistic map?", back: "$x_{n+1} = rx_n(1 - x_n)$." },
+  { front: "Stability for maps?", back: "Fixed point stable if $|f'(x^*)| \\lt 1$." },
+  { front: "Period doubling?", back: "Multiplier passes −1; a cycle of twice the period appears." },
+  { front: "Feigenbaum δ?", back: "≈ 4.669, the shrinking ratio of period-doubling intervals; universal." },
+  { front: "Lyapunov exponent?", back: "$\\lambda = \\langle\\ln|f'(x_k)|\\rangle$; positive means chaos." },
+]} />
+
+<Predict revisit question="How many steps until two r = 4 orbits that start 10⁻¹⁰ apart differ completely?" />
+
+<Key title="Before you go">
+<ul>
+<li>A map's fixed point is stable if its multiplier is below 1 in size.</li>
+<li>The logistic map period-doubles from r = 3, with gaps shrinking by Feigenbaum's 4.669, into chaos near 3.57.</li>
+<li>Chaos means sensitive dependence: a positive Lyapunov exponent.</li>
+<li>Windows of periodic order, such as period 3 near 3.83, appear inside chaos.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: May (1976), <em>Simple mathematical models with very complicated dynamics</em>.</li>
+<li>Strogatz, <em>Nonlinear Dynamics and Chaos</em>, chapter 10, one-dimensional maps.</li>
+<li>Gleick, <em>Chaos: Making a New Science</em> (1987), for the history, including Feigenbaum's discovery.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="May argued that erratic fluctuations in an animal population might be deterministic chaos rather than noise. Suppose you have 30 years of population counts. What would you need to see, and what would you need to rule out, before concluding that the fluctuations were chaotic?" />

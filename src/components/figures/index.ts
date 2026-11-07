@@ -104,3 +104,8 @@ export { TraceDeterminant } from "./trace-determinant";
 export { ISNParadox } from "./isn-paradox";
 export { FitzHughNagumo } from "./fitzhugh-nagumo";
 export { IntegratorTuning } from "./integrator-tuning";
+export { BifurcationDiagram } from "./bifurcation-diagram";
+export { HopfCycle } from "./hopf-cycle";
+export { KuramotoSync } from "./kuramoto-sync";
+export { LogisticMap } from "./logistic-map";
+export { LorenzButterfly } from "./lorenz-butterfly";
