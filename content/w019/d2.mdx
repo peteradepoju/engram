@@ -1,0 +1,232 @@
+export const meta = {
+  title: "Posterior summaries, prediction and Bayes factors",
+  intro: "A posterior is a whole distribution, and today you learn three things to do with it. Summarise it, with means, intervals and probabilities of statements you care about. Predict with it, by averaging over what you are unsure of, which turns a Poisson model into a more variable negative binomial. And check it, by asking whether data simulated from the fitted model look like the data you actually have. Then you step up a level and compare whole models, with the Bayes factor, which rewards a model for predicting the data well and automatically penalises it for being flexible enough to predict anything. You will also find a case where a p-value and a Bayes factor point in opposite directions.",
+  goals: [
+    "Summarise a posterior with point estimates, credible intervals and probabilities of hypotheses",
+    "Compute a posterior predictive distribution and explain why it is wider than the plug-in prediction",
+    "Use a posterior predictive check to detect a model that does not fit",
+    "Compute a Bayes factor from marginal likelihoods, and explain Occam's razor and Lindley's paradox",
+  ],
+  plan: [
+    { label: "Predict and summaries", minutes: 20 },
+    { label: "The posterior predictive", minutes: 25 },
+    { label: "Posterior predictive checks", minutes: 30 },
+    { label: "Bayes factors", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "kass-1995",
+};
+
+<Predict question="In 10,000 trials a neuron fires a burst 5,100 times. A test of 'the burst probability is 0.5' gives p of about 0.046. Will a Bayes factor comparing 'exactly 0.5' with 'some unknown probability' favour the effect, or favour 0.5?" />
+
+<Step n={1} title="Summaries" minutes={20} />
+
+From a posterior you can report the **mean**, **median** or **mode** (Week 16 matched each to a loss), a **credible interval**, and, most usefully, the posterior probability of any statement: $P(p > 0.5 \mid \text{data})$, $P(\text{rate increased} \mid \text{data})$. Two kinds of credible interval are common: the **equal-tailed** interval (2.5% of probability in each tail) and the **highest posterior density** interval (the narrowest interval holding 95%), which differ for skewed posteriors. When the posterior is awkward, draw samples from it and compute everything from the samples, the approach of the rest of this week.
+
+<Video id="lG4VkPoG3ko" title="The medical test paradox, and redesigning Bayes' rule" by="3Blue1Brown" note="Grant Sanderson recasts Bayes' rule with Bayes factors, the ratios you compute at the end of today's lesson." />
+
+<Step n={2} title="The posterior predictive" minutes={25} />
+
+To predict a new observation, average the model's prediction over the posterior:
+
+$$
+p(\tilde{x} \mid \text{data}) = \int p(\tilde{x} \mid \theta)\,p(\theta \mid \text{data})\,\mathrm{d}\theta.
+$$
+
+This **posterior predictive** distribution includes two kinds of uncertainty: the randomness of the observation given $\theta$, and your uncertainty about $\theta$. Plugging in a single estimate ignores the second and is overconfident. For the gamma-Poisson model the posterior predictive of a new count is a **negative binomial** distribution, whose variance exceeds its mean, the over-dispersion of Week 15 appearing from uncertainty about the rate.
+
+<PyCell id="predictive" title="Prediction with uncertainty about the rate" tests={String.raw`
+  import numpy as np
+  def test_predictive():
+      "the predictive samples have a mean close to the posterior mean rate"
+      assert abs(pred.mean() - post_a / post_b) < 0.1
+
+  def test_wider():
+      "the predictive variance exceeds the plug-in Poisson variance (the posterior mean) by at least 20%"
+      assert pred.var() > 1.2 * (post_a / post_b)
+`} prompt="With a Gamma(2, 0.5) prior and counts [3, 7, 4] from 3 trials, find the posterior, then draw 200,000 predictive counts by first drawing a rate from the posterior and then a Poisson count with that rate. Compare the predictive variance with the plug-in Poisson variance."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from math import lgamma
+  rng = np.random.default_rng(1995)
+  k = np.array([3, 7, 4])
+  post_a, post_b = ..., ...
+  rates = rng.gamma(post_a, 1 / post_b, 200000)
+  pred = ...
+  print(f"posterior Gamma({post_a}, {post_b}); predictive mean {pred.mean():.2f}, variance {pred.var():.2f};  plug-in Poisson variance {post_a / post_b:.2f}")
+`}
+hint="post_a, post_b = 2 + k.sum(), 0.5 + len(k); pred = rng.poisson(rates)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from math import lgamma
+  rng = np.random.default_rng(1995)
+  k = np.array([3, 7, 4])
+  post_a, post_b = 2 + k.sum(), 0.5 + len(k)
+  rates = rng.gamma(post_a, 1 / post_b, 200000)
+  pred = rng.poisson(rates)
+  print(f"posterior Gamma({post_a}, {post_b}); predictive mean {pred.mean():.2f}, variance {pred.var():.2f};  plug-in Poisson variance {post_a / post_b:.2f}")
+`} />
+
+<Step n={3} title="Posterior predictive checks" minutes={30} />
+
+A model can be the best of the ones you tried and still be wrong. A **posterior predictive check** asks: if the fitted model were true, would data like mine be typical? Simulate many replicated datasets from the posterior predictive, compute a statistic that captures a feature you care about (the Fano factor, the longest run of silence, the largest count), and see where the real data's value falls among the replicates. If it is far in the tail, the model misses that feature.
+
+<PyCell id="ppc" title="Is this neuron Poisson?" tests={String.raw`
+  import numpy as np
+  def test_reps():
+      "fano_rep holds one Fano factor per replicated dataset"
+      assert fano_rep.shape == (2000,)
+
+  def test_misfit():
+      "the observed Fano factor is beyond almost all replicates (posterior predictive p below 0.01)"
+      assert ppc_p < 0.01
+`} prompt="A neuron's 60 trial counts come from a Poisson process with a fluctuating gain (over-dispersed). Fit the gamma-Poisson model for a single rate with a Gamma(1, 0.1) prior. For 2,000 replicates, draw a rate from the posterior, simulate 60 Poisson counts, and record their Fano factor. Compute the fraction of replicates with a Fano factor at least as large as the observed one."
+code={String.raw`
+  counts = rng.poisson(8 * rng.gamma(4, 1 / 4, 60))          # the real data: over-dispersed
+  fano_obs = counts.var(ddof=1) / counts.mean()
+  pa, pb = 1 + counts.sum(), 0.1 + len(counts)
+  fano_rep = []
+  for _ in range(2000):
+      lam = ...
+      rep = ...
+      fano_rep.append(rep.var(ddof=1) / rep.mean())
+  fano_rep = np.array(fano_rep)
+  ppc_p = ...
+  print(f"observed Fano factor {fano_obs:.2f};  replicated Fano factors mostly between {np.percentile(fano_rep, 2.5):.2f} and {np.percentile(fano_rep, 97.5):.2f};  predictive p = {ppc_p:.4f}")
+  plt.hist(fano_rep, 40); plt.axvline(fano_obs, color="k"); plt.xlabel("Fano factor"); plt.show()
+`}
+hint="lam = rng.gamma(pa, 1 / pb); rep = rng.poisson(lam, 60); ppc_p = np.mean(fano_rep >= fano_obs)."
+solution={String.raw`
+  counts = rng.poisson(8 * rng.gamma(4, 1 / 4, 60))          # the real data: over-dispersed
+  fano_obs = counts.var(ddof=1) / counts.mean()
+  pa, pb = 1 + counts.sum(), 0.1 + len(counts)
+  fano_rep = []
+  for _ in range(2000):
+      lam = rng.gamma(pa, 1 / pb)
+      rep = rng.poisson(lam, 60)
+      fano_rep.append(rep.var(ddof=1) / rep.mean())
+  fano_rep = np.array(fano_rep)
+  ppc_p = np.mean(fano_rep >= fano_obs)
+  print(f"observed Fano factor {fano_obs:.2f};  replicated Fano factors mostly between {np.percentile(fano_rep, 2.5):.2f} and {np.percentile(fano_rep, 97.5):.2f};  predictive p = {ppc_p:.4f}")
+  plt.hist(fano_rep, 40); plt.axvline(fano_obs, color="k"); plt.xlabel("Fano factor"); plt.show()
+`} />
+
+The single-rate Poisson model cannot produce counts as variable as the real ones, and the check says so clearly. The fix is a richer model, such as Week 15's modulated Poisson, which you could check the same way.
+
+<Step n={4} title="Bayes factors" minutes={30} />
+
+To compare two models $M_0$ and $M_1$, use Bayes' rule at the level of models. Each model's **marginal likelihood** (or **evidence**) averages its likelihood over its own prior:
+
+$$
+p(\text{data} \mid M) = \int p(\text{data} \mid \theta, M)\,p(\theta \mid M)\,\mathrm{d}\theta.
+$$
+
+The **Bayes factor** $B_{10} = p(\text{data} \mid M_1)/p(\text{data} \mid M_0)$ multiplies the prior odds of the models to give their posterior odds (Kass and Raftery, 1995, today's paper). A flexible model spreads its predictions thinly over many possible datasets, so unless the data need its flexibility it predicts them less well: this built-in penalty is the **Bayesian Occam's razor**.
+
+<Figure caption="Evidence for a fair model (p = 0.5) and a flexible model (p uniform) as a function of the number of successes. Lopsided data favour the flexible model; data near the middle favour the simple one." credit="Interactive figure by Engram.">
+  <BayesFactor />
+</Figure>
+
+<PyCell id="bf" title="Lindley's paradox" tests={String.raw`
+  import numpy as np
+  def test_evidence():
+      "log_ev_flexible equals log(1 / (n + 1)), the evidence under a uniform prior"
+      assert abs(log_ev_flexible(10) - np.log(1 / 11)) < 1e-12
+
+  def test_paradox():
+      "for 5,100 bursts in 10,000 trials, p is below 0.05 but the Bayes factor favours p = 0.5 by more than 5 to 1"
+      assert p_value < 0.05 and bf01 > 5
+`} prompt="Write `log_ev_fair(k, n)` = log P(k | p = 0.5) using `lgamma`, and `log_ev_flexible(n)` = log(1/(n + 1)), the evidence when p is uniform. For k = 5,100 and n = 10,000, compute the Bayes factor in favour of the fair model, `bf01`, and the two-sided p-value of the z-test, `p_value`."
+code={String.raw`
+  from math import erf, sqrt, log, exp
+  def log_choose(n, k): return lgamma(n + 1) - lgamma(k + 1) - lgamma(n - k + 1)
+
+  def log_ev_fair(k, n):
+      return ...
+
+  def log_ev_flexible(n):
+      return ...
+
+  k_b, n_b = 5100, 10000
+  bf01 = exp(log_ev_fair(k_b, n_b) - log_ev_flexible(n_b))
+  z = (k_b / n_b - 0.5) / sqrt(0.25 / n_b)
+  p_value = 2 * (1 - 0.5 * (1 + erf(abs(z) / sqrt(2))))
+  print(f"z = {z:.2f}, p = {p_value:.4f};  Bayes factor for p = 0.5 against unknown p: {bf01:.1f}")
+`}
+hint="log_ev_fair returns log_choose(n, k) + n * log(0.5); log_ev_flexible returns log(1 / (n + 1))."
+solution={String.raw`
+  from math import erf, sqrt, log, exp
+  def log_choose(n, k): return lgamma(n + 1) - lgamma(k + 1) - lgamma(n - k + 1)
+
+  def log_ev_fair(k, n):
+      return log_choose(n, k) + n * log(0.5)
+
+  def log_ev_flexible(n):
+      return log(1 / (n + 1))
+
+  k_b, n_b = 5100, 10000
+  bf01 = exp(log_ev_fair(k_b, n_b) - log_ev_flexible(n_b))
+  z = (k_b / n_b - 0.5) / sqrt(0.25 / n_b)
+  p_value = 2 * (1 - 0.5 * (1 + erf(abs(z) / sqrt(2))))
+  print(f"z = {z:.2f}, p = {p_value:.4f};  Bayes factor for p = 0.5 against unknown p: {bf01:.1f}")
+`} />
+
+The p-value says "significant"; the Bayes factor favours $p = 0.5$ by about 11 to 1. That answers the prediction. This is **Lindley's paradox**: with huge samples, a tiny deviation from the null is significant, but the flexible model, which spread its predictions over all $p$ from 0 to 1, predicted "very close to half" far less well than the model that said exactly half. The two approaches answer different questions, and the Bayes factor depends strongly on the prior of the flexible model: a prior concentrated near 0.5 would favour it more.
+
+<Bridge title="Model comparison in brains and machines"
+  neuro="Bayes factors and posterior predictive checks compare models of behaviour and neural data, for example whether an animal uses a prior or not, or whether a neuron needs spike history. Over-dispersion found by predictive checks motivated the modulated Poisson models of Week 15."
+  ai="Model selection by marginal likelihood chooses kernel hyperparameters in Gaussian processes, and the evidence lower bound of Day 5 approximates it in variational autoencoders. Calibration checks on a classifier's predicted probabilities are posterior predictive checks in spirit.">
+
+Summarise with probabilities, predict by averaging over uncertainty, and check that the fitted model can reproduce the data.
+
+</Bridge>
+
+<Prove title="The Bayesian Occam's razor" task="Show that under a uniform prior on p, the evidence for k successes in n trials is $1/(n + 1)$ for every k. Use $\int_0^1 p^k(1-p)^{n-k}\,\mathrm{d}p = \frac{k!\,(n-k)!}{(n+1)!}$.">
+
+The evidence is $\int_0^1 \binom{n}{k}p^k(1 - p)^{n-k}\cdot 1\,\mathrm{d}p = \binom{n}{k}\cdot\frac{k!\,(n-k)!}{(n+1)!}$.
+
+Since $\binom{n}{k} = \frac{n!}{k!\,(n-k)!}$, this simplifies to $\frac{n!}{(n+1)!} = \frac{1}{n + 1}$.
+
+So the flexible model spreads its total probability of 1 equally over the $n + 1$ possible outcomes. The fair model concentrates its probability near $k = n/2$, so it beats the flexible model whenever the data land near the middle, and loses only for clearly lopsided data. Flexibility is paid for by thinner predictions everywhere.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "A highest posterior density interval is...", options: ["Always equal-tailed", "The narrowest interval with the stated posterior probability", "A confidence interval", "The prior's interval"], answer: 1, explain: "Differs from equal-tailed for skewed posteriors." },
+  { q: "The posterior predictive distribution includes...", options: ["Only observation noise", "Observation noise and uncertainty about the parameters", "Only the prior", "Nothing random"], answer: 1, explain: "Average over the posterior." },
+  { q: "The gamma-Poisson posterior predictive is...", options: ["Poisson", "Negative binomial, with variance above the mean", "Gaussian", "Binomial"], answer: 1, explain: "Rate uncertainty adds variance." },
+  { q: "A posterior predictive check asks...", options: ["Whether the prior is right", "Whether data simulated from the fitted model resemble the real data", "Whether p is below 0.05", "Which model is simpler"], answer: 1, explain: "Model criticism." },
+  { q: "The Bayes factor compares...", options: ["Maximum likelihoods", "Marginal likelihoods averaged over each model's prior", "Priors only", "p-values"], answer: 1, explain: "Kass and Raftery (1995)." },
+  { q: "The Bayesian Occam's razor arises because...", options: ["Simple models are always right", "Flexible models spread their predictions thinly", "Priors are flat", "Data are noisy"], answer: 1, explain: "Evidence is normalised over datasets." },
+  { q: "Lindley's paradox is when...", options: ["p and the Bayes factor agree", "A significant p-value coexists with a Bayes factor favouring the null", "The prior is improper", "n is small"], answer: 1, explain: "Large n, tiny deviation." },
+]} />
+
+<Flashcards cards={[
+  { front: "Posterior predictive?", back: "$p(\\tilde x \\mid D) = \\int p(\\tilde x \\mid \\theta)p(\\theta \\mid D)\\,d\\theta$." },
+  { front: "Posterior predictive check?", back: "Simulate replicated data from the fitted model and compare a statistic with the observed one." },
+  { front: "Marginal likelihood?", back: "$p(D \\mid M) = \\int p(D \\mid \\theta, M)p(\\theta \\mid M)\\,d\\theta$." },
+  { front: "Bayes factor?", back: "$B_{10} = p(D \\mid M_1)/p(D \\mid M_0)$; posterior odds = B × prior odds." },
+  { front: "Lindley's paradox?", back: "With huge n, p below 0.05 while the Bayes factor favours the point null." },
+]} />
+
+<Predict revisit question="5,100 bursts in 10,000 trials: does the Bayes factor favour an effect or p = 0.5?" />
+
+<Key title="Before you go">
+<ul>
+<li>Report posteriors with intervals and probabilities of the statements you care about.</li>
+<li>Predict by averaging over the posterior; plug-in predictions are overconfident.</li>
+<li>Check models by simulating replicated data and comparing features.</li>
+<li>Bayes factors compare models by their evidence and penalise unneeded flexibility, and they can disagree with p-values.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Kass and Raftery (1995), <em>Bayes factors</em>, sections 1 to 3.</li>
+<li>Gelman and colleagues, <em>Bayesian Data Analysis</em>, chapter 6 on model checking.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Choose a model of neural data you know (Poisson spiking, a linear tuning curve, a drift-diffusion model of choices). Name one feature of real data it might fail to reproduce, and the statistic you would use in a posterior predictive check to find out." />

@@ -84,3 +84,8 @@ export { PermutationTest } from "./permutation-test";
 export { BootstrapCI } from "./bootstrap-ci";
 export { PowerCurve } from "./power-curve";
 export { MultipleTests } from "./multiple-tests";
+export { BetaUpdate } from "./beta-update";
+export { BayesFactor } from "./bayes-factor";
+export { MetropolisWalk } from "./metropolis-walk";
+export { GibbsMixture } from "./gibbs-mixture";
+export { VariationalFit } from "./variational-fit";

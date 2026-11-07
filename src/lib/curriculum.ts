@@ -183,6 +183,14 @@ export const DAY_TITLES: Record<number, string[]> = {
     "Many tests at once: false discoveries and double dipping",
     "Forge: Week 18 challenge, quiz and deep read",
   ],
+  19: [
+    "Conjugate priors: beta-binomial and gamma-Poisson",
+    "Posterior summaries, prediction and Bayes factors",
+    "Monte Carlo and the Metropolis algorithm",
+    "Latent variables and Gibbs sampling: sorting spikes",
+    "Variational inference: approximating the posterior",
+    "Forge: Week 19 challenge, quiz and deep read",
+  ],
 };
 
 export const DAYS_PER_WEEK = 6;
@@ -211,7 +219,7 @@ export function dayTitle(w: number, d: number): string {
 }
 
 /** Weeks whose lesson files exist. Kept in sync by hand as content is written. */
-export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18];
+export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19];
 export const isWritten = (w: number) => WRITTEN_WEEKS.includes(w);
 
 /** Every lesson that is published, in order. */

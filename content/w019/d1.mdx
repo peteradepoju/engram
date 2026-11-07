@@ -1,0 +1,223 @@
+export const meta = {
+  title: "Conjugate priors: beta-binomial and gamma-Poisson",
+  intro: "Week 16 introduced Bayes' rule; Week 17 used its peak, the MAP estimate. Now you keep the whole posterior. For a few combinations of prior and likelihood, called conjugate pairs, the posterior has the same form as the prior, and updating is just arithmetic on its parameters. Today you use the beta distribution for a synapse's release probability and the gamma distribution for a neuron's firing rate, see that the posterior mean is a weighted average of the prior's guess and the data's, and discover that this weighting is a learning rate that shrinks as evidence accumulates. With a prior learned from many neurons, Bayesian estimates of each neuron beat the plain averages.",
+  goals: [
+    "Update a beta prior with binomial data and a gamma prior with Poisson data",
+    "Interpret prior parameters as pseudo-observations and the posterior mean as a weighted average",
+    "Compute credible intervals and show that sequential and batch updating agree",
+    "Show that posterior means beat maximum likelihood when the prior matches the population",
+  ],
+  plan: [
+    { label: "Predict and conjugacy", minutes: 20 },
+    { label: "The beta-binomial model", minutes: 30 },
+    { label: "The gamma-Poisson model", minutes: 25 },
+    { label: "Shrinkage across neurons", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "behrens-2007",
+};
+
+<Predict question="You record 100 neurons for just 2 trials each, and estimate each one's firing rate. Firing rates across the population follow a known distribution. Will each neuron's estimate be more accurate if you use its own mean count, or if you pull it part of the way towards the population average?" />
+
+<Step n={1} title="Conjugacy" minutes={20} />
+
+A prior is **conjugate** to a likelihood if the posterior belongs to the same family as the prior. Then the posterior is described by a few numbers, and each new observation updates those numbers by a simple rule. Three conjugate pairs cover much of neuroscience:
+
+| Data | Likelihood | Conjugate prior | Update |
+| --- | --- | --- | --- |
+| successes in trials | binomial | beta(a, b) | a + successes, b + failures |
+| counts | Poisson | gamma(a, b) | a + total count, b + number of observations |
+| measurements | Gaussian (known variance) | Gaussian | precisions add (Week 16) |
+
+You met the third already: cue combination. Today is about the first two.
+
+<Video id="mDEyZHaG5aY" title="Conjugate priors" by="Neuromatch Academy (prerequisite course)" note="Neuromatch's introduction to conjugate priors and why they make Bayesian updating simple." />
+
+<Step n={2} title="The beta-binomial model" minutes={30} />
+
+A synapse releases on $k$ of $n$ trials with unknown probability $p$. The **beta** prior has density $\propto p^{a-1}(1 - p)^{b-1}$ and mean $a/(a + b)$. Multiplying by the binomial likelihood $p^k(1 - p)^{n-k}$ gives
+
+$$
+p \mid k \sim \text{Beta}(a + k,\; b + n - k).
+$$
+
+The prior acts like $a$ earlier successes and $b$ earlier failures. The posterior mean is
+
+$$
+\frac{a + k}{a + b + n} = \underbrace{\frac{a + b}{a + b + n}}_{\text{weight on prior}}\cdot\frac{a}{a + b} + \underbrace{\frac{n}{a + b + n}}_{\text{weight on data}}\cdot\frac{k}{n},
+$$
+
+a weighted average of the prior mean and the observed fraction, with the data's weight growing as $n$ grows. A **credible interval** contains, say, 95% of the posterior probability, and unlike a confidence interval it says directly: given the data and the prior, $p$ lies in this interval with probability 0.95.
+
+<Figure caption="A beta prior on a release probability, updated trial by trial. Change the prior's strength and add trials." credit="Interactive figure by Engram.">
+  <BetaUpdate />
+</Figure>
+
+<PyCell id="beta" title="Posterior for a release probability" tests={String.raw`
+  import numpy as np
+  def test_params():
+      "post_a and post_b follow the conjugate update"
+      assert post_a == 2 + 7 and post_b == 2 + 13
+
+  def test_interval():
+      "the sampled 95% credible interval agrees with the grid interval to within 0.01"
+      assert np.allclose(ci_samples, ci_grid, atol=0.01)
+
+  def test_sequential():
+      "updating one trial at a time gives the same posterior as updating with all the data at once"
+      assert (seq_a, seq_b) == (post_a, post_b)
+`} prompt="With a Beta(2, 2) prior and 7 releases in 20 trials, compute `post_a`, `post_b`, the 95% credible interval by sampling 200,000 values with `rng.beta` (`ci_samples`) and on a fine grid (`ci_grid`). Then update one trial at a time through the sequence in `trials` and store the final parameters in `seq_a` and `seq_b`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2007)
+  a0, b0, k, n = 2, 2, 7, 20
+  post_a, post_b = ..., ...
+  ci_samples = np.percentile(rng.beta(post_a, post_b, 200000), [2.5, 97.5])
+
+  p = np.linspace(0.0005, 0.9995, 20000)
+  dens = p ** (post_a - 1) * (1 - p) ** (post_b - 1)
+  cdf = np.cumsum(dens) / dens.sum()
+  ci_grid = ...                                  # the grid points where the CDF crosses 0.025 and 0.975
+
+  trials = np.array([1] * 7 + [0] * 13); rng.shuffle(trials)
+  seq_a, seq_b = a0, b0
+  for t in trials:
+      ...
+  print(f"posterior Beta({post_a}, {post_b}), mean {post_a / (post_a + post_b):.3f};  95% interval {ci_samples.round(3)} (grid {np.round(ci_grid, 3)});  sequential Beta({seq_a}, {seq_b})")
+`}
+hint="post_a, post_b = a0 + k, b0 + n - k; ci_grid = np.array([p[np.searchsorted(cdf, 0.025)], p[np.searchsorted(cdf, 0.975)]]); in the loop: seq_a += t; seq_b += 1 - t."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2007)
+  a0, b0, k, n = 2, 2, 7, 20
+  post_a, post_b = a0 + k, b0 + n - k
+  ci_samples = np.percentile(rng.beta(post_a, post_b, 200000), [2.5, 97.5])
+
+  p = np.linspace(0.0005, 0.9995, 20000)
+  dens = p ** (post_a - 1) * (1 - p) ** (post_b - 1)
+  cdf = np.cumsum(dens) / dens.sum()
+  ci_grid = np.array([p[np.searchsorted(cdf, 0.025)], p[np.searchsorted(cdf, 0.975)]])                                  # the grid points where the CDF crosses 0.025 and 0.975
+
+  trials = np.array([1] * 7 + [0] * 13); rng.shuffle(trials)
+  seq_a, seq_b = a0, b0
+  for t in trials:
+      seq_a += t
+      seq_b += 1 - t
+  print(f"posterior Beta({post_a}, {post_b}), mean {post_a / (post_a + post_b):.3f};  95% interval {ci_samples.round(3)} (grid {np.round(ci_grid, 3)});  sequential Beta({seq_a}, {seq_b})")
+`} />
+
+Sequential updating gives exactly the batch answer, whatever the order: yesterday's posterior is today's prior. Written as an update of the mean after each trial, $\hat{p} \leftarrow \hat{p} + \frac{1}{a + b + t}(x_t - \hat{p})$, it is a learning rule whose learning rate shrinks as $1/t$. Behrens and colleagues (2007, today's paper) showed that people's learning rates rise again when the world becomes volatile, as a Bayesian learner that tracks change would do.
+
+<Step n={3} title="The gamma-Poisson model" minutes={25} />
+
+For spike counts $k_1, \dots, k_n$ with rate $\lambda$ per trial, the conjugate prior is the **gamma** distribution with shape $a$ and rate $b$, density $\propto \lambda^{a-1}e^{-b\lambda}$, mean $a/b$. The posterior is
+
+$$
+\lambda \mid k_{1:n} \sim \text{Gamma}\!\left(a + \sum_i k_i,\; b + n\right),
+$$
+
+so the prior acts like $b$ earlier trials containing $a$ spikes in total, and the posterior mean $(a + \sum k_i)/(b + n)$ is again a weighted average of the prior mean and the observed mean count.
+
+<Step n={4} title="Shrinkage across neurons" minutes={30} />
+
+Where does a prior come from? Often from other units like the one you are studying. If you record many neurons, the spread of their rates is a natural prior for each one. Pulling each neuron's noisy estimate towards the population average, by an amount set by how noisy it is, is called **shrinkage**, and it is the idea behind hierarchical models and empirical Bayes.
+
+<PyCell id="shrink" title="Bayes beats the plain average" tests={String.raw`
+  import numpy as np
+  def test_posterior():
+      "post_mean is (a + total count) / (b + n) for every neuron"
+      assert np.allclose(post_mean, (a_pop + counts.sum(axis=1)) / (b_pop + 2))
+
+  def test_better():
+      "the posterior means have a lower mean squared error than the per-neuron averages"
+      assert mse_bayes < 0.8 * mse_mle
+
+  def test_shrink():
+      "posterior means are pulled towards the population mean: their spread is smaller than the averages' spread"
+      assert post_mean.std() < mle.std()
+`} prompt="100 neurons have rates drawn from Gamma(shape 4, rate 0.8) (mean 5 spikes per trial). Each is recorded on just 2 trials. Compute each neuron's plain average `mle`, its posterior mean `post_mean` under that gamma prior, and the mean squared errors of both against the true rates."
+code={String.raw`
+  a_pop, b_pop = 4.0, 0.8
+  true_rates = rng.gamma(a_pop, 1 / b_pop, 100)          # numpy uses shape and scale = 1 / rate
+  counts = rng.poisson(true_rates[:, None], (100, 2))
+  mle = ...
+  post_mean = ...
+  mse_mle = ...
+  mse_bayes = ...
+  print(f"mean squared error: per-neuron average {mse_mle:.2f}, posterior mean {mse_bayes:.2f}")
+  plt.plot(true_rates, mle, ".", label="average of 2 trials"); plt.plot(true_rates, post_mean, ".", label="posterior mean")
+  plt.plot([0, 15], [0, 15], "k--"); plt.xlabel("true rate"); plt.ylabel("estimate"); plt.legend(); plt.show()
+`}
+hint="mle = counts.mean(axis=1); post_mean = (a_pop + counts.sum(axis=1)) / (b_pop + 2); mse_mle = np.mean((mle - true_rates) ** 2); mse_bayes = np.mean((post_mean - true_rates) ** 2)."
+solution={String.raw`
+  a_pop, b_pop = 4.0, 0.8
+  true_rates = rng.gamma(a_pop, 1 / b_pop, 100)          # numpy uses shape and scale = 1 / rate
+  counts = rng.poisson(true_rates[:, None], (100, 2))
+  mle = counts.mean(axis=1)
+  post_mean = (a_pop + counts.sum(axis=1)) / (b_pop + 2)
+  mse_mle = np.mean((mle - true_rates) ** 2)
+  mse_bayes = np.mean((post_mean - true_rates) ** 2)
+  print(f"mean squared error: per-neuron average {mse_mle:.2f}, posterior mean {mse_bayes:.2f}")
+  plt.plot(true_rates, mle, ".", label="average of 2 trials"); plt.plot(true_rates, post_mean, ".", label="posterior mean")
+  plt.plot([0, 15], [0, 15], "k--"); plt.xlabel("true rate"); plt.ylabel("estimate"); plt.legend(); plt.show()
+`} />
+
+Pulling each estimate towards the population average makes every neuron's estimate slightly biased but much less variable, and the overall error nearly halves (a mean squared error of 1.7 against 3.1), which answers the prediction. The surprise is that this holds even though the neurons are independent: borrowing strength from the others helps each one. In real data the population prior is not known in advance but estimated from the same neurons, which is what hierarchical models do (Part 5).
+
+<Bridge title="Conjugate updating in brains and machines"
+  neuro="A learner tracking a reward probability with a beta posterior has a learning rate that falls as evidence accumulates, and Behrens and colleagues showed that people raise it again when the world becomes volatile. Synapses estimating their own release statistics, and neurons adapting their gain to recent input, are candidates for similar computations."
+  ai="Thompson sampling, which balances exploration and exploitation in bandits and recommendation systems, keeps a beta posterior for each option and acts on a sample from it. Count-based smoothing in language models, such as adding pseudo-counts to unseen words, is a Dirichlet prior in disguise.">
+
+A conjugate prior is a stock of imaginary data; the posterior simply adds the real data to it.
+
+</Bridge>
+
+<Prove title="Gamma-Poisson conjugacy" task="Show that if $\lambda \sim \text{Gamma}(a, b)$ and $k_1, \dots, k_n$ are independent Poisson($\lambda$), then $\lambda \mid k_{1:n} \sim \text{Gamma}(a + \sum_i k_i, b + n)$.">
+
+The prior density is $\propto \lambda^{a-1}e^{-b\lambda}$. Each Poisson likelihood term is $\propto \lambda^{k_i}e^{-\lambda}$, so the likelihood of all the counts is $\propto \lambda^{\sum_i k_i}e^{-n\lambda}$.
+
+Multiplying, the posterior is $\propto \lambda^{a + \sum_i k_i - 1}e^{-(b + n)\lambda}$.
+
+This is the kernel of a Gamma$(a + \sum_i k_i, b + n)$ density. Since the posterior must integrate to 1, it is exactly that distribution.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "A conjugate prior gives a posterior...", options: ["That is always Gaussian", "In the same family as the prior", "Equal to the prior", "With no parameters"], answer: 1, explain: "Updating is arithmetic on parameters." },
+  { q: "A Beta(2, 2) prior updated with 7 successes in 20 trials gives...", options: ["Beta(7, 13)", "Beta(9, 15)", "Beta(22, 22)", "Beta(2, 20)"], answer: 1, explain: "a + k, b + n − k." },
+  { q: "The posterior mean of a beta-binomial model is...", options: ["The prior mean", "A weighted average of the prior mean and the observed fraction", "Always 0.5", "The MLE"], answer: 1, explain: "Weights a + b and n." },
+  { q: "The conjugate prior for a Poisson rate is...", options: ["Beta", "Gamma", "Gaussian", "Uniform"], answer: 1, explain: "Gamma(a + Σk, b + n)." },
+  { q: "A 95% credible interval says...", options: ["95% of experiments' intervals contain the truth", "Given the data and prior, the parameter is in it with probability 0.95", "The data lie in it", "Nothing about the parameter"], answer: 1, explain: "A direct probability statement." },
+  { q: "Sequential and batch Bayesian updating...", options: ["Differ", "Give the same posterior", "Need different priors", "Only agree for Gaussians"], answer: 1, explain: "Yesterday's posterior is today's prior." },
+  { q: "Shrinking noisy per-neuron estimates towards the population mean...", options: ["Always increases error", "Can reduce total error by cutting variance", "Removes all bias", "Needs more trials"], answer: 1, explain: "Borrowing strength." },
+]} />
+
+<Flashcards cards={[
+  { front: "Beta-binomial update?", back: "Beta(a, b) + k successes in n → Beta(a + k, b + n − k)." },
+  { front: "Gamma-Poisson update?", back: "Gamma(a, b) + counts → Gamma(a + Σk, b + n); mean (a + Σk)/(b + n)." },
+  { front: "Prior as pseudo-data?", back: "Beta(a, b): a successes, b failures already seen." },
+  { front: "Credible interval?", back: "An interval containing a stated posterior probability of the parameter." },
+  { front: "Shrinkage?", back: "Pulling noisy estimates towards a population mean, trading a little bias for less variance." },
+]} />
+
+<Predict revisit question="With 2 trials per neuron, is the plain average or the shrunken estimate more accurate?" />
+
+<Key title="Before you go">
+<ul>
+<li>Conjugate pairs make the posterior a simple update of the prior's parameters.</li>
+<li>Beta for probabilities, gamma for Poisson rates; priors act as pseudo-observations.</li>
+<li>Posterior means are weighted averages; their weight on the prior shrinks like a falling learning rate.</li>
+<li>A prior drawn from the population shrinks noisy estimates and lowers total error.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Behrens and colleagues (2007), <em>Learning the value of information in an uncertain world</em>.</li>
+<li>Andrew Gelman and colleagues, <em>Bayesian Data Analysis</em> (third edition, 2013), chapter 2 (free from the authors' site).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A Bayesian learner's learning rate falls as 1 over the number of observations. Describe a situation in which an animal should not let its learning rate fall, and what signal could tell it to speed up again." />

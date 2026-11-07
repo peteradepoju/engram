@@ -1,0 +1,258 @@
+export const meta = {
+  title: "Variational inference: approximating the posterior",
+  intro: "MCMC is exact in the limit but can be slow, and for models with millions of latent variables, such as a variational autoencoder trained on a large dataset, it is too slow. Variational inference takes a different route: choose a simple family of distributions, such as Gaussians, and find the member closest to the posterior, turning inference into optimisation. Today you derive the evidence lower bound that makes this possible, fit a Gaussian approximation to the posterior of yesterday's tuning-curve model with the reparameterisation trick from Week 16, and compare it with MCMC. You will see what the approximation gets right, and what it systematically gets wrong.",
+  goals: [
+    "Derive the evidence lower bound (ELBO) and its relation to the KL divergence",
+    "Check numerically that the ELBO never exceeds the log evidence, and equals it at the true posterior",
+    "Fit a mean-field Gaussian to a posterior by stochastic gradient ascent with the reparameterisation trick",
+    "Explain why variational inference tends to underestimate posterior uncertainty",
+  ],
+  plan: [
+    { label: "Predict and the idea", minutes: 20 },
+    { label: "The evidence lower bound", minutes: 30 },
+    { label: "Variational inference for a tuning curve", minutes: 40 },
+    { label: "What the approximation misses", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "blei-2017",
+};
+
+<Predict question="You approximate a posterior over three correlated tuning weights with a product of three independent Gaussians, fitted by variational inference. Compared with the true posterior, will the approximation's standard deviations be about right, too large, or too small?" />
+
+<Step n={1} title="The idea" minutes={20} />
+
+Pick a family $\mathcal{Q}$ of tractable distributions $q(z)$ over the latent variables, for example independent Gaussians with free means and variances (the **mean-field** family). Find the member closest to the posterior in **Kullback-Leibler divergence**:
+
+$$
+q^* = \arg\min_{q \in \mathcal{Q}} \mathrm{KL}\left(q(z)\,\|\,p(z \mid x)\right), \qquad \mathrm{KL}(q\,\|\,p) = \mathbb{E}_q\left[\log\frac{q(z)}{p(z)}\right] \ge 0.
+$$
+
+The KL divergence is zero only when the two distributions are equal, and it is not symmetric; Week 20 studies it properly. The difficulty is that the posterior contains the unknown evidence $p(x)$. The next step removes it.
+
+<Figure caption="Fitting one Gaussian to a two-peaked distribution in two ways. Variational inference minimises KL(q‖p) and locks onto one peak." credit="Interactive figure by Engram.">
+  <VariationalFit />
+</Figure>
+
+<Video id="srWb_Gp6OGA" title="Variational Autoencoders" by="Neuromatch Academy (Deep Learning course)" note="Neuromatch's introduction to variational autoencoders, where variational inference and the ELBO train deep generative models." />
+
+<Step n={2} title="The evidence lower bound" minutes={30} />
+
+<Derivation title="From KL to the ELBO">
+
+<div>
+
+Write the posterior as $p(z \mid x) = p(x, z)/p(x)$ and expand the KL divergence:
+
+$$
+\mathrm{KL}(q\,\|\,p(z \mid x)) = \mathbb{E}_q[\log q(z)] - \mathbb{E}_q[\log p(x, z)] + \log p(x).
+$$
+
+</div>
+
+<div>
+
+Rearrange, defining the **evidence lower bound**:
+
+$$
+\log p(x) = \underbrace{\mathbb{E}_q[\log p(x, z)] - \mathbb{E}_q[\log q(z)]}_{\text{ELBO}(q)} + \mathrm{KL}(q\,\|\,p(z \mid x)).
+$$
+
+</div>
+
+<div>
+
+The left side does not depend on $q$, and the KL term is non-negative, so the ELBO is a lower bound on the log evidence, and *maximising the ELBO minimises the KL divergence*. The ELBO needs only the joint $p(x, z) = p(x \mid z)p(z)$, which you can compute. Its two terms have a natural reading: fit the data on average under $q$, and keep $q$ spread out (its entropy, $-\mathbb{E}_q[\log q]$).
+
+</div>
+
+</Derivation>
+
+<PyCell id="elbo" title="Check the bound" tests={String.raw`
+  import numpy as np
+  def test_bound():
+      "the ELBO is below the log evidence for every q tried, by more than 0.01 for a poor q"
+      assert np.all(elbos <= log_evidence + 0.01) and elbos.min() < log_evidence - 0.01
+
+  def test_tight():
+      "at the exact posterior the ELBO equals the log evidence to within 0.01"
+      assert abs(elbo(post_m, post_s, np.random.default_rng(1)) - log_evidence) < 0.01
+`} prompt="Prior z ~ N(0, 1), one observation x = 1.2 with x | z ~ N(z, 0.5²). Write `elbo(m, s, rng)` estimating E_q[log p(x, z)] − E_q[log q(z)] with 100,000 samples from q = N(m, s²). Compute the exact posterior (`post_m`, `post_s`, Week 16's precision rule) and the exact `log_evidence` (x ~ N(0, 1 + 0.5²)), then evaluate the ELBO for a few choices of q."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2017)
+  x_obs, s_lik = 1.2, 0.5
+  def log_norm(v, m, s): return -0.5 * np.log(2 * np.pi * s ** 2) - (v - m) ** 2 / (2 * s ** 2)
+
+  def elbo(m, s, rng):
+      z = m + s * rng.normal(size=100000)
+      log_joint = ...                          # log p(x | z) + log p(z)
+      log_q = ...
+      return np.mean(log_joint - log_q)
+
+  prec = 1 + 1 / s_lik ** 2
+  post_m, post_s = (x_obs / s_lik ** 2) / prec, 1 / np.sqrt(prec)
+  log_evidence = log_norm(x_obs, 0, np.sqrt(1 + s_lik ** 2))
+  qs = [(0.0, 1.0), (1.2, 0.5), (post_m, post_s), (0.96, 0.2)]
+  elbos = np.array([elbo(m, s, rng) for m, s in qs])
+  print(f"log evidence {log_evidence:.4f}");  [print(f"q = N({m:.2f}, {s:.2f}^2): ELBO {e:.4f}") for (m, s), e in zip(qs, elbos)]
+`}
+hint="log_joint = log_norm(x_obs, z, s_lik) + log_norm(z, 0, 1); log_q = log_norm(z, m, s)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2017)
+  x_obs, s_lik = 1.2, 0.5
+  def log_norm(v, m, s): return -0.5 * np.log(2 * np.pi * s ** 2) - (v - m) ** 2 / (2 * s ** 2)
+
+  def elbo(m, s, rng):
+      z = m + s * rng.normal(size=100000)
+      log_joint = log_norm(x_obs, z, s_lik) + log_norm(z, 0, 1)                          # log p(x | z) + log p(z)
+      log_q = log_norm(z, m, s)
+      return np.mean(log_joint - log_q)
+
+  prec = 1 + 1 / s_lik ** 2
+  post_m, post_s = (x_obs / s_lik ** 2) / prec, 1 / np.sqrt(prec)
+  log_evidence = log_norm(x_obs, 0, np.sqrt(1 + s_lik ** 2))
+  qs = [(0.0, 1.0), (1.2, 0.5), (post_m, post_s), (0.96, 0.2)]
+  elbos = np.array([elbo(m, s, rng) for m, s in qs])
+  print(f"log evidence {log_evidence:.4f}");  [print(f"q = N({m:.2f}, {s:.2f}^2): ELBO {e:.4f}") for (m, s), e in zip(qs, elbos)]
+`} />
+
+Every approximation falls below the log evidence, and the exact posterior reaches it: the gap is precisely the KL divergence. Note that the ELBO also approximates the evidence itself, which is how variational methods compare models.
+
+<Step n={3} title="Variational inference for a tuning curve" minutes={40} />
+
+Return to Day 3's Bayesian tuning curve, and approximate its posterior over the three weights with independent Gaussians, $q(\mathbf{w}) = \prod_j \mathcal{N}(m_j, s_j^2)$. Maximise the ELBO by stochastic gradient ascent, using the **reparameterisation trick** of Week 16: write $\mathbf{w} = \mathbf{m} + \mathbf{s}\odot\boldsymbol{\varepsilon}$ with $\boldsymbol{\varepsilon}$ standard normal. Then, with $g = \nabla_{\mathbf{w}}\log p(\mathbf{k}, \mathbf{w})$ and optimising $\log\mathbf{s}$ so that $\mathbf{s}$ stays positive,
+
+$$
+\nabla_{\mathbf{m}}\text{ELBO} = \mathbb{E}_\varepsilon[g], \qquad \nabla_{\log\mathbf{s}}\text{ELBO} = \mathbb{E}_\varepsilon[g\odot\boldsymbol{\varepsilon}]\odot\mathbf{s} + 1,
+$$
+
+where the $+1$ comes from the entropy of each Gaussian factor. Average over a few samples of $\boldsymbol{\varepsilon}$ per step and use Adam (Week 13).
+
+<PyCell code={String.raw`
+  r_v = np.random.default_rng(60)
+  theta = r_v.uniform(0, np.pi, 60)
+  X = np.column_stack([np.ones(60), np.cos(2 * theta), np.sin(2 * theta)])
+  k = r_v.poisson(np.exp(1 + 0.8 * np.cos(2 * (theta - np.deg2rad(60)))))
+  def log_post(w): eta = X @ w; return np.sum(k * eta - np.exp(eta)) - np.sum(w ** 2) / 18
+  def grad_log_post(W):                     # W has one weight vector per row
+      return (k - np.exp(W @ X.T)) @ X - W / 9
+
+  # A long Metropolis run, as the reference answer
+  w, lp, chain = np.zeros(3), log_post(np.zeros(3)), []
+  for t in range(40000):
+      prop = w + 0.12 * r_v.normal(size=3); lpp = log_post(prop)
+      if np.log(r_v.random()) < lpp - lp: w, lp = prop, lpp
+      chain.append(w.copy())
+  chain = np.array(chain[4000:])
+  print("MCMC posterior means", chain.mean(axis=0).round(3), " sds", chain.std(axis=0).round(3))
+`} />
+
+<PyCell id="vi" title="Fit the variational Gaussian" tests={String.raw`
+  import numpy as np
+  def test_means():
+      "the variational means agree with the MCMC means to within 0.06"
+      assert np.all(np.abs(m - chain.mean(axis=0)) < 0.06)
+
+  def test_sds():
+      "the variational sds are no larger than the MCMC sds (within 5%), and at least one is more than 10% smaller"
+      s_mc = chain.std(axis=0)
+      assert np.all(s_vi <= 1.05 * s_mc) and np.any(s_vi < 0.9 * s_mc)
+`} prompt="Run 3,000 steps of Adam (step size 0.02) on the ELBO, starting from m = 0 and s = 0.3, with 20 samples of ε per step. Store the fitted means in `m` and standard deviations in `s_vi`, and compare with MCMC."
+code={String.raw`
+  m, log_s = np.zeros(3), np.log(0.3) * np.ones(3)
+  am, av = np.zeros(6), np.zeros(6)
+  for it in range(1, 3001):
+      eps = r_v.normal(size=(20, 3))
+      s = np.exp(log_s)
+      G = grad_log_post(m + s * eps)                  # 20 x 3
+      g_m = ...
+      g_log_s = ...
+      grad = np.r_[g_m, g_log_s]
+      am = 0.9 * am + 0.1 * grad; av = 0.999 * av + 0.001 * grad ** 2
+      step = 0.02 * (am / (1 - 0.9 ** it)) / (np.sqrt(av / (1 - 0.999 ** it)) + 1e-8)
+      m, log_s = m + step[:3], log_s + step[3:]       # ascent: we maximise the ELBO
+  s_vi = np.exp(log_s)
+  print("variational means", m.round(3), " sds", s_vi.round(3))
+  print("MCMC        means", chain.mean(axis=0).round(3), " sds", chain.std(axis=0).round(3))
+`}
+hint="g_m = G.mean(axis=0); g_log_s = (G * eps).mean(axis=0) * s + 1."
+solution={String.raw`
+  m, log_s = np.zeros(3), np.log(0.3) * np.ones(3)
+  am, av = np.zeros(6), np.zeros(6)
+  for it in range(1, 3001):
+      eps = r_v.normal(size=(20, 3))
+      s = np.exp(log_s)
+      G = grad_log_post(m + s * eps)                  # 20 x 3
+      g_m = G.mean(axis=0)
+      g_log_s = (G * eps).mean(axis=0) * s + 1
+      grad = np.r_[g_m, g_log_s]
+      am = 0.9 * am + 0.1 * grad; av = 0.999 * av + 0.001 * grad ** 2
+      step = 0.02 * (am / (1 - 0.9 ** it)) / (np.sqrt(av / (1 - 0.999 ** it)) + 1e-8)
+      m, log_s = m + step[:3], log_s + step[3:]       # ascent: we maximise the ELBO
+  s_vi = np.exp(log_s)
+  print("variational means", m.round(3), " sds", s_vi.round(3))
+  print("MCMC        means", chain.mean(axis=0).round(3), " sds", chain.std(axis=0).round(3))
+`} />
+
+<Step n={4} title="What the approximation misses" minutes={15} />
+
+The means agree with MCMC; the standard deviations are equal or smaller. That answers the prediction. Two reasons. First, $\mathrm{KL}(q\,\|\,p)$ heavily penalises $q$ for placing probability where the posterior has little, so $q$ prefers to sit inside the posterior rather than spread over it: it is **mode-seeking**, as the figure shows for two peaks. Second, a mean-field $q$ cannot represent correlations, and an independent Gaussian fitted inside a correlated, elongated posterior must be narrow along the axes. Variational inference is fast, scales to huge models and gives good means, but treat its uncertainty with suspicion; full-covariance or richer families, or a check against MCMC on a small problem, help (Blei and colleagues, 2017, today's paper).
+
+<Bridge title="Approximate inference in brains and machines"
+  neuro="If the brain does Bayesian inference, it must approximate, and variational ideas offer one account: the free-energy principle and predictive coding (Part 5) describe perception as minimising a variational bound by adjusting neural activity. Sampling (yesterday) and variational inference make different predictions about neural variability, which is one way the deep read's question can be tested."
+  ai="Variational autoencoders train an encoder to output q for each data point and a decoder for p(x | z) by maximising the ELBO with the reparameterisation trick, exactly today's recipe at scale. Bayesian neural networks and many probabilistic programming tools use variational inference.">
+
+Turn inference into optimisation: choose a simple family and climb the evidence lower bound, remembering that the result is confident by construction.
+
+</Bridge>
+
+<Prove title="The ELBO is a lower bound by Jensen's inequality" task="Show directly that $\log p(x) \ge \mathbb{E}_q[\log p(x, z) - \log q(z)]$, using Jensen's inequality: for the concave function log, $\log\mathbb{E}[Y] \ge \mathbb{E}[\log Y]$.">
+
+Write the evidence as an expectation under $q$: $p(x) = \int p(x, z)\,\mathrm{d}z = \int q(z)\frac{p(x, z)}{q(z)}\,\mathrm{d}z = \mathbb{E}_q\left[\frac{p(x, z)}{q(z)}\right]$.
+
+Taking logs and applying Jensen's inequality: $\log p(x) = \log\mathbb{E}_q\left[\frac{p(x, z)}{q(z)}\right] \ge \mathbb{E}_q\left[\log\frac{p(x, z)}{q(z)}\right]$, which is the ELBO.
+
+Equality holds in Jensen's inequality when the quantity inside is constant, that is when $p(x, z)/q(z)$ does not depend on $z$, which happens exactly when $q(z) = p(z \mid x)$.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "Variational inference turns inference into...", options: ["Sampling", "Optimisation over a family of distributions", "Hypothesis testing", "Bootstrapping"], answer: 1, explain: "Find the closest q." },
+  { q: "The ELBO equals log p(x) minus...", options: ["The prior", "KL(q ‖ posterior)", "The likelihood", "The entropy"], answer: 1, explain: "The gap is the KL divergence." },
+  { q: "Maximising the ELBO...", options: ["Maximises the KL", "Minimises KL(q ‖ posterior)", "Ignores the data", "Needs the evidence"], answer: 1, explain: "log p(x) is fixed." },
+  { q: "A mean-field family assumes...", options: ["Correlated latents", "Independent factors for each latent variable", "A single Gaussian with full covariance", "No latents"], answer: 1, explain: "q factorises." },
+  { q: "Minimising KL(q ‖ p) tends to make q...", options: ["Cover all modes", "Lock onto one mode and be too narrow", "Uniform", "Exactly p"], answer: 1, explain: "Mode-seeking." },
+  { q: "The reparameterisation trick writes a sample as...", options: ["m s ε", "m + s ε", "ε / s", "m²"], answer: 1, explain: "Week 16." },
+  { q: "Compared with MCMC, variational inference is usually...", options: ["Slower and more accurate", "Faster, with good means but underestimated uncertainty", "Identical", "Unable to fit means"], answer: 1, explain: "Today's result." },
+]} />
+
+<Flashcards cards={[
+  { front: "KL divergence?", back: "$KL(q \\| p) = E_q[\\log q - \\log p] \\ge 0$, zero only if q = p; not symmetric." },
+  { front: "ELBO?", back: "$E_q[\\log p(x, z)] - E_q[\\log q(z)] = \\log p(x) - KL(q \\| p(z \\mid x))$." },
+  { front: "Mean-field?", back: "$q(z) = \\prod_j q_j(z_j)$: independent factors." },
+  { front: "Reparameterised ELBO gradient for a Gaussian q?", back: "$\\nabla_m = E[g]$; $\\nabla_{\\log s} = E[g\\varepsilon]s + 1$, with g the gradient of log p(x, z)." },
+  { front: "Weakness of variational inference?", back: "Mode-seeking and mean-field: underestimates posterior variance and misses correlations." },
+]} />
+
+<Predict revisit question="Are the mean-field standard deviations about right, too large or too small?" />
+
+<Key title="Before you go">
+<ul>
+<li>Variational inference fits the closest member of a simple family to the posterior.</li>
+<li>log p(x) = ELBO + KL, so maximising the ELBO needs only the joint distribution.</li>
+<li>The reparameterisation trick gives low-variance gradients for Gaussian families.</li>
+<li>Expect good means and too-small uncertainty; check against MCMC where you can.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Blei, Kucukelbir and McAuliffe (2017), <em>Variational inference: a review for statisticians</em>, sections 1 to 3.</li>
+<li>Kingma and Welling (2014), <em>Auto-encoding variational Bayes</em>, from Week 16, now with the ELBO in hand.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Sampling (Day 4) and variational inference (today) are two ways a brain might approximate a posterior. Describe one measurement of neural activity that could tell them apart, and what each would predict." />

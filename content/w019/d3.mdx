@@ -1,0 +1,281 @@
+export const meta = {
+  title: "Monte Carlo and the Metropolis algorithm",
+  intro: "Conjugate priors are a lucky special case. For most models the posterior has no formula: a tuning curve with a Poisson likelihood and a Gaussian prior, a network model, a drift-diffusion model of choices. But you can still learn everything about a posterior if you can draw samples from it, and you can draw samples from almost any posterior you can write down up to a constant, using a Markov chain that wanders in proportion to probability. Today you build the Metropolis algorithm from scratch, learn to tune it and to tell when it has worked, and use it to put credible intervals on a neuron's preferred orientation.",
+  goals: [
+    "Estimate posterior expectations and probabilities from samples",
+    "Implement the Metropolis algorithm and explain why it samples the right distribution",
+    "Tune the proposal width using the acceptance rate and the effective sample size",
+    "Sample the posterior of a Poisson tuning-curve model and report credible intervals",
+  ],
+  plan: [
+    { label: "Predict and Monte Carlo", minutes: 20 },
+    { label: "The Metropolis algorithm", minutes: 30 },
+    { label: "Tuning and diagnostics", minutes: 30 },
+    { label: "A Bayesian tuning curve", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "metropolis-1953",
+};
+
+<Predict question="A Metropolis chain proposes tiny steps and accepts 99% of them. Another proposes huge steps and accepts 2%. A third accepts about 30%. Which will give the most accurate estimate of the posterior mean from 5,000 steps?" />
+
+<Step n={1} title="Monte Carlo" minutes={20} />
+
+If you have samples $\theta^{(1)}, \dots, \theta^{(S)}$ from the posterior, any posterior quantity is an average over them:
+
+$$
+\mathbb{E}[g(\theta) \mid \text{data}] \approx \frac{1}{S}\sum_{s=1}^S g(\theta^{(s)}).
+$$
+
+The posterior mean, its standard deviation, the probability that $\theta > 0$ (the average of an indicator), a credible interval (percentiles of the samples), and the posterior of any function of $\theta$, such as a preferred orientation computed from tuning weights: all come from the same samples. If the samples are independent the error falls like $1/\sqrt{S}$ (Week 15). The hard part is getting the samples.
+
+<Video id="yApmR-c_hKU" title="Markov Chain Monte Carlo (MCMC)" by="ritvikmath" note="Ritvik Kharkar explains why sampling from a distribution known only up to a constant is possible, and how MCMC does it." />
+
+<Step n={2} title="The Metropolis algorithm" minutes={30} />
+
+You can usually compute the posterior up to a constant, $\pi(\theta) \propto p(\text{data} \mid \theta)p(\theta)$, but not its normalising evidence. The **Metropolis algorithm** (Metropolis and colleagues, 1953, today's paper) needs only ratios:
+
+1. From the current $\theta$, propose $\theta' = \theta + \varepsilon$ with symmetric noise (for example Gaussian, of width $w$).
+2. Accept with probability $\min\left(1, \pi(\theta')/\pi(\theta)\right)$; otherwise stay at $\theta$ (and record it again).
+
+Moves uphill are always accepted; moves downhill sometimes. The resulting Markov chain spends time in each region in proportion to its posterior probability, so after an initial **burn-in** its states are samples from the posterior (correlated ones). The reason is **detailed balance**: the probability flow from $\theta$ to $\theta'$ equals the flow back, $\pi(\theta)T(\theta \to \theta') = \pi(\theta')T(\theta' \to \theta)$, which makes $\pi$ a stationary distribution of the chain. Work in logs to avoid underflow: accept if $\log u \lt \log\pi(\theta') - \log\pi(\theta)$.
+
+<Figure caption="A Metropolis chain on a correlated two-dimensional posterior. Change the proposal width and watch how the chain explores." credit="Interactive figure by Engram.">
+  <MetropolisWalk />
+</Figure>
+
+<PyCell id="metropolis" title="Write a Metropolis sampler" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "metropolis returns (samples, acceptance rate)"
+      s, acc = metropolis(lambda x: -0.5 * np.sum(x ** 2), np.zeros(2), 100, 1.0, np.random.default_rng(0))
+      assert s.shape == (100, 2) and 0 <= acc <= 1
+
+  def test_moments():
+      "after burn-in, the samples of the correlated Gaussian have means near 0 and correlation near 0.9"
+      kept = samples[1000:]
+      assert np.all(np.abs(kept.mean(axis=0)) < 0.15) and abs(np.corrcoef(kept.T)[0, 1] - 0.9) < 0.05
+`} prompt="Write `metropolis(logp, x0, steps, width, rng)` returning an array of the chain's states (one row per step) and the acceptance rate. Sample 20,000 steps from a two-dimensional Gaussian with correlation 0.9, starting at (−3, 3) with width 0.5, and check the moments after discarding 1,000 burn-in steps."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1953)
+
+  def metropolis(logp, x0, steps, width, rng):
+      x = np.array(x0, dtype=float); lp = logp(x)
+      out = np.empty((steps, len(x))); accepted = 0
+      for t in range(steps):
+          prop = ...
+          lp_prop = logp(prop)
+          if ...:
+              x, lp = prop, lp_prop
+              accepted += 1
+          out[t] = x
+      return out, accepted / steps
+
+  rho = 0.9
+  Sinv = np.linalg.inv(np.array([[1, rho], [rho, 1]]))
+  def log_target(x): return -0.5 * x @ Sinv @ x
+  samples, acc = metropolis(log_target, [-3.0, 3.0], 20000, 0.5, rng)
+  kept = samples[1000:]
+  print(f"acceptance {acc:.2f};  mean {kept.mean(axis=0).round(3)};  correlation {np.corrcoef(kept.T)[0, 1]:.3f}")
+  plt.plot(samples[:500, 0], samples[:500, 1], ".-", ms=2, lw=0.5); plt.axis("equal"); plt.show()
+`}
+hint="prop = x + width * rng.normal(size=len(x)); accept if np.log(rng.random()) < lp_prop - lp."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1953)
+
+  def metropolis(logp, x0, steps, width, rng):
+      x = np.array(x0, dtype=float); lp = logp(x)
+      out = np.empty((steps, len(x))); accepted = 0
+      for t in range(steps):
+          prop = x + width * rng.normal(size=len(x))
+          lp_prop = logp(prop)
+          if np.log(rng.random()) < lp_prop - lp:
+              x, lp = prop, lp_prop
+              accepted += 1
+          out[t] = x
+      return out, accepted / steps
+
+  rho = 0.9
+  Sinv = np.linalg.inv(np.array([[1, rho], [rho, 1]]))
+  def log_target(x): return -0.5 * x @ Sinv @ x
+  samples, acc = metropolis(log_target, [-3.0, 3.0], 20000, 0.5, rng)
+  kept = samples[1000:]
+  print(f"acceptance {acc:.2f};  mean {kept.mean(axis=0).round(3)};  correlation {np.corrcoef(kept.T)[0, 1]:.3f}")
+  plt.plot(samples[:500, 0], samples[:500, 1], ".-", ms=2, lw=0.5); plt.axis("equal"); plt.show()
+`} />
+
+<Step n={3} title="Tuning and diagnostics" minutes={30} />
+
+Successive states of a chain are correlated, so $S$ steps carry less information than $S$ independent samples. The **effective sample size** (ESS) estimates how many independent samples they are worth:
+
+$$
+\text{ESS} = \frac{S}{1 + 2\sum_{k \ge 1}\rho_k},
+$$
+
+where $\rho_k$ is the autocorrelation of the chain at lag $k$ (summed until it becomes negligible). Too small a proposal width gives high acceptance but tiny moves, so successive states are nearly identical; too large a width gives frequent rejections, so the chain sits still. For random-walk Metropolis a rule of thumb targets acceptance rates of roughly 25 to 50%. Further checks: run several chains from different starting points and confirm they agree (the $\hat{R}$ statistic), and look at trace plots for drifts.
+
+<PyCell id="ess" title="Choose the proposal width" tests={String.raw`
+  import numpy as np
+  def test_ess_fn():
+      "ess of independent samples is close to their number"
+      x = np.random.default_rng(1).normal(size=4000)
+      assert 3000 < ess(x) < 5000
+
+  def test_best_middle():
+      "the intermediate width has the largest effective sample size of the three"
+      assert ess_by_width[1.0] > ess_by_width[0.05] and ess_by_width[1.0] > ess_by_width[8.0]
+`} prompt="Write `ess(x)` for a one-dimensional chain: compute autocorrelations up to lag 200 and sum them until the first one below 0.05. For widths 0.05, 1 and 8, run 5,000 steps on the correlated Gaussian, discard 500, and store the acceptance rates in `acc_by_width` and the ESS of the first coordinate in `ess_by_width`."
+code={String.raw`
+  def ess(x, max_lag=200):
+      x = x - x.mean()
+      var = np.mean(x ** 2)
+      total = 0.0
+      for k in range(1, max_lag):
+          rho_k = ...
+          if rho_k < 0.05:
+              break
+          total += rho_k
+      return len(x) / (1 + 2 * total)
+
+  acc_by_width, ess_by_width = {}, {}
+  for w in [0.05, 1.0, 8.0]:
+      s, a = metropolis(log_target, [0.0, 0.0], 5000, w, rng)
+      acc_by_width[w] = a
+      ess_by_width[w] = ...
+  print("acceptance:", {w: round(a, 2) for w, a in acc_by_width.items()}); print("effective sample size of 4,500 kept steps:", {w: round(e) for w, e in ess_by_width.items()})
+`}
+hint="rho_k = np.mean(x[:-k] * x[k:]) / var; ess_by_width[w] = ess(s[500:, 0])."
+solution={String.raw`
+  def ess(x, max_lag=200):
+      x = x - x.mean()
+      var = np.mean(x ** 2)
+      total = 0.0
+      for k in range(1, max_lag):
+          rho_k = np.mean(x[:-k] * x[k:]) / var
+          if rho_k < 0.05:
+              break
+          total += rho_k
+      return len(x) / (1 + 2 * total)
+
+  acc_by_width, ess_by_width = {}, {}
+  for w in [0.05, 1.0, 8.0]:
+      s, a = metropolis(log_target, [0.0, 0.0], 5000, w, rng)
+      acc_by_width[w] = a
+      ess_by_width[w] = ess(s[500:, 0])
+  print("acceptance:", {w: round(a, 2) for w, a in acc_by_width.items()}); print("effective sample size of 4,500 kept steps:", {w: round(e) for w, e in ess_by_width.items()})
+`} />
+
+The middle width wins by a wide margin, which answers the prediction. Neither extreme of acceptance is good: what matters is how far the chain travels per step, which the ESS measures. Better samplers, such as Hamiltonian Monte Carlo, use the gradient of the log-posterior to make long moves that are still accepted (Neal, 2011).
+
+<Step n={4} title="A Bayesian tuning curve" minutes={25} />
+
+Week 17 fitted a tuning curve by maximum likelihood and gave Wald error bars. Now sample its whole posterior. The model is Poisson counts with log-rate $w_0 + w_1\cos 2\theta + w_2\sin 2\theta$ and a Gaussian prior on the weights. The preferred orientation $\tfrac{1}{2}\operatorname{atan2}(w_2, w_1)$ is a non-linear function of the weights, so its posterior has no formula, but its samples are just the function applied to each weight sample.
+
+<PyCell id="tuning" title="Credible intervals for a preferred orientation" tests={String.raw`
+  import numpy as np
+  def test_logpost():
+      "log_post is the Poisson log-likelihood plus the Gaussian log-prior (up to a constant)"
+      w = np.array([0.5, 0.2, -0.1]); eta = X @ w
+      assert abs(log_post(w) - (np.sum(k * eta - np.exp(eta)) - np.sum(w ** 2) / (2 * 3 ** 2))) < 1e-9
+
+  def test_interval():
+      "the 95% credible interval for the preferred orientation contains the true 60 degrees and is narrower than 30 degrees"
+      assert ci_pref[0] < 60 < ci_pref[1] and ci_pref[1] - ci_pref[0] < 30
+`} prompt="With 60 trials, write `log_post(w)` (Poisson log-likelihood plus a N(0, 3²) log-prior on each weight), run Metropolis for 20,000 steps (width 0.15) from zero, discard 2,000, convert each sample to a preferred orientation in degrees, and store its 95% credible interval in `ci_pref`."
+code={String.raw`
+  r_t = np.random.default_rng(60)
+  theta = r_t.uniform(0, np.pi, 60)
+  X = np.column_stack([np.ones(60), np.cos(2 * theta), np.sin(2 * theta)])
+  k = r_t.poisson(np.exp(1 + 0.8 * np.cos(2 * (theta - np.deg2rad(60)))))
+
+  def log_post(w):
+      eta = X @ w
+      return ...
+
+  chain, acc = metropolis(log_post, np.zeros(3), 20000, 0.15, r_t)
+  W_s = chain[2000:]
+  pref = ...                                         # degrees between 0 and 180, one per sample
+  ci_pref = np.percentile(pref, [2.5, 97.5])
+  print(f"acceptance {acc:.2f};  posterior mean weights {W_s.mean(axis=0).round(2)};  preferred orientation 95% interval {ci_pref.round(1)}")
+  plt.hist(pref, 60); plt.axvline(60, color="k"); plt.xlabel("preferred orientation (deg)"); plt.show()
+`}
+hint="return np.sum(k * eta - np.exp(eta)) - np.sum(w ** 2) / (2 * 3 ** 2); pref = np.mod(np.rad2deg(0.5 * np.arctan2(W_s[:, 2], W_s[:, 1])), 180)."
+solution={String.raw`
+  r_t = np.random.default_rng(60)
+  theta = r_t.uniform(0, np.pi, 60)
+  X = np.column_stack([np.ones(60), np.cos(2 * theta), np.sin(2 * theta)])
+  k = r_t.poisson(np.exp(1 + 0.8 * np.cos(2 * (theta - np.deg2rad(60)))))
+
+  def log_post(w):
+      eta = X @ w
+      return np.sum(k * eta - np.exp(eta)) - np.sum(w ** 2) / (2 * 3 ** 2)
+
+  chain, acc = metropolis(log_post, np.zeros(3), 20000, 0.15, r_t)
+  W_s = chain[2000:]
+  pref = np.mod(np.rad2deg(0.5 * np.arctan2(W_s[:, 2], W_s[:, 1])), 180)                                         # degrees between 0 and 180, one per sample
+  ci_pref = np.percentile(pref, [2.5, 97.5])
+  print(f"acceptance {acc:.2f};  posterior mean weights {W_s.mean(axis=0).round(2)};  preferred orientation 95% interval {ci_pref.round(1)}")
+  plt.hist(pref, 60); plt.axvline(60, color="k"); plt.xlabel("preferred orientation (deg)"); plt.show()
+`} />
+
+The same few lines would sample any model whose log-posterior you can write: add spike history, a different tuning shape, or a hierarchy across neurons, and only `log_post` changes. That generality is why MCMC transformed applied statistics.
+
+<Bridge title="Sampling in brains and machines"
+  neuro="The sampling hypothesis proposes that neural activity itself is a sequence of samples from the brain's posterior over the causes of its input, so that variability carries uncertainty (Berkes and colleagues, 2011, tomorrow's deep read). Some models implement Metropolis-like or Langevin dynamics in recurrent networks of spiking neurons."
+  ai="MCMC, especially Hamiltonian Monte Carlo in tools such as Stan and PyMC, is the standard way to fit Bayesian models. Langevin dynamics, gradient steps plus noise, links sampling to optimisation and underlies the sampling procedure of diffusion models.">
+
+If you can compute a posterior up to a constant, a Markov chain can sample it; the art is in making it move.
+
+</Bridge>
+
+<Prove title="Metropolis satisfies detailed balance" task="With a symmetric proposal $q(\theta' \mid \theta) = q(\theta \mid \theta')$ and acceptance $A(\theta \to \theta') = \min(1, \pi(\theta')/\pi(\theta))$, show that $\pi(\theta)\,q(\theta' \mid \theta)A(\theta \to \theta') = \pi(\theta')\,q(\theta \mid \theta')A(\theta' \to \theta)$ for $\theta \ne \theta'$.">
+
+Suppose $\pi(\theta') \le \pi(\theta)$. Then $A(\theta \to \theta') = \pi(\theta')/\pi(\theta)$ and $A(\theta' \to \theta) = 1$.
+
+The left side is $\pi(\theta)\,q(\theta' \mid \theta)\cdot\pi(\theta')/\pi(\theta) = \pi(\theta')\,q(\theta' \mid \theta)$. The right side is $\pi(\theta')\,q(\theta \mid \theta')\cdot 1$, which is equal by symmetry of $q$. The case $\pi(\theta') > \pi(\theta)$ is the same with the roles swapped.
+
+Detailed balance implies that if the chain's state is distributed as $\pi$, it remains so after a step: summing the flow into any state over all origins gives back $\pi$. Combined with the chain being able to reach every region, this makes $\pi$ the distribution the chain settles into.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "From posterior samples, P(θ > 0 | data) is estimated by...", options: ["The largest sample", "The fraction of samples above 0", "The mean", "Impossible"], answer: 1, explain: "The average of an indicator." },
+  { q: "Metropolis needs the posterior...", options: ["Exactly normalised", "Only up to a constant", "In closed form", "As a Gaussian"], answer: 1, explain: "Only ratios are used." },
+  { q: "A downhill proposal is accepted with probability...", options: ["0", "π(θ′)/π(θ)", "1", "0.5"], answer: 1, explain: "min(1, ratio)." },
+  { q: "Burn-in is...", options: ["The final samples", "Early samples discarded before the chain reaches the posterior", "A type of prior", "The proposal width"], answer: 1, explain: "Forget the starting point." },
+  { q: "The effective sample size is reduced by...", options: ["Independence", "Autocorrelation between successive states", "A large S", "A good proposal"], answer: 1, explain: "Correlated samples carry less information." },
+  { q: "A proposal width that gives 99% acceptance...", options: ["Is ideal", "Usually moves too little", "Moves too far", "Breaks detailed balance"], answer: 1, explain: "Tiny steps are always accepted." },
+  { q: "Detailed balance guarantees...", options: ["Fast mixing", "That π is a stationary distribution of the chain", "No burn-in", "Independence"], answer: 1, explain: "Flows balance." },
+]} />
+
+<Flashcards cards={[
+  { front: "Monte Carlo estimate?", back: "$E[g(\\theta)] \\approx \\frac{1}{S}\\sum_s g(\\theta^{(s)})$." },
+  { front: "Metropolis acceptance?", back: "min(1, π(θ′)/π(θ)) for a symmetric proposal; in logs, accept if log u < Δ log π." },
+  { front: "Detailed balance?", back: "$\\pi(\\theta)T(\\theta \\to \\theta') = \\pi(\\theta')T(\\theta' \\to \\theta)$." },
+  { front: "Effective sample size?", back: "$S/(1 + 2\\sum_k\\rho_k)$." },
+  { front: "Tuning random-walk Metropolis?", back: "Aim for roughly 25 to 50% acceptance; check ESS, trace plots and several chains." },
+]} />
+
+<Predict revisit question="Which chain gives the best estimate: 99%, 30% or 2% acceptance?" />
+
+<Key title="Before you go">
+<ul>
+<li>Samples from a posterior give every summary you need.</li>
+<li>Metropolis samples any posterior known up to a constant, thanks to detailed balance.</li>
+<li>Tune by effective sample size, not acceptance alone; discard burn-in and check convergence.</li>
+<li>Posteriors of derived quantities come free: transform the samples.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Metropolis and colleagues (1953), <em>Equation of state calculations by fast computing machines</em>, first three pages.</li>
+<li>Radford Neal (2011), <em>MCMC using Hamiltonian dynamics</em>, in the Handbook of Markov Chain Monte Carlo (arXiv:1206.1901).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If neurons sampled from a posterior, what would you expect their trial-to-trial variability to look like when the stimulus is very clear compared with when it is ambiguous? How could you test this in a recording?" />

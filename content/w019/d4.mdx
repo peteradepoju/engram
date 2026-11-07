@@ -1,0 +1,249 @@
+export const meta = {
+  title: "Latent variables and Gibbs sampling: sorting spikes",
+  intro: "An electrode near several neurons records spikes from all of them, and nothing in the recording says which neuron fired which spike. Which neuron it was is a latent variable: hidden, but inferable. Models with latent variables are everywhere in neuroscience, from spike sorting to hidden brain states to the causes of a visual scene. Today you meet Gibbs sampling, which samples a joint posterior one variable at a time from its conditional distribution, and use it to sort spikes from two neurons by their amplitudes, with honest uncertainty about the spikes that could have come from either. You also start this week's deep read, which asks whether the brain itself samples its posterior.",
+  goals: [
+    "Write down a mixture model with latent cluster assignments",
+    "Implement Gibbs sampling from full conditional distributions",
+    "Sort spikes from two neurons with a Gibbs sampler and report posterior assignment probabilities",
+    "Recognise slow mixing and label switching, and know where EM fits in",
+  ],
+  plan: [
+    { label: "Predict and latent variables", minutes: 20 },
+    { label: "Gibbs sampling", minutes: 30 },
+    { label: "Sorting spikes", minutes: 40 },
+    { label: "The sampling brain", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "berkes-2011",
+};
+
+<Predict question="Two neurons on one electrode have spike amplitudes of about 60 and 95 µV, each varying with sd 8 µV. A spike of 78 µV arrives. What should a good spike sorter report about it: definitely neuron 1, definitely neuron 2, or a probability for each?" />
+
+<Step n={1} title="Latent variables" minutes={20} />
+
+A **latent variable** is a quantity the model needs but the data do not show directly. In a **mixture model**, each observation $x_i$ comes from one of $K$ components, and the latent variable $z_i \in \{1, \dots, K\}$ says which:
+
+$$
+z_i \sim \text{Categorical}(\boldsymbol{\pi}), \qquad x_i \mid z_i = k \sim \mathcal{N}(\mu_k, \sigma^2).
+$$
+
+For spike sorting, $x_i$ is a spike's amplitude (or a vector of waveform features), $\mu_k$ is neuron $k$'s typical amplitude and $\pi_k$ the fraction of spikes it fires. The unknowns are the parameters $\mu_k, \pi_k$ *and* every $z_i$. Their joint posterior is complicated, but each piece is simple once the others are fixed.
+
+<Video id="_e0nKUeBDFo" title="Latent Variable Models" by="Neuromatch Academy (Deep Learning course)" note="Neuromatch's introduction to models in which hidden variables generate the data we observe." />
+
+<Step n={2} title="Gibbs sampling" minutes={30} />
+
+**Gibbs sampling** draws each variable in turn from its **full conditional** distribution, its distribution given the current values of all the others:
+
+$$
+\theta_j^{\text{new}} \sim p(\theta_j \mid \theta_{-j}, \text{data}).
+$$
+
+Each update is a Metropolis step that is always accepted, so the chain samples the joint posterior (Geman and Geman, 1984). It is ideal when the conditionals are standard distributions, as they are for conjugate models, and it needs no tuning. Its weakness is strong correlation: if two variables are tightly coupled, updating one at a time moves only in small zigzags, like coordinate-wise optimisation in a long valley (Week 13).
+
+<PyCell id="gibbs2" title="Gibbs on a correlated Gaussian" tests={String.raw`
+  import numpy as np
+  def test_moments():
+      "with correlation 0.5 the Gibbs samples have correlation near 0.5"
+      s = gibbs_gauss(0.5, 20000, np.random.default_rng(0))[1000:]
+      assert abs(np.corrcoef(s.T)[0, 1] - 0.5) < 0.05
+
+  def test_slow():
+      "the lag-1 autocorrelation of x is much higher with correlation 0.99 than with 0.5"
+      assert lag1[0.99] > 0.9 and lag1[0.5] < 0.5
+`} prompt="Write `gibbs_gauss(rho, steps, rng)` for a standard bivariate Gaussian with correlation rho: alternately draw x given y from N(ρy, 1 − ρ²) and y given x from N(ρx, 1 − ρ²) (Week 16's conditional). Compare the lag-1 autocorrelation of x for ρ = 0.5 and 0.99."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1984)
+
+  def gibbs_gauss(rho, steps, rng):
+      x, y = 0.0, 0.0
+      out = np.empty((steps, 2))
+      sd = np.sqrt(1 - rho ** 2)
+      for t in range(steps):
+          x = ...
+          y = ...
+          out[t] = x, y
+      return out
+
+  lag1 = {}
+  for rho in (0.5, 0.99):
+      s = gibbs_gauss(rho, 20000, rng)[1000:, 0]
+      lag1[rho] = np.corrcoef(s[:-1], s[1:])[0, 1]
+  print("lag-1 autocorrelation of x:", {r: round(v, 3) for r, v in lag1.items()})
+`}
+hint="x = rho * y + sd * rng.normal(); y = rho * x + sd * rng.normal()."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1984)
+
+  def gibbs_gauss(rho, steps, rng):
+      x, y = 0.0, 0.0
+      out = np.empty((steps, 2))
+      sd = np.sqrt(1 - rho ** 2)
+      for t in range(steps):
+          x = rho * y + sd * rng.normal()
+          y = rho * x + sd * rng.normal()
+          out[t] = x, y
+      return out
+
+  lag1 = {}
+  for rho in (0.5, 0.99):
+      s = gibbs_gauss(rho, 20000, rng)[1000:, 0]
+      lag1[rho] = np.corrcoef(s[:-1], s[1:])[0, 1]
+  print("lag-1 autocorrelation of x:", {r: round(v, 3) for r, v in lag1.items()})
+`} />
+
+With $\rho = 0.99$ each conditional is very narrow, so the chain creeps along the ridge and successive samples are almost identical. Reparameterising to remove the correlation, or updating correlated variables together in a block, fixes this.
+
+<Step n={3} title="Sorting spikes" minutes={40} />
+
+For the two-neuron mixture with known noise $\sigma$, a Gaussian prior on each mean and a uniform prior on $\pi$, every full conditional is standard:
+
+- **Assignments**: $P(z_i = k \mid \cdot) \propto \pi_k\,\mathcal{N}(x_i; \mu_k, \sigma^2)$, a two-way categorical draw for each spike.
+- **Means**: given the spikes assigned to unit $k$, $\mu_k$ has a Gaussian posterior with precision $n_k/\sigma^2 + 1/\tau^2$ (Week 16's cue combination).
+- **Mixing fraction**: $\pi \mid z \sim \text{Beta}(1 + n_1, 1 + n_0)$ (Day 1).
+
+<Figure caption="Gibbs sampling sorts spikes from two neurons by amplitude. Step through the sweeps from random initial assignments." credit="Interactive figure by Engram.">
+  <GibbsMixture />
+</Figure>
+
+<PyCell id="sort" title="A Gibbs spike sorter" tests={String.raw`
+  import numpy as np
+  def test_means():
+      "the posterior mean unit amplitudes are within 3 µV of 60 and 95 (in some order)"
+      m = np.sort(mu_samples[200:].mean(axis=0))
+      assert abs(m[0] - 60) < 3 and abs(m[1] - 95) < 3
+
+  def test_accuracy():
+      "assigning each spike to its more probable unit matches the true neuron for at least 93% of spikes (allowing for label swap)"
+      acc = np.mean((p_unit1 > 0.5) == (truth == 1))
+      assert max(acc, 1 - acc) > 0.93
+
+  def test_uncertain():
+      "a 78 µV spike gets a probability between 0.2 and 0.8"
+      assert 0.2 < p_78 < 0.8
+`} prompt="Simulate 300 spikes (60% from a 60 µV unit, 40% from a 95 µV unit, sd 8). Complete the three Gibbs updates and run 1,000 sweeps. Store the mean samples in `mu_samples`, each spike's posterior probability of being in unit 1 (averaged over sweeps after 200) in `p_unit1`, and the probability for a new spike of 78 µV in `p_78`."
+code={String.raw`
+  r_s = np.random.default_rng(2011)
+  truth = (r_s.random(300) < 0.4).astype(int)
+  x = np.where(truth == 1, 95, 60) + 8 * r_s.normal(size=300)
+  sigma, tau, m0 = 8.0, 50.0, 75.0
+
+  mu = np.array([70.0, 80.0]); pi1 = 0.5
+  mu_samples, z_samples, pi_samples = [], [], []
+  for sweep in range(1000):
+      # 1. assignments
+      l0 = (1 - pi1) * np.exp(-(x - mu[0]) ** 2 / (2 * sigma ** 2))
+      l1 = pi1 * np.exp(-(x - mu[1]) ** 2 / (2 * sigma ** 2))
+      z = ...                                              # 1 with probability l1 / (l0 + l1)
+      # 2. means, from their Gaussian conditionals
+      for kk in (0, 1):
+          xs = x[z == kk]
+          prec = len(xs) / sigma ** 2 + 1 / tau ** 2
+          mean = (xs.sum() / sigma ** 2 + m0 / tau ** 2) / prec
+          mu[kk] = ...
+      # 3. mixing fraction
+      pi1 = ...
+      mu_samples.append(mu.copy()); z_samples.append(z); pi_samples.append(pi1)
+  mu_samples, z_samples, pi_samples = np.array(mu_samples), np.array(z_samples), np.array(pi_samples)
+  p_unit1 = z_samples[200:].mean(axis=0)
+  post = slice(200, None)
+  p_78 = np.mean(pi_samples[post] * np.exp(-(78 - mu_samples[post, 1]) ** 2 / 128) /
+                 (pi_samples[post] * np.exp(-(78 - mu_samples[post, 1]) ** 2 / 128) + (1 - pi_samples[post]) * np.exp(-(78 - mu_samples[post, 0]) ** 2 / 128)))
+  print(f"posterior mean amplitudes {mu_samples[200:].mean(axis=0).round(1)} µV;  fraction in unit 1 {pi_samples[200:].mean():.2f};  P(unit 1 | 78 µV) = {p_78:.2f}")
+`}
+hint="z = (r_s.random(300) < l1 / (l0 + l1)).astype(int); mu[kk] = mean + r_s.normal() / np.sqrt(prec); pi1 = r_s.beta(1 + z.sum(), 1 + len(z) - z.sum())."
+solution={String.raw`
+  r_s = np.random.default_rng(2011)
+  truth = (r_s.random(300) < 0.4).astype(int)
+  x = np.where(truth == 1, 95, 60) + 8 * r_s.normal(size=300)
+  sigma, tau, m0 = 8.0, 50.0, 75.0
+
+  mu = np.array([70.0, 80.0]); pi1 = 0.5
+  mu_samples, z_samples, pi_samples = [], [], []
+  for sweep in range(1000):
+      # 1. assignments
+      l0 = (1 - pi1) * np.exp(-(x - mu[0]) ** 2 / (2 * sigma ** 2))
+      l1 = pi1 * np.exp(-(x - mu[1]) ** 2 / (2 * sigma ** 2))
+      z = (r_s.random(300) < l1 / (l0 + l1)).astype(int)                                              # 1 with probability l1 / (l0 + l1)
+      # 2. means, from their Gaussian conditionals
+      for kk in (0, 1):
+          xs = x[z == kk]
+          prec = len(xs) / sigma ** 2 + 1 / tau ** 2
+          mean = (xs.sum() / sigma ** 2 + m0 / tau ** 2) / prec
+          mu[kk] = mean + r_s.normal() / np.sqrt(prec)
+      # 3. mixing fraction
+      pi1 = r_s.beta(1 + z.sum(), 1 + len(z) - z.sum())
+      mu_samples.append(mu.copy()); z_samples.append(z); pi_samples.append(pi1)
+  mu_samples, z_samples, pi_samples = np.array(mu_samples), np.array(z_samples), np.array(pi_samples)
+  p_unit1 = z_samples[200:].mean(axis=0)
+  post = slice(200, None)
+  p_78 = np.mean(pi_samples[post] * np.exp(-(78 - mu_samples[post, 1]) ** 2 / 128) /
+                 (pi_samples[post] * np.exp(-(78 - mu_samples[post, 1]) ** 2 / 128) + (1 - pi_samples[post]) * np.exp(-(78 - mu_samples[post, 0]) ** 2 / 128)))
+  print(f"posterior mean amplitudes {mu_samples[200:].mean(axis=0).round(1)} µV;  fraction in unit 1 {pi_samples[200:].mean():.2f};  P(unit 1 | 78 µV) = {p_78:.2f}")
+`} />
+
+Spikes far from the boundary are assigned with near certainty; those in the overlap get intermediate probabilities, which answers the prediction. A sorter that forces every spike into one unit throws that uncertainty away, and downstream analyses (such as correlations between the two neurons) inherit hidden errors. Two practical notes: the components can swap labels during sampling (**label switching**), since nothing in the model says which unit is "1", and the **EM algorithm** finds a point estimate of the same model by alternating soft assignments and parameter updates, Gibbs sampling's deterministic cousin. Modern spike sorters use richer models of waveforms, drift and overlapping spikes, but the core is still a mixture.
+
+<Step n={4} title="The sampling brain" minutes={15} />
+
+If a brain must represent uncertainty about latent causes, one way is to let neural activity *be* samples from the posterior, varying from moment to moment. Berkes, Orbán, Lengyel and Fiser (2011, this week's deep read) derived a striking prediction: averaged over natural inputs, the posterior equals the prior, so spontaneous activity (sampling the prior, with no input) should match the average activity evoked by natural scenes, if the brain's model is well adapted. In ferret visual cortex the match improved over development for natural movies, but not for artificial gratings or noise. Read it with today's ideas in mind, and with the question: what else could explain the result?
+
+<Bridge title="Latent variables in brains and machines"
+  neuro="Spike sorting, hidden Markov models of brain states, latent factors underlying population activity (GPFA, LFADS in Part 5) and models of perception as inference over hidden causes all use latent variables. The sampling hypothesis proposes that cortical variability is the brain's own Gibbs-like sampling."
+  ai="Mixture models, topic models, hidden Markov models and variational autoencoders are latent variable models. Restricted Boltzmann machines were trained with Gibbs sampling, and diffusion models generate images by a long sequence of sampling steps.">
+
+When something hidden generated your data, infer it together with everything else, and keep the uncertainty.
+
+</Bridge>
+
+<Prove title="Gibbs updates are always accepted" task="Show that a Metropolis-Hastings step that proposes a new value of $\theta_j$ from its full conditional $p(\theta_j \mid \theta_{-j})$, leaving $\theta_{-j}$ unchanged, has acceptance probability 1. (The Hastings acceptance for an asymmetric proposal $q$ is $\min\left(1, \frac{\pi(\theta')q(\theta \mid \theta')}{\pi(\theta)q(\theta' \mid \theta)}\right)$.)">
+
+Write $\pi(\theta) = p(\theta_j \mid \theta_{-j})\,p(\theta_{-j})$, and similarly for $\theta'$, which shares $\theta_{-j}$. The proposal is $q(\theta' \mid \theta) = p(\theta_j' \mid \theta_{-j})$, and the reverse is $q(\theta \mid \theta') = p(\theta_j \mid \theta_{-j})$.
+
+The ratio is $\frac{p(\theta_j' \mid \theta_{-j})\,p(\theta_{-j})\cdot p(\theta_j \mid \theta_{-j})}{p(\theta_j \mid \theta_{-j})\,p(\theta_{-j})\cdot p(\theta_j' \mid \theta_{-j})} = 1$.
+
+So the acceptance probability is $\min(1, 1) = 1$. Gibbs sampling is Metropolis-Hastings with a proposal so good it is never rejected.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "A latent variable is...", options: ["A measured quantity", "A hidden quantity the model infers", "A prior", "A test statistic"], answer: 1, explain: "Such as which neuron fired a spike." },
+  { q: "Gibbs sampling draws each variable from...", options: ["The prior", "Its full conditional given all the others", "A uniform proposal", "The likelihood"], answer: 1, explain: "One variable at a time." },
+  { q: "Gibbs sampling mixes slowly when variables are...", options: ["Independent", "Strongly correlated", "Discrete", "Few"], answer: 1, explain: "Small zigzag moves." },
+  { q: "In the mixture sampler, a spike's assignment probability is proportional to...", options: ["Its amplitude", "π_k times the Gaussian likelihood of its amplitude under unit k", "The number of spikes", "1/K"], answer: 1, explain: "Bayes' rule for each spike." },
+  { q: "A spike in the overlap between two units should get...", options: ["A forced label", "An intermediate posterior probability", "Discarded always", "Probability 0.5 always"], answer: 1, explain: "Keep the uncertainty." },
+  { q: "Label switching means...", options: ["Units drift", "Component labels can swap during sampling because the model is symmetric", "Spikes change neurons", "A bug"], answer: 1, explain: "Nothing names unit 1." },
+  { q: "Berkes and colleagues compared spontaneous activity with...", options: ["Random noise", "Average activity evoked by natural movies", "Behaviour", "A Gaussian"], answer: 1, explain: "Prior against average posterior." },
+]} />
+
+<Flashcards cards={[
+  { front: "Mixture model?", back: "$z_i \\sim \\text{Cat}(\\pi)$, $x_i \\mid z_i = k \\sim N(\\mu_k, \\sigma^2)$." },
+  { front: "Gibbs sampling?", back: "Draw each variable from its full conditional in turn; always accepted." },
+  { front: "Assignment update?", back: "$P(z_i = k) \\propto \\pi_k N(x_i; \\mu_k, \\sigma^2)$." },
+  { front: "EM algorithm?", back: "Point-estimate cousin of Gibbs: soft assignments, then parameter updates, repeated." },
+  { front: "Sampling hypothesis test?", back: "Spontaneous activity (prior) should match average evoked activity under natural input (Berkes and colleagues, 2011)." },
+]} />
+
+<Predict revisit question="What should a sorter report for a 78 µV spike?" />
+
+<Key title="Before you go">
+<ul>
+<li>Latent variable models explain data through hidden causes such as which neuron fired.</li>
+<li>Gibbs sampling updates each variable from its full conditional, with no tuning.</li>
+<li>A Gibbs spike sorter gives each spike a probability, keeping uncertainty in the overlap.</li>
+<li>Strong correlations slow Gibbs sampling; label switching and EM are its practical companions.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>This week's deep read: Berkes, Orbán, Lengyel and Fiser (2011), <em>Spontaneous cortical activity reveals hallmarks of an optimal internal model of the environment</em>. Start the first pass today.</li>
+<li>Christopher Bishop (2006), <em>Pattern Recognition and Machine Learning</em>, chapter 9 on mixture models and EM (free from Microsoft Research).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Spike sorters usually output one label per spike. Describe an analysis whose conclusion could change if you used assignment probabilities instead, and why." />
