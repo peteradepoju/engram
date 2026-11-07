@@ -1,0 +1,220 @@
+export const meta = {
+  title: "What a differential equation says: the membrane equation",
+  intro: "Much of the brain is described not by formulas for quantities but by rules for how they change: the voltage of a neuron, the strength of a synapse, the activity of a population. Those rules are differential equations. This week you learn to read, solve and simulate them, starting with the most important one in neuroscience, the membrane equation, which treats a patch of neuron as a resistor and a capacitor. Today you derive it from a circuit, solve it exactly, read its time constant from data, and see why every neuron, at rest, behaves like a leaky bucket.",
+  goals: [
+    "Read a first-order differential equation as a rule for the slope of its solution",
+    "Derive the membrane equation from Kirchhoff's current law for an RC circuit",
+    "Solve it for a step of current and interpret the time constant and the steady state",
+    "Estimate a membrane time constant from a noisy voltage recording",
+  ],
+  plan: [
+    { label: "Predict and rates of change", minutes: 20 },
+    { label: "The membrane as a circuit", minutes: 30 },
+    { label: "The exact solution", minutes: 30 },
+    { label: "Measuring τ", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "hodgkin-1952",
+};
+
+<Predict question="A neuron at rest receives a constant current that will eventually depolarise it by 10 mV. Its membrane time constant is 20 ms. Roughly how long until it has depolarised by 9 mV: 20 ms, 46 ms, or 180 ms?" />
+
+<Step n={1} title="Rates of change" minutes={20} />
+
+A **differential equation** relates an unknown function to its derivatives. The simplest kind, a first-order equation,
+
+$$
+\frac{\mathrm{d}x}{\mathrm{d}t} = f(x, t),
+$$
+
+says: wherever you are, at value $x$ and time $t$, the solution is changing at rate $f(x, t)$. Knowing the starting value $x(0)$ and the rule, the whole future is fixed. You can picture the rule as a **slope field**, a short line at every point showing the direction of travel, and a solution as a curve that follows the lines (Week 8's derivative, now as an instruction rather than a result).
+
+<Figure caption="The slope field of the membrane equation and one solution. Drag the starting voltage and change the time constant and input." credit="Interactive figure by Engram.">
+  <SlopeField />
+</Figure>
+
+<Video id="87z6OR7-DBI" title="Linear Dynamical Systems" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's introduction to describing neural systems with linear differential equations." />
+
+<Step n={2} title="The membrane as a circuit" minutes={30} />
+
+A patch of neural membrane is a thin insulating lipid layer (a **capacitor**, capacitance $C$) pierced by ion channels that let current leak through (a **resistor**, resistance $R$, or conductance $g_L = 1/R$), with the channels driving the voltage towards a resting potential $E_L$ set by ion concentrations. Inject a current $I$. Kirchhoff's law says the injected current must go somewhere: either into charging the capacitor, $C\,\mathrm{d}V/\mathrm{d}t$, or out through the leak, $(V - E_L)/R$:
+
+$$
+C\frac{\mathrm{d}V}{\mathrm{d}t} = -\frac{V - E_L}{R} + I \quad\Longleftrightarrow\quad \tau\frac{\mathrm{d}V}{\mathrm{d}t} = -(V - E_L) + RI, \qquad \tau = RC.
+$$
+
+This is the **membrane equation**. Hodgkin and Huxley (1952, this week's deep read) used exactly this circuit, with the leak split into sodium, potassium and leak conductances whose values change with voltage. With fixed conductances it is linear, and it describes a neuron below threshold remarkably well. Typical values: $C \approx 100$ pF and $R \approx 100$ MΩ give $\tau = 10$ ms.
+
+<Step n={3} title="The exact solution" minutes={30} />
+
+<Derivation title="Solving the membrane equation for a step of current">
+
+<div>
+
+Let the steady state be $V_\infty = E_L + RI$, where the right side vanishes. Write $u = V - V_\infty$; then $\tau\,\mathrm{d}u/\mathrm{d}t = -u$.
+
+</div>
+
+<div>
+
+The function whose derivative is proportional to itself is the exponential: $u(t) = u(0)\,e^{-t/\tau}$, as you can check by differentiating.
+
+</div>
+
+<div>
+
+So
+
+$$
+V(t) = V_\infty + (V(0) - V_\infty)\,e^{-t/\tau}.
+$$
+
+After one time constant the remaining gap is $e^{-1} \approx 37\%$ of the original; after $\tau\ln 10 \approx 2.3\tau$ it is 10%.
+
+</div>
+
+</Derivation>
+
+<PyCell id="membrane" title="The solution and the time to 90%" tests={String.raw`
+  import numpy as np
+  def test_solution():
+      "V_exact matches the analytic solution and starts at V0"
+      assert abs(V_exact(0.0) + 70) < 1e-12 and abs(V_exact(20.0) - (-60 + (-10) * np.exp(-1))) < 1e-9
+
+  def test_t90():
+      "t90 is tau ln 10"
+      assert abs(t90 - 20 * np.log(10)) < 1e-9
+
+  def test_check():
+      "the solution satisfies the differential equation (numerical derivative within 1e-6)"
+      t, h = 13.0, 1e-5
+      lhs = 20 * (V_exact(t + h) - V_exact(t - h)) / (2 * h)
+      assert abs(lhs - (-(V_exact(t) + 70) + 10)) < 1e-6
+`} prompt="With τ = 20 ms, E_L = −70 mV, RI = 10 mV and V(0) = −70 mV, write `V_exact(t)`, compute `t90`, the time to cover 90% of the way to the steady state, and check that the solution satisfies the equation."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  tau, E_L, RI, V0 = 20.0, -70.0, 10.0, -70.0
+  V_inf = E_L + RI
+
+  def V_exact(t):
+      return ...
+
+  t90 = ...
+  t = np.linspace(0, 100, 500)
+  print(f"steady state {V_inf} mV;  90% reached after {t90:.1f} ms")
+  plt.plot(t, V_exact(t)); plt.axhline(V_inf, ls="--", c="k"); plt.axvline(t90, ls=":", c="k"); plt.xlabel("time (ms)"); plt.ylabel("V (mV)"); plt.show()
+`}
+hint="return V_inf + (V0 - V_inf) * np.exp(-t / tau); t90 = tau * np.log(10)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  tau, E_L, RI, V0 = 20.0, -70.0, 10.0, -70.0
+  V_inf = E_L + RI
+
+  def V_exact(t):
+      return V_inf + (V0 - V_inf) * np.exp(-t / tau)
+
+  t90 = tau * np.log(10)
+  t = np.linspace(0, 100, 500)
+  print(f"steady state {V_inf} mV;  90% reached after {t90:.1f} ms")
+  plt.plot(t, V_exact(t)); plt.axhline(V_inf, ls="--", c="k"); plt.axvline(t90, ls=":", c="k"); plt.xlabel("time (ms)"); plt.ylabel("V (mV)"); plt.show()
+`} />
+
+That answers the prediction: about 46 ms, a little over two time constants. The time constant sets how quickly a neuron forgets its past input, and so the window over which it integrates: about 10 to 30 ms for many cortical neurons, much shorter when synaptic input opens many channels (Week 107).
+
+<Step n={4} title="Measuring τ" minutes={25} />
+
+Experimenters measure $\tau$ by injecting a small current step and fitting the voltage. Because $\log|V(t) - V_\infty| = \log|V(0) - V_\infty| - t/\tau$ is a straight line in $t$, a linear fit to the logarithm gives $-1/\tau$ as its slope, a trick you will reuse whenever something decays exponentially.
+
+<PyCell id="fit" title="Fit a time constant from a noisy recording" tests={String.raw`
+  import numpy as np
+  def test_tau():
+      "the fitted time constant is within 10% of the true 15 ms"
+      assert abs(tau_hat - 15) / 15 < 0.1
+
+  def test_vinf():
+      "the steady state is estimated from the last 50 ms to within 0.3 mV"
+      assert abs(v_inf_hat - (-62)) < 0.3
+`} prompt="A recording of 150 ms (0.1 ms samples) shows the response to a current step, with 0.3 mV of recording noise. Estimate the steady state `v_inf_hat` from the last 50 ms, then fit a straight line to log(V∞ − V) over the first 20 ms and convert its slope to `tau_hat`."
+code={String.raw`
+  rng = np.random.default_rng(1952)
+  t = np.arange(0, 150, 0.1)
+  V = -62 + (-70 + 62) * np.exp(-t / 15) + 0.3 * rng.normal(size=len(t))
+
+  v_inf_hat = ...
+  early = t < 20
+  slope = np.polyfit(t[early], np.log(np.abs(v_inf_hat - V[early])), 1)[0]
+  tau_hat = ...
+  print(f"steady state {v_inf_hat:.2f} mV, time constant {tau_hat:.2f} ms (true 15)")
+`}
+hint="v_inf_hat = V[t >= 100].mean(); tau_hat = -1 / slope."
+solution={String.raw`
+  rng = np.random.default_rng(1952)
+  t = np.arange(0, 150, 0.1)
+  V = -62 + (-70 + 62) * np.exp(-t / 15) + 0.3 * rng.normal(size=len(t))
+
+  v_inf_hat = V[t >= 100].mean()
+  early = t < 20
+  slope = np.polyfit(t[early], np.log(np.abs(v_inf_hat - V[early])), 1)[0]
+  tau_hat = -1 / slope
+  print(f"steady state {v_inf_hat:.2f} mV, time constant {tau_hat:.2f} ms (true 15)")
+`} />
+
+The fit uses only the early part, where the gap is large compared with the noise: late in the decay, $V_\infty - V$ is tiny and its logarithm is dominated by noise. Fitting the first 40 ms instead pulls the estimate down to about 13 ms. A nonlinear least-squares fit of the exponential itself (Week 12) avoids that problem.
+
+<Bridge title="Rates of change in brains and machines"
+  neuro="Membrane voltage, synaptic conductances, calcium concentrations, firing rates and synaptic weights are all modelled by differential equations. The membrane time constant sets how long a neuron remembers its inputs; Hodgkin and Huxley's equations, built on this circuit, remain the template for biophysical models."
+  ai="Recurrent networks in continuous time, state-space models such as S4 and Mamba, and neural ODEs are all differential equations with learned right-hand sides. Leaky units with time constants, like today's membrane, give a network memory over a chosen timescale.">
+
+A differential equation is a rule for change; the time constant says how fast the past is forgotten.
+
+</Bridge>
+
+<Prove title="Linear superposition" task="Show that if $V_1$ solves $\tau\dot{V} = -V + I_1(t)$ and $V_2$ solves $\tau\dot{V} = -V + I_2(t)$, then $V_1 + V_2$ solves $\tau\dot{V} = -V + I_1 + I_2$. Why does this fail once a spiking threshold is added?">
+
+Add the two equations: $\tau(\dot{V}_1 + \dot{V}_2) = -(V_1 + V_2) + I_1 + I_2$, which is the equation for $V_1 + V_2$ with input $I_1 + I_2$. (Here $V$ is measured from rest, so the resting potential drops out.)
+
+So the response to a sum of inputs is the sum of the responses: the equation is **linear**. This is what lets tomorrow's lesson describe the response to any input by convolution with a single impulse response.
+
+A threshold breaks it: whether the neuron spikes, and the reset after a spike, depend on whether the *total* voltage crosses threshold, which is not the sum of what each input alone would do. Two inputs that are each subthreshold can together cause a spike.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "A first-order differential equation dx/dt = f(x) specifies...", options: ["The solution directly", "The slope of the solution at every point", "Only the steady state", "The initial condition"], answer: 1, explain: "A rule for change." },
+  { q: "In the membrane equation, the capacitor current is...", options: ["V/R", "C dV/dt", "RI", "E_L"], answer: 1, explain: "Charging the membrane." },
+  { q: "The membrane time constant is...", options: ["R/C", "RC", "R + C", "1/(RC)"], answer: 1, explain: "About 10 to 30 ms." },
+  { q: "After one time constant, the remaining gap to the steady state is about...", options: ["0%", "37%", "50%", "63%"], answer: 1, explain: "$e^{-1}$." },
+  { q: "The steady-state depolarisation for a current I is...", options: ["I/R", "IR", "IC", "I/C"], answer: 1, explain: "Ohm's law at steady state." },
+  { q: "Plotting log|V − V∞| against time gives...", options: ["A parabola", "A straight line with slope −1/τ", "A constant", "An exponential"], answer: 1, explain: "Fit τ from the slope." },
+  { q: "The membrane equation stops being linear when...", options: ["τ changes", "A spiking threshold and reset are added", "Current is injected", "Noise is added"], answer: 1, explain: "Superposition fails." },
+]} />
+
+<Flashcards cards={[
+  { front: "Membrane equation?", back: "$\\tau\\,dV/dt = -(V - E_L) + RI$, with $\\tau = RC$." },
+  { front: "Solution for a step of current?", back: "$V(t) = V_\\infty + (V_0 - V_\\infty)e^{-t/\\tau}$." },
+  { front: "Time to 90% of the way?", back: "$\\tau\\ln 10 \\approx 2.3\\tau$." },
+  { front: "Typical membrane values?", back: "C about 100 pF, R about 100 MΩ, τ about 10 ms." },
+  { front: "Superposition?", back: "For linear equations, the response to a sum of inputs is the sum of the responses." },
+]} />
+
+<Predict revisit question="How long to reach 9 of 10 mV with τ = 20 ms?" />
+
+<Key title="Before you go">
+<ul>
+<li>A differential equation is a rule for the slope of its solution.</li>
+<li>Kirchhoff's law for an RC circuit gives the membrane equation, τ dV/dt = −(V − E_L) + RI.</li>
+<li>Its solution approaches V∞ exponentially, with time constant τ = RC.</li>
+<li>τ is measured from the slope of log|V − V∞| against time.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>This week's deep read: Hodgkin and Huxley (1952), <em>A quantitative description of membrane current</em>. Start with Part I today.</li>
+<li>Dayan and Abbott (2001), <em>Theoretical Neuroscience</em>, sections 5.1 to 5.3.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A neuron with a long time constant integrates inputs over a long window; one with a short time constant responds only to near-coincident inputs. Which would you want for detecting the precise timing of sounds, and which for accumulating evidence over a second? Why?" />

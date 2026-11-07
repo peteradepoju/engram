@@ -94,3 +94,8 @@ export { MutualInfoTable } from "./mutual-info-table";
 export { InfoBias } from "./info-bias";
 export { KLAsymmetry } from "./kl-asymmetry";
 export { GaussianChannel } from "./gaussian-channel";
+export { SlopeField } from "./slope-field";
+export { DampedOscillator } from "./damped-oscillator";
+export { EulerSteps } from "./euler-steps";
+export { CompartmentModes } from "./compartment-modes";
+export { FICurve } from "./fi-curve";

@@ -1,0 +1,311 @@
+export const meta = {
+  title: "Integrate-and-fire neurons and the f-I curve",
+  intro: "The membrane equation from Day 1 has no spikes. Add one rule, when the voltage reaches threshold, record a spike and reset, and you have the leaky integrate-and-fire neuron, the workhorse of computational neuroscience. Today you solve it exactly for constant input to get its firing rate as a function of current, the f-I curve, then see how noise turns its hard threshold into a smooth one, and how one extra equation for adaptation makes it reproduce the slowing-down that real cortical neurons show.",
+  goals: [
+    "Simulate a leaky integrate-and-fire neuron with threshold, reset and refractory period",
+    "Derive its firing rate for constant input and check it against simulation",
+    "Show how input noise smooths the f-I curve and lets the neuron fire below rheobase",
+    "Add spike-frequency adaptation and watch interspike intervals lengthen",
+  ],
+  plan: [
+    { label: "Predict and the LIF neuron", minutes: 20 },
+    { label: "The f-I curve, exactly", minutes: 30 },
+    { label: "Noise smooths the threshold", minutes: 30 },
+    { label: "Adaptation", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "brette-2005",
+};
+
+<Predict question="A leaky integrate-and-fire neuron needs an input of 15 mV (in units of RI) to reach threshold, so with a steady input of 14 mV it never fires. Add random fluctuations to the input, with mean still 14 mV. Will it now fire, and if so, roughly how often compared with a neuron driven at 30 mV?" />
+
+<Step n={1} title="The leaky integrate-and-fire neuron" minutes={20} />
+
+Measure voltage from rest, so $V = 0$ is the resting potential. Below threshold the neuron is the RC membrane of Day 1:
+
+$$
+\tau\frac{\mathrm{d}V}{\mathrm{d}t} = -V + RI(t).
+$$
+
+When $V$ reaches the threshold $\theta$, a spike is recorded, $V$ is reset to 0 and held there for a refractory period $t_\text{ref}$. That is all. The spike's shape is not modelled; the model claims only that the timing of spikes is what matters, and that a neuron's subthreshold voltage is roughly linear. Lapicque proposed the idea in 1907, long before anyone knew how spikes worked. Throughout today, $\tau = 20$ ms, $\theta = 15$ mV and $t_\text{ref} = 2$ ms, and input is written as $RI$ in millivolts.
+
+<Video id="preNGdab7Kk" title="Response of the LIF neuron to different inputs" by="Neuromatch Academy" note="Neuromatch's tutorial video on how the leaky integrate-and-fire neuron responds to constant and fluctuating input, the same ground as today's lesson." />
+
+<Step n={2} title="The f-I curve, exactly" minutes={30} />
+
+With constant input $RI$, the voltage after a reset climbs towards $RI$ exponentially: $V(t) = RI(1 - e^{-t/\tau})$. If $RI \le \theta$ it never arrives, and the neuron is silent. Otherwise it reaches $\theta$ at the time $T$ where $RI(1 - e^{-T/\tau}) = \theta$:
+
+<Derivation>
+<div>
+
+Rearrange for the exponential: $e^{-T/\tau} = 1 - \theta/RI = (RI - \theta)/RI$.
+
+</div>
+<div>
+
+Take logs: $T = \tau\ln\dfrac{RI}{RI - \theta}$.
+
+</div>
+<div>
+
+Each interspike interval is this charging time plus the refractory period, so the firing rate is
+
+$$
+f(I) = \frac{1}{t_\text{ref} + \tau\ln\dfrac{RI}{RI - \theta}}, \qquad RI > \theta,
+$$
+
+and 0 otherwise. The smallest current that makes the neuron fire, $RI = \theta$, is called the **rheobase**.
+
+</div>
+</Derivation>
+
+The curve rises steeply just above rheobase (the logarithm blows up there, so the rate climbs from zero with infinite slope) and then becomes nearly linear, saturating at $1/t_\text{ref}$ for huge inputs.
+
+<Figure caption="The f-I curve of a leaky integrate-and-fire neuron. The line is the formula without noise; the dots are simulations with noise. Raise the noise and the hard corner at rheobase softens." credit="Interactive figure by Engram.">
+  <FICurve />
+</Figure>
+
+<PyCell id="fi" title="Formula against simulation" tests={String.raw`
+  import numpy as np
+  def test_silent():
+      "the neuron is silent below rheobase, in both theory and simulation"
+      assert lif_rate(14.0) == 0 and rate_theory(np.array([14.0]))[0] == 0
+
+  def test_match():
+      "simulated rates are within 3% of the formula from 20 to 60 mV"
+      for RI in (20.0, 30.0, 45.0, 60.0):
+          assert abs(lif_rate(RI) - rate_theory(np.array([RI]))[0]) / rate_theory(np.array([RI]))[0] < 0.03
+`} prompt="Complete the Euler update in `lif_rate` (1 s of simulation with dt = 0.1 ms, returning spikes per second) and the formula in `rate_theory`, then compare them across inputs from 0 to 60 mV."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  tau, theta, tref, dt = 20.0, 15.0, 2.0, 0.1          # ms, mV, ms, ms
+
+  def lif_rate(RI, T=1000.0):
+      V, refr, n = 0.0, 0.0, 0
+      for _ in range(int(T / dt)):
+          if refr > 0:
+              refr -= dt; continue
+          V = ...                                       # one Euler step of tau dV/dt = -V + RI
+          if V >= theta:
+              n += 1; V = 0.0; refr = tref
+      return n / (T / 1000)
+
+  def rate_theory(RI):
+      out = np.zeros(len(RI))
+      ok = RI > theta
+      out[ok] = ...                                     # spikes per second (times are in ms)
+      return out
+
+  Is = np.arange(0, 61, 2.5)
+  sim = np.array([lif_rate(RI) for RI in Is])
+  print("RI = 20, 30, 60 mV:", [round(lif_rate(r), 1) for r in (20.0, 30.0, 60.0)], "Hz simulated,", rate_theory(np.array([20.0, 30.0, 60.0])).round(1), "Hz formula")
+  plt.plot(Is, rate_theory(Is), label="formula"); plt.plot(Is, sim, "o", label="simulation")
+  plt.xlabel("RI (mV)"); plt.ylabel("rate (Hz)"); plt.legend(); plt.show()
+`}
+hint="V = V + dt / tau * (-V + RI); out[ok] = 1000 / (tref + tau * np.log(RI[ok] / (RI[ok] - theta)))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  tau, theta, tref, dt = 20.0, 15.0, 2.0, 0.1          # ms, mV, ms, ms
+
+  def lif_rate(RI, T=1000.0):
+      V, refr, n = 0.0, 0.0, 0
+      for _ in range(int(T / dt)):
+          if refr > 0:
+              refr -= dt; continue
+          V = V + dt / tau * (-V + RI)                                       # one Euler step of tau dV/dt = -V + RI
+          if V >= theta:
+              n += 1; V = 0.0; refr = tref
+      return n / (T / 1000)
+
+  def rate_theory(RI):
+      out = np.zeros(len(RI))
+      ok = RI > theta
+      out[ok] = 1000 / (tref + tau * np.log(RI[ok] / (RI[ok] - theta)))                                     # spikes per second (times are in ms)
+      return out
+
+  Is = np.arange(0, 61, 2.5)
+  sim = np.array([lif_rate(RI) for RI in Is])
+  print("RI = 20, 30, 60 mV:", [round(lif_rate(r), 1) for r in (20.0, 30.0, 60.0)], "Hz simulated,", rate_theory(np.array([20.0, 30.0, 60.0])).round(1), "Hz formula")
+  plt.plot(Is, rate_theory(Is), label="formula"); plt.plot(Is, sim, "o", label="simulation")
+  plt.xlabel("RI (mV)"); plt.ylabel("rate (Hz)"); plt.legend(); plt.show()
+`} />
+
+The formula and the simulation agree: about 33 Hz at 20 mV, 63 Hz at 30 mV and 128 to 129 Hz at 60 mV, with the simulation slightly below the formula because Euler steps of 0.1 ms cross threshold a fraction of a step late.
+
+<Step n={3} title="Noise smooths the threshold" minutes={30} />
+
+Real neurons receive thousands of synaptic inputs, and their membrane voltage fluctuates. Model the fluctuations as white noise added to each step: $V \leftarrow V + \frac{\Delta t}{\tau}(-V + RI) + \sigma\sqrt{2\Delta t/\tau}\,\xi$, with $\xi$ a standard normal draw, which makes the free voltage fluctuate with standard deviation $\sigma$ around its mean (Week 24 explains why the square root is there). Now a neuron below rheobase can still fire, whenever a fluctuation carries it over threshold. This is the **fluctuation-driven** regime, and cortex in an awake animal is thought to sit largely within it.
+
+<PyCell id="noise" title="Firing below rheobase" tests={String.raw`
+  import numpy as np
+  def test_below():
+      "with sigma = 4 mV the neuron fires at RI = 12 mV, below rheobase, at more than 3 Hz"
+      assert rates[4.0][list(Is_n).index(12.0)] > 3
+
+  def test_silent_no_noise():
+      "without noise it is silent there"
+      assert rates[0.0][list(Is_n).index(12.0)] == 0
+
+  def test_smooth():
+      "far above rheobase noise changes the rate by less than 15%"
+      i = list(Is_n).index(40.0)
+      assert abs(rates[4.0][i] - rates[0.0][i]) / rates[0.0][i] < 0.15
+`} prompt="Simulate all the input levels at once as a vector V (one entry per input), adding noise of size sigma with the update above, for 2 s, and store the rates (Hz) in `rates[sigma]` for sigma = 0, 2 and 4 mV."
+code={String.raw`
+  r_n = np.random.default_rng(1907)
+  Is_n = np.arange(0.0, 42.0, 2.0)
+  rates = {}
+  for sigma in (0.0, 2.0, 4.0):
+      V = np.zeros(len(Is_n)); refr = np.zeros(len(Is_n)); n = np.zeros(len(Is_n))
+      T = 2000.0
+      for _ in range(int(T / dt)):
+          free = refr <= 0
+          V = np.where(free, ..., V)                    # Euler step with noise, only for neurons not refractory
+          refr -= dt
+          spk = V >= theta
+          n += spk; V[spk] = 0.0; refr[spk] = tref
+      rates[sigma] = n / (T / 1000)
+  print({s: rates[s][[6, 7, 10, 20]].round(1) for s in rates}, " Hz at RI = 12, 14, 20 and 40 mV")
+  for s in rates: plt.plot(Is_n, rates[s], "o-", label=f"sigma = {s} mV")
+  plt.axvline(theta, c="k", ls="--"); plt.xlabel("RI (mV)"); plt.ylabel("rate (Hz)"); plt.legend(); plt.show()
+`}
+hint="V + dt / tau * (-V + Is_n) + sigma * np.sqrt(2 * dt / tau) * r_n.normal(size=len(V))."
+solution={String.raw`
+  r_n = np.random.default_rng(1907)
+  Is_n = np.arange(0.0, 42.0, 2.0)
+  rates = {}
+  for sigma in (0.0, 2.0, 4.0):
+      V = np.zeros(len(Is_n)); refr = np.zeros(len(Is_n)); n = np.zeros(len(Is_n))
+      T = 2000.0
+      for _ in range(int(T / dt)):
+          free = refr <= 0
+          V = np.where(free, V + dt / tau * (-V + Is_n) + sigma * np.sqrt(2 * dt / tau) * r_n.normal(size=len(V)), V)                    # Euler step with noise, only for neurons not refractory
+          refr -= dt
+          spk = V >= theta
+          n += spk; V[spk] = 0.0; refr[spk] = tref
+      rates[sigma] = n / (T / 1000)
+  print({s: rates[s][[6, 7, 10, 20]].round(1) for s in rates}, " Hz at RI = 12, 14, 20 and 40 mV")
+  for s in rates: plt.plot(Is_n, rates[s], "o-", label=f"sigma = {s} mV")
+  plt.axvline(theta, c="k", ls="--"); plt.xlabel("RI (mV)"); plt.ylabel("rate (Hz)"); plt.legend(); plt.show()
+`} />
+
+Without noise the neuron is silent at 12 and 14 mV. With fluctuations of 4 mV it fires at about 16 Hz at 12 mV and 20 Hz at 14 mV, which answers the prediction: it fires, at about a third of the 63 Hz it reaches at 30 mV. Far above rheobase the noise hardly matters (87 Hz at 40 mV with or without it). Noise has turned a hard threshold into a smooth, rounded one, and that smooth curve is what a rate model uses as its activation function.
+
+<Step n={4} title="Adaptation" minutes={25} />
+
+Inject a step of current into a pyramidal cell in cortex and it fires fast at first, then slows. Calcium-activated potassium currents build up with each spike and pull the voltage down. Model this with an adaptation variable $w$ that jumps by $b$ at each spike and decays with time constant $\tau_w$:
+
+$$
+\tau\frac{\mathrm{d}V}{\mathrm{d}t} = -V + RI - w, \qquad \tau_w\frac{\mathrm{d}w}{\mathrm{d}t} = -w, \qquad w \to w + b \text{ at a spike}.
+$$
+
+Brette and Gerstner (2005, today's paper) combined an adaptation variable like this with an exponential spike-initiation term to build the adaptive exponential integrate-and-fire model, which with different parameter settings reproduces many of the firing patterns of real cortical neurons and predicts their spike times well.
+
+<PyCell id="adapt" title="Spike-frequency adaptation" tests={String.raw`
+  import numpy as np
+  def test_slowing():
+      "the last interspike interval is at least 1.5 times the first"
+      assert isi[-1] > 1.5 * isi[0]
+
+  def test_fewer():
+      "the adapting neuron fires fewer spikes in 500 ms than the plain one"
+      assert len(spikes_adapt) < len(spikes_plain)
+`} prompt="Simulate 500 ms with RI = 30 mV, with b = 3 mV and tau_w = 100 ms, and without adaptation (b = 0). Record spike times in `spikes_adapt` and `spikes_plain`, and the adapting neuron's interspike intervals in `isi`."
+code={String.raw`
+  def run(b, tau_w=100.0, RI=30.0, T=500.0):
+      V, w, refr, spikes = 0.0, 0.0, 0.0, []
+      for i in range(int(T / dt)):
+          w = w - dt / tau_w * w
+          if refr > 0:
+              refr -= dt; continue
+          V = ...                                       # Euler step including -w
+          if V >= theta:
+              spikes.append(i * dt); V = 0.0; refr = tref
+              w = ...
+      return np.array(spikes)
+
+  spikes_plain, spikes_adapt = run(0.0), run(3.0)
+  isi = np.diff(spikes_adapt)
+  print(f"{len(spikes_plain)} spikes without adaptation, {len(spikes_adapt)} with;  first ISI {isi[0]:.1f} ms, last {isi[-1]:.1f} ms")
+  plt.plot(isi, "o-"); plt.xlabel("interval number"); plt.ylabel("ISI (ms)"); plt.show()
+`}
+hint="V = V + dt / tau * (-V + RI - w); w = w + b."
+solution={String.raw`
+  def run(b, tau_w=100.0, RI=30.0, T=500.0):
+      V, w, refr, spikes = 0.0, 0.0, 0.0, []
+      for i in range(int(T / dt)):
+          w = w - dt / tau_w * w
+          if refr > 0:
+              refr -= dt; continue
+          V = V + dt / tau * (-V + RI - w)                                       # Euler step including -w
+          if V >= theta:
+              spikes.append(i * dt); V = 0.0; refr = tref
+              w = w + b
+      return np.array(spikes)
+
+  spikes_plain, spikes_adapt = run(0.0), run(3.0)
+  isi = np.diff(spikes_adapt)
+  print(f"{len(spikes_plain)} spikes without adaptation, {len(spikes_adapt)} with;  first ISI {isi[0]:.1f} ms, last {isi[-1]:.1f} ms")
+  plt.plot(isi, "o-"); plt.xlabel("interval number"); plt.ylabel("ISI (ms)"); plt.show()
+`} />
+
+With adaptation the neuron fires 19 spikes in 500 ms instead of 31, and its interspike interval grows from about 18 ms to about 29 ms as $w$ builds up, then levels off where the decay of $w$ between spikes balances its jump at each one.
+
+<Bridge title="Spiking neurons and artificial units"
+  neuro="The f-I curve is the bridge between spiking and rate models: a population of noisy integrate-and-fire neurons behaves like a rate unit whose activation function is the smoothed f-I curve. Rate models such as Wilson-Cowan (Week 22) use exactly this idea."
+  ai="A ReLU is a cartoon f-I curve: zero below threshold, roughly linear above. Spiking neural networks keep the threshold and reset and are trained with surrogate gradients, which replace the spike's zero-or-infinite derivative with a smooth stand-in, much as noise smooths the f-I curve today.">
+
+Threshold, reset and a leak: enough to turn input current into a firing rate.
+
+</Bridge>
+
+<Prove title="The f-I curve far above rheobase" task="Show that for $RI \gg \theta$, $\tau\ln\frac{RI}{RI - \theta} \approx \tau\theta/RI$, so that without a refractory period the rate grows linearly, $f \approx RI/(\tau\theta)$, and with one it saturates at $1/t_\text{ref}$.">
+
+Write $\ln\frac{RI}{RI - \theta} = -\ln\left(1 - \frac{\theta}{RI}\right)$. For small $u = \theta/RI$, $-\ln(1 - u) = u + u^2/2 + \cdots \approx u$.
+
+So the charging time is $T \approx \tau\theta/RI$: the voltage rises at its initial slope $RI/\tau$ almost all the way, and the leak barely matters.
+
+With $t_\text{ref} = 0$ the rate is $1/T \approx RI/(\tau\theta)$, linear in the input. With a refractory period, $f = 1/(t_\text{ref} + \tau\theta/RI)$, which tends to $1/t_\text{ref}$ as $RI \to \infty$: the neuron cannot fire faster than once per refractory period.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "The leaky integrate-and-fire neuron adds to the RC membrane...", options: ["Sodium and potassium channels", "A threshold, a reset and a refractory period", "Dendrites", "Noise only"], answer: 1, explain: "Spikes are events, not shapes." },
+  { q: "For constant input below rheobase, a noiseless LIF neuron...", options: ["Fires slowly", "Never fires", "Fires at 1/t_ref", "Fires once"], answer: 1, explain: "V approaches RI, which is below θ." },
+  { q: "The interspike interval for constant input above rheobase is...", options: ["τ θ / RI exactly", "t_ref + τ ln(RI / (RI − θ))", "τ", "θ / RI"], answer: 1, explain: "Charging time plus refractory period." },
+  { q: "Just above rheobase, the f-I curve rises...", options: ["Linearly from zero", "With infinite slope", "Not at all", "Exponentially"], answer: 1, explain: "The logarithm diverges at RI = θ." },
+  { q: "Input noise makes the f-I curve...", options: ["Sharper", "Smooth, with firing below rheobase", "Lower everywhere", "Unchanged"], answer: 1, explain: "Fluctuations cross threshold." },
+  { q: "The maximum rate of an LIF neuron with refractory period t_ref is...", options: ["Unbounded", "1/t_ref", "1/τ", "θ/τ"], answer: 1, explain: "At most one spike per refractory period." },
+  { q: "Spike-frequency adaptation makes interspike intervals...", options: ["Shrink", "Lengthen over a sustained input", "Constant", "Random"], answer: 1, explain: "w builds up with each spike." },
+]} />
+
+<Flashcards cards={[
+  { front: "LIF neuron?", back: "$\\tau\\dot V = -V + RI$; at θ record a spike, reset to 0, hold for $t_{ref}$." },
+  { front: "LIF f-I curve?", back: "$f = 1/(t_{ref} + \\tau\\ln(RI/(RI - \\theta)))$ for RI > θ, else 0." },
+  { front: "Rheobase?", back: "The smallest constant input that makes the neuron fire: RI = θ." },
+  { front: "Fluctuation-driven firing?", back: "Mean input below threshold; spikes caused by noise crossing threshold." },
+  { front: "Adaptation variable?", back: "w jumps by b at each spike and decays with τ_w; subtracts from the input." },
+]} />
+
+<Predict revisit question="Does a noisy neuron with mean input 14 mV, below its 15 mV rheobase, fire, and how often compared with one driven at 30 mV?" />
+
+<Key title="Before you go">
+<ul>
+<li>The LIF neuron is the RC membrane plus threshold, reset and refractory period.</li>
+<li>Its f-I curve for constant input is exact: zero below rheobase, then a logarithmic rise and saturation at 1/t_ref.</li>
+<li>Noise smooths the threshold, so neurons fire, slowly, below rheobase.</li>
+<li>An adaptation variable makes firing slow down during a sustained input.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Brette and Gerstner (2005), <em>Adaptive exponential integrate-and-fire model as an effective description of neuronal activity</em>.</li>
+<li>Gerstner, Kistler, Naud and Paninski, <em>Neuronal Dynamics</em> (free online at neuronaldynamics.epfl.ch), chapters 1 and 6.</li>
+<li>Abbott (1999), <em>Lapicque's introduction of the integrate-and-fire model neuron (1907)</em>, Brain Research Bulletin, a short history.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="The LIF neuron throws away the shape of the spike and all the ion channels behind it, and yet it predicts spike times well. What does that suggest about which details of a neuron matter for computation, and what kinds of question would it be the wrong model for?" />

@@ -1,0 +1,275 @@
+export const meta = {
+  title: "Forge: Week 21 challenge, quiz and deep read",
+  intro: "This week you learned to read, solve and simulate differential equations: the membrane equation and its time constant, impulse responses and resonance, Euler and Runge-Kutta and when each fails, systems of equations and their eigenmodes, and the integrate-and-fire neuron. Today's challenge puts them all to work on the most famous equations in neuroscience, those of Hodgkin and Huxley. You will build their model, watch it fire, measure its f-I curve and find that it differs in a telling way from the integrate-and-fire neuron, and discover its refractory period, a property nobody wrote into the equations. Then the quiz and a critique of the 1952 paper itself.",
+  goals: [
+    "Simulate the Hodgkin-Huxley equations with Runge-Kutta and produce an action potential",
+    "Measure the Hodgkin-Huxley f-I curve and contrast its onset with the integrate-and-fire neuron's",
+    "Find the refractory period as an emergent property of the equations",
+    "Critique Hodgkin and Huxley's 1952 model",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "hodgkin-1952",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. The time constant of a membrane with resistance 100 MΩ and capacitance 200 pF?
+2. The largest Euler step that is stable for $\dot V = -V/\tau$ with $\tau = 20$ ms?
+3. The firing rate of Day 5's integrate-and-fire neuron ($\tau = 20$ ms, $\theta = 15$ mV, $t_\text{ref} = 2$ ms) at $RI = 30$ mV?
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  print("1. tau = RC =", 100e6 * 200e-12 * 1000, "ms")
+  print("2. dt below 2 tau =", 2 * 20, "ms")
+  print("3.", round(1000 / (2 + 20 * np.log(30 / (30 - 15))), 1), "Hz")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+The Hodgkin-Huxley model treats the membrane as a capacitor with three parallel conductances: sodium, potassium and a leak. The sodium conductance is $\bar g_\text{Na}m^3h$ and the potassium conductance $\bar g_\text{K}n^4$, where the gating variables $m$, $h$ and $n$ each relax towards a voltage-dependent target, exactly like Day 1's membrane equation but with rates that change with voltage:
+
+$$
+C\frac{\mathrm{d}V}{\mathrm{d}t} = I - \bar g_\text{Na}m^3h(V - E_\text{Na}) - \bar g_\text{K}n^4(V - E_\text{K}) - g_L(V - E_L), \qquad \frac{\mathrm{d}n}{\mathrm{d}t} = \alpha_n(V)(1 - n) - \beta_n(V)n,
+$$
+
+and the same for $m$ and $h$. The rate functions below are the modern form, with rest at about −65 mV (Hodgkin and Huxley measured voltage from rest with the opposite sign). Units: mV, ms, μA/cm², mS/cm² and μF/cm².
+
+<PyCell code={String.raw`
+  gNa, gK, gL, ENa, EK, EL, C = 120.0, 36.0, 0.3, 50.0, -77.0, -54.387, 1.0
+
+  def hh_rates(V):
+      an = 0.01 * (V + 55) / (1 - np.exp(-(V + 55) / 10)); bn = 0.125 * np.exp(-(V + 65) / 80)
+      am = 0.1 * (V + 40) / (1 - np.exp(-(V + 40) / 10)); bm = 4.0 * np.exp(-(V + 65) / 18)
+      ah = 0.07 * np.exp(-(V + 65) / 20); bh = 1 / (1 + np.exp(-(V + 35) / 10))
+      return an, bn, am, bm, ah, bh
+
+  def hh_rest():
+      an, bn, am, bm, ah, bh = hh_rates(-65.0)
+      return np.array([-65.0, an / (an + bn), am / (am + bm), ah / (ah + bh)])
+
+  def count_spikes(V):
+      return int(np.sum((V[1:] > 0) & (V[:-1] <= 0)))      # upward crossings of 0 mV
+  print("resting state (V, n, m, h):", hh_rest().round(3))
+`} />
+
+**Part A: an action potential.** Write the right-hand side of the four equations and integrate them with RK4 (Day 3) using steps of 0.01 ms. Inject 10 μA/cm² from 5 to 55 ms.
+
+<PyCell id="partA" title="Part A: the Hodgkin-Huxley neuron fires" tests={String.raw`
+  import numpy as np
+  def test_rest():
+      "with no input the neuron stays within 0.5 mV of rest for 20 ms"
+      V0 = simulate(lambda t: 0.0, 20.0)
+      assert np.abs(V0 + 65).max() < 0.5
+
+  def test_spikes():
+      "with 10 uA/cm2 it fires, peaking above +30 mV, several times in 50 ms"
+      assert V_A.max() > 30 and count_spikes(V_A) >= 4
+`} prompt="Complete `hh_rhs(y, I)`, which returns the derivatives of (V, n, m, h), and the RK4 step in `simulate(Ifun, T)`, which returns the voltage at every step. Store the voltage for the 10 μA/cm² step in `V_A`."
+code={String.raw`
+  def hh_rhs(y, I):
+      V, n, m, h = y
+      an, bn, am, bm, ah, bh = hh_rates(V)
+      dV = ...
+      return np.array([dV, an * (1 - n) - bn * n, am * (1 - m) - bm * m, ah * (1 - h) - bh * h])
+
+  def simulate(Ifun, T, dt=0.01, y0=None):
+      y = hh_rest() if y0 is None else y0
+      Vs = np.empty(int(T / dt))
+      for i in range(len(Vs)):
+          t = i * dt
+          k1 = hh_rhs(y, Ifun(t)); k2 = hh_rhs(y + dt / 2 * k1, Ifun(t + dt / 2))
+          k3 = ...; k4 = ...
+          y = y + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+          Vs[i] = y[0]
+      return Vs
+
+  V_A = simulate(lambda t: 10.0 if 5 <= t < 55 else 0.0, 60.0)
+  print(f"{count_spikes(V_A)} spikes, peak {V_A.max():.1f} mV, lowest {V_A.min():.1f} mV")
+  plt.plot(np.arange(len(V_A)) * 0.01, V_A); plt.xlabel("ms"); plt.ylabel("V (mV)"); plt.show()
+`}
+hint="dV = (I - gNa * m**3 * h * (V - ENa) - gK * n**4 * (V - EK) - gL * (V - EL)) / C; k3 = hh_rhs(y + dt / 2 * k2, Ifun(t + dt / 2)); k4 = hh_rhs(y + dt * k3, Ifun(t + dt))."
+solution={String.raw`
+  def hh_rhs(y, I):
+      V, n, m, h = y
+      an, bn, am, bm, ah, bh = hh_rates(V)
+      dV = (I - gNa * m**3 * h * (V - ENa) - gK * n**4 * (V - EK) - gL * (V - EL)) / C
+      return np.array([dV, an * (1 - n) - bn * n, am * (1 - m) - bm * m, ah * (1 - h) - bh * h])
+
+  def simulate(Ifun, T, dt=0.01, y0=None):
+      y = hh_rest() if y0 is None else y0
+      Vs = np.empty(int(T / dt))
+      for i in range(len(Vs)):
+          t = i * dt
+          k1 = hh_rhs(y, Ifun(t)); k2 = hh_rhs(y + dt / 2 * k1, Ifun(t + dt / 2))
+          k3 = hh_rhs(y + dt / 2 * k2, Ifun(t + dt / 2)); k4 = hh_rhs(y + dt * k3, Ifun(t + dt))
+          y = y + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+          Vs[i] = y[0]
+      return Vs
+
+  V_A = simulate(lambda t: 10.0 if 5 <= t < 55 else 0.0, 60.0)
+  print(f"{count_spikes(V_A)} spikes, peak {V_A.max():.1f} mV, lowest {V_A.min():.1f} mV")
+  plt.plot(np.arange(len(V_A)) * 0.01, V_A); plt.xlabel("ms"); plt.ylabel("V (mV)"); plt.show()
+`} />
+
+The neuron fires 4 action potentials in 50 ms, each overshooting to about +40 mV and followed by an undershoot to about −75 mV, below rest, as the slow potassium gates close. Every feature of the waveform comes from the four equations: sodium activation $m$ is fast and drives the upstroke, while the slower inactivation $h$ and potassium activation $n$ end it.
+
+**Part B: a different kind of f-I curve.** Because `hh_rhs` uses only array arithmetic, you can simulate many neurons at once by giving each column of `y` its own current. Measure the steady firing rate (spikes between 100 and 300 ms) for inputs from 0 to 20 μA/cm².
+
+<PyCell id="partB" title="Part B: the rate jumps" tests={String.raw`
+  import numpy as np
+  def test_silent():
+      "the neuron does not fire repetitively at 4 uA/cm2 or below"
+      assert all(r == 0 for I, r in zip(Is_B, rates_B) if I <= 4)
+
+  def test_jump():
+      "the lowest non-zero steady rate is above 40 Hz: there is no slow firing"
+      assert rates_B[rates_B > 0].min() > 40
+
+  def test_rises():
+      "the rate at 20 uA/cm2 is higher than at the onset"
+      assert rates_B[-1] > rates_B[rates_B > 0].min()
+`} prompt="Simulate all the currents in `Is_B` together for 300 ms (y has shape 4 by the number of currents), store the voltage of every neuron at every step, and count upward crossings of 0 mV between 100 and 300 ms to get `rates_B` in Hz."
+code={String.raw`
+  Is_B = np.array([0, 2, 4, 6, 6.5, 7, 8, 10, 15, 20.0])
+  y = np.tile(hh_rest()[:, None], (1, len(Is_B)))
+  dt, steps = 0.01, 30000
+  Vs = np.empty((steps, len(Is_B)))
+  for i in range(steps):
+      k1 = hh_rhs(y, Is_B); k2 = hh_rhs(y + dt / 2 * k1, Is_B)
+      k3 = hh_rhs(y + dt / 2 * k2, Is_B); k4 = hh_rhs(y + dt * k3, Is_B)
+      y = y + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+      Vs[i] = y[0]
+  late = Vs[10000:]
+  rates_B = ...                                   # crossings per neuron, divided by 0.2 s
+  print(dict(zip(Is_B.tolist(), rates_B.tolist())), " Hz")
+  plt.plot(Is_B, rates_B, "o-"); plt.xlabel("I (uA/cm2)"); plt.ylabel("rate (Hz)"); plt.show()
+`}
+hint="rates_B = ((late[1:] > 0) & (late[:-1] <= 0)).sum(axis=0) / 0.2."
+solution={String.raw`
+  Is_B = np.array([0, 2, 4, 6, 6.5, 7, 8, 10, 15, 20.0])
+  y = np.tile(hh_rest()[:, None], (1, len(Is_B)))
+  dt, steps = 0.01, 30000
+  Vs = np.empty((steps, len(Is_B)))
+  for i in range(steps):
+      k1 = hh_rhs(y, Is_B); k2 = hh_rhs(y + dt / 2 * k1, Is_B)
+      k3 = hh_rhs(y + dt / 2 * k2, Is_B); k4 = hh_rhs(y + dt * k3, Is_B)
+      y = y + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+      Vs[i] = y[0]
+  late = Vs[10000:]
+  rates_B = ((late[1:] > 0) & (late[:-1] <= 0)).sum(axis=0) / 0.2                                   # crossings per neuron, divided by 0.2 s
+  print(dict(zip(Is_B.tolist(), rates_B.tolist())), " Hz")
+  plt.plot(Is_B, rates_B, "o-"); plt.xlabel("I (uA/cm2)"); plt.ylabel("rate (Hz)"); plt.show()
+`} />
+
+The model is silent up to 6 μA/cm² and then jumps straight to about 55 Hz at 6.5 μA/cm², rising only to 85 Hz at 20. It cannot fire slowly. The integrate-and-fire neuron, by contrast, starts from zero rate, steeply but continuously. Hodgkin called these two behaviours class 2 and class 1 excitability, and in Week 23 you will see that they come from two different ways a resting state can lose its stability. (Between about 6.3 and 9.8 μA/cm² both rest and repetitive firing are stable, and which you see depends on how the current is switched on; an abrupt step, as here, kicks the neuron into firing.)
+
+**Part C: the refractory period.** Give two brief pulses (20 μA/cm² for 1 ms each), the second a delay $d$ after the first. Nothing in the equations says "refractory", yet for short delays the second pulse fails. Find the shortest delay, in whole milliseconds from 2 to 20, at which the second pulse also produces a spike.
+
+<PyCell id="partC" title="Part C: refractoriness emerges" tests={String.raw`
+  import numpy as np
+  def test_first():
+      "a single pulse produces exactly one spike"
+      assert count_spikes(simulate(lambda t: 20.0 if 1 <= t < 2 else 0.0, 40.0)) == 1
+
+  def test_dmin():
+      "the shortest delay that gives a second spike lies between 8 and 14 ms"
+      assert 8 <= d_min <= 14
+`} prompt="Loop over delays 2, 3, ..., 20 ms, simulate 40 ms with both pulses, and store in `d_min` the first delay that gives two spikes."
+code={String.raw`
+  d_min = None
+  for d in range(2, 21):
+      pulses = lambda t, d=d: 20.0 if (1 <= t < 2) or (1 + d <= t < 2 + d) else 0.0
+      n_spk = ...
+      if n_spk == 2:
+          d_min = d
+          break
+  print("second spike first appears at a delay of", d_min, "ms")
+`}
+hint="n_spk = count_spikes(simulate(pulses, 40.0))."
+solution={String.raw`
+  d_min = None
+  for d in range(2, 21):
+      pulses = lambda t, d=d: 20.0 if (1 <= t < 2) or (1 + d <= t < 2 + d) else 0.0
+      n_spk = count_spikes(simulate(pulses, 40.0))
+      if n_spk == 2:
+          d_min = d
+          break
+  print("second spike first appears at a delay of", d_min, "ms")
+`} />
+
+With these pulses the second one fails for delays up to 10 ms and succeeds from 11 ms. After a spike, sodium channels are inactivated ($h$ is low) and potassium channels are still open ($n$ is high), and both take several milliseconds to recover. A stronger second pulse succeeds sooner, which is the difference between the relative refractory period and the absolute one, when no pulse succeeds at all.
+
+**Part D (written).** Answer in your journal: the integrate-and-fire neuron of Day 5 had its refractory period and threshold written in by hand. Which properties of the action potential does the Hodgkin-Huxley model produce on its own, which does it not, and when would you choose each model?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The Euler stability limit" task="Show that Euler's method for $\dot V = -V/\tau$ with step $\Delta t$ gives $V_{k+1} = (1 - \Delta t/\tau)V_k$, and deduce that the numerical solution decays only if $\Delta t \lt 2\tau$.">
+
+One Euler step is $V_{k+1} = V_k + \Delta t\,(-V_k/\tau) = (1 - \Delta t/\tau)V_k$, so $V_k = (1 - \Delta t/\tau)^k V_0$.
+
+This decays to zero exactly when $|1 - \Delta t/\tau| \lt 1$, that is $0 \lt \Delta t/\tau \lt 2$. For $\tau \lt \Delta t \lt 2\tau$ the factor is negative and the numerical solution oscillates in sign while decaying; for $\Delta t > 2\tau$ it grows without bound, even though the true solution decays.
+
+In a system of equations the limit is set by the fastest time constant, which is why stiff systems such as Hodgkin-Huxley's need small steps or implicit methods (Day 3).
+
+</Prove>
+
+<Prove title="2. A gating variable at fixed voltage" task="With the voltage clamped, so that $\alpha$ and $\beta$ are constants, solve $\dot n = \alpha(1 - n) - \beta n$ and show it relaxes exponentially to $n_\infty = \alpha/(\alpha + \beta)$ with time constant $\tau_n = 1/(\alpha + \beta)$.">
+
+Collect terms: $\dot n = \alpha - (\alpha + \beta)n = -(n - n_\infty)/\tau_n$ with $n_\infty = \alpha/(\alpha + \beta)$ and $\tau_n = 1/(\alpha + \beta)$.
+
+This is Day 1's membrane equation for the variable $n - n_\infty$, so $n(t) = n_\infty + (n(0) - n_\infty)e^{-t/\tau_n}$.
+
+This is how Hodgkin and Huxley fitted their model: in a voltage-clamp step, each conductance rises or falls exponentially, and the rate and final value at each voltage give $\alpha(V)$ and $\beta(V)$.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 21 quiz (15 questions)" questions={[
+  { q: "The membrane time constant of an RC circuit is...", options: ["R/C", "RC", "1/(RC)", "R + C"], answer: 1, explain: "Resistance times capacitance." },
+  { q: "After a step of current, the membrane voltage reaches about 63% of its final change after...", options: ["One time constant", "Half a time constant", "Two time constants", "Instantly"], answer: 0, explain: "1 − e⁻¹." },
+  { q: "The response of a linear system to any input is...", options: ["The input squared", "The convolution of the input with the impulse response", "The impulse response alone", "The derivative of the input"], answer: 1, explain: "Day 2." },
+  { q: "The alpha function t e^{−t/τ} peaks at...", options: ["t = 0", "t = τ", "t = 2τ", "Never"], answer: 1, explain: "Set the derivative to zero." },
+  { q: "A damped oscillator driven near its natural frequency...", options: ["Responds least", "Resonates, responding most", "Stops", "Doubles its frequency"], answer: 1, explain: "Resonance." },
+  { q: "Euler's method has global error proportional to...", options: ["Δt", "Δt²", "Δt⁴", "1/Δt"], answer: 0, explain: "First order." },
+  { q: "RK4 has global error proportional to...", options: ["Δt", "Δt²", "Δt⁴", "e^{Δt}"], answer: 2, explain: "Fourth order." },
+  { q: "A stiff system is one with...", options: ["One time constant", "Time constants of very different sizes", "No solution", "Only oscillations"], answer: 1, explain: "The fast one limits explicit steps." },
+  { q: "The solution of ẋ = Ax is...", options: ["Ax(0)", "e^{At}x(0)", "A^t x(0)", "x(0)/A"], answer: 1, explain: "The matrix exponential." },
+  { q: "A linear system is stable when every eigenvalue of A has...", options: ["Positive real part", "Negative real part", "Modulus 1", "Zero imaginary part"], answer: 1, explain: "All modes decay." },
+  { q: "Random N × N matrices with entry variance g²/N have eigenvalues in...", options: ["A disc of radius g", "A line", "The real axis", "A ring of radius N"], answer: 0, explain: "The circular law." },
+  { q: "The LIF firing rate for RI above θ is...", options: ["RI/θ", "1/(t_ref + τ ln(RI/(RI − θ)))", "1/τ", "θ/(τ RI)"], answer: 1, explain: "Charging time plus refractory period." },
+  { q: "Input noise lets an LIF neuron...", options: ["Fire above 1/t_ref", "Fire below rheobase", "Never fire", "Fire periodically always"], answer: 1, explain: "Fluctuations cross threshold." },
+  { q: "The Hodgkin-Huxley f-I curve, unlike the LIF's, starts...", options: ["At zero with infinite slope", "With a jump to a non-zero rate", "Negative", "Only at very high currents"], answer: 1, explain: "Part B: no slow firing." },
+  { q: "In the Hodgkin-Huxley model the refractory period...", options: ["Is a parameter", "Emerges from sodium inactivation and potassium activation", "Does not exist", "Equals τ"], answer: 1, explain: "Part C." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Hodgkin and Huxley (1952) its third pass and write your critique under the five headings. Focus on one question: **how much of the model is mechanism, and how much is curve fitting?** Consider that the gating variables and their exponents (the 3 in $m^3$, the 4 in $n^4$) were chosen to fit the shape of the conductance curves rather than derived from channel structure; that the model predicted the action potential's shape and speed, which it was not fitted to; that it describes one preparation, the squid giant axon, at one temperature; what single-channel recordings later revealed about real sodium channels; and why, seventy years on, the same mathematical form still underlies most detailed neuron models.
+
+<Callout kind="research">
+
+Mammalian cortical neurons often begin firing at very low rates, unlike Part B's jump, and Hodgkin himself classified axons by this difference in 1948. Find which change to the Hodgkin-Huxley model turns its jump into a smooth onset (Week 23 will explain the mathematics), and test it with the code from Part B.
+
+</Callout>
+
+<Key title="Week 21 review checklist">
+<ul>
+<li>I can solve the membrane equation, read its time constant and fit it to data.</li>
+<li>I can compute a linear system's response by convolution and explain resonance.</li>
+<li>I can implement Euler and RK4, measure their order of accuracy and explain stiffness.</li>
+<li>I can solve ẋ = Ax with eigenvectors and read stability from the eigenvalues.</li>
+<li>I can simulate integrate-and-fire and Hodgkin-Huxley neurons and compare their f-I curves.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part D: which properties of the action potential does the Hodgkin-Huxley model produce on its own, which does it not, and when would you choose it over an integrate-and-fire neuron? Then note what you found for the research callout." />

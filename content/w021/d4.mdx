@@ -1,0 +1,267 @@
+export const meta = {
+  title: "Systems of linear equations and the matrix exponential",
+  intro: "A single membrane has one time constant. A neuron with a soma and dendrites, a pair of excitatory and inhibitory populations, or a network of a thousand neurons is a system of coupled linear equations, ẋ = Ax, and its behaviour is written in the eigenvalues of A. Today you solve such systems with the matrix exponential, decompose their responses into modes, each decaying or oscillating at its own rate, and meet a remarkable result about random networks: their eigenvalues fill a disc, and whether that disc crosses a line decides whether the network's activity dies away or runs wild.",
+  goals: [
+    "Write the solution of ẋ = Ax as a matrix exponential and as a sum of eigenmodes",
+    "Read stability, decay rates and oscillation frequencies from the eigenvalues of A",
+    "Find the two time constants of a two-compartment neuron",
+    "Show that the eigenvalues of a random network fill a disc, and relate its radius to stability",
+  ],
+  plan: [
+    { label: "Predict and the matrix exponential", minutes: 25 },
+    { label: "Eigenmodes", minutes: 25 },
+    { label: "A neuron with a dendrite", minutes: 25 },
+    { label: "Random networks", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "rajan-2006",
+};
+
+<Predict question="A network of 200 neurons follows ẋ = −x + Wx, with random connection weights of standard deviation g/√200. For g = 0.8 activity decays to zero. What happens for g = 1.2?" />
+
+<Step n={1} title="The matrix exponential" minutes={25} />
+
+For one variable, $\dot{x} = ax$ has solution $x(t) = e^{at}x(0)$. For a vector, $\dot{\mathbf{x}} = A\mathbf{x}$ has solution
+
+$$
+\mathbf{x}(t) = e^{At}\mathbf{x}(0), \qquad e^{At} = I + At + \frac{(At)^2}{2!} + \frac{(At)^3}{3!} + \cdots,
+$$
+
+defined by the same power series as the ordinary exponential. Differentiating the series term by term gives $\frac{\mathrm{d}}{\mathrm{d}t}e^{At} = Ae^{At}$, so it solves the equation, and $e^{A\cdot 0} = I$ makes it start at $\mathbf{x}(0)$.
+
+<Video id="O85OWBJ2ayo" title="How (and why) to raise e to the power of a matrix" by="3Blue1Brown" note="Grant Sanderson explains what the matrix exponential means and why it solves systems of linear differential equations." />
+
+<Step n={2} title="Eigenmodes" minutes={25} />
+
+Summing the series is rarely the way to compute $e^{At}$. If $A$ has eigenvectors $\mathbf{v}_i$ with eigenvalues $\lambda_i$ (Week 6), write $\mathbf{x}(0) = \sum_i c_i\mathbf{v}_i$. Each eigenvector evolves independently, scaled by $e^{\lambda_i t}$:
+
+$$
+\mathbf{x}(t) = \sum_i c_i e^{\lambda_i t}\mathbf{v}_i, \qquad e^{At} = V e^{\Lambda t}V^{-1}.
+$$
+
+So the eigenvalues say everything about the behaviour. If every eigenvalue has negative real part, all modes decay and the system is **stable**; a mode with time constant $-1/\text{Re}\,\lambda$ decays slowest when $\lambda$ is nearest zero. A complex pair $\lambda = a \pm i\omega$ gives oscillation at angular frequency $\omega$ inside an envelope $e^{at}$. Any eigenvalue with positive real part makes the system blow up.
+
+<PyCell id="expm" title="Three ways to the same answer" tests={String.raw`
+  import numpy as np
+  def test_eig():
+      "expm_eig agrees with the power series to 1e-9"
+      assert np.max(np.abs(expm_eig(A, 1.5) - expm_series(A, 1.5))) < 1e-9
+
+  def test_sim():
+      "e^{At} x0 agrees with an RK4 simulation to 1e-6"
+      assert np.max(np.abs(expm_eig(A, 1.5) @ x0 - x_sim)) < 1e-6
+`} prompt="For the 3 × 3 matrix A, write `expm_series(A, t)` (sum terms until they are below 1e-15) and `expm_eig(A, t)` (V exp(Λt) V⁻¹, using np.linalg.eig and taking the real part). Compare both, and compare e^{At}x0 with an RK4 simulation `x_sim` at t = 1.5 using 1,500 steps."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  A = np.array([[-1.0, 2.0, 0.0], [-2.0, -1.0, 0.5], [0.0, 0.3, -0.5]])
+  x0 = np.array([1.0, 0.0, -1.0])
+
+  def expm_series(A, t):
+      term = np.eye(len(A)); total = term.copy(); k = 1
+      while np.abs(term).max() > 1e-15:
+          term = ...                                 # next term (At)^k / k!
+          total = total + term; k += 1
+      return total
+
+  def expm_eig(A, t):
+      lam, V = np.linalg.eig(A)
+      return ...
+
+  x, dt = x0.copy(), 1.5 / 1500
+  f = lambda x: A @ x
+  for _ in range(1500):
+      k1 = f(x); k2 = f(x + dt / 2 * k1); k3 = f(x + dt / 2 * k2); k4 = f(x + dt * k3)
+      x = x + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+  x_sim = x
+  print("eigenvalues:", np.linalg.eigvals(A).round(3)); print("e^{At} x0:", (expm_eig(A, 1.5) @ x0).round(6), " simulated:", x_sim.round(6))
+`}
+hint="term = term @ (A * t) / k; return np.real(V @ np.diag(np.exp(lam * t)) @ np.linalg.inv(V))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  A = np.array([[-1.0, 2.0, 0.0], [-2.0, -1.0, 0.5], [0.0, 0.3, -0.5]])
+  x0 = np.array([1.0, 0.0, -1.0])
+
+  def expm_series(A, t):
+      term = np.eye(len(A)); total = term.copy(); k = 1
+      while np.abs(term).max() > 1e-15:
+          term = term @ (A * t) / k                                 # next term (At)^k / k!
+          total = total + term; k += 1
+      return total
+
+  def expm_eig(A, t):
+      lam, V = np.linalg.eig(A)
+      return np.real(V @ np.diag(np.exp(lam * t)) @ np.linalg.inv(V))
+
+  x, dt = x0.copy(), 1.5 / 1500
+  f = lambda x: A @ x
+  for _ in range(1500):
+      k1 = f(x); k2 = f(x + dt / 2 * k1); k3 = f(x + dt / 2 * k2); k4 = f(x + dt * k3)
+      x = x + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+  x_sim = x
+  print("eigenvalues:", np.linalg.eigvals(A).round(3)); print("e^{At} x0:", (expm_eig(A, 1.5) @ x0).round(6), " simulated:", x_sim.round(6))
+`} />
+
+The eigenvalues here are a complex pair near $-1 \pm 2i$ and a real one near $-0.5$: the first two variables spiral inwards at about 2 radians per unit time while the slow third mode lingers.
+
+<Step n={3} title="A neuron with a dendrite" minutes={25} />
+
+Split a neuron into a soma and a dendrite, each with its own capacitance and leak, joined by a coupling conductance. The two voltages obey two coupled linear equations, and charge injected at the soma both leaks away and spreads into the dendrite. The response is a sum of two exponentials: a fast mode in which charge equalises between the compartments, and a slow mode in which the whole cell discharges. Measuring both time constants from a recording, "exponential peeling", is how Rall and others inferred the electrical structure of neurons.
+
+<Figure caption="A two-compartment neuron after a current pulse at the soma, on a log scale. Change the coupling and watch the two modes separate." credit="Interactive figure by Engram.">
+  <CompartmentModes />
+</Figure>
+
+<PyCell id="compartment" title="Two time constants from one recording" tests={String.raw`
+  import numpy as np
+  def test_modes():
+      "tau_fast and tau_slow are the two time constants from the eigenvalues of A2"
+      lam = np.sort(np.linalg.eigvals(A2).real)
+      assert abs(tau_fast + 1 / lam[0]) < 1e-9 and abs(tau_slow + 1 / lam[1]) < 1e-9
+
+  def test_peel():
+      "the late slope of log V_soma recovers the slow time constant to within 3%"
+      assert abs(tau_late - tau_slow) / tau_slow < 0.03
+`} prompt="For a soma (τ = 10 ms) and dendrite (τ = 30 ms) coupled with strength g = 0.5, build the matrix A2, find the fast and slow time constants from its eigenvalues, then compute the soma voltage after a pulse with the matrix exponential (0 to 150 ms) and fit the slope of log V_soma over 60 to 150 ms to get `tau_late`."
+code={String.raw`
+  tS, tD, g = 10.0, 30.0, 0.5
+  A2 = np.array([[-(1 + g) / tS, g / tS],
+                 [g / tD, -(1 + g) / tD]])
+  lam2 = np.sort(np.linalg.eigvals(A2).real)
+  tau_fast, tau_slow = ..., ...
+  ts = np.arange(0, 150, 0.5)
+  V_soma = np.array([(expm_eig(A2, t) @ np.array([1.0, 0.0]))[0] for t in ts])
+  late = ts >= 60
+  tau_late = ...
+  print(f"fast mode {tau_fast:.2f} ms, slow mode {tau_slow:.2f} ms;  late slope gives {tau_late:.2f} ms")
+  plt.semilogy(ts, V_soma); plt.xlabel("ms"); plt.ylabel("soma voltage (log)"); plt.show()
+`}
+hint="tau_fast, tau_slow = -1 / lam2[0], -1 / lam2[1]; tau_late = -1 / np.polyfit(ts[late], np.log(V_soma[late]), 1)[0]."
+solution={String.raw`
+  tS, tD, g = 10.0, 30.0, 0.5
+  A2 = np.array([[-(1 + g) / tS, g / tS],
+                 [g / tD, -(1 + g) / tD]])
+  lam2 = np.sort(np.linalg.eigvals(A2).real)
+  tau_fast, tau_slow = -1 / lam2[0], -1 / lam2[1]
+  ts = np.arange(0, 150, 0.5)
+  V_soma = np.array([(expm_eig(A2, t) @ np.array([1.0, 0.0]))[0] for t in ts])
+  late = ts >= 60
+  tau_late = -1 / np.polyfit(ts[late], np.log(V_soma[late]), 1)[0]
+  print(f"fast mode {tau_fast:.2f} ms, slow mode {tau_slow:.2f} ms;  late slope gives {tau_late:.2f} ms")
+  plt.semilogy(ts, V_soma); plt.xlabel("ms"); plt.ylabel("soma voltage (log)"); plt.show()
+`} />
+
+<Step n={4} title="Random networks" minutes={30} />
+
+A linear rate network, $\dot{\mathbf{x}} = -\mathbf{x} + W\mathbf{x}$, is stable when every eigenvalue of $W$ has real part below 1. For a random $W$ whose $N^2$ entries are independent with mean 0 and variance $g^2/N$, the eigenvalues fill a disc of radius $g$ centred on 0, uniformly, for large $N$: the **circular law**. So the network is stable for $g \lt 1$ and unstable for $g > 1$, when the disc pokes past 1. Rajan and Abbott (2006, today's paper) showed how separate excitatory and inhibitory populations, as in real cortex, reshape this disc. In a non-linear network, crossing $g = 1$ is where chaotic activity begins (Week 23).
+
+<PyCell id="random" title="The circular law and stability" tests={String.raw`
+  import numpy as np
+  def test_disc():
+      "the largest eigenvalue modulus is within 10% of g"
+      assert abs(np.abs(eigs[0.8]).max() - 0.8) < 0.08 and abs(np.abs(eigs[1.2]).max() - 1.2) < 0.12
+
+  def test_dynamics():
+      "activity decays for g = 0.8 and grows for g = 1.2"
+      assert norms[0.8][-1] < 0.01 * norms[0.8][0] and norms[1.2][-1] > 10 * norms[1.2][0]
+`} prompt="For N = 200 and g = 0.8 and 1.2, draw W with entries of standard deviation g/√N, store its eigenvalues in `eigs[g]`, and simulate ẋ = −x + Wx from a random start for 40 time units with Euler steps of 0.05, recording the norm of x at each step in `norms[g]`."
+code={String.raw`
+  rng = np.random.default_rng(2006)
+  N = 200
+  eigs, norms = {}, {}
+  for g in (0.8, 1.2):
+      W = rng.normal(0, g / np.sqrt(N), (N, N))
+      eigs[g] = np.linalg.eigvals(W)
+      x = rng.normal(size=N); nr = [np.linalg.norm(x)]
+      for _ in range(800):
+          x = ...
+          nr.append(np.linalg.norm(x))
+      norms[g] = np.array(nr)
+  print({g: round(float(np.abs(e).max()), 3) for g, e in eigs.items()}, " largest eigenvalue modulus")
+  print({g: f"{n[-1] / n[0]:.3g}" for g, n in norms.items()}, " final / initial norm")
+  fig, ax = plt.subplots(1, 2, figsize=(9, 4))
+  for g in eigs: ax[0].plot(eigs[g].real, eigs[g].imag, ".", ms=3, label=f"g = {g}")
+  ax[0].axvline(1, c="k", ls="--"); ax[0].set_aspect("equal"); ax[0].legend()
+  for g in norms: ax[1].semilogy(norms[g], label=f"g = {g}")
+  ax[1].legend(); plt.show()
+`}
+hint="x = x + 0.05 * (-x + W @ x)."
+solution={String.raw`
+  rng = np.random.default_rng(2006)
+  N = 200
+  eigs, norms = {}, {}
+  for g in (0.8, 1.2):
+      W = rng.normal(0, g / np.sqrt(N), (N, N))
+      eigs[g] = np.linalg.eigvals(W)
+      x = rng.normal(size=N); nr = [np.linalg.norm(x)]
+      for _ in range(800):
+          x = x + 0.05 * (-x + W @ x)
+          nr.append(np.linalg.norm(x))
+      norms[g] = np.array(nr)
+  print({g: round(float(np.abs(e).max()), 3) for g, e in eigs.items()}, " largest eigenvalue modulus")
+  print({g: f"{n[-1] / n[0]:.3g}" for g, n in norms.items()}, " final / initial norm")
+  fig, ax = plt.subplots(1, 2, figsize=(9, 4))
+  for g in eigs: ax[0].plot(eigs[g].real, eigs[g].imag, ".", ms=3, label=f"g = {g}")
+  ax[0].axvline(1, c="k", ls="--"); ax[0].set_aspect("equal"); ax[0].legend()
+  for g in norms: ax[1].semilogy(norms[g], label=f"g = {g}")
+  ax[1].legend(); plt.show()
+`} />
+
+With $g = 1.2$ a slice of the disc lies past 1, and those modes grow exponentially, which answers the prediction: activity explodes. Real neurons saturate, so in a non-linear network the explosion becomes sustained, irregular activity instead. Note too that even a stable network can amplify some inputs transiently before they decay if its connectivity is **non-normal** (its eigenvectors are not orthogonal), an effect that eigenvalues alone do not reveal (Murphy and Miller, 2009).
+
+<Bridge title="Linear systems in brains and machines"
+  neuro="Linearised around a steady state, any neural circuit is ẋ = Ax, and its eigenvalues give its timescales and oscillations. Networks can create slow timescales far longer than any single neuron's when an eigenvalue sits close to zero, a proposed mechanism for working memory and integration (Week 22)."
+  ai="Initialising recurrent networks with weights of variance about 1/N keeps the eigenvalue disc near the edge of stability, so signals neither vanish nor explode; this is the reasoning behind standard initialisation schemes and behind state-space models that parameterise their dynamics directly through eigenvalues.">
+
+Find the eigenvalues, and you know how every mode of a linear system will behave.
+
+</Bridge>
+
+<Prove title="Eigenvectors evolve independently" task="Show that if $A\mathbf{v} = \lambda\mathbf{v}$, then $\mathbf{x}(t) = e^{\lambda t}\mathbf{v}$ solves $\dot{\mathbf{x}} = A\mathbf{x}$, and use linearity to write the general solution when $A$ has a full set of eigenvectors.">
+
+Differentiate: $\dot{\mathbf{x}} = \lambda e^{\lambda t}\mathbf{v}$. And $A\mathbf{x} = e^{\lambda t}A\mathbf{v} = e^{\lambda t}\lambda\mathbf{v}$. The two agree, so $\mathbf{x}$ is a solution.
+
+The equation is linear, so any sum of solutions is a solution: $\mathbf{x}(t) = \sum_i c_i e^{\lambda_i t}\mathbf{v}_i$. At $t = 0$ this is $\sum_i c_i\mathbf{v}_i$, and because the eigenvectors form a basis, the coefficients can be chosen to match any starting point: $\mathbf{c} = V^{-1}\mathbf{x}(0)$.
+
+Each mode grows or shrinks at its own rate, never mixing with the others, which is why the eigenvalues summarise the dynamics.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "The solution of ẋ = Ax is...", options: ["Ax(0)t", "e^{At}x(0)", "x(0)/A", "A^t x(0)"], answer: 1, explain: "The matrix exponential." },
+  { q: "e^{At} can be computed as...", options: ["Entry-wise e^{a_ij t}", "V e^{Λt} V⁻¹ using eigenvectors", "A t", "Only by simulation"], answer: 1, explain: "Not entry-wise!" },
+  { q: "A linear system is stable when every eigenvalue has...", options: ["Positive real part", "Negative real part", "Zero imaginary part", "Modulus 1"], answer: 1, explain: "All modes decay." },
+  { q: "A complex eigenvalue pair a ± iω gives...", options: ["Monotonic decay", "Oscillation at ω in an envelope e^{at}", "Explosion always", "A constant"], answer: 1, explain: "Spirals." },
+  { q: "The slowest decaying mode has the eigenvalue...", options: ["Most negative", "Closest to zero (real part)", "With the largest imaginary part", "Any"], answer: 1, explain: "Time constant −1/Re λ." },
+  { q: "A random N × N matrix with entry variance g²/N has eigenvalues filling...", options: ["A line", "A disc of radius g", "A square", "Only the real axis"], answer: 1, explain: "The circular law." },
+  { q: "The network ẋ = −x + Wx becomes unstable when...", options: ["Any eigenvalue of W has real part above 1", "g is below 1", "W is symmetric", "N is large"], answer: 0, explain: "Then −1 + λ has positive real part." },
+]} />
+
+<Flashcards cards={[
+  { front: "Matrix exponential?", back: "$e^{At} = \\sum_k (At)^k/k!$; solves ẋ = Ax." },
+  { front: "Eigenmode expansion?", back: "$x(t) = \\sum_i c_i e^{\\lambda_i t}v_i$, $c = V^{-1}x(0)$." },
+  { front: "Stability of ẋ = Ax?", back: "All eigenvalues of A have negative real part." },
+  { front: "Circular law?", back: "Random N × N matrix, entries of variance g²/N: eigenvalues uniform in a disc of radius g." },
+  { front: "Non-normal amplification?", back: "Stable systems with non-orthogonal eigenvectors can grow transiently before decaying." },
+]} />
+
+<Predict revisit question="What does activity do in the random network with g = 1.2?" />
+
+<Key title="Before you go">
+<ul>
+<li>ẋ = Ax is solved by the matrix exponential, best computed from eigenvectors.</li>
+<li>Each eigenmode decays, grows or oscillates at a rate set by its eigenvalue.</li>
+<li>Multi-compartment neurons show several exponential modes, read from a log plot.</li>
+<li>Random networks have eigenvalues in a disc of radius g; g = 1 is the edge of stability.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Rajan and Abbott (2006), <em>Eigenvalue spectra of random matrices for neural networks</em>.</li>
+<li>Strogatz, <em>Nonlinear Dynamics and Chaos</em>, chapter 5 on linear systems.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A circuit needs to hold a value for several seconds, far longer than any neuron's time constant. Using today's ideas, describe what the eigenvalues of its connectivity would need to look like, and why this might be hard to maintain." />

@@ -1,0 +1,275 @@
+export const meta = {
+  title: "Numerical solvers: Euler, stability and Runge-Kutta",
+  intro: "Most differential equations in neuroscience have no formula for their solution: Hodgkin and Huxley's, networks of neurons, models of plasticity. They are solved numerically, by stepping forward in time. Today you write the two workhorse methods, Euler's and fourth-order Runge-Kutta, measure how their errors shrink as the step gets smaller, and meet the two ways a simulation can fail: a step that is too large makes it explode, and a model with both very fast and very slow processes (a stiff system) forces tiny steps unless you use an implicit method. These ideas decide whether your simulations of neurons can be trusted.",
+  goals: [
+    "Implement Euler and fourth-order Runge-Kutta steps for systems of equations",
+    "Measure the order of accuracy of each method from a log-log plot of error against step size",
+    "Explain numerical instability and derive Euler's stability limit for exponential decay",
+    "Solve a stiff system with the backward Euler method",
+  ],
+  plan: [
+    { label: "Predict and Euler's method", minutes: 20 },
+    { label: "Order of accuracy and Runge-Kutta", minutes: 35 },
+    { label: "Stability", minutes: 25 },
+    { label: "Stiff systems", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "chen-2018",
+};
+
+<Predict question="You simulate a membrane with τ = 10 ms using Euler's method. With a step of 1 ms the result looks fine. If you use a step of 25 ms, will the simulation be slightly inaccurate, wildly wrong but bounded, or blow up to enormous values?" />
+
+<Step n={1} title="Euler's method" minutes={20} />
+
+To solve $\dot{x} = f(x, t)$ numerically, chop time into steps of size $\Delta t$ and follow the current slope for one step:
+
+$$
+x_{n+1} = x_n + \Delta t\,f(x_n, t_n).
+$$
+
+This is **Euler's method** (forward Euler). Each step makes an error of order $\Delta t^2$ (the curvature it ignores, from Taylor's theorem in Week 9), and over a fixed time $T$ there are $T/\Delta t$ steps, so the total error is of order $\Delta t$: halving the step halves the error. It is a **first-order** method. It is also how a residual network updates its state, $x \leftarrow x + f(x)$, the observation behind neural ODEs (Chen and colleagues, 2018, today's paper).
+
+<Figure caption="Euler and fourth-order Runge-Kutta solutions of an exponential decay, against the exact curve. Increase the step size." credit="Interactive figure by Engram.">
+  <EulerSteps />
+</Figure>
+
+<Video id="p_di4Zn4wz4" title="Differential equations, studying the unsolvable" by="3Blue1Brown" note="Grant Sanderson simulates a pendulum by stepping forward in time, exactly the method of today's lesson, and explains why most equations must be solved this way." />
+
+<Step n={2} title="Order of accuracy and Runge-Kutta" minutes={35} />
+
+Better methods sample the slope several times per step and combine the samples to cancel errors. The classic **fourth-order Runge-Kutta** (RK4) method:
+
+$$
+\begin{aligned}
+k_1 &= f(x_n),\quad k_2 = f(x_n + \tfrac{\Delta t}{2}k_1),\quad k_3 = f(x_n + \tfrac{\Delta t}{2}k_2),\quad k_4 = f(x_n + \Delta t\,k_3),\\
+x_{n+1} &= x_n + \tfrac{\Delta t}{6}(k_1 + 2k_2 + 2k_3 + k_4).
+\end{aligned}
+$$
+
+Its global error is of order $\Delta t^4$: halving the step cuts the error sixteenfold. It costs four evaluations of $f$ per step, but for smooth problems it reaches a given accuracy with far fewer evaluations than Euler. On a log-log plot of error against step size, a method of order $p$ is a straight line of slope $p$.
+
+<PyCell id="orders" title="Measure the order of each method" tests={String.raw`
+  import numpy as np
+  def test_steps():
+      "one RK4 step on dx/dt = -x from x = 1 with dt = 0.1 matches the known value"
+      assert abs(rk4_step(lambda x: -x, np.array([1.0]), 0.1)[0] - 0.9048375) < 1e-7
+
+  def test_slopes():
+      "the fitted orders are close to 1 for Euler and 4 for RK4"
+      assert abs(order["euler"] - 1) < 0.15 and abs(order["rk4"] - 4) < 0.3
+`} prompt="Write `euler_step(f, x, dt)`, `rk4_step(f, x, dt)` and `solve(f, x0, T, dt, step)` (return the state at time T). For a damped oscillator x'' = −x − 0.2x′ written as a two-variable system, compute the error at T = 10 against a very fine RK4 reference for dt = 0.05, 0.025, 0.0125 and 0.00625, and fit the slopes of log error against log dt."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def euler_step(f, x, dt):
+      return ...
+
+  def rk4_step(f, x, dt):
+      k1 = f(x)
+      k2 = f(x + dt / 2 * k1)
+      k3 = ...
+      k4 = ...
+      return ...
+
+  def solve(f, x0, T, dt, step):
+      x = np.array(x0, dtype=float)
+      for _ in range(int(round(T / dt))):
+          x = step(f, x, dt)
+      return x
+
+  def osc(x): return np.array([x[1], -x[0] - 0.2 * x[1]])
+  ref = solve(osc, [1.0, 0.0], 10.0, 0.001, rk4_step)
+  dts = np.array([0.05, 0.025, 0.0125, 0.00625])
+  err = {name: np.array([np.abs(solve(osc, [1.0, 0.0], 10.0, d, st) - ref).max() for d in dts]) for name, st in [("euler", euler_step), ("rk4", rk4_step)]}
+  order = {name: np.polyfit(np.log(dts), np.log(e), 1)[0] for name, e in err.items()}
+  print({k: v.round(8) for k, v in err.items()}); print("fitted orders:", {k: round(v, 2) for k, v in order.items()})
+  for name, e in err.items(): plt.loglog(dts, e, "o-", label=name)
+  plt.xlabel("dt"); plt.ylabel("error at T = 10"); plt.legend(); plt.show()
+`}
+hint="euler_step returns x + dt * f(x). In rk4_step: k3 = f(x + dt / 2 * k2); k4 = f(x + dt * k3); return x + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def euler_step(f, x, dt):
+      return x + dt * f(x)
+
+  def rk4_step(f, x, dt):
+      k1 = f(x)
+      k2 = f(x + dt / 2 * k1)
+      k3 = f(x + dt / 2 * k2)
+      k4 = f(x + dt * k3)
+      return x + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+
+  def solve(f, x0, T, dt, step):
+      x = np.array(x0, dtype=float)
+      for _ in range(int(round(T / dt))):
+          x = step(f, x, dt)
+      return x
+
+  def osc(x): return np.array([x[1], -x[0] - 0.2 * x[1]])
+  ref = solve(osc, [1.0, 0.0], 10.0, 0.001, rk4_step)
+  dts = np.array([0.05, 0.025, 0.0125, 0.00625])
+  err = {name: np.array([np.abs(solve(osc, [1.0, 0.0], 10.0, d, st) - ref).max() for d in dts]) for name, st in [("euler", euler_step), ("rk4", rk4_step)]}
+  order = {name: np.polyfit(np.log(dts), np.log(e), 1)[0] for name, e in err.items()}
+  print({k: v.round(8) for k, v in err.items()}); print("fitted orders:", {k: round(v, 2) for k, v in order.items()})
+  for name, e in err.items(): plt.loglog(dts, e, "o-", label=name)
+  plt.xlabel("dt"); plt.ylabel("error at T = 10"); plt.legend(); plt.show()
+`} />
+
+<Step n={3} title="Stability" minutes={25} />
+
+Accuracy is not the only concern. For the decay $\dot{V} = -V/\tau$, one Euler step multiplies $V$ by $1 - \Delta t/\tau$. If $\Delta t > \tau$ this factor is negative, so the solution oscillates in sign, which the true solution never does; if $\Delta t > 2\tau$ its size exceeds 1, so the "decay" grows without bound. That answers the prediction: with $\Delta t = 25$ ms and $\tau = 10$ ms the factor is $-1.5$, and the simulation explodes. In general, Euler is **stable** for $\dot{x} = \lambda x$ only when $|1 + \lambda\Delta t| \lt 1$, so the fastest process in a model sets the largest usable step.
+
+The **backward** (implicit) Euler method evaluates the slope at the *new* point instead, $x_{n+1} = x_n + \Delta t\,f(x_{n+1})$. For the decay this gives $V_{n+1} = V_n/(1 + \Delta t/\tau)$, which shrinks for every step size: it is unconditionally stable, at the price of solving an equation at each step (easy for linear $f$).
+
+<PyCell id="stability" title="Explosion and its cure" tests={String.raw`
+  import numpy as np
+  def test_explodes():
+      "forward Euler with dt = 25 ms explodes (|V| above 1000 after 20 steps)"
+      assert abs(fwd[-1]) > 1000
+
+  def test_backward():
+      "backward Euler stays positive and decays monotonically"
+      assert np.all(bwd > 0) and np.all(np.diff(bwd) < 0)
+`} prompt="With τ = 10 ms, V(0) = 1 and Δt = 25 ms, run 20 steps of forward Euler (`fwd`) and of backward Euler (`bwd`), each array including the starting value."
+code={String.raw`
+  tau, dt_big = 10.0, 25.0
+  fwd, bwd = [1.0], [1.0]
+  for _ in range(20):
+      fwd.append(...)
+      bwd.append(...)
+  fwd, bwd = np.array(fwd), np.array(bwd)
+  print("forward Euler:", fwd[:6].round(2), "...", f"{fwd[-1]:.3g}"); print("backward Euler:", bwd[:6].round(4))
+`}
+hint="fwd.append(fwd[-1] * (1 - dt_big / tau)); bwd.append(bwd[-1] / (1 + dt_big / tau))."
+solution={String.raw`
+  tau, dt_big = 10.0, 25.0
+  fwd, bwd = [1.0], [1.0]
+  for _ in range(20):
+      fwd.append(fwd[-1] * (1 - dt_big / tau))
+      bwd.append(bwd[-1] / (1 + dt_big / tau))
+  fwd, bwd = np.array(fwd), np.array(bwd)
+  print("forward Euler:", fwd[:6].round(2), "...", f"{fwd[-1]:.3g}"); print("backward Euler:", bwd[:6].round(4))
+`} />
+
+Backward Euler is stable but not magic: with steps much larger than $\tau$ it still gets the timing of the decay wrong. Stability keeps a simulation from exploding; accuracy still needs steps small compared with the processes you care about.
+
+<Step n={4} title="Stiff systems" minutes={25} />
+
+A system is **stiff** when it contains processes on very different timescales: for example a sodium activation gate relaxing in 0.1 ms alongside a membrane with a 20 ms time constant. Forward Euler must use steps below about 0.2 ms to stay stable, even after the fast gate has settled and nothing fast is happening. Implicit methods remove that restriction, and adaptive solvers change the step size automatically, taking small steps during a spike and large ones in between.
+
+<PyCell id="stiff" title="A fast gate and a slow membrane" tests={String.raw`
+  import numpy as np
+  def test_forward_fails():
+      "forward Euler with dt = 0.5 ms is unstable (the gate variable exceeds 10 in size)"
+      assert np.abs(m_fwd).max() > 10
+
+  def test_backward_ok():
+      "backward Euler with dt = 0.5 ms tracks the fine reference voltage to within 0.2 mV at the end"
+      assert abs(V_bwd[-1] - V_ref[-1]) < 0.2
+`} prompt="A gate m relaxes towards m∞(V) = 1/(1 + exp(−(V + 40)/5)) with τm = 0.1 ms, and the voltage obeys τ dV/dt = −(V + 70) + 30 m with τ = 20 ms. Starting from V = −70, m = 0, simulate 100 ms with forward Euler at dt = 0.5 ms (`m_fwd`, `V_fwd`) and with a semi-implicit scheme that updates m by backward Euler (m_new = (m + dt/τm · m∞(V)) / (1 + dt/τm)) and V by backward Euler (`V_bwd`). Compare with forward Euler at dt = 0.01 ms (`V_ref`)."
+code={String.raw`
+  tau_m, tau_V = 0.1, 20.0
+  def m_inf(V): return 1 / (1 + np.exp(-(V + 40) / 5))
+
+  def run(dt, implicit):
+      n = int(100 / dt)
+      V, m = -70.0, 0.0
+      Vs, ms = np.empty(n), np.empty(n)
+      for i in range(n):
+          if implicit:
+              m = ...
+              V = ...                                  # backward Euler for V with m fixed: (V + dt/tau_V (-70 + 30 m)) / (1 + dt/tau_V)
+          else:
+              m, V = m + dt / tau_m * (m_inf(V) - m), V + dt / tau_V * (-(V + 70) + 30 * m)
+          Vs[i], ms[i] = V, m
+          if abs(m) > 1e6: return Vs[:i + 1], ms[:i + 1]
+      return Vs, ms
+
+  V_fwd, m_fwd = run(0.5, False)
+  V_bwd, m_bwd = run(0.5, True)
+  V_ref, m_ref = run(0.01, False)
+  print(f"forward Euler at 0.5 ms: largest |m| {np.abs(m_fwd).max():.3g};  semi-implicit final V {V_bwd[-1]:.3f} mV;  reference {V_ref[-1]:.3f} mV")
+`}
+hint="m = (m + dt / tau_m * m_inf(V)) / (1 + dt / tau_m); V = (V + dt / tau_V * (-70 + 30 * m)) / (1 + dt / tau_V)."
+solution={String.raw`
+  tau_m, tau_V = 0.1, 20.0
+  def m_inf(V): return 1 / (1 + np.exp(-(V + 40) / 5))
+
+  def run(dt, implicit):
+      n = int(100 / dt)
+      V, m = -70.0, 0.0
+      Vs, ms = np.empty(n), np.empty(n)
+      for i in range(n):
+          if implicit:
+              m = (m + dt / tau_m * m_inf(V)) / (1 + dt / tau_m)
+              V = (V + dt / tau_V * (-70 + 30 * m)) / (1 + dt / tau_V)                                  # backward Euler for V with m fixed: (V + dt/tau_V (-70 + 30 m)) / (1 + dt/tau_V)
+          else:
+              m, V = m + dt / tau_m * (m_inf(V) - m), V + dt / tau_V * (-(V + 70) + 30 * m)
+          Vs[i], ms[i] = V, m
+          if abs(m) > 1e6: return Vs[:i + 1], ms[:i + 1]
+      return Vs, ms
+
+  V_fwd, m_fwd = run(0.5, False)
+  V_bwd, m_bwd = run(0.5, True)
+  V_ref, m_ref = run(0.01, False)
+  print(f"forward Euler at 0.5 ms: largest |m| {np.abs(m_fwd).max():.3g};  semi-implicit final V {V_bwd[-1]:.3f} mV;  reference {V_ref[-1]:.3f} mV")
+`} />
+
+The semi-implicit scheme takes steps fifty times larger than the reference and lands in the same place. This idea, treating each gating variable implicitly because its equation is linear in the gate, is the basis of the exponential Euler and Crank-Nicolson schemes used in neuron simulators such as NEURON and Brian.
+
+<Bridge title="Solvers in brains and machines"
+  neuro="Every simulated neuron, network and plasticity model depends on a numerical solver. A spike model run with too large a step can miss spikes or fire spuriously; checking that results do not change when the step is halved is a basic test of any simulation."
+  ai="Residual networks are Euler steps; neural ODEs replace them with adaptive solvers (Chen and colleagues, 2018). Diffusion models generate images by solving a differential equation backwards in time, and much of their speed-up has come from better numerical solvers.">
+
+Follow the slope in small steps; check accuracy by halving the step, and stability by watching for explosions.
+
+</Bridge>
+
+<Prove title="Euler's stability limit" task="For $\dot{x} = \lambda x$ with real $\lambda \lt 0$, show that forward Euler's iterates satisfy $x_n = (1 + \lambda\Delta t)^n x_0$, and that they decay only if $\Delta t \lt 2/|\lambda|$. Then show that backward Euler's iterates decay for every $\Delta t > 0$.">
+
+Each forward step is $x_{n+1} = x_n + \Delta t\,\lambda x_n = (1 + \lambda\Delta t)x_n$, so $x_n = (1 + \lambda\Delta t)^n x_0$. This decays exactly when $|1 + \lambda\Delta t| \lt 1$, that is $-2 \lt \lambda\Delta t \lt 0$, or $\Delta t \lt 2/|\lambda|$. With $\lambda = -1/\tau$ the limit is $2\tau$.
+
+Backward Euler gives $x_{n+1} = x_n + \Delta t\,\lambda x_{n+1}$, so $x_{n+1} = x_n/(1 - \lambda\Delta t)$. Since $\lambda \lt 0$, the denominator exceeds 1 for every $\Delta t > 0$, and the iterates always decay, without changing sign.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "Euler's method takes a step...", options: ["Along the slope at the end of the step", "Along the slope at the current point", "Of random size", "Backwards in time"], answer: 1, explain: "$x + \\Delta t f(x)$." },
+  { q: "Euler's global error scales like...", options: ["Δt²", "Δt", "Δt⁴", "Not at all"], answer: 1, explain: "First order." },
+  { q: "RK4's global error scales like...", options: ["Δt", "Δt²", "Δt⁴", "e^Δt"], answer: 2, explain: "Halving the step cuts error sixteenfold." },
+  { q: "On a log-log plot of error against step size, a method of order p is...", options: ["A curve", "A line of slope p", "Flat", "A line of slope 1/p"], answer: 1, explain: "Error ∝ Δt^p." },
+  { q: "Forward Euler on dV/dt = −V/τ is stable only if Δt is below...", options: ["τ/2", "2τ", "10τ", "Any value"], answer: 1, explain: "|1 − Δt/τ| below 1." },
+  { q: "A stiff system has...", options: ["Only slow processes", "Processes on very different timescales", "No solution", "Only linear terms"], answer: 1, explain: "The fast one limits explicit steps." },
+  { q: "Backward Euler is...", options: ["Unstable", "Unconditionally stable for decaying linear equations", "Fourth order", "The same as forward Euler"], answer: 1, explain: "Implicit." },
+]} />
+
+<Flashcards cards={[
+  { front: "Euler's method?", back: "$x_{n+1} = x_n + \\Delta t f(x_n)$; first order." },
+  { front: "RK4?", back: "Four slope samples per step, weighted 1, 2, 2, 1; fourth order." },
+  { front: "Stability of forward Euler on ẋ = λx?", back: "Requires |1 + λΔt| below 1, so Δt below 2/|λ|." },
+  { front: "Backward Euler?", back: "$x_{n+1} = x_n + \\Delta t f(x_{n+1})$; unconditionally stable for decay." },
+  { front: "Stiffness?", back: "Fast and slow timescales together; explicit steps limited by the fastest." },
+]} />
+
+<Predict revisit question="Euler with Δt = 25 ms and τ = 10 ms: inaccurate, wrong but bounded, or explosive?" />
+
+<Key title="Before you go">
+<ul>
+<li>Euler follows the current slope; its error is first order.</li>
+<li>RK4 samples the slope four times per step and is fourth order.</li>
+<li>Explicit methods explode if the step is too large for the fastest process.</li>
+<li>Implicit methods handle stiff systems; check any simulation by halving the step.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Chen, Rubanova, Bettencourt and Duvenaud (2018), <em>Neural ordinary differential equations</em>, sections 1, 2 and 5.</li>
+<li>Steven Strogatz, <em>Nonlinear Dynamics and Chaos</em> (second edition, 2015), section 2.8 on numerical methods.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="You simulate a network of spiking neurons and want to know whether your step size is small enough. Describe two checks you would run and what result would make you trust the simulation." />

@@ -1,0 +1,254 @@
+export const meta = {
+  title: "Linear equations with inputs: impulse responses and resonance",
+  intro: "Yesterday's neuron received a constant current. Real input is a stream of synaptic currents arriving at irregular times. For a linear equation there is a beautiful shortcut: work out the response to a single brief kick, the impulse response, and the response to any input is the sum of shifted, scaled copies of it, a convolution. Today you prove that the membrane equation is a filter, build synaptic potentials from Rall's alpha function, and meet the second-order equation of a damped oscillator, which explains why some neurons respond best to inputs at a particular frequency.",
+  goals: [
+    "Derive the impulse response of the membrane equation and express the response to any input as a convolution",
+    "Check numerically that convolution and direct simulation agree",
+    "Model a synaptic potential with the alpha function and find its peak",
+    "Solve a damped second-order equation and find its resonance frequency",
+  ],
+  plan: [
+    { label: "Predict and the impulse response", minutes: 25 },
+    { label: "Convolution and simulation", minutes: 25 },
+    { label: "Synaptic potentials", minutes: 25 },
+    { label: "Resonance", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "rall-1967",
+};
+
+<Predict question="A neuron's membrane acts like a damped spring with a natural frequency of 8 Hz and light damping. You drive it with sinusoidal currents of equal amplitude at 2, 8 and 20 Hz. Which produces the largest voltage oscillation?" />
+
+<Step n={1} title="The impulse response" minutes={25} />
+
+Give the membrane equation $\tau\dot{V} = -V + RI(t)$ (with $V$ measured from rest) a very brief pulse of current delivering charge $q$ at time 0. The voltage jumps by $q/C$ and then decays: the **impulse response** is
+
+$$
+h(t) = \frac{1}{\tau}e^{-t/\tau} \quad (t \ge 0), \qquad h(t) = 0 \quad (t \lt 0),
+$$
+
+for a unit-area input to $RI$. Because the equation is linear and does not change over time, any input can be written as a sum of many tiny pulses, and the response is the sum of their shifted impulse responses:
+
+$$
+V(t) = \int_{-\infty}^{t} h(t - s)\,RI(s)\,\mathrm{d}s = (h * RI)(t).
+$$
+
+The membrane is a **filter**: a low-pass filter that smooths fast fluctuations and passes slow ones (Week 11's language). This is why linear-nonlinear models of neurons (Week 10) begin with a convolution.
+
+<Video id="vPYQPI4nKT8" title="Oscillatory Solutions" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's look at linear systems whose solutions oscillate, the second half of today's lesson." />
+
+<Step n={2} title="Convolution and simulation" minutes={25} />
+
+<PyCell id="conv" title="Two ways to the same answer" tests={String.raw`
+  import numpy as np
+  def test_agree():
+      "the convolution and the direct simulation agree to within 0.05 mV everywhere"
+      assert np.max(np.abs(V_conv - V_sim)) < 0.05
+`} prompt="Drive a membrane with τ = 15 ms by a random input current (RI changes every 1 ms, mean 5 mV, sd 8 mV) for 300 ms, with time step 0.01 ms. Compute the response by simulating τ dV/dt = −V + RI with small Euler steps (`V_sim`), and by convolving the input with h(t) = e^(−t/τ)/τ (`V_conv`, use np.convolve and multiply by dt)."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1967)
+  dt, T, tau = 0.01, 300.0, 15.0
+  t = np.arange(0, T, dt)
+  RI = np.repeat(5 + 8 * rng.normal(size=int(T)), int(1 / dt))[:len(t)]     # changes every 1 ms
+
+  V_sim = np.zeros(len(t))
+  for i in range(1, len(t)):
+      V_sim[i] = ...
+
+  h = np.exp(-t / tau) / tau
+  V_conv = ...                                          # keep the first len(t) samples
+  print(f"largest difference {np.max(np.abs(V_conv - V_sim)):.4f} mV")
+  plt.plot(t, RI, alpha=0.3, label="input RI"); plt.plot(t, V_sim, label="simulated"); plt.plot(t, V_conv, "--", label="convolution"); plt.legend(); plt.xlabel("ms"); plt.show()
+`}
+hint="V_sim[i] = V_sim[i - 1] + dt / tau * (-V_sim[i - 1] + RI[i - 1]); V_conv = np.convolve(RI, h)[:len(t)] * dt."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1967)
+  dt, T, tau = 0.01, 300.0, 15.0
+  t = np.arange(0, T, dt)
+  RI = np.repeat(5 + 8 * rng.normal(size=int(T)), int(1 / dt))[:len(t)]     # changes every 1 ms
+
+  V_sim = np.zeros(len(t))
+  for i in range(1, len(t)):
+      V_sim[i] = V_sim[i - 1] + dt / tau * (-V_sim[i - 1] + RI[i - 1])
+
+  h = np.exp(-t / tau) / tau
+  V_conv = np.convolve(RI, h)[:len(t)] * dt                                          # keep the first len(t) samples
+  print(f"largest difference {np.max(np.abs(V_conv - V_sim)):.4f} mV")
+  plt.plot(t, RI, alpha=0.3, label="input RI"); plt.plot(t, V_sim, label="simulated"); plt.plot(t, V_conv, "--", label="convolution"); plt.legend(); plt.xlabel("ms"); plt.show()
+`} />
+
+The two agree: for a linear, time-invariant system, the impulse response is the whole story. Note how much smoother the voltage is than the input: fluctuations faster than $\tau$ are averaged away.
+
+<Step n={3} title="Synaptic potentials" minutes={25} />
+
+A synapse does not deliver an instant pulse: its current rises and decays over a few milliseconds. Rall (1967, today's paper) modelled it with the **alpha function**,
+
+$$
+I_{\text{syn}}(t) \propto \frac{t}{\tau_s}e^{1 - t/\tau_s},
+$$
+
+which rises from zero, peaks at $t = \tau_s$, and decays. The resulting postsynaptic potential is the alpha current convolved with the membrane's impulse response: a smoothed, delayed version, which peaks later and lasts longer than the current that caused it. Its shape tells you about both the synapse and the membrane, and, through the dendrites, about where on the neuron the synapse sits.
+
+<PyCell id="psp" title="From synaptic current to PSP" tests={String.raw`
+  import numpy as np
+  def test_alpha():
+      "the alpha current peaks at tau_s"
+      assert abs(t[np.argmax(I_alpha)] - 2.0) < 0.02
+
+  def test_psp_later():
+      "the PSP peaks later than the current, and decays more slowly (its value at 40 ms is more than 10% of its peak)"
+      assert t_peak_psp > 2.0 + 2 and psp[np.searchsorted(t, 40)] > 0.1 * psp.max()
+`} prompt="With τ_s = 2 ms and membrane τ = 15 ms, compute the alpha current on a 0.01 ms grid from 0 to 100 ms, convolve it with the membrane impulse response to get `psp`, and find the time of the PSP's peak, `t_peak_psp`."
+code={String.raw`
+  t = np.arange(0, 100, dt)
+  tau_s = 2.0
+  I_alpha = ...
+  h = np.exp(-t / tau) / tau
+  psp = np.convolve(I_alpha, h)[:len(t)] * dt
+  t_peak_psp = ...
+  print(f"current peaks at {t[np.argmax(I_alpha)]:.2f} ms, PSP peaks at {t_peak_psp:.2f} ms")
+  plt.plot(t, I_alpha / I_alpha.max(), label="synaptic current"); plt.plot(t, psp / psp.max(), label="PSP"); plt.legend(); plt.xlabel("ms"); plt.show()
+`}
+hint="I_alpha = (t / tau_s) * np.exp(1 - t / tau_s); t_peak_psp = t[np.argmax(psp)]."
+solution={String.raw`
+  t = np.arange(0, 100, dt)
+  tau_s = 2.0
+  I_alpha = (t / tau_s) * np.exp(1 - t / tau_s)
+  h = np.exp(-t / tau) / tau
+  psp = np.convolve(I_alpha, h)[:len(t)] * dt
+  t_peak_psp = t[np.argmax(psp)]
+  print(f"current peaks at {t[np.argmax(I_alpha)]:.2f} ms, PSP peaks at {t_peak_psp:.2f} ms")
+  plt.plot(t, I_alpha / I_alpha.max(), label="synaptic current"); plt.plot(t, psp / psp.max(), label="PSP"); plt.legend(); plt.xlabel("ms"); plt.show()
+`} />
+
+<Step n={4} title="Resonance" minutes={30} />
+
+Some neurons have a slow current (such as the h-current) that opposes changes in voltage. Together with the capacitor, it makes the membrane behave like a mass on a spring with friction, a **second-order** linear equation:
+
+$$
+\ddot{x} + 2\zeta\omega_0\dot{x} + \omega_0^2 x = u(t).
+$$
+
+Try $x = e^{\lambda t}$ with no input: $\lambda^2 + 2\zeta\omega_0\lambda + \omega_0^2 = 0$, so $\lambda = -\zeta\omega_0 \pm \omega_0\sqrt{\zeta^2 - 1}$. With light damping ($\zeta \lt 1$) the roots are complex, and the solution rings at about $\omega_0$ while decaying. Driven by $u = \cos\omega t$, the steady response has amplitude
+
+$$
+A(\omega) = \frac{1}{\sqrt{(\omega_0^2 - \omega^2)^2 + (2\zeta\omega_0\omega)^2}},
+$$
+
+largest near $\omega_0$: **resonance**. Neurons with subthreshold resonance respond best to inputs in a preferred frequency band, often theta (4 to 12 Hz), which may help them select rhythmic inputs (Hutcheon and Yarom, 2000).
+
+<Figure caption="A damped oscillator: its impulse response, and the amplitude of its response to sinusoidal drive. Change the natural frequency, the damping and the drive." credit="Interactive figure by Engram.">
+  <DampedOscillator />
+</Figure>
+
+<PyCell id="resonance" title="Find the resonance by simulation" tests={String.raw`
+  import numpy as np
+  def test_sim_matches():
+      "the simulated steady-state amplitudes match the formula to within 5%"
+      assert np.all(np.abs(amp_sim - amp_formula) / amp_formula < 0.05)
+
+  def test_peak():
+      "the largest response is at the 8 Hz drive"
+      assert freqs[np.argmax(amp_sim)] == 8
+`} prompt="With f0 = 8 Hz and ζ = 0.15, simulate x'' + 2ζω0 x' + ω0² x = cos(ωt) for drives at 2, 5, 8, 12 and 20 Hz, for 3 s with dt = 0.1 ms (write it as two first-order equations for x and v = x'). Measure the amplitude over the last second (`amp_sim`) and compare with the formula (`amp_formula`)."
+code={String.raw`
+  w0, zeta = 2 * np.pi * 8, 0.15
+  freqs = [2, 5, 8, 12, 20]
+  dts, T2 = 1e-4, 3.0
+  amp_sim, amp_formula = [], []
+  for f in freqs:
+      w = 2 * np.pi * f
+      x, v = 0.0, 0.0
+      n = int(T2 / dts); xs = np.empty(n)
+      for i in range(n):
+          a = ...                                   # acceleration from the equation
+          x, v = x + dts * v, v + dts * a
+          xs[i] = x
+      amp_sim.append(np.abs(xs[-int(1 / dts):]).max())
+      amp_formula.append(...)
+  amp_sim, amp_formula = np.array(amp_sim), np.array(amp_formula)
+  print("drive (Hz):", freqs); print("amplitude, simulated:", (amp_sim / amp_sim.max()).round(3)); print("amplitude, formula:  ", (amp_formula / amp_formula.max()).round(3))
+`}
+hint="a = np.cos(w * i * dts) - 2 * zeta * w0 * v - w0 ** 2 * x; amp_formula.append(1 / np.sqrt((w0 ** 2 - w ** 2) ** 2 + (2 * zeta * w0 * w) ** 2))."
+solution={String.raw`
+  w0, zeta = 2 * np.pi * 8, 0.15
+  freqs = [2, 5, 8, 12, 20]
+  dts, T2 = 1e-4, 3.0
+  amp_sim, amp_formula = [], []
+  for f in freqs:
+      w = 2 * np.pi * f
+      x, v = 0.0, 0.0
+      n = int(T2 / dts); xs = np.empty(n)
+      for i in range(n):
+          a = np.cos(w * i * dts) - 2 * zeta * w0 * v - w0 ** 2 * x                                   # acceleration from the equation
+          x, v = x + dts * v, v + dts * a
+          xs[i] = x
+      amp_sim.append(np.abs(xs[-int(1 / dts):]).max())
+      amp_formula.append(1 / np.sqrt((w0 ** 2 - w ** 2) ** 2 + (2 * zeta * w0 * w) ** 2))
+  amp_sim, amp_formula = np.array(amp_sim), np.array(amp_formula)
+  print("drive (Hz):", freqs); print("amplitude, simulated:", (amp_sim / amp_sim.max()).round(3)); print("amplitude, formula:  ", (amp_formula / amp_formula.max()).round(3))
+`} />
+
+The 8 Hz drive wins by a wide margin, which answers the prediction. Note the trick that made the simulation possible: any second-order equation becomes two first-order equations by treating the velocity as a second variable, so everything you learn about first-order systems applies.
+
+<Bridge title="Filters in brains and machines"
+  neuro="Membranes, synapses and dendrites are filters: the membrane low-passes its input, short-term synaptic depression high-passes it, and resonant currents make band-pass filters tuned to theta or gamma rhythms. The impulse response, measured by injecting brief pulses, characterises them completely while they stay linear."
+  ai="Convolutional layers in time, and modern state-space sequence models such as S4, are learned linear filters, often parameterised by exactly these damped oscillatory impulse responses because they can represent long memories stably.">
+
+For a linear system, the response to a single kick tells you the response to everything.
+
+</Bridge>
+
+<Prove title="The impulse response of the membrane" task="Show that $V(t) = \int_0^t \frac{1}{\tau}e^{-(t-s)/\tau}u(s)\,\mathrm{d}s$ solves $\tau\dot{V} = -V + u(t)$ with $V(0) = 0$.">
+
+Write $V(t) = \frac{1}{\tau}e^{-t/\tau}\int_0^t e^{s/\tau}u(s)\,\mathrm{d}s$. Differentiate with the product rule and the fundamental theorem of calculus (Week 10):
+
+$$
+\dot{V} = -\frac{1}{\tau}V(t) + \frac{1}{\tau}e^{-t/\tau}\,e^{t/\tau}u(t) = -\frac{1}{\tau}V(t) + \frac{1}{\tau}u(t).
+$$
+
+Multiplying by $\tau$ gives $\tau\dot{V} = -V + u$, and at $t = 0$ the integral is empty, so $V(0) = 0$. The response is the input convolved with $h(t) = e^{-t/\tau}/\tau$.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "The impulse response of the membrane equation is...", options: ["A step", "A decaying exponential", "A sine wave", "Constant"], answer: 1, explain: "$e^{-t/\\tau}/\\tau$." },
+  { q: "For a linear time-invariant system, the response to any input is...", options: ["Unpredictable", "The input convolved with the impulse response", "The impulse response", "The input times τ"], answer: 1, explain: "Superposition of shifted kicks." },
+  { q: "The membrane acts as a...", options: ["High-pass filter", "Low-pass filter", "Band-pass filter", "Amplifier"], answer: 1, explain: "Smooths fast fluctuations." },
+  { q: "The alpha function t e^{1 − t/τs}/τs peaks at...", options: ["0", "τs", "2τs", "The membrane τ"], answer: 1, explain: "Set the derivative to zero." },
+  { q: "A PSP peaks compared with its synaptic current...", options: ["Earlier", "Later", "At the same time", "Never"], answer: 1, explain: "The membrane delays and smooths." },
+  { q: "A lightly damped second-order system's impulse response...", options: ["Decays without oscillating", "Rings at about the natural frequency while decaying", "Grows", "Is a step"], answer: 1, explain: "Complex characteristic roots." },
+  { q: "A second-order equation can be simulated by...", options: ["It cannot", "Rewriting it as two first-order equations", "Only analytically", "Using the impulse response only"], answer: 1, explain: "x and v = x′." },
+]} />
+
+<Flashcards cards={[
+  { front: "Membrane impulse response?", back: "$h(t) = e^{-t/\\tau}/\\tau$ for t ≥ 0." },
+  { front: "Response to any input (linear)?", back: "$V = h * u$, the convolution of the input with the impulse response." },
+  { front: "Alpha function?", back: "$(t/\\tau_s)e^{1 - t/\\tau_s}$, peaking at $\\tau_s$ (Rall, 1967)." },
+  { front: "Damped oscillator?", back: "$\\ddot x + 2\\zeta\\omega_0\\dot x + \\omega_0^2x = u$; rings if ζ below 1." },
+  { front: "Resonance?", back: "Steady amplitude $1/\\sqrt{(\\omega_0^2 - \\omega^2)^2 + (2\\zeta\\omega_0\\omega)^2}$, peaked near ω0." },
+]} />
+
+<Predict revisit question="Which drive frequency gives the largest response from an 8 Hz resonator?" />
+
+<Key title="Before you go">
+<ul>
+<li>A linear, time-invariant system is fully described by its impulse response.</li>
+<li>The membrane response is the input convolved with e^(−t/τ)/τ: a low-pass filter.</li>
+<li>Synaptic potentials are alpha currents filtered by the membrane.</li>
+<li>Second-order systems can ring and resonate; rewrite them as two first-order equations to simulate.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Rall (1967), <em>Distinguishing theoretical synaptic potentials computed for different soma-dendritic distributions of synaptic input</em>.</li>
+<li>Bruce Hutcheon and Yosef Yarom (2000), <em>Resonance, oscillation and the intrinsic frequency preferences of neurons</em>, Trends in Neurosciences 23, 216 to 222.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A neuron that resonates at 8 Hz receives inputs from two areas, one oscillating at 8 Hz and one at 40 Hz. Which input will it listen to, and how could the brain use this to route information?" />
