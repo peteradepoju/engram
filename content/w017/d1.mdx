@@ -1,0 +1,242 @@
+export const meta = {
+  title: "Estimators: bias, variance and the sampling distribution",
+  intro: "Probability runs from a known model to the data it produces. Statistics runs the other way: from data you have to a model you do not know. Every number you report from an experiment, a firing rate, a Fano factor, a preferred orientation, is an estimate: a function of random data, and therefore itself random. Today you learn to think of an estimator through its sampling distribution, the spread of answers it would give over many repeats of the experiment, and to judge it by its bias and its variance. You will find that some natural estimates are systematically wrong, that unbiased is not the same as best, and that the measured peak of a tuning curve is almost always too high.",
+  goals: [
+    "Treat an estimator as a random variable with a sampling distribution",
+    "Compute bias, variance, standard error and mean squared error, and decompose one into the others",
+    "Explain why dividing by n − 1 removes the bias of the sample variance, and why that may not lower the error",
+    "Recognise selection bias, such as the inflated peak of a measured tuning curve",
+  ],
+  plan: [
+    { label: "Predict and estimators", minutes: 20 },
+    { label: "The sampling distribution", minutes: 25 },
+    { label: "Bias, variance and mean squared error", minutes: 35 },
+    { label: "The winner's curse", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "fisher-1922",
+};
+
+<Predict question="You measure a neuron's response to 8 orientations, 10 trials each, and report its peak rate as the largest of the 8 mean rates. If you repeated the whole experiment many times, would your reported peak be right on average, too high, or too low?" />
+
+<Step n={1} title="Estimators" minutes={20} />
+
+A statistical **model** is a family of distributions indexed by unknown **parameters** $\theta$: Poisson spike counts with an unknown rate, Gaussian noise with unknown mean and variance. An **estimator** $\hat{\theta}$ is any rule that turns data $x_1, \dots, x_n$ into a guess for $\theta$. The sample mean is an estimator of a rate; so is the median, and so, absurdly, is "always say 5". Because the data are random, $\hat{\theta}$ is a random variable, and the question "how good is this estimator?" is a question about its distribution.
+
+Fisher (1922, today's paper) set out the criteria still used. An estimator is **unbiased** if $\mathbb{E}[\hat{\theta}] = \theta$; **consistent** if it converges to $\theta$ as $n$ grows; and **efficient** if no other unbiased estimator has smaller variance.
+
+<Video id="7aiKvKlYwR0" title="Statistical inference and likelihood" by="Neuromatch Academy (prerequisite course)" note="Neuromatch's introduction to inferring parameters from data, the step from probability to statistics." />
+
+<Step n={2} title="The sampling distribution" minutes={25} />
+
+Imagine repeating your experiment many times and computing $\hat{\theta}$ each time. The distribution of those values is the **sampling distribution**. Its standard deviation is the **standard error** (SE). For the sample mean of $n$ independent draws, the SE is $\sigma/\sqrt{n}$ (Week 15), estimated in practice by $s/\sqrt{n}$ with $s$ the sample standard deviation. You can never see the sampling distribution of a real experiment, because you run it once; simulation lets you see it for a model, and the bootstrap (next week) approximates it from data.
+
+<Figure caption="The sampling distribution of two estimators of a variance. Switch between dividing by n and by n − 1, and change the sample size." credit="Interactive figure by Engram.">
+  <SamplingDistribution />
+</Figure>
+
+<PyCell id="sampdist" title="See a sampling distribution" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "rate_hats holds 5000 estimates"
+      assert rate_hats.shape == (5000,)
+
+  def test_se():
+      "the spread of the estimates matches sqrt(rate / (n T)) to within 5%"
+      assert abs(rate_hats.std() - np.sqrt(8 / (10 * 0.5))) / np.sqrt(8 / (10 * 0.5)) < 0.05
+
+  def test_unbiased():
+      "the estimates average to the true rate to within 0.1 Hz"
+      assert abs(rate_hats.mean() - 8) < 0.1
+`} prompt="A neuron fires as a Poisson process at 8 Hz. One experiment records 10 trials of 0.5 s and estimates the rate as total spikes / total time. Simulate 5,000 such experiments and store the estimates in `rate_hats`. Compare their spread with the formula sqrt(rate / (n T))."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1922)
+  rate, n, T = 8.0, 10, 0.5
+  counts = rng.poisson(rate * T, size=(5000, n))
+  rate_hats = ...
+  print(f"mean of estimates {rate_hats.mean():.3f} Hz, standard error {rate_hats.std():.3f} (formula {np.sqrt(rate / (n * T)):.3f})")
+  plt.hist(rate_hats, 40); plt.axvline(rate, color="k"); plt.xlabel("estimated rate (Hz)"); plt.show()
+`}
+hint="rate_hats = counts.sum(axis=1) / (n * T)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1922)
+  rate, n, T = 8.0, 10, 0.5
+  counts = rng.poisson(rate * T, size=(5000, n))
+  rate_hats = counts.sum(axis=1) / (n * T)
+  print(f"mean of estimates {rate_hats.mean():.3f} Hz, standard error {rate_hats.std():.3f} (formula {np.sqrt(rate / (n * T)):.3f})")
+  plt.hist(rate_hats, 40); plt.axvline(rate, color="k"); plt.xlabel("estimated rate (Hz)"); plt.show()
+`} />
+
+<Step n={3} title="Bias, variance and mean squared error" minutes={35} />
+
+The **bias** is $\mathbb{E}[\hat{\theta}] - \theta$; the **variance** is $\operatorname{Var}(\hat{\theta})$. The overall accuracy is the **mean squared error**, and it splits exactly into the two:
+
+$$
+\operatorname{MSE}(\hat{\theta}) = \mathbb{E}\left[(\hat{\theta} - \theta)^2\right] = \operatorname{bias}^2 + \operatorname{Var}(\hat{\theta}).
+$$
+
+The proof is the same move as the law of total variance: add and subtract $\mathbb{E}[\hat{\theta}]$, and the cross term vanishes. This decomposition is the seed of the bias-variance trade-off of Day 5.
+
+The classic example is the variance. Dividing the sum of squared deviations from the *sample* mean by $n$ underestimates $\sigma^2$, because the sample mean is, by construction, closer to the data than the true mean is.
+
+<Derivation title="Why n − 1">
+
+<div>
+
+Write $\sum_i (x_i - \bar{x})^2 = \sum_i (x_i - \mu)^2 - n(\bar{x} - \mu)^2$ (expand and use $\sum_i (x_i - \mu) = n(\bar{x} - \mu)$).
+
+</div>
+
+<div>
+
+Take expectations: the first term has expectation $n\sigma^2$, and $\mathbb{E}[(\bar{x} - \mu)^2] = \operatorname{Var}(\bar{x}) = \sigma^2/n$, so
+
+$$
+\mathbb{E}\left[\sum_i (x_i - \bar{x})^2\right] = n\sigma^2 - \sigma^2 = (n - 1)\sigma^2.
+$$
+
+</div>
+
+<div>
+
+Dividing by $n - 1$ therefore gives an unbiased estimator; dividing by $n$ gives one with bias $-\sigma^2/n$. The $n - 1$ counts the **degrees of freedom** left after estimating the mean.
+
+</div>
+
+</Derivation>
+
+<PyCell id="variance" title="Unbiased is not best" tests={String.raw`
+  import numpy as np
+  def test_bias():
+      "dividing by n is biased by about -sigma^2 / n; dividing by n - 1 is unbiased (within 0.05)"
+      assert abs(results["n"]["bias"] + 4 / 5) < 0.05 and abs(results["n-1"]["bias"]) < 0.05
+
+  def test_decomposition():
+      "for each estimator, MSE equals bias^2 + variance to within 1e-9"
+      assert all(abs(r["mse"] - (r["bias"] ** 2 + r["var"])) < 1e-9 for r in results.values())
+
+  def test_mse():
+      "the biased estimator has the smaller mean squared error"
+      assert results["n"]["mse"] < results["n-1"]["mse"]
+`} prompt="Draw 200,000 samples of size 5 from a Gaussian with variance 4. For the estimators that divide by n and by n − 1, compute the bias, variance and MSE, and store them as `results[name] = {'bias': ..., 'var': ..., 'mse': ...}`."
+code={String.raw`
+  x = rng.normal(0, 2, size=(200000, 5))
+  ss = ((x - x.mean(axis=1, keepdims=True)) ** 2).sum(axis=1)
+  results = {}
+  for name, d in [("n", 5), ("n-1", 4)]:
+      est = ss / d
+      results[name] = {"bias": ..., "var": ..., "mse": ...}
+  for name, r in results.items():
+      print(f"divide by {name:3s}: bias {r['bias']:+.3f}, variance {r['var']:.3f}, MSE {r['mse']:.3f}")
+`}
+hint="'bias': est.mean() - 4, 'var': est.var(), 'mse': np.mean((est - 4) ** 2)."
+solution={String.raw`
+  x = rng.normal(0, 2, size=(200000, 5))
+  ss = ((x - x.mean(axis=1, keepdims=True)) ** 2).sum(axis=1)
+  results = {}
+  for name, d in [("n", 5), ("n-1", 4)]:
+      est = ss / d
+      results[name] = {"bias": est.mean() - 4, "var": est.var(), "mse": np.mean((est - 4) ** 2)}
+  for name, r in results.items():
+      print(f"divide by {name:3s}: bias {r['bias']:+.3f}, variance {r['var']:.3f}, MSE {r['mse']:.3f}")
+`} />
+
+The estimator that divides by $n$ is biased, yet its mean squared error is smaller, because shrinking every estimate towards zero reduces their variance by more than it adds in bias squared. Accepting a little bias for a large cut in variance is the idea behind every regulariser you will meet this week.
+
+<Step n={4} title="The winner's curse" minutes={25} />
+
+Some biases come not from the formula but from how estimates are *selected*. If you pick the largest of several noisy means and report it, you have picked the one whose noise happened to be most positive, so it is biased upwards. This is the **winner's curse**, and it is everywhere in neuroscience: the peak rate of a tuning curve, the most responsive voxel, the strongest effect in a screen. Its cure is to select on one half of the data and measure on the other, a theme of next week.
+
+<PyCell id="curse" title="The inflated peak" tests={String.raw`
+  import numpy as np
+  def test_inflated():
+      "the max-of-means estimate of the peak is too high on average by more than 0.2 spikes"
+      assert peak_naive.mean() - true_peak > 0.2
+
+  def test_split():
+      "selecting on half the trials and measuring on the other half removes most of the bias (within 0.2)"
+      assert abs(peak_split.mean() - true_peak) < 0.2 + 0.05 * true_peak
+`} prompt="A neuron's mean counts at 8 orientations are given by `f`, peaking at 10 spikes. For 5,000 simulated experiments of 10 trials per orientation, estimate the peak two ways: `peak_naive` (the largest of the 8 means) and `peak_split` (choose the best orientation using trials 1 to 5, then report its mean over trials 6 to 10)."
+code={String.raw`
+  f = np.array([2.0, 3.5, 6.0, 9.0, 10.0, 9.0, 6.0, 3.5])
+  true_peak = f.max()
+  counts = rng.poisson(f, size=(5000, 10, 8))         # experiments x trials x orientations
+  means = counts.mean(axis=1)
+  peak_naive = ...
+  best = counts[:, :5, :].mean(axis=1).argmax(axis=1)
+  peak_split = ...
+  print(f"true peak {true_peak};  naive estimate {peak_naive.mean():.2f};  split estimate {peak_split.mean():.2f}")
+`}
+hint="peak_naive = means.max(axis=1); peak_split = counts[:, 5:, :].mean(axis=1)[np.arange(5000), best]."
+solution={String.raw`
+  f = np.array([2.0, 3.5, 6.0, 9.0, 10.0, 9.0, 6.0, 3.5])
+  true_peak = f.max()
+  counts = rng.poisson(f, size=(5000, 10, 8))         # experiments x trials x orientations
+  means = counts.mean(axis=1)
+  peak_naive = means.max(axis=1)
+  best = counts[:, :5, :].mean(axis=1).argmax(axis=1)
+  peak_split = counts[:, 5:, :].mean(axis=1)[np.arange(5000), best]
+  print(f"true peak {true_peak};  naive estimate {peak_naive.mean():.2f};  split estimate {peak_split.mean():.2f}")
+`} />
+
+The naive peak averages 10.29 spikes against a true 10, too high, which answers the prediction; the inflation grows with more noise, fewer trials and more conditions near the peak. The split estimate averages 9.55, now slightly low, because the orientation chosen on half the data is sometimes a neighbour of the true peak, but it is no longer flattered by its own noise. The price is noisier estimates, since each half has only five trials.
+
+<Bridge title="Estimators in brains and machines"
+  neuro="A neuron downstream of a population is itself an estimator: it computes a function of noisy spikes, and its accuracy can be judged by bias and variance. Perceptual biases, such as the pull towards a prior you saw last week, can be the price of lower variance."
+  ai="Validation scores suffer the winner's curse: the best of many hyperparameter settings looks better on the validation set than it will on new data, which is why a final, untouched test set is reported (Week 13). Shrinkage, from weight decay to dropout, trades bias for variance.">
+
+Every reported number has a sampling distribution; ask how it is biased and how much it would vary.
+
+</Bridge>
+
+<Prove title="The bias-variance decomposition" task="Show that $\mathbb{E}[(\hat{\theta} - \theta)^2] = (\mathbb{E}[\hat{\theta}] - \theta)^2 + \operatorname{Var}(\hat{\theta})$.">
+
+Let $m = \mathbb{E}[\hat{\theta}]$. Then $\hat{\theta} - \theta = (\hat{\theta} - m) + (m - \theta)$, and squaring gives $(\hat{\theta} - m)^2 + 2(\hat{\theta} - m)(m - \theta) + (m - \theta)^2$.
+
+Take expectations. The middle term is $2(m - \theta)\,\mathbb{E}[\hat{\theta} - m] = 0$, because $m - \theta$ is a constant and $\mathbb{E}[\hat{\theta}] = m$.
+
+What remains is $\mathbb{E}[(\hat{\theta} - m)^2] + (m - \theta)^2 = \operatorname{Var}(\hat{\theta}) + \operatorname{bias}^2$.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "An estimator is...", options: ["The true parameter", "A function of the data used to guess a parameter", "A prior", "Always unbiased"], answer: 1, explain: "And therefore a random variable." },
+  { q: "The standard error is...", options: ["The bias", "The standard deviation of the sampling distribution", "The data's standard deviation", "The MSE"], answer: 1, explain: "How much the estimate would vary across repeats." },
+  { q: "An unbiased estimator...", options: ["Is always right", "Is right on average", "Has zero variance", "Has the smallest MSE"], answer: 1, explain: "$E[\\hat\\theta] = \\theta$." },
+  { q: "MSE equals...", options: ["bias + variance", "bias² + variance", "variance only", "bias² × variance"], answer: 1, explain: "The decomposition." },
+  { q: "The sample variance divided by n is...", options: ["Unbiased", "Biased downwards", "Biased upwards", "Infinite"], answer: 1, explain: "By −σ²/n." },
+  { q: "A consistent estimator...", options: ["Never changes", "Converges to the truth as n grows", "Is unbiased for every n", "Has variance 1"], answer: 1, explain: "Fisher's criterion." },
+  { q: "Reporting the largest of several noisy means gives an estimate that is...", options: ["Unbiased", "Too high on average", "Too low", "Exact"], answer: 1, explain: "The winner's curse." },
+]} />
+
+<Flashcards cards={[
+  { front: "Sampling distribution?", back: "The distribution of an estimate over imagined repeats of the experiment." },
+  { front: "Bias?", back: "$E[\\hat\\theta] - \\theta$." },
+  { front: "MSE decomposition?", back: "MSE = bias² + variance." },
+  { front: "Why n − 1?", back: "$E[\\sum(x_i - \\bar x)^2] = (n - 1)\\sigma^2$: one degree of freedom used by the mean." },
+  { front: "Winner's curse?", back: "Selecting the largest of noisy estimates biases it upwards; select and measure on independent data." },
+]} />
+
+<Predict revisit question="Is the reported peak of a tuning curve right on average, too high or too low?" />
+
+<Key title="Before you go">
+<ul>
+<li>An estimate is random; its sampling distribution describes its accuracy.</li>
+<li>MSE = bias² + variance, and a little bias can buy a large cut in variance.</li>
+<li>The sample variance needs n − 1 to be unbiased.</li>
+<li>Selecting the best of noisy estimates biases it; use independent data to select and to measure.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Fisher (1922), <em>On the mathematical foundations of theoretical statistics</em>, sections 1 to 3.</li>
+<li>Larry Wasserman, <em>All of Statistics</em> (2004), chapter 6.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Find a number you or a paper you read reported after choosing it as the best of several: the most responsive neuron, the best model, the strongest effect. How large might its winner's curse be, and how could it have been avoided?" />

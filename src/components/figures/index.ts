@@ -74,3 +74,8 @@ export { BayesUpdate } from "./bayes-update";
 export { CueCombination } from "./cue-combination";
 export { GaussianConditional } from "./gaussian-conditional";
 export { GaussianClassifier } from "./gaussian-classifier";
+export { SamplingDistribution } from "./sampling-distribution";
+export { LikelihoodCurve } from "./likelihood-curve";
+export { FisherTuning } from "./fisher-tuning";
+export { RidgePrior } from "./ridge-prior";
+export { BiasVariance } from "./bias-variance";

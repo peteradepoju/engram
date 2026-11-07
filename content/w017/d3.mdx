@@ -1,0 +1,258 @@
+export const meta = {
+  title: "Fisher information and the limits of precision",
+  intro: "How precisely can a parameter be estimated from data, by anyone, with any method? The answer is set by the curvature of the log-likelihood: a sharply peaked likelihood pins the parameter down, a flat one does not. That curvature is the Fisher information, and its reciprocal, the Cramér-Rao bound, is the smallest variance any unbiased estimator can achieve. Today you compute it for a firing rate, use it to put error bars on a maximum likelihood estimate, and then turn it on its head: the Fisher information of a population about a stimulus measures how well the brain could possibly decode it. You finish with a striking result: with the right kind of correlation, adding more neurons stops helping.",
+  goals: [
+    "Define the score and the Fisher information, and compute them for Poisson data",
+    "State the Cramér-Rao bound and the approximate normality of the MLE, and build Wald confidence intervals",
+    "Compute a population's Fisher information about a stimulus from its tuning curves",
+    "Show how differential correlations make information saturate as a population grows",
+  ],
+  plan: [
+    { label: "Predict and curvature", minutes: 25 },
+    { label: "Error bars from the curvature", minutes: 25 },
+    { label: "Fisher information of a population", minutes: 35 },
+    { label: "Information-limiting correlations", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "moreno-bote-2014",
+};
+
+<Predict question="A population of orientation-tuned neurons has independent Poisson noise. You double the number of neurons. By how much does the best possible decoding precision (one over the standard deviation) improve: not at all, by a factor of √2, or by a factor of 2? Would your answer change if the neurons' noise were correlated?" />
+
+<Step n={1} title="Curvature" minutes={25} />
+
+The **score** is the derivative of the log-likelihood, $s(\theta) = \partial\ell/\partial\theta$. At the true parameter its expectation is zero: on average, the data do not push $\theta$ either way. Its variance is the **Fisher information**,
+
+$$
+I(\theta) = \operatorname{Var}\left[s(\theta)\right] = -\mathbb{E}\left[\frac{\partial^2\ell}{\partial\theta^2}\right],
+$$
+
+the expected curvature of the log-likelihood. For $n$ independent observations it is $n$ times the information in one. For Poisson counts, $\ell'' = -\sum_i k_i/\lambda^2$, so $I(\lambda) = n\lambda/\lambda^2 = n/\lambda$.
+
+<Video id="Fuwx_V64nEU" title="Maximum likelihood" by="Neuromatch Academy (prerequisite course)" note="Neuromatch's short treatment of maximum likelihood and the shape of the likelihood around its peak." />
+
+<Step n={2} title="Error bars from the curvature" minutes={25} />
+
+Two classic results connect information to precision. The **Cramér-Rao bound**: any unbiased estimator has $\operatorname{Var}(\hat{\theta}) \ge 1/I(\theta)$. And **asymptotic normality**: for large $n$ the MLE is approximately $\mathcal{N}(\theta, 1/I(\theta))$, so it attains the bound. Together they give the **Wald interval**, $\hat{\theta} \pm 1.96/\sqrt{I(\hat{\theta})}$, the most common error bar in science. It is only an approximation: with little data, or near a boundary such as a rate near zero, it can be badly wrong.
+
+<PyCell id="crb" title="The MLE reaches the bound" tests={String.raw`
+  import numpy as np
+  def test_var():
+      "with 40 trials, the variance of the MLE across experiments is within 5% of lambda / n"
+      assert abs(var_mle - 3 / 40) / (3 / 40) < 0.05
+
+  def test_coverage():
+      "Wald intervals cover the truth about 95% of the time with 40 trials (0.93 to 0.97) but less well with 3 trials"
+      assert 0.93 < coverage[40] < 0.97 and coverage[3] < coverage[40]
+`} prompt="For a rate of 3 per trial, simulate 20,000 experiments with n = 3 and n = 40 trials. Compute the variance of the MLE for n = 40 (`var_mle`) and compare with the Cramér-Rao bound λ/n. For both n, compute how often the Wald interval mean ± 1.96 sqrt(mean / n) contains 3, storing the fractions in `coverage[n]`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2014)
+  lam = 3.0
+  coverage = {}
+  for n in (3, 40):
+      mle = rng.poisson(lam, size=(20000, n)).mean(axis=1)
+      half = ...
+      coverage[n] = ...
+      if n == 40:
+          var_mle = mle.var()
+  print(f"variance of the MLE with 40 trials {var_mle:.4f}, Cramer-Rao bound {lam / 40:.4f}")
+  print("Wald coverage:", {n: round(c, 3) for n, c in coverage.items()})
+`}
+hint="half = 1.96 * np.sqrt(mle / n); coverage[n] = np.mean(np.abs(mle - lam) <= half)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2014)
+  lam = 3.0
+  coverage = {}
+  for n in (3, 40):
+      mle = rng.poisson(lam, size=(20000, n)).mean(axis=1)
+      half = 1.96 * np.sqrt(mle / n)
+      coverage[n] = np.mean(np.abs(mle - lam) <= half)
+      if n == 40:
+          var_mle = mle.var()
+  print(f"variance of the MLE with 40 trials {var_mle:.4f}, Cramer-Rao bound {lam / 40:.4f}")
+  print("Wald coverage:", {n: round(c, 3) for n, c in coverage.items()})
+`} />
+
+With 40 trials the MLE sits right on the bound and the 95% interval covers 95% of the time. With 3 trials the "95%" interval covers only about 94% of the time, and the shortfall grows for smaller rates, because the Gaussian approximation is poor for small counts. Next week's bootstrap and the Bayesian intervals of Week 19 are two ways round this.
+
+<Step n={3} title="Fisher information of a population" minutes={35} />
+
+Now flip the roles: the parameter is a **stimulus** $\theta$, and the data are the spike counts of $N$ neurons with tuning curves $f_i(\theta)$. For independent Poisson neurons the Fisher information about $\theta$ is
+
+$$
+I(\theta) = \sum_{i=1}^N \frac{f_i'(\theta)^2}{f_i(\theta)}.
+$$
+
+Each neuron contributes most where its tuning curve is *steep*, not where it fires most. For independent neurons, information adds, so doubling $N$ doubles $I$ and improves the best possible precision $\sqrt{I}$ by $\sqrt{2}$, which answers the first part of the prediction. Through the Cramér-Rao bound, $1/\sqrt{I}$ is a floor on the discrimination threshold of any decoder, which is why Fisher information is the standard way to ask how well a population could support perception (Week 36).
+
+<Figure caption="Tuning curves, each neuron's Fisher information and the population total. Change the number of neurons and their tuning width." credit="Interactive figure by Engram.">
+  <FisherTuning />
+</Figure>
+
+<PyCell id="popfisher" title="Fisher information and a real decoder" tests={String.raw`
+  import numpy as np
+  def test_fi():
+      "pop_fi computes the sum of f'^2 / f"
+      assert abs(pop_fi(np.array([60.0]), prefs)[0] - np.sum(fprime(60.0, prefs) ** 2 / tuning(60.0, prefs))) < 1e-9
+
+  def test_decoder():
+      "the ML decoder's variance at 60 degrees is within 15% of the Cramer-Rao bound 1 / I"
+      assert abs(dec_var - 1 / pop_fi(np.array([60.0]), prefs)[0]) * pop_fi(np.array([60.0]), prefs)[0] < 0.15
+
+  def test_doubling():
+      "doubling the number of neurons roughly doubles the information"
+      assert 1.9 < fi_ratio < 2.1
+`} prompt="For 32 neurons with Gaussian tuning curves (width 20°, peak 20 spikes, baseline 1), write `pop_fi(theta, prefs)`. Decode 3,000 trials at θ = 60° with a maximum likelihood grid decoder and compare the decoder's variance `dec_var` with 1/I. Then compute `fi_ratio`, the information at 60° with 64 neurons over that with 32."
+code={String.raw`
+  def circ(d): return (d + 90) % 180 - 90
+  def tuning(theta, prefs): return 1 + 20 * np.exp(-circ(np.subtract.outer(theta, prefs)) ** 2 / (2 * 20 ** 2))
+  def fprime(theta, prefs, h=1e-4): return (tuning(theta + h, prefs) - tuning(theta - h, prefs)) / (2 * h)
+  prefs = np.arange(32) * 180 / 32
+
+  def pop_fi(theta, prefs):
+      return ...                                   # sum over neurons of f'^2 / f, one value per theta
+
+  grid = np.arange(40, 80, 0.05)
+  F = tuning(grid, prefs)
+  est = []
+  for _ in range(3000):
+      k = rng.poisson(tuning(60.0, prefs))
+      est.append(grid[np.argmax((k * np.log(F) - F).sum(axis=1))])
+  dec_var = np.var(est)
+  fi_ratio = ...
+  print(f"Fisher information at 60 deg: {pop_fi(np.array([60.0]), prefs)[0]:.3f} per deg^2;  bound on variance {1 / pop_fi(np.array([60.0]), prefs)[0]:.3f};  ML decoder variance {dec_var:.3f}")
+  print(f"information ratio, 64 against 32 neurons: {fi_ratio:.3f}")
+`}
+hint="return (fprime(theta, prefs) ** 2 / tuning(theta, prefs)).sum(axis=-1). fi_ratio = pop_fi(np.array([60.0]), np.arange(64) * 180 / 64)[0] / pop_fi(np.array([60.0]), prefs)[0]."
+solution={String.raw`
+  def circ(d): return (d + 90) % 180 - 90
+  def tuning(theta, prefs): return 1 + 20 * np.exp(-circ(np.subtract.outer(theta, prefs)) ** 2 / (2 * 20 ** 2))
+  def fprime(theta, prefs, h=1e-4): return (tuning(theta + h, prefs) - tuning(theta - h, prefs)) / (2 * h)
+  prefs = np.arange(32) * 180 / 32
+
+  def pop_fi(theta, prefs):
+      return (fprime(theta, prefs) ** 2 / tuning(theta, prefs)).sum(axis=-1)                                   # sum over neurons of f'^2 / f, one value per theta
+
+  grid = np.arange(40, 80, 0.05)
+  F = tuning(grid, prefs)
+  est = []
+  for _ in range(3000):
+      k = rng.poisson(tuning(60.0, prefs))
+      est.append(grid[np.argmax((k * np.log(F) - F).sum(axis=1))])
+  dec_var = np.var(est)
+  fi_ratio = pop_fi(np.array([60.0]), np.arange(64) * 180 / 64)[0] / pop_fi(np.array([60.0]), prefs)[0]
+  print(f"Fisher information at 60 deg: {pop_fi(np.array([60.0]), prefs)[0]:.3f} per deg^2;  bound on variance {1 / pop_fi(np.array([60.0]), prefs)[0]:.3f};  ML decoder variance {dec_var:.3f}")
+  print(f"information ratio, 64 against 32 neurons: {fi_ratio:.3f}")
+`} />
+
+<Step n={4} title="Information-limiting correlations" minutes={20} />
+
+With correlated noise of covariance $\Sigma$, the information available to a linear decoder is the **linear Fisher information** $I = \mathbf{f}'^\top\Sigma^{-1}\mathbf{f}'$, the reciprocal of the minimum-variance unbiased readout's variance from Week 13. Moreno-Bote and colleagues (2014, today's paper) showed that only one kind of correlation stops it growing with $N$: **differential correlations**, $\Sigma = \Sigma_0 + \varepsilon\,\mathbf{f}'\mathbf{f}'^\top$, which look exactly like a small random shift of the stimulus itself. Then
+
+$$
+I = \frac{I_0}{1 + \varepsilon I_0},
+$$
+
+which can never exceed $1/\varepsilon$, however many neurons you add. That answers the second part of the prediction.
+
+<PyCell id="limit" title="Information saturates" tests={String.raw`
+  import numpy as np
+  def test_formula():
+      "the computed information matches I0 / (1 + eps I0) for every N"
+      assert np.allclose(info_corr, info_indep / (1 + eps * info_indep), rtol=1e-6)
+
+  def test_saturates():
+      "independent information grows about 100-fold from N = 10 to 1000, but the correlated information stays below 1 / eps"
+      assert info_indep[-1] / info_indep[0] > 80 and np.all(info_corr < 1 / eps)
+`} prompt="For N = 10, 30, 100, 300 and 1000 neurons tiling orientation, compute the linear Fisher information at 60° with independent Poisson-like noise (Σ0 = diag(f)) as `info_indep`, and with added differential correlations ε f′f′ᵀ (ε = 0.2) as `info_corr`, using np.linalg.solve."
+code={String.raw`
+  eps = 0.2
+  Ns = [10, 30, 100, 300, 1000]
+  info_indep, info_corr = [], []
+  for N in Ns:
+      p = np.arange(N) * 180 / N
+      fpv = fprime(60.0, p)
+      S0 = np.diag(tuning(60.0, p))
+      info_indep.append(...)
+      S = S0 + eps * np.outer(fpv, fpv)
+      info_corr.append(...)
+  info_indep, info_corr = np.array(info_indep), np.array(info_corr)
+  print("independent:", info_indep.round(2)); print("differential correlations:", info_corr.round(2), " limit 1/eps =", 1 / eps)
+`}
+hint="info_indep.append(fpv @ np.linalg.solve(S0, fpv)); info_corr.append(fpv @ np.linalg.solve(S, fpv))."
+solution={String.raw`
+  eps = 0.2
+  Ns = [10, 30, 100, 300, 1000]
+  info_indep, info_corr = [], []
+  for N in Ns:
+      p = np.arange(N) * 180 / N
+      fpv = fprime(60.0, p)
+      S0 = np.diag(tuning(60.0, p))
+      info_indep.append(fpv @ np.linalg.solve(S0, fpv))
+      S = S0 + eps * np.outer(fpv, fpv)
+      info_corr.append(fpv @ np.linalg.solve(S, fpv))
+  info_indep, info_corr = np.array(info_indep), np.array(info_corr)
+  print("independent:", info_indep.round(2)); print("differential correlations:", info_corr.round(2), " limit 1/eps =", 1 / eps)
+`} />
+
+With independent noise the information grows a hundredfold from 10 to 1,000 neurons; with differential correlations it creeps towards the ceiling of 5 and stops. A correlation of this kind adds only $\varepsilon f_i'f_j'$ to each covariance, far too small to notice pair by pair, yet it caps the whole population. That is why such correlations are hard to measure and why they matter so much.
+
+<Bridge title="Information in brains and machines"
+  neuro="Fisher information links neural noise to behaviour: the discrimination threshold of an ideal observer reading a population is about one over the square root of its Fisher information. Comparing that with animals' actual thresholds tests whether the brain uses all the information its neurons carry."
+  ai="The Fisher information matrix measures how sensitive a model's predictions are to its parameters. It drives natural-gradient methods, approximations used in Adam-like optimisers, and elastic weight consolidation, which protects important weights against forgetting in continual learning.">
+
+Curvature is certainty: the sharper the log-likelihood, the more the data pin the parameter down.
+
+</Bridge>
+
+<Prove title="The score has mean zero" task="Show that $\mathbb{E}\left[\frac{\partial}{\partial\theta}\log p(x \mid \theta)\right] = 0$ at the true $\theta$, assuming you may swap differentiation and integration.">
+
+$\mathbb{E}[s] = \int \frac{\partial_\theta p(x \mid \theta)}{p(x \mid \theta)}\,p(x \mid \theta)\,\mathrm{d}x = \int \partial_\theta p(x \mid \theta)\,\mathrm{d}x$.
+
+Swapping the derivative and the integral gives $\partial_\theta \int p(x \mid \theta)\,\mathrm{d}x = \partial_\theta 1 = 0$.
+
+So the score averages to zero at the truth, and the Fisher information, its variance, equals its mean square $\mathbb{E}[s^2]$. Differentiating the identity once more gives the curvature form $I = -\mathbb{E}[\partial_\theta^2\log p]$.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "Fisher information measures...", options: ["The bias of an estimator", "The expected curvature of the log-likelihood", "The prior's width", "The number of parameters"], answer: 1, explain: "Sharp likelihood, high information." },
+  { q: "For n Poisson counts with rate λ, I(λ) is...", options: ["λ/n", "n/λ", "nλ", "1/λ²"], answer: 1, explain: "$-E[\\ell''] = n\\lambda/\\lambda^2$." },
+  { q: "The Cramér-Rao bound says an unbiased estimator's variance is at least...", options: ["I", "1/I", "√I", "0"], answer: 1, explain: "No unbiased method beats it." },
+  { q: "A Wald interval is...", options: ["Exact for any n", "MLE ± 1.96/√I, approximate for large n", "A Bayesian interval", "Based on the median"], answer: 1, explain: "Asymptotic normality." },
+  { q: "A Poisson neuron gives most Fisher information about θ...", options: ["At its preferred stimulus", "On the flanks of its tuning curve", "Where it is silent", "Everywhere equally"], answer: 1, explain: "$f'^2/f$." },
+  { q: "For independent neurons, doubling N multiplies Fisher information by...", options: ["1", "√2", "2", "4"], answer: 2, explain: "Information adds." },
+  { q: "Differential correlations make information...", options: ["Grow faster", "Saturate at 1/ε", "Become negative", "Unchanged"], answer: 1, explain: "$I_0/(1 + \\varepsilon I_0)$." },
+]} />
+
+<Flashcards cards={[
+  { front: "Fisher information?", back: "$I(\\theta) = \\text{Var}(\\partial_\\theta\\ell) = -E[\\partial_\\theta^2\\ell]$." },
+  { front: "Cramér-Rao bound?", back: "$\\text{Var}(\\hat\\theta) \\ge 1/I(\\theta)$ for unbiased estimators." },
+  { front: "Poisson population Fisher information?", back: "$\\sum_i f_i'(\\theta)^2/f_i(\\theta)$." },
+  { front: "Linear Fisher information?", back: "$f'^\\top\\Sigma^{-1}f'$." },
+  { front: "Differential correlations?", back: "$\\Sigma = \\Sigma_0 + \\varepsilon f'f'^\\top$; information saturates at 1/ε (Moreno-Bote and colleagues, 2014)." },
+]} />
+
+<Predict revisit question="Doubling independent neurons improves precision by what factor, and what changes with correlations?" />
+
+<Key title="Before you go">
+<ul>
+<li>Fisher information is the expected curvature of the log-likelihood; for n Poisson counts it is n/λ.</li>
+<li>The MLE is approximately Gaussian with variance 1/I and attains the Cramér-Rao bound in large samples.</li>
+<li>A population's Fisher information about a stimulus sums f′²/f; it lives on the tuning curves' flanks.</li>
+<li>Differential correlations cap information however large the population.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Moreno-Bote and colleagues (2014), <em>Information-limiting correlations</em>.</li>
+<li>Dayan and Abbott (2001), <em>Theoretical Neuroscience</em>, section 3.3 on Fisher information and population coding.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If information in a large population is limited by correlations that look like a shift of the stimulus, where in the visual pathway might that shift come from? Name one source and how you could measure it." />

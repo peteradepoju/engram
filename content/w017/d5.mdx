@@ -1,0 +1,271 @@
+export const meta = {
+  title: "The bias-variance trade-off, cross-validation and model selection",
+  intro: "Every model you fit forces a choice: how complex should it be? A straight line or a wiggly curve, three parameters or three hundred, a weak prior or a strong one. Too simple and the model cannot capture the truth (bias); too complex and it captures the noise (variance). Today you see the trade-off directly by fitting many datasets, learn to estimate how well a model will predict new data with cross-validation, and meet the information criteria that do the same job with a formula. You finish by asking whether the classic U-shaped picture still holds for the enormous models of modern machine learning, which is the question of this week's deep read.",
+  goals: [
+    "Decompose expected prediction error into bias², variance and noise",
+    "Implement k-fold cross-validation and use it to choose a model's complexity",
+    "Compute AIC and BIC from a maximised log-likelihood and compare them with cross-validation",
+    "Explain why choosing a model on the same data used to report its performance is biased",
+  ],
+  plan: [
+    { label: "Predict and the trade-off", minutes: 25 },
+    { label: "Cross-validation", minutes: 35 },
+    { label: "Information criteria", minutes: 20 },
+    { label: "Honest reporting and double descent", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "belkin-2019",
+};
+
+<Predict question="You fit polynomials of degree 0 to 8 to 20 noisy points and pick the degree with the lowest error on the same 15 points. Which degree will you pick, and how well will it predict new data?" />
+
+<Step n={1} title="The trade-off" minutes={25} />
+
+Suppose data are $y = f(x) + \varepsilon$ with noise variance $\sigma^2$, and you fit a model $\hat{f}$ to a random training set. At a new point $x$, the expected squared prediction error splits into three parts:
+
+$$
+\mathbb{E}\left[(y - \hat{f}(x))^2\right] = \underbrace{\left(\mathbb{E}[\hat{f}(x)] - f(x)\right)^2}_{\text{bias}^2} + \underbrace{\operatorname{Var}(\hat{f}(x))}_{\text{variance}} + \underbrace{\sigma^2}_{\text{noise}}.
+$$
+
+This is Day 1's decomposition applied to predictions. Simple models have high bias and low variance; flexible ones the reverse. Noise is irreducible. Training error, measured on the data used to fit, always falls as complexity grows, so it cannot be used to choose: it rewards fitting the noise.
+
+<Figure caption="Polynomials fitted to 30 small datasets from the same curve. Change the degree and watch bias give way to variance." credit="Interactive figure by Engram.">
+  <BiasVariance />
+</Figure>
+
+<Video id="NcUH_seBcVw" title="Bias Variance Tradeoff" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's introduction to the trade-off, from its day on model fitting." />
+
+<PyCell id="bv" title="Measure the trade-off" tests={String.raw`
+  import numpy as np
+  def test_decomposition():
+      "for every degree, bias^2 + variance + noise matches the measured test error to within 10%"
+      assert np.all(np.abs(bias2 + var + 0.16 - pred_err) / pred_err < 0.1)
+
+  def test_shapes():
+      "bias^2 falls and variance rises from degree 1 to degree 7, and training error falls throughout"
+      assert bias2[7] < bias2[1] and var[7] > var[1] and np.all(np.diff(train_err) <= 1e-9)
+
+  def test_u():
+      "test error is lowest at an intermediate degree (between 2 and 7)"
+      assert 2 <= int(np.argmin(pred_err)) <= 7
+`} prompt="For degrees 0 to 8, fit polynomials to 500 datasets of 20 points (noise sd 0.4). On a fixed grid of test inputs inside the data range, compute bias², variance and the expected test error (including fresh noise), averaged over the grid, plus the average training error. Store arrays `bias2`, `var`, `pred_err` and `train_err`, indexed by degree."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2019)
+  def truth(x): return np.sin(2.5 * x) + 0.3 * x
+  xg = np.linspace(-1.2, 1.2, 50)
+  degrees = range(9)
+  bias2, var, pred_err, train_err = [], [], [], []
+  for d in degrees:
+      preds, tr = [], []
+      for _ in range(500):
+          x = rng.uniform(-1.5, 1.5, 20)
+          y = truth(x) + 0.4 * rng.normal(size=20)
+          c = np.polyfit(x / 1.5, y, d)
+          preds.append(np.polyval(c, xg / 1.5))
+          tr.append(np.mean((np.polyval(c, x / 1.5) - y) ** 2))
+      preds = np.array(preds)
+      mean_pred = preds.mean(axis=0)
+      bias2.append(...)
+      var.append(...)
+      pred_err.append(np.mean((preds - truth(xg)) ** 2) + 0.16)    # expected error on a fresh noisy point
+      train_err.append(np.mean(tr))
+  bias2, var, pred_err, train_err = map(np.array, (bias2, var, pred_err, train_err))
+  print("degree   bias^2  variance  test   train")
+  for d in degrees: print(f"{d:5d}  {bias2[d]:7.3f}  {var[d]:8.3f}  {pred_err[d]:5.3f}  {train_err[d]:5.3f}")
+`}
+hint="bias2.append(np.mean((mean_pred - truth(xg)) ** 2)); var.append(np.mean(preds.var(axis=0)))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2019)
+  def truth(x): return np.sin(2.5 * x) + 0.3 * x
+  xg = np.linspace(-1.2, 1.2, 50)
+  degrees = range(9)
+  bias2, var, pred_err, train_err = [], [], [], []
+  for d in degrees:
+      preds, tr = [], []
+      for _ in range(500):
+          x = rng.uniform(-1.5, 1.5, 20)
+          y = truth(x) + 0.4 * rng.normal(size=20)
+          c = np.polyfit(x / 1.5, y, d)
+          preds.append(np.polyval(c, xg / 1.5))
+          tr.append(np.mean((np.polyval(c, x / 1.5) - y) ** 2))
+      preds = np.array(preds)
+      mean_pred = preds.mean(axis=0)
+      bias2.append(np.mean((mean_pred - truth(xg)) ** 2))
+      var.append(np.mean(preds.var(axis=0)))
+      pred_err.append(np.mean((preds - truth(xg)) ** 2) + 0.16)    # expected error on a fresh noisy point
+      train_err.append(np.mean(tr))
+  bias2, var, pred_err, train_err = map(np.array, (bias2, var, pred_err, train_err))
+  print("degree   bias^2  variance  test   train")
+  for d in degrees: print(f"{d:5d}  {bias2[d]:7.3f}  {var[d]:8.3f}  {pred_err[d]:5.3f}  {train_err[d]:5.3f}")
+`} />
+
+Choosing by training error picks degree 8, which fits the 20 points most closely and predicts new data terribly: its expected test error is about 35, against 0.21 for degree 3. That answers the prediction.
+
+<Step n={2} title="Cross-validation" minutes={35} />
+
+In a real experiment you have one dataset, so you cannot average over many. **k-fold cross-validation** imitates it: split the data into $k$ folds, fit on $k - 1$ of them, measure the error on the held-out fold, rotate, and average. The result estimates the test error of a model fitted to slightly less data. Choose the complexity, or the regularisation strength, with the lowest cross-validated error. Typical choices are $k = 5$ or 10; $k = n$ is **leave-one-out**.
+
+<Video id="OtKw0rSRxo4" title="Cross-Validation" by="Neuromatch Academy (Computational Neuroscience course)" note="Optional second video: Neuromatch's introduction to k-fold cross-validation for model selection." />
+
+<PyCell id="kfold" title="Choose the degree by cross-validation" tests={String.raw`
+  import numpy as np
+  def test_cv():
+      "cv_error returns one mean held-out error per degree"
+      assert len(cv_errs) == 9 and np.all(np.isfinite(cv_errs))
+
+  def test_choice():
+      "the degree chosen by cross-validation has a true test error within 25% of the best possible"
+      assert pred_err[best_cv] < 1.25 * pred_err.min()
+`} prompt="Write `cv_error(x, y, degree, k=5)` that returns the mean squared error on held-out folds. Using one dataset of 40 points, compute the cross-validated error for degrees 0 to 8 (`cv_errs`), pick `best_cv`, and compare its true test error (from the previous cell) with the best possible."
+code={String.raw`
+  rng = np.random.default_rng(7)
+  x40 = rng.uniform(-1.5, 1.5, 40)
+  y40 = truth(x40) + 0.4 * rng.normal(size=40)
+
+  def cv_error(x, y, degree, k=5):
+      folds = np.array_split(rng.permutation(len(x)), k)
+      errs = []
+      for f in folds:
+          train = np.setdiff1d(np.arange(len(x)), f)
+          c = ...
+          errs.append(...)
+      return np.mean(errs)
+
+  cv_errs = np.array([cv_error(x40, y40, d) for d in range(9)])
+  best_cv = int(np.argmin(cv_errs))
+  print("cross-validated error by degree:", cv_errs.round(3))
+  print(f"chosen degree {best_cv}; its true test error {pred_err[best_cv]:.3f}; best possible {pred_err.min():.3f} at degree {int(np.argmin(pred_err))}")
+`}
+hint="c = np.polyfit(x[train] / 1.5, y[train], degree); errs.append(np.mean((np.polyval(c, x[f] / 1.5) - y[f]) ** 2))."
+solution={String.raw`
+  rng = np.random.default_rng(7)
+  x40 = rng.uniform(-1.5, 1.5, 40)
+  y40 = truth(x40) + 0.4 * rng.normal(size=40)
+
+  def cv_error(x, y, degree, k=5):
+      folds = np.array_split(rng.permutation(len(x)), k)
+      errs = []
+      for f in folds:
+          train = np.setdiff1d(np.arange(len(x)), f)
+          c = np.polyfit(x[train] / 1.5, y[train], degree)
+          errs.append(np.mean((np.polyval(c, x[f] / 1.5) - y[f]) ** 2))
+      return np.mean(errs)
+
+  cv_errs = np.array([cv_error(x40, y40, d) for d in range(9)])
+  best_cv = int(np.argmin(cv_errs))
+  print("cross-validated error by degree:", cv_errs.round(3))
+  print(f"chosen degree {best_cv}; its true test error {pred_err[best_cv]:.3f}; best possible {pred_err.min():.3f} at degree {int(np.argmin(pred_err))}")
+`} />
+
+Note that the test errors from the previous cell were for 20 training points, while here there are 40, so the best degree may differ a little; cross-validation still lands on a sensible choice.
+
+<Step n={3} title="Information criteria" minutes={20} />
+
+Cross-validation refits the model $k$ times. **Information criteria** estimate the same out-of-sample performance from a single fit, by penalising the maximised log-likelihood $\hat{\ell}$ for the number of parameters $p$:
+
+$$
+\text{AIC} = 2p - 2\hat{\ell}, \qquad \text{BIC} = p\log n - 2\hat{\ell}.
+$$
+
+Lower is better. AIC (Akaike, 1974) approximates leave-one-out cross-validation and tends to choose models that predict well; BIC penalises complexity more heavily for $n > 7$ and tends to choose simpler models, consistently finding the true one if it is among the candidates. For Gaussian errors with the variance estimated, $-2\hat{\ell} = n\log(\text{RSS}/n) + \text{const}$.
+
+<PyCell id="aic" title="AIC and BIC" tests={String.raw`
+  import numpy as np
+  def test_formula():
+      "aic and bic use n log(RSS / n) with p = degree + 2 parameters (coefficients plus the noise variance)"
+      c = np.polyfit(x40 / 1.5, y40, 3); rss = np.sum((np.polyval(c, x40 / 1.5) - y40) ** 2)
+      assert abs(aic[3] - (2 * 5 + 40 * np.log(rss / 40))) < 1e-9 and abs(bic[3] - (5 * np.log(40) + 40 * np.log(rss / 40))) < 1e-9
+
+  def test_bic_simpler():
+      "BIC never chooses a more complex model than AIC here"
+      assert int(np.argmin(bic)) <= int(np.argmin(aic))
+`} prompt="For degrees 0 to 8 fitted to the 40 points, compute the residual sum of squares, then AIC and BIC with p = degree + 2. Store arrays `aic` and `bic` and compare their choices with cross-validation."
+code={String.raw`
+  aic, bic = [], []
+  for d in range(9):
+      c = np.polyfit(x40 / 1.5, y40, d)
+      rss = np.sum((np.polyval(c, x40 / 1.5) - y40) ** 2)
+      p, n = d + 2, len(x40)
+      aic.append(...)
+      bic.append(...)
+  aic, bic = np.array(aic), np.array(bic)
+  print(f"chosen degree: AIC {int(np.argmin(aic))}, BIC {int(np.argmin(bic))}, cross-validation {best_cv}")
+`}
+hint="aic.append(2 * p + n * np.log(rss / n)); bic.append(p * np.log(n) + n * np.log(rss / n))."
+solution={String.raw`
+  aic, bic = [], []
+  for d in range(9):
+      c = np.polyfit(x40 / 1.5, y40, d)
+      rss = np.sum((np.polyval(c, x40 / 1.5) - y40) ** 2)
+      p, n = d + 2, len(x40)
+      aic.append(2 * p + n * np.log(rss / n))
+      bic.append(p * np.log(n) + n * np.log(rss / n))
+  aic, bic = np.array(aic), np.array(bic)
+  print(f"chosen degree: AIC {int(np.argmin(aic))}, BIC {int(np.argmin(bic))}, cross-validation {best_cv}")
+`} />
+
+<Step n={4} title="Honest reporting and double descent" minutes={25} />
+
+Once you have chosen a model by cross-validation, its cross-validated error is optimistic: it is the best of several noisy scores, the winner's curse of Day 1. To report performance honestly, either keep a final **test set** untouched until the end, or use **nested cross-validation**, which repeats the whole selection inside each outer fold. In neuroscience, where datasets are small, this matters: a decoder "selected" on the same trials used to report its accuracy will look better than it is.
+
+The U-shaped curve is not the whole story. Belkin and colleagues (2019, this week's deep read) showed that, for models that can interpolate the data, test error can fall again as complexity grows far beyond the number of data points, the **double descent** you glimpsed in Week 13. The bias-variance decomposition still holds; what changes is that among the many models that fit the training data exactly, the fitting procedure picks a smooth one, and its variance can fall.
+
+<Bridge title="Model selection in brains and machines"
+  neuro="Choosing between models of neural data, a GLM with or without spike history, a tuning curve with one peak or two, a network model with or without inhibition, is model selection, and cross-validated likelihood is the standard currency. The brain faces the same trade-off when learning from limited experience: generalising too little or too much."
+  ai="Validation sets, early stopping, hyperparameter search and the train-validation-test split all come from today's ideas. Very large models complicate the classical picture, which is why scaling laws and double descent are active research topics.">
+
+Judge a model by how it predicts data it has not seen, and keep some data it will never see until the end.
+
+</Bridge>
+
+<Prove title="Expected prediction error" task="With $y = f(x) + \varepsilon$, $\mathbb{E}[\varepsilon] = 0$, $\operatorname{Var}(\varepsilon) = \sigma^2$, and $\varepsilon$ independent of the training data, show that $\mathbb{E}[(y - \hat{f}(x))^2] = \text{bias}^2 + \operatorname{Var}(\hat{f}(x)) + \sigma^2$.">
+
+Write $y - \hat{f} = \varepsilon + (f - \hat{f})$. Squaring and taking expectations, the cross term $2\mathbb{E}[\varepsilon(f - \hat{f})] = 2\mathbb{E}[\varepsilon]\mathbb{E}[f - \hat{f}] = 0$, because the new noise is independent of the fitted model.
+
+So $\mathbb{E}[(y - \hat{f})^2] = \sigma^2 + \mathbb{E}[(f - \hat{f})^2]$.
+
+The second term is the mean squared error of $\hat{f}(x)$ as an estimator of $f(x)$, which Day 1 split into $\text{bias}^2 + \operatorname{Var}(\hat{f}(x))$.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "As model complexity grows, training error...", options: ["Rises", "Falls (or stays the same)", "Is U-shaped", "Is constant"], answer: 1, explain: "More flexibility fits the data, and the noise, better." },
+  { q: "Expected test error equals...", options: ["bias + variance", "bias² + variance + noise", "variance only", "training error"], answer: 1, explain: "The decomposition." },
+  { q: "High-degree polynomials fitted to few points have...", options: ["High bias, low variance", "Low bias, high variance", "Low both", "High both"], answer: 1, explain: "They chase the noise." },
+  { q: "k-fold cross-validation...", options: ["Uses all data to fit and to test at once", "Fits on k − 1 folds and tests on the held-out one, rotating", "Needs a prior", "Only works for linear models"], answer: 1, explain: "Average of held-out errors." },
+  { q: "Compared with AIC, BIC tends to choose...", options: ["More complex models", "Simpler models", "The same", "No model"], answer: 1, explain: "Heavier penalty, p log n." },
+  { q: "The cross-validated error of the selected model is...", options: ["Unbiased", "Optimistic", "Pessimistic", "Exact"], answer: 1, explain: "Best of several noisy scores." },
+  { q: "Double descent refers to test error...", options: ["Falling twice as fast", "Falling again beyond the interpolation threshold", "Doubling", "Being U-shaped"], answer: 1, explain: "Belkin and colleagues (2019)." },
+]} />
+
+<Flashcards cards={[
+  { front: "Bias-variance decomposition of prediction error?", back: "bias² + variance + noise σ²." },
+  { front: "k-fold cross-validation?", back: "Fit on k − 1 folds, test on the remaining one, rotate and average." },
+  { front: "AIC and BIC?", back: "AIC = 2p − 2ℓ̂; BIC = p log n − 2ℓ̂; lower is better." },
+  { front: "Nested cross-validation?", back: "Model selection repeated inside each outer fold, so the reported error is not optimistic." },
+  { front: "Double descent?", back: "Test error can fall again when capacity exceeds the interpolation threshold." },
+]} />
+
+<Predict revisit question="Which degree does training error pick, and how well does it predict?" />
+
+<Key title="Before you go">
+<ul>
+<li>Test error = bias² + variance + noise; training error cannot choose complexity.</li>
+<li>Cross-validation estimates out-of-sample error from a single dataset.</li>
+<li>AIC and BIC penalise the likelihood for parameters; BIC prefers simpler models.</li>
+<li>Report performance on data not used for selection, and be aware that very large models can break the U-shape.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>This week's deep read: Belkin, Hsu, Ma and Mandal (2019), <em>Reconciling modern machine-learning practice and the classical bias-variance trade-off</em>.</li>
+<li>Hastie, Tibshirani and Friedman, <em>The Elements of Statistical Learning</em>, chapter 7 (free from the authors).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Describe a neuroscience analysis where the same data might be used both to choose something (neurons, time windows, a model) and to report a result. How would you restructure it so the reported number is honest?" />

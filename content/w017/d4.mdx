@@ -1,0 +1,220 @@
+export const meta = {
+  title: "MAP estimation: priors as regularisers",
+  intro: "Maximum likelihood trusts the data completely. With plenty of data that is fine; with little data and many parameters it overfits, producing receptive fields that look like noise and weights that explode. The Bayesian answer is to add prior knowledge, and the simplest way to use a prior is to take the peak of the posterior, the maximum a posteriori (MAP) estimate. Today you discover that the regularisers you have used since Week 5, ridge and the lasso, are exactly MAP estimation with Gaussian and Laplace priors, and you put the idea to work on a classic problem: estimating a neuron's receptive field from a short recording, where a prior that says receptive fields are smooth makes the difference between noise and structure.",
+  goals: [
+    "Write the MAP estimate as maximum likelihood plus a log-prior penalty",
+    "Show that ridge regression is MAP with a Gaussian prior, and the lasso MAP with a Laplace prior",
+    "Estimate a receptive field from limited data with least squares, ridge and a smoothness prior",
+    "Explain how the prior's strength trades bias against variance",
+  ],
+  plan: [
+    { label: "Predict and the MAP estimate", minutes: 20 },
+    { label: "Ridge is a Gaussian prior", minutes: 30 },
+    { label: "Receptive fields from little data", minutes: 40 },
+    { label: "Laplace priors and sparsity", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "tibshirani-1996",
+};
+
+<Predict question="You estimate a 30-pixel receptive field from only 50 trials of white-noise stimulation. Least squares gives a jagged, noisy estimate. If you instead assume that neighbouring pixels have similar weights, will the error of your estimate fall a little, a lot, or rise because the assumption biases it?" />
+
+<Step n={1} title="The MAP estimate" minutes={20} />
+
+Bayes' rule gives the posterior $p(\theta \mid \text{data}) \propto p(\text{data} \mid \theta)\,p(\theta)$. Its peak is the **maximum a posteriori** estimate:
+
+$$
+\hat{\theta}_{\text{MAP}} = \arg\max_\theta \left[\ell(\theta) + \log p(\theta)\right].
+$$
+
+The log-prior is simply added to the log-likelihood. Written as a minimisation, the negative log-prior is a **penalty** on parameter values the prior considers unlikely. Every regulariser has a prior hiding inside it, and every prior gives a regulariser. As data accumulate, the log-likelihood (a sum over $n$ observations) grows and the fixed prior matters less, so MAP and MLE agree for large $n$.
+
+<Video id="b2IaUCZ91bo" title="Regularization" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's introduction to L1 and L2 regularisation of generalised linear models, from its GLM day." />
+
+<Step n={2} title="Ridge is a Gaussian prior" minutes={30} />
+
+Take a linear model with Gaussian noise, $y = X\mathbf{w} + \boldsymbol{\varepsilon}$ with noise variance $\sigma^2$, and a Gaussian prior $\mathbf{w} \sim \mathcal{N}(0, \tau^2 I)$. The negative log-posterior is, up to constants,
+
+$$
+\frac{1}{2\sigma^2}\lVert\mathbf{y} - X\mathbf{w}\rVert^2 + \frac{1}{2\tau^2}\lVert\mathbf{w}\rVert^2.
+$$
+
+Multiplying by $2\sigma^2$, this is ridge regression with $\lambda = \sigma^2/\tau^2$, whose solution is $\hat{\mathbf{w}} = (X^\top X + \lambda I)^{-1}X^\top\mathbf{y}$. A tight prior (small $\tau$) or noisy data (large $\sigma$) means strong shrinkage. Here the posterior is Gaussian, so its mode and mean coincide and the MAP estimate is also the posterior mean.
+
+<Figure caption="Likelihood contours from correlated inputs, a Gaussian prior, and the path of the MAP estimate as the prior's strength grows." credit="Interactive figure by Engram.">
+  <RidgePrior />
+</Figure>
+
+<PyCell id="ridgemap" title="Ridge equals MAP" tests={String.raw`
+  import numpy as np
+  def test_same():
+      "the ridge solution and the minimiser of the negative log-posterior agree to within 1e-6"
+      assert np.abs(w_ridge - w_map).max() < 1e-6
+
+  def test_lambda():
+      "lam equals sigma^2 / tau^2"
+      assert abs(lam - 0.5 ** 2 / 0.3 ** 2) < 1e-12
+`} prompt="With noise sd σ = 0.5 and prior sd τ = 0.3, compute `lam`, the ridge solution `w_ridge` in closed form, and `w_map` by running gradient descent on the negative log-posterior (5,000 steps of size one over the largest curvature) from zero. Check they agree."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1996)
+  X = rng.normal(size=(40, 6)); w_true = rng.normal(0, 0.3, 6)
+  y = X @ w_true + 0.5 * rng.normal(size=40)
+  sigma, tau = 0.5, 0.3
+
+  lam = ...
+  w_ridge = ...
+
+  def neg_log_post_grad(w):
+      return ...                                     # gradient of |y - Xw|^2 / (2 sigma^2) + |w|^2 / (2 tau^2)
+
+  w_map = np.zeros(6)
+  step = 1 / (np.linalg.eigvalsh(X.T @ X).max() / sigma ** 2 + 1 / tau ** 2)   # safe step size, 1 / largest curvature
+  for _ in range(5000):
+      w_map = w_map - step * neg_log_post_grad(w_map)
+  print("ridge:", w_ridge.round(4)); print("MAP:  ", w_map.round(4)); print("truth:", w_true.round(4))
+`}
+hint="lam = sigma ** 2 / tau ** 2; w_ridge = np.linalg.solve(X.T @ X + lam * np.eye(6), X.T @ y); the gradient is -X.T @ (y - X @ w) / sigma ** 2 + w / tau ** 2."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1996)
+  X = rng.normal(size=(40, 6)); w_true = rng.normal(0, 0.3, 6)
+  y = X @ w_true + 0.5 * rng.normal(size=40)
+  sigma, tau = 0.5, 0.3
+
+  lam = sigma ** 2 / tau ** 2
+  w_ridge = np.linalg.solve(X.T @ X + lam * np.eye(6), X.T @ y)
+
+  def neg_log_post_grad(w):
+      return -X.T @ (y - X @ w) / sigma ** 2 + w / tau ** 2                                     # gradient of |y - Xw|^2 / (2 sigma^2) + |w|^2 / (2 tau^2)
+
+  w_map = np.zeros(6)
+  step = 1 / (np.linalg.eigvalsh(X.T @ X).max() / sigma ** 2 + 1 / tau ** 2)   # safe step size, 1 / largest curvature
+  for _ in range(5000):
+      w_map = w_map - step * neg_log_post_grad(w_map)
+  print("ridge:", w_ridge.round(4)); print("MAP:  ", w_map.round(4)); print("truth:", w_true.round(4))
+`} />
+
+<Step n={3} title="Receptive fields from little data" minutes={40} />
+
+A simple cell's linear receptive field $\mathbf{w}$ is estimated by showing white-noise stimuli $\mathbf{x}_i$ and recording responses $y_i = \mathbf{w}^\top\mathbf{x}_i + $ noise. Least squares needs many more trials than pixels. But a prior can say more than "weights are small": real receptive fields are **smooth**, so neighbouring pixels have similar weights. A Gaussian prior with precision matrix $D^\top D$, where $D$ takes differences between neighbours, penalises roughness:
+
+$$
+\hat{\mathbf{w}} = (X^\top X + \lambda D^\top D)^{-1}X^\top\mathbf{y}.
+$$
+
+Priors like this, and the automatic smoothness determination of Sahani and Linden (2003), are standard in receptive-field estimation.
+
+<PyCell id="rf" title="Three estimates of a receptive field" tests={String.raw`
+  import numpy as np
+  def test_order():
+      "the smoothness prior beats ridge, which beats least squares, in error against the true receptive field"
+      assert err["smooth"] < err["ridge"] < err["ols"]
+
+  def test_big_gain():
+      "the smoothness prior cuts the least-squares error by more than half"
+      assert err["smooth"] < 0.5 * err["ols"]
+`} prompt="A 30-pixel receptive field is a smooth Gabor-like profile. With 50 white-noise trials and noise sd 1, estimate it by least squares, by ridge (λ = 10) and with the smoothness prior (λ = 30, D the first-difference matrix). Store the relative squared errors |ŵ − w|² / |w|² in the dictionary `err` with keys 'ols', 'ridge' and 'smooth'."
+code={String.raw`
+  rng = np.random.default_rng(3)                 # this exercise's own random numbers
+  P, n = 30, 50
+  pix = np.arange(P)
+  w_rf = np.exp(-(pix - 15) ** 2 / (2 * 4 ** 2)) * np.cos(2 * np.pi * (pix - 15) / 10)
+  Xs = rng.normal(size=(n, P))
+  ys = Xs @ w_rf + rng.normal(size=n)
+  D = np.diff(np.eye(P), axis=0)                 # (P - 1) x P first differences
+
+  est = {
+      "ols": np.linalg.lstsq(Xs, ys, rcond=None)[0],
+      "ridge": ...,
+      "smooth": ...,
+  }
+  err = {k: np.sum((v - w_rf) ** 2) / np.sum(w_rf ** 2) for k, v in est.items()}
+  print({k: round(v, 3) for k, v in err.items()})
+  for k, v in est.items(): plt.plot(v, label=k)
+  plt.plot(w_rf, "k", lw=3, label="true"); plt.legend(); plt.xlabel("pixel"); plt.show()
+`}
+hint="'ridge': np.linalg.solve(Xs.T @ Xs + 10 * np.eye(P), Xs.T @ ys); 'smooth': np.linalg.solve(Xs.T @ Xs + 30 * D.T @ D, Xs.T @ ys)."
+solution={String.raw`
+  rng = np.random.default_rng(3)                 # this exercise's own random numbers
+  P, n = 30, 50
+  pix = np.arange(P)
+  w_rf = np.exp(-(pix - 15) ** 2 / (2 * 4 ** 2)) * np.cos(2 * np.pi * (pix - 15) / 10)
+  Xs = rng.normal(size=(n, P))
+  ys = Xs @ w_rf + rng.normal(size=n)
+  D = np.diff(np.eye(P), axis=0)                 # (P - 1) x P first differences
+
+  est = {
+      "ols": np.linalg.lstsq(Xs, ys, rcond=None)[0],
+      "ridge": np.linalg.solve(Xs.T @ Xs + 10 * np.eye(P), Xs.T @ ys),
+      "smooth": np.linalg.solve(Xs.T @ Xs + 30 * D.T @ D, Xs.T @ ys),
+  }
+  err = {k: np.sum((v - w_rf) ** 2) / np.sum(w_rf ** 2) for k, v in est.items()}
+  print({k: round(v, 3) for k, v in err.items()})
+  for k, v in est.items(): plt.plot(v, label=k)
+  plt.plot(w_rf, "k", lw=3, label="true"); plt.legend(); plt.xlabel("pixel"); plt.show()
+`} />
+
+Least squares misses by 36% of the receptive field's size (in squared error), ridge by 18% and the smoothness prior by 12%. A prior that encodes something true about receptive fields does better than one that only says "small", and both beat no prior at all, though how much varies from dataset to dataset: try other seeds. That answers the prediction: the bias the prior introduces is tiny compared with the variance it removes. The strength $\lambda$ was simply chosen here; tomorrow you choose it from the data.
+
+<Step n={4} title="Laplace priors and sparsity" minutes={15} />
+
+A **Laplace** prior, $p(w_j) \propto e^{-|w_j|/b}$, gives the penalty $\lambda\sum_j|w_j|$: the lasso (Tibshirani, 1996, today's paper). Its sharp peak at zero is why the MAP estimate is exactly sparse, the geometry you saw in Week 13. Note a subtlety: the Laplace prior does not believe weights are exactly zero (it assigns zero probability to any exact value); the zeros come from taking the posterior *mode*. The posterior *mean* under the same prior is never exactly sparse.
+
+<Bridge title="Priors in brains and machines"
+  neuro="Estimating receptive fields, connectivity and tuning from limited recordings almost always needs priors: smoothness in space and time, sparsity of connections, or low rank. The choice of prior is a scientific claim about the brain, and should be stated and tested."
+  ai="Weight decay is a Gaussian prior on network weights, and L1 penalties a Laplace prior. Data augmentation and architectural choices such as convolution encode priors too: convolution says that the same feature matters wherever it appears.">
+
+A good prior is knowledge you already have; a regulariser is that knowledge written as a penalty.
+
+</Bridge>
+
+<Prove title="Lasso as MAP" task="Show that with Gaussian noise of variance σ² and independent Laplace priors $p(w_j) = \frac{1}{2b}e^{-|w_j|/b}$, the MAP estimate minimises $\lVert\mathbf{y} - X\mathbf{w}\rVert^2 + \lambda\sum_j|w_j|$, and find λ.">
+
+The negative log-likelihood is $\frac{1}{2\sigma^2}\lVert\mathbf{y} - X\mathbf{w}\rVert^2$ plus a constant, and the negative log-prior is $\frac{1}{b}\sum_j|w_j|$ plus a constant.
+
+Maximising the posterior means minimising their sum. Multiplying by $2\sigma^2$, which does not move the minimum, gives $\lVert\mathbf{y} - X\mathbf{w}\rVert^2 + \frac{2\sigma^2}{b}\sum_j|w_j|$.
+
+So $\lambda = 2\sigma^2/b$: noisier data or a narrower prior (small $b$) mean a stronger penalty and more zeros.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "The MAP estimate maximises...", options: ["The prior", "The log-likelihood plus the log-prior", "The likelihood alone", "The evidence"], answer: 1, explain: "The posterior's peak." },
+  { q: "Ridge regression is MAP with...", options: ["A Laplace prior", "A Gaussian prior centred on zero", "A flat prior", "No noise"], answer: 1, explain: "$\\lambda = \\sigma^2/\\tau^2$." },
+  { q: "The lasso is MAP with...", options: ["A Gaussian prior", "A Laplace prior", "A uniform prior", "A Poisson prior"], answer: 1, explain: "Sharp peak at zero." },
+  { q: "As the amount of data grows, MAP and MLE...", options: ["Diverge", "Agree", "Both become zero", "Swap"], answer: 1, explain: "The likelihood dominates." },
+  { q: "A smoothness prior on a receptive field penalises...", options: ["Large weights", "Differences between neighbouring weights", "Positive weights", "The intercept"], answer: 1, explain: "$\\lambda|Dw|^2$." },
+  { q: "A stronger prior...", options: ["Raises variance and bias", "Lowers variance and raises bias", "Lowers both", "Has no effect"], answer: 1, explain: "Shrinkage trades bias for variance." },
+  { q: "Under a Laplace prior, the posterior mean is...", options: ["Exactly sparse", "Never exactly sparse", "Always zero", "The same as the MLE"], answer: 1, explain: "Zeros come from the mode." },
+]} />
+
+<Flashcards cards={[
+  { front: "MAP?", back: "$\\arg\\max_\\theta [\\ell(\\theta) + \\log p(\\theta)]$." },
+  { front: "Ridge as MAP?", back: "Gaussian prior N(0, τ²I), Gaussian noise σ²: λ = σ²/τ²." },
+  { front: "Lasso as MAP?", back: "Laplace prior with scale b: λ = 2σ²/b." },
+  { front: "Smoothness prior?", back: "Penalty $\\lambda|Dw|^2$ with D the difference matrix; solution $(X^\\top X + \\lambda D^\\top D)^{-1}X^\\top y$." },
+  { front: "Regulariser and prior?", back: "Every penalty is a negative log-prior, and every prior a penalty." },
+]} />
+
+<Predict revisit question="Does assuming a smooth receptive field cut the error a little, a lot, or raise it?" />
+
+<Key title="Before you go">
+<ul>
+<li>MAP = maximum likelihood plus a log-prior penalty.</li>
+<li>Ridge is a Gaussian prior and the lasso a Laplace prior.</li>
+<li>Priors that encode real structure, like smoothness, beat generic shrinkage when data are scarce.</li>
+<li>The prior's strength sets the balance of bias against variance.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Tibshirani (1996), <em>Regression shrinkage and selection via the lasso</em>, sections 1, 2 and 5.</li>
+<li>Maneesh Sahani and Jennifer Linden (2003), <em>Evidence optimization techniques for estimating stimulus-response functions</em>, NeurIPS 15.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Choose a quantity you might estimate from neural data (a tuning curve, a connectivity matrix, a temporal filter). What prior knowledge would you encode, and how could you check that the prior was not forcing the answer?" />

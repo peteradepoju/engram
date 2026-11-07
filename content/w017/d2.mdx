@@ -1,0 +1,280 @@
+export const meta = {
+  title: "Maximum likelihood: fitting rates, tuning curves and GLMs",
+  intro: "Yesterday you judged estimators; today you meet the method that produces good ones almost automatically. Maximum likelihood asks: which parameter values make the data you actually observed most probable? For a Poisson rate the answer is the mean count; for a Gaussian, the sample mean and the variance divided by n. For a tuning curve or a model of how a neuron responds to a stimulus over time, there is no formula, but if the model is a generalised linear model the log-likelihood is concave, and Newton's method climbs to the unique peak in a handful of steps. This is how Pillow and colleagues fitted an entire patch of retina, and how you will fit a neuron's tuning curve today.",
+  goals: [
+    "Write down the likelihood and log-likelihood of independent observations",
+    "Derive maximum likelihood estimates for Poisson and Gaussian models",
+    "Fit a Poisson generalised linear model by Newton's method, using its gradient and Hessian",
+    "Recover a neuron's preferred orientation and tuning strength from the fitted GLM",
+  ],
+  plan: [
+    { label: "Predict and the likelihood", minutes: 25 },
+    { label: "Closed-form estimates", minutes: 20 },
+    { label: "The Poisson GLM", minutes: 25 },
+    { label: "Newton's method on a tuning curve", minutes: 35 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "pillow-2008",
+};
+
+<Predict question="You fit a tuning curve to a neuron's spike counts by maximum likelihood with a Poisson model, and separately by least squares on the counts. With plenty of data both look reasonable. Which do you expect to recover the true tuning parameters more precisely, and why might the answer depend on the firing rate?" />
+
+<Step n={1} title="The likelihood" minutes={25} />
+
+For independent observations $x_1, \dots, x_n$ from a model $p(x \mid \theta)$, the **likelihood** is the probability of the whole dataset, read as a function of the parameters:
+
+$$
+L(\theta) = \prod_{i=1}^n p(x_i \mid \theta), \qquad \ell(\theta) = \log L(\theta) = \sum_{i=1}^n \log p(x_i \mid \theta).
+$$
+
+The **maximum likelihood estimate** (MLE) is the $\theta$ that maximises it. Working with the log is almost always easier: products become sums, the tiny numbers that underflow a computer become manageable, and the maximum is in the same place. The likelihood is not a probability distribution over $\theta$ (it need not integrate to 1); turning it into one needs a prior, which is Day 4.
+
+<Figure caption="The log-likelihood of a Poisson rate. Add trials and watch the peak (the MLE) settle and the curve sharpen." credit="Interactive figure by Engram.">
+  <LikelihoodCurve />
+</Figure>
+
+<Video id="8mpNmzLKNfU" title="Maximum Likelihood Estimation" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's introduction to likelihood and maximum likelihood, from its day on model fitting." />
+
+<Step n={2} title="Closed-form estimates" minutes={20} />
+
+For Poisson counts with rate $\lambda$, $\ell(\lambda) = \sum_i (k_i\log\lambda - \lambda) + \text{const}$. Setting $\ell'(\lambda) = \sum_i k_i/\lambda - n = 0$ gives $\hat{\lambda} = \bar{k}$, the mean count. For Gaussian data, the MLEs are the sample mean and $\frac{1}{n}\sum_i (x_i - \bar{x})^2$: the variance divided by $n$, biased, exactly as yesterday. Maximum likelihood estimates are not always unbiased, but under mild conditions they are **consistent** and, for large $n$, **efficient**: their variance reaches the Cramér-Rao bound of tomorrow.
+
+Two more properties make the MLE convenient. It is **invariant**: the MLE of any function of $\theta$ is that function of the MLE (the MLE of a standard deviation is the square root of the MLE of the variance). And minimising squared error is maximum likelihood under Gaussian noise (Week 12), so least squares is a special case.
+
+<PyCell id="poissonmle" title="The mean count maximises the likelihood" tests={String.raw`
+  import numpy as np
+  def test_ll():
+      "poisson_ll is the Poisson log-likelihood, up to a constant"
+      k = np.array([2, 5, 3])
+      assert abs((poisson_ll(4.0, k) - poisson_ll(3.0, k)) - (10 * np.log(4 / 3) - 3)) < 1e-9
+
+  def test_max():
+      "the grid maximum agrees with the mean count to within the grid step"
+      assert abs(lam_grid_best - counts.mean()) <= 0.01
+`} prompt="Write `poisson_ll(lam, k)` returning the sum of k log(lam) − lam (dropping the constant). Evaluate it on a fine grid of rates for 25 simulated counts and confirm that the maximum is at the mean count."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2008)
+  counts = rng.poisson(6.0, 25)
+
+  def poisson_ll(lam, k):
+      return ...
+
+  grid = np.arange(0.5, 15, 0.01)
+  ll = np.array([poisson_ll(l, counts) for l in grid])
+  lam_grid_best = grid[np.argmax(ll)]
+  print(f"grid maximum {lam_grid_best:.2f}, mean count {counts.mean():.2f}")
+  plt.plot(grid, ll); plt.axvline(counts.mean(), color="k", ls="--"); plt.xlabel("rate"); plt.ylabel("log-likelihood"); plt.show()
+`}
+hint="return np.sum(k * np.log(lam) - lam)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2008)
+  counts = rng.poisson(6.0, 25)
+
+  def poisson_ll(lam, k):
+      return np.sum(k * np.log(lam) - lam)
+
+  grid = np.arange(0.5, 15, 0.01)
+  ll = np.array([poisson_ll(l, counts) for l in grid])
+  lam_grid_best = grid[np.argmax(ll)]
+  print(f"grid maximum {lam_grid_best:.2f}, mean count {counts.mean():.2f}")
+  plt.plot(grid, ll); plt.axvline(counts.mean(), color="k", ls="--"); plt.xlabel("rate"); plt.ylabel("log-likelihood"); plt.show()
+`} />
+
+<Step n={3} title="The Poisson GLM" minutes={25} />
+
+Most models have no closed form. The workhorse of neural data analysis is the **Poisson generalised linear model** (GLM): spike counts $k_i$ are Poisson with rate
+
+$$
+\lambda_i = \exp(\mathbf{x}_i^\top\mathbf{w}),
+$$
+
+where $\mathbf{x}_i$ holds the covariates on trial or time bin $i$ (stimulus features, the recent stimulus, the neuron's own recent spikes, other neurons' spikes) and $\mathbf{w}$ the weights to fit. The exponential keeps rates positive and turns weights into multiplicative effects. Its log-likelihood and derivatives are
+
+$$
+\ell(\mathbf{w}) = \sum_i \left[k_i\,\mathbf{x}_i^\top\mathbf{w} - e^{\mathbf{x}_i^\top\mathbf{w}}\right], \qquad \nabla\ell = X^\top(\mathbf{k} - \boldsymbol{\lambda}), \qquad \nabla^2\ell = -X^\top\operatorname{diag}(\boldsymbol{\lambda})X.
+$$
+
+The Hessian is negative semidefinite for every $\mathbf{w}$, so $\ell$ is **concave**: it has no false peaks, and any method that climbs will find the global maximum (Week 12). This is why GLMs with hundreds of parameters, such as those of Pillow and colleagues (2008, today's paper), can be fitted reliably.
+
+**Newton's method** (Week 9) uses the curvature to take much better steps than gradient ascent: $\mathbf{w} \leftarrow \mathbf{w} - (\nabla^2\ell)^{-1}\nabla\ell$. Near the peak it converges quadratically, doubling the number of correct digits each step.
+
+<Step n={4} title="Newton's method on a tuning curve" minutes={35} />
+
+An orientation tuning curve of the form $\exp(a + b\cos 2\theta + c\sin 2\theta)$ is a Poisson GLM in disguise: the covariates are $(1, \cos 2\theta, \sin 2\theta)$. From the fitted weights, the preferred orientation is $\tfrac{1}{2}\operatorname{atan2}(c, b)$ and the tuning strength is $\sqrt{b^2 + c^2}$.
+
+<PyCell id="newton" title="Fit a tuning curve" tests={String.raw`
+  import numpy as np
+  def test_converged():
+      "Newton's method converges: the gradient at the end is tiny"
+      lam = np.exp(X @ w_hat)
+      assert np.abs(X.T @ (k - lam)).max() < 1e-6
+
+  def test_steps():
+      "it needs at most 12 Newton steps"
+      assert n_steps <= 12
+
+  def test_recover():
+      "the preferred orientation is within 5 degrees of 60, and the tuning strength within 0.15 of 1.2"
+      assert abs(pref_hat - 60) < 5 and abs(strength_hat - 1.2) < 0.15
+`} prompt="Simulate 400 trials at random orientations from a neuron with log-rate 1 + 1.2 cos 2(θ − 60°). Build the design matrix X with columns (1, cos 2θ, sin 2θ), then run Newton's method from w = 0 until the step is smaller than 1e-10, counting the steps. Store `w_hat`, `n_steps`, `pref_hat` (degrees) and `strength_hat`."
+code={String.raw`
+  theta = rng.uniform(0, np.pi, 400)
+  log_rate = 1 + 1.2 * np.cos(2 * (theta - np.deg2rad(60)))
+  k = rng.poisson(np.exp(log_rate))
+  X = np.column_stack([np.ones_like(theta), np.cos(2 * theta), np.sin(2 * theta)])
+
+  w = np.zeros(3)
+  for n_steps in range(1, 50):
+      lam = np.exp(X @ w)
+      grad = ...
+      hess = ...
+      step = np.linalg.solve(hess, grad)
+      w = w - step
+      if np.abs(step).max() < 1e-10:
+          break
+  w_hat = w
+  pref_hat = ...                                  # 0.5 * atan2(c, b), in degrees between 0 and 180
+  strength_hat = ...
+  print(f"Newton steps {n_steps};  weights {w_hat.round(3)};  preferred {pref_hat:.1f} deg, strength {strength_hat:.3f}")
+  tt = np.linspace(0, np.pi, 200); Xt = np.column_stack([np.ones_like(tt), np.cos(2 * tt), np.sin(2 * tt)])
+  plt.plot(np.rad2deg(theta), k, ".", alpha=0.4); plt.plot(np.rad2deg(tt), np.exp(Xt @ w_hat), "k"); plt.xlabel("orientation (deg)"); plt.ylabel("count"); plt.show()
+`}
+hint="grad = X.T @ (k - lam); hess = -X.T @ (lam[:, None] * X); pref_hat = np.mod(np.rad2deg(0.5 * np.arctan2(w_hat[2], w_hat[1])), 180); strength_hat = np.hypot(w_hat[1], w_hat[2])."
+solution={String.raw`
+  theta = rng.uniform(0, np.pi, 400)
+  log_rate = 1 + 1.2 * np.cos(2 * (theta - np.deg2rad(60)))
+  k = rng.poisson(np.exp(log_rate))
+  X = np.column_stack([np.ones_like(theta), np.cos(2 * theta), np.sin(2 * theta)])
+
+  w = np.zeros(3)
+  for n_steps in range(1, 50):
+      lam = np.exp(X @ w)
+      grad = X.T @ (k - lam)
+      hess = -X.T @ (lam[:, None] * X)
+      step = np.linalg.solve(hess, grad)
+      w = w - step
+      if np.abs(step).max() < 1e-10:
+          break
+  w_hat = w
+  pref_hat = np.mod(np.rad2deg(0.5 * np.arctan2(w_hat[2], w_hat[1])), 180)                                  # 0.5 * atan2(c, b), in degrees between 0 and 180
+  strength_hat = np.hypot(w_hat[1], w_hat[2])
+  print(f"Newton steps {n_steps};  weights {w_hat.round(3)};  preferred {pref_hat:.1f} deg, strength {strength_hat:.3f}")
+  tt = np.linspace(0, np.pi, 200); Xt = np.column_stack([np.ones_like(tt), np.cos(2 * tt), np.sin(2 * tt)])
+  plt.plot(np.rad2deg(theta), k, ".", alpha=0.4); plt.plot(np.rad2deg(tt), np.exp(Xt @ w_hat), "k"); plt.xlabel("orientation (deg)"); plt.ylabel("count"); plt.show()
+`} />
+
+<PyCell id="compare" title="Likelihood against least squares" tests={String.raw`
+  import numpy as np
+  def test_both():
+      "both methods are run on 300 simulated datasets"
+      assert len(err_ml) == 300 and len(err_ls) == 300
+
+  def test_ml_better():
+      "maximum likelihood recovers the preferred orientation with a smaller mean squared error than least squares on log(count + 1)"
+      assert np.mean(err_ml) < np.mean(err_ls)
+`} prompt="A common shortcut is to fit log(count + 1) by ordinary least squares. For 300 simulated datasets of 60 trials each, estimate the preferred orientation both ways and store the squared errors (in degrees²) in `err_ml` and `err_ls`."
+code={String.raw`
+  def fit_ml(X, k, steps=30):
+      w = np.zeros(X.shape[1])
+      for _ in range(steps):
+          lam = np.exp(X @ w)
+          w = w - np.linalg.solve(-X.T @ (lam[:, None] * X), X.T @ (k - lam))
+      return w
+
+  def pref(w): return np.mod(np.rad2deg(0.5 * np.arctan2(w[2], w[1])), 180)
+  def circ_err(a, b): d = np.mod(a - b, 180); return min(d, 180 - d) ** 2
+
+  err_ml, err_ls = [], []
+  for _ in range(300):
+      th = rng.uniform(0, np.pi, 60)
+      Xd = np.column_stack([np.ones_like(th), np.cos(2 * th), np.sin(2 * th)])
+      kd = rng.poisson(np.exp(0.5 + 1.0 * np.cos(2 * (th - np.deg2rad(60)))))
+      w_ls = ...                                   # least squares of log(kd + 1) on Xd
+      err_ml.append(circ_err(pref(fit_ml(Xd, kd)), 60))
+      err_ls.append(...)
+  print(f"mean squared error of the preferred orientation: maximum likelihood {np.mean(err_ml):.1f}, least squares {np.mean(err_ls):.1f} (deg^2)")
+`}
+hint="w_ls = np.linalg.lstsq(Xd, np.log(kd + 1), rcond=None)[0]; err_ls.append(circ_err(pref(w_ls), 60))."
+solution={String.raw`
+  def fit_ml(X, k, steps=30):
+      w = np.zeros(X.shape[1])
+      for _ in range(steps):
+          lam = np.exp(X @ w)
+          w = w - np.linalg.solve(-X.T @ (lam[:, None] * X), X.T @ (k - lam))
+      return w
+
+  def pref(w): return np.mod(np.rad2deg(0.5 * np.arctan2(w[2], w[1])), 180)
+  def circ_err(a, b): d = np.mod(a - b, 180); return min(d, 180 - d) ** 2
+
+  err_ml, err_ls = [], []
+  for _ in range(300):
+      th = rng.uniform(0, np.pi, 60)
+      Xd = np.column_stack([np.ones_like(th), np.cos(2 * th), np.sin(2 * th)])
+      kd = rng.poisson(np.exp(0.5 + 1.0 * np.cos(2 * (th - np.deg2rad(60)))))
+      w_ls = np.linalg.lstsq(Xd, np.log(kd + 1), rcond=None)[0]                                   # least squares of log(kd + 1) on Xd
+      err_ml.append(circ_err(pref(fit_ml(Xd, kd)), 60))
+      err_ls.append(circ_err(pref(w_ls), 60))
+  print(f"mean squared error of the preferred orientation: maximum likelihood {np.mean(err_ml):.1f}, least squares {np.mean(err_ls):.1f} (deg^2)")
+`} />
+
+Maximum likelihood uses the right noise model: Poisson counts are noisier where the rate is high, and the likelihood automatically weights each trial accordingly, while least squares on transformed counts treats every trial as equally reliable and distorts low counts. Here the gain is modest, a mean squared error of 14.7 against 16.9 square degrees, but it is free, and it grows at lower firing rates, where the log(count + 1) transformation is crudest. That answers the prediction.
+
+<Bridge title="Likelihood in brains and machines"
+  neuro="GLMs are the standard descriptive model of single neurons: stimulus filters, spike-history filters (refractoriness and bursting) and coupling filters between neurons, all fitted by maximum likelihood. Pillow and colleagues (2008) fitted a complete population and decoded the stimulus from its spikes."
+  ai="Training a classifier with cross-entropy, or a language model on next-token prediction, is maximum likelihood. Logistic regression (Week 12) is the Bernoulli GLM, and the softmax layer is the multinomial one.">
+
+Choose the parameters that make what you saw most probable, with a noise model that matches the data.
+
+</Bridge>
+
+<Prove title="The Poisson GLM is concave" task="For $\ell(\mathbf{w}) = \sum_i [k_i\mathbf{x}_i^\top\mathbf{w} - \exp(\mathbf{x}_i^\top\mathbf{w})]$, derive the gradient and Hessian and show that the Hessian is negative semidefinite.">
+
+Differentiate term by term. The derivative of $k_i\mathbf{x}_i^\top\mathbf{w}$ is $k_i\mathbf{x}_i$, and of $\exp(\mathbf{x}_i^\top\mathbf{w})$ is $\lambda_i\mathbf{x}_i$, so $\nabla\ell = \sum_i (k_i - \lambda_i)\mathbf{x}_i = X^\top(\mathbf{k} - \boldsymbol{\lambda})$.
+
+Differentiating again, only $\lambda_i$ depends on $\mathbf{w}$, with $\partial\lambda_i/\partial\mathbf{w} = \lambda_i\mathbf{x}_i$, so $\nabla^2\ell = -\sum_i \lambda_i\mathbf{x}_i\mathbf{x}_i^\top$.
+
+For any vector $\mathbf{v}$, $\mathbf{v}^\top\nabla^2\ell\,\mathbf{v} = -\sum_i \lambda_i(\mathbf{x}_i^\top\mathbf{v})^2 \le 0$, since every $\lambda_i > 0$. So the Hessian is negative semidefinite and $\ell$ is concave.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "The likelihood is...", options: ["A distribution over θ", "The probability of the observed data as a function of θ", "The prior", "Always less than 1 when integrated over θ"], answer: 1, explain: "Read as a function of the parameters." },
+  { q: "Why maximise the log-likelihood?", options: ["It has a different maximum", "Products become sums and numbers stay manageable", "It is always linear", "It removes the noise"], answer: 1, explain: "Same maximiser, easier to compute." },
+  { q: "The MLE of a Poisson rate is...", options: ["The median", "The mean count", "The variance", "The maximum count"], answer: 1, explain: "Set the derivative to zero." },
+  { q: "The Gaussian MLE of the variance divides by...", options: ["n − 1", "n", "n + 1", "√n"], answer: 1, explain: "So it is biased." },
+  { q: "A Poisson GLM's rate is...", options: ["Linear in the weights", "The exponential of a linear function of the covariates", "A step function", "Always constant"], answer: 1, explain: "Log link." },
+  { q: "The Poisson GLM log-likelihood is...", options: ["Convex", "Concave, so it has one peak", "Has many local maxima", "Not differentiable"], answer: 1, explain: "Its Hessian is negative semidefinite." },
+  { q: "Least squares is maximum likelihood when the noise is...", options: ["Poisson", "Gaussian with constant variance", "Exponential", "Absent"], answer: 1, explain: "Week 12." },
+]} />
+
+<Flashcards cards={[
+  { front: "Log-likelihood?", back: "$\\ell(\\theta) = \\sum_i \\log p(x_i \\mid \\theta)$ for independent data." },
+  { front: "Poisson MLE?", back: "$\\hat\\lambda = \\bar k$." },
+  { front: "Poisson GLM gradient and Hessian?", back: "$X^\\top(k - \\lambda)$ and $-X^\\top\\text{diag}(\\lambda)X$." },
+  { front: "Newton step?", back: "$w \\leftarrow w - (\\nabla^2\\ell)^{-1}\\nabla\\ell$; quadratic convergence near the peak." },
+  { front: "Invariance of the MLE?", back: "The MLE of g(θ) is g(θ̂)." },
+]} />
+
+<Predict revisit question="Which recovers the tuning parameters better, Poisson maximum likelihood or least squares, and when does it matter most?" />
+
+<Key title="Before you go">
+<ul>
+<li>The MLE maximises the log-likelihood; for Poisson rates it is the mean count.</li>
+<li>MLEs are consistent and, in large samples, efficient, but not always unbiased.</li>
+<li>The Poisson GLM is concave, so Newton's method finds its unique maximum in a few steps.</li>
+<li>Using the right noise model beats least squares on transformed data.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Pillow and colleagues (2008), <em>Spatio-temporal correlations and visual signalling in a complete neuronal population</em>.</li>
+<li>Neuromatch Academy, Computational Neuroscience, W1D3 tutorials on generalised linear models.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A GLM can include a neuron's own recent spikes as covariates. What would a large negative weight on the spike one millisecond ago mean biologically, and what would a positive weight on spikes 5 to 10 ms ago mean?" />
