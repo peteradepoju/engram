@@ -1,0 +1,248 @@
+export const meta = {
+  title: "Hypothesis testing: null hypotheses, p-values and errors",
+  intro: "Does this neuron respond to the stimulus, or is the difference just noise? Does the drug change the firing rate? Hypothesis testing gives a formal way to ask whether data are surprising under a boring explanation, the null hypothesis. Its central quantity, the p-value, is one of the most used and most misunderstood numbers in science. Today you build a test from scratch, see that p-values are uniformly distributed when the null is true, meet the two kinds of error, and discover by simulation why a significant result in a field full of small studies is much less convincing than it sounds.",
+  goals: [
+    "State a null hypothesis, choose a test statistic and compute a p-value",
+    "Show that p-values are uniform under the null, and explain what a significance level controls",
+    "Distinguish type I and type II errors, and explain power",
+    "Compute how often a significant result is a false positive, given the prior fraction of real effects and the power",
+  ],
+  plan: [
+    { label: "Predict and the logic of a test", minutes: 25 },
+    { label: "p-values under the null", minutes: 25 },
+    { label: "Does this neuron respond?", minutes: 25 },
+    { label: "What a significant result means", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "wasserstein-2016",
+};
+
+<Predict question="In a field, 10% of tested hypotheses are true effects, and studies have 50% power. A study reports p below 0.05. What is the probability that the effect is real: about 95%, about 50%, or lower?" />
+
+<Step n={1} title="The logic of a test" minutes={25} />
+
+A test has four parts.
+
+1. A **null hypothesis** $H_0$, a precise statement of "nothing interesting": the mean rate change is zero, the two conditions have the same distribution.
+2. A **test statistic** $T$ computed from the data, large when the data disagree with $H_0$: for example $z = (\bar{x} - \mu_0)/(\sigma/\sqrt{n})$.
+3. The **null distribution** of $T$: its distribution if $H_0$ were true.
+4. The **p-value**: the probability, under $H_0$, of a statistic at least as extreme as the one observed.
+
+If $p$ is below a **significance level** $\alpha$ chosen in advance (often 0.05), you **reject** $H_0$. Rejecting a true null is a **type I error**, with probability $\alpha$; failing to reject a false null is a **type II error**, with probability $\beta$. The **power** is $1 - \beta$, the chance of detecting a real effect (Day 4).
+
+What a p-value is not: it is not the probability that $H_0$ is true, not the probability that the result is due to chance, and not a measure of the size or importance of an effect. These are three of the six principles in today's paper.
+
+<Figure caption="The null distribution of a z statistic and the p-value as the shaded tail area. Change the true effect and the sample size." credit="Interactive figure by Engram.">
+  <NullDistribution />
+</Figure>
+
+<Video id="5Z9OIYA8He8" title="P Values, clearly explained" by="StatQuest with Josh Starmer" note="Josh Starmer explains what a p-value means, and what it does not, with simple examples." />
+
+<PyCell id="ztest" title="A z-test from scratch" tests={String.raw`
+  import numpy as np
+  def test_values():
+      "z_test returns the z statistic and the two-sided p-value"
+      z, p = z_test(np.array([1.0, 2.0, 3.0, 4.0]), 2.0, 1.0)
+      assert abs(z - 1.5) < 1e-12 and abs(p - 0.13361440253771617) < 1e-9
+
+  def test_symmetric():
+      "the p-value depends only on the size of z"
+      assert abs(z_test(np.array([-1.0, -2.0]), 1.0, 0.0)[1] - z_test(np.array([1.0, 2.0]), 1.0, 0.0)[1]) < 1e-12
+`} prompt="Write `z_test(x, sigma, mu0)` returning the z statistic (x̄ − μ0)/(σ/√n) and the two-sided p-value 2(1 − Φ(|z|)), with Φ from `math.erf`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from math import erf, sqrt
+  def Phi(z): return 0.5 * (1 + erf(z / sqrt(2)))
+
+  def z_test(x, sigma, mu0):
+      z = ...
+      p = ...
+      return z, p
+
+  print(z_test(np.array([1.0, 2.0, 3.0, 4.0]), 2.0, 1.0))
+`}
+hint="z = (x.mean() - mu0) / (sigma / np.sqrt(len(x))); p = 2 * (1 - Phi(abs(z)))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from math import erf, sqrt
+  def Phi(z): return 0.5 * (1 + erf(z / sqrt(2)))
+
+  def z_test(x, sigma, mu0):
+      z = (x.mean() - mu0) / (sigma / np.sqrt(len(x)))
+      p = 2 * (1 - Phi(abs(z)))
+      return z, p
+
+  print(z_test(np.array([1.0, 2.0, 3.0, 4.0]), 2.0, 1.0))
+`} />
+
+<Step n={2} title="p-values under the null" minutes={25} />
+
+If $H_0$ is true and the test is correct, the p-value is **uniformly distributed** between 0 and 1 (it is the null CDF of the statistic evaluated at itself, Week 13's histogram equalisation in reverse). So exactly a fraction $\alpha$ of null experiments give $p \lt \alpha$: that is the sense in which a test "controls" its type I error rate. Under a real effect, p-values pile up near zero, more steeply the higher the power.
+
+<PyCell id="uniform" title="The distribution of p-values" tests={String.raw`
+  import numpy as np
+  def test_null_uniform():
+      "under the null about 5% of p-values fall below 0.05, and each tenth of [0, 1] holds about 10%"
+      assert abs(np.mean(p_null < 0.05) - 0.05) < 0.01
+      assert np.all(np.abs(np.histogram(p_null, bins=10, range=(0, 1))[0] / len(p_null) - 0.1) < 0.015)
+
+  def test_alt():
+      "under a real effect more than 40% of p-values fall below 0.05"
+      assert np.mean(p_alt < 0.05) > 0.4
+`} prompt="Simulate 10,000 experiments of 20 Gaussian observations with σ = 1, testing μ0 = 0. Store p-values when the true mean is 0 in `p_null` and when it is 0.4 in `p_alt`, and plot both histograms."
+code={String.raw`
+  rng = np.random.default_rng(2016)
+  p_null = np.array([...])
+  p_alt = np.array([...])
+  print(f"fraction below 0.05: null {np.mean(p_null < 0.05):.3f}, real effect {np.mean(p_alt < 0.05):.3f}")
+  plt.hist(p_null, 20, alpha=0.5, label="null true"); plt.hist(p_alt, 20, alpha=0.5, label="effect 0.4"); plt.legend(); plt.xlabel("p-value"); plt.show()
+`}
+hint="p_null = np.array([z_test(rng.normal(0, 1, 20), 1.0, 0.0)[1] for _ in range(10000)]), and the same with rng.normal(0.4, 1, 20) for p_alt."
+solution={String.raw`
+  rng = np.random.default_rng(2016)
+  p_null = np.array([z_test(rng.normal(0, 1, 20), 1.0, 0.0)[1] for _ in range(10000)])
+  p_alt = np.array([z_test(rng.normal(0.4, 1, 20), 1.0, 0.0)[1] for _ in range(10000)])
+  print(f"fraction below 0.05: null {np.mean(p_null < 0.05):.3f}, real effect {np.mean(p_alt < 0.05):.3f}")
+  plt.hist(p_null, 20, alpha=0.5, label="null true"); plt.hist(p_alt, 20, alpha=0.5, label="effect 0.4"); plt.legend(); plt.xlabel("p-value"); plt.show()
+`} />
+
+<Step n={3} title="Does this neuron respond?" minutes={25} />
+
+A common real test: on each of $n$ trials you count spikes in a baseline window and in a response window. The **paired** design compares each trial with itself, removing slow drifts between trials. Test whether the mean of the differences is zero with $t = \bar{d}/(s_d/\sqrt{n})$, where $s_d$ is the sample standard deviation of the differences. With unknown variance this follows Student's **t distribution** with $n - 1$ degrees of freedom, which has heavier tails than the Gaussian for small $n$; for $n$ above about 30 the Gaussian approximation is close.
+
+<PyCell id="paired" title="A paired test on spike counts" tests={String.raw`
+  import numpy as np
+  def test_t():
+      "t is the mean difference over its standard error"
+      d = resp - base
+      assert abs(t_stat - d.mean() / (d.std(ddof=1) / np.sqrt(len(d)))) < 1e-12
+
+  def test_paired_wins():
+      "the paired test gives a smaller p-value than an unpaired test that ignores the pairing"
+      assert p_paired < p_unpaired
+`} prompt="On 40 trials, a neuron's baseline count varies with a large slow drift, and the stimulus adds about 1.5 spikes. Compute the paired t statistic `t_stat` and its two-sided p-value `p_paired` (Gaussian approximation), and compare with `p_unpaired` from treating baseline and response as independent groups: z = (mean difference) / sqrt(var_b / n + var_r / n)."
+code={String.raw`
+  rng_p = np.random.default_rng(2)
+  n = 40
+  drift = 10 + 8 * np.sin(np.linspace(0, 3 * np.pi, n))       # slow changes in excitability
+  base = rng_p.poisson(drift)
+  resp = rng_p.poisson(drift + 1.5)
+  d = resp - base
+  t_stat = ...
+  p_paired = 2 * (1 - Phi(abs(t_stat)))
+  z_unp = ...
+  p_unpaired = 2 * (1 - Phi(abs(z_unp)))
+  print(f"paired: t = {t_stat:.2f}, p = {p_paired:.4f};  unpaired: z = {z_unp:.2f}, p = {p_unpaired:.4f}")
+`}
+hint="t_stat = d.mean() / (d.std(ddof=1) / np.sqrt(n)); z_unp = (resp.mean() - base.mean()) / np.sqrt(base.var(ddof=1) / n + resp.var(ddof=1) / n)."
+solution={String.raw`
+  rng_p = np.random.default_rng(2)
+  n = 40
+  drift = 10 + 8 * np.sin(np.linspace(0, 3 * np.pi, n))       # slow changes in excitability
+  base = rng_p.poisson(drift)
+  resp = rng_p.poisson(drift + 1.5)
+  d = resp - base
+  t_stat = d.mean() / (d.std(ddof=1) / np.sqrt(n))
+  p_paired = 2 * (1 - Phi(abs(t_stat)))
+  z_unp = (resp.mean() - base.mean()) / np.sqrt(base.var(ddof=1) / n + resp.var(ddof=1) / n)
+  p_unpaired = 2 * (1 - Phi(abs(z_unp)))
+  print(f"paired: t = {t_stat:.2f}, p = {p_paired:.4f};  unpaired: z = {z_unp:.2f}, p = {p_unpaired:.4f}")
+`} />
+
+The paired test finds the response (p about 0.02); the unpaired test, swamped by the drift, does not (p about 0.23). The drift adds variance to each condition, but it cancels in the paired differences. Designing the comparison to remove known sources of variance is often worth more than collecting more trials.
+
+<Step n={4} title="What a significant result means" minutes={30} />
+
+$\alpha$ is the probability of a significant result *given* a true null. What a reader wants is the reverse: the probability the effect is real *given* a significant result, the **positive predictive value** (PPV). Bayes' rule (Week 16) connects them through the prior fraction $\pi$ of tested hypotheses that are true and the power $1 - \beta$:
+
+$$
+\text{PPV} = \frac{(1 - \beta)\,\pi}{(1 - \beta)\,\pi + \alpha\,(1 - \pi)}.
+$$
+
+<PyCell id="ppv" title="How often is significant real?" tests={String.raw`
+  import numpy as np
+  def test_sim():
+      "the simulated PPV matches the formula to within 0.03"
+      assert abs(ppv_sim - ppv_formula) < 0.03
+
+  def test_low():
+      "with 10% real effects and 50% power, fewer than 60% of significant results are real"
+      assert ppv_formula < 0.6
+`} prompt="Simulate 100,000 studies: each tests a real effect with probability 0.1 and has power 0.5 (so a real effect is significant with probability 0.5, a null one with probability 0.05). Compute the fraction of significant studies that tested a real effect (`ppv_sim`) and compare with the formula (`ppv_formula`)."
+code={String.raw`
+  N = 100000
+  real = rng.random(N) < 0.1
+  significant = np.where(real, rng.random(N) < 0.5, rng.random(N) < 0.05)
+  ppv_sim = ...
+  ppv_formula = ...
+  print(f"P(real | significant): simulated {ppv_sim:.3f}, formula {ppv_formula:.3f}")
+`}
+hint="ppv_sim = real[significant].mean(); ppv_formula = 0.5 * 0.1 / (0.5 * 0.1 + 0.05 * 0.9)."
+solution={String.raw`
+  N = 100000
+  real = rng.random(N) < 0.1
+  significant = np.where(real, rng.random(N) < 0.5, rng.random(N) < 0.05)
+  ppv_sim = real[significant].mean()
+  ppv_formula = 0.5 * 0.1 / (0.5 * 0.1 + 0.05 * 0.9)
+  print(f"P(real | significant): simulated {ppv_sim:.3f}, formula {ppv_formula:.3f}")
+`} />
+
+Barely half of the significant results are real. That answers the prediction: "p below 0.05" is far from "95% sure". It gets worse with lower power or rarer true effects, the argument of this week's deep read by Button and colleagues.
+
+<Bridge title="Testing in brains and machines"
+  neuro="Deciding whether a neuron is selective, whether an area is engaged by a task, or whether a manipulation changed behaviour are all hypothesis tests. Good practice reports effect sizes and confidence intervals alongside p-values, and plans sample sizes in advance."
+  ai="Comparing two models on a benchmark is a hypothesis test too, and small differences on a fixed test set are often within noise. A/B tests in industry, and checks for whether a network's units encode a variable, use the same machinery.">
+
+A p-value asks how surprising the data are if nothing is going on; it does not tell you how likely it is that something is.
+
+</Bridge>
+
+<Prove title="p-values are uniform under the null" task="Let T have a continuous null CDF $F$, and define the one-sided p-value $p = 1 - F(T)$. Show that, if $H_0$ is true, $P(p \le \alpha) = \alpha$ for every $\alpha$ in $[0, 1]$.">
+
+Under $H_0$, $T$ has CDF $F$, so $F(T)$ is uniform on $[0, 1]$ (the probability integral transform, Week 15's Forge).
+
+Then $1 - F(T)$ is also uniform, so $P(p \le \alpha) = \alpha$.
+
+This is exactly what it means for the test to have type I error rate $\alpha$: if you reject when $p \le \alpha$, you reject a true null with probability $\alpha$. Two-sided p-values work the same way with $|T|$.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "A p-value is...", options: ["The probability the null is true", "The probability, under the null, of data at least as extreme as observed", "The effect size", "The power"], answer: 1, explain: "A tail probability under H0." },
+  { q: "A type I error is...", options: ["Missing a real effect", "Rejecting a true null", "Using the wrong test", "A small sample"], answer: 1, explain: "A false alarm, probability α." },
+  { q: "Power is...", options: ["α", "1 − β, the chance of detecting a real effect", "The p-value", "The sample size"], answer: 1, explain: "Type II error rate is β." },
+  { q: "Under the null, p-values are...", options: ["Near 0", "Uniform on [0, 1]", "Near 1", "Gaussian"], answer: 1, explain: "That is what calibration means." },
+  { q: "A paired test is more sensitive when...", options: ["Trials are independent", "Variability shared within each pair cancels in the differences", "Samples are large", "The null is true"], answer: 1, explain: "Drift cancels." },
+  { q: "With 10% true hypotheses and 50% power, P(real | significant) is about...", options: ["95%", "53%", "10%", "5%"], answer: 1, explain: "0.05 / (0.05 + 0.045)." },
+  { q: "A tiny p-value guarantees...", options: ["A large effect", "Nothing about the size of the effect", "A true hypothesis", "Replication"], answer: 1, explain: "Large samples make small effects significant." },
+]} />
+
+<Flashcards cards={[
+  { front: "p-value?", back: "P(statistic at least as extreme as observed | H0)." },
+  { front: "Type I and II errors?", back: "Rejecting a true null (α); failing to reject a false null (β)." },
+  { front: "Distribution of p under H0?", back: "Uniform on [0, 1]." },
+  { front: "Paired t statistic?", back: "$t = \\bar d/(s_d/\\sqrt n)$, n − 1 degrees of freedom." },
+  { front: "Positive predictive value?", back: "$(1 - \\beta)\\pi / [(1 - \\beta)\\pi + \\alpha(1 - \\pi)]$." },
+]} />
+
+<Predict revisit question="With 10% real effects and 50% power, how likely is a significant result to be real?" />
+
+<Key title="Before you go">
+<ul>
+<li>A test compares a statistic with its distribution under a null hypothesis; p is a tail probability.</li>
+<li>p-values are uniform under the null, so α is the false alarm rate.</li>
+<li>Paired designs remove shared variability and gain power.</li>
+<li>Whether a significant result is real depends on power and the prior fraction of true effects.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Wasserstein and Lazar (2016), <em>The ASA statement on p-values</em>.</li>
+<li>Regina Nuzzo (2014), <em>Statistical errors</em>, Nature 506, 150 to 152, a short readable history of the p-value.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Write one sentence a careful author could use to report p = 0.03 for a difference in firing rates, giving the effect size and its uncertainty as well. Then write the sentence a careless author might write instead, and say what is wrong with it." />

@@ -79,3 +79,8 @@ export { LikelihoodCurve } from "./likelihood-curve";
 export { FisherTuning } from "./fisher-tuning";
 export { RidgePrior } from "./ridge-prior";
 export { BiasVariance } from "./bias-variance";
+export { NullDistribution } from "./null-distribution";
+export { PermutationTest } from "./permutation-test";
+export { BootstrapCI } from "./bootstrap-ci";
+export { PowerCurve } from "./power-curve";
+export { MultipleTests } from "./multiple-tests";

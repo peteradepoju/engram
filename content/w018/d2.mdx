@@ -1,0 +1,279 @@
+export const meta = {
+  title: "Permutation tests: testing by shuffling",
+  intro: "Yesterday's tests needed a formula for the null distribution, and formulas need assumptions: Gaussian noise, known variances, large samples. Neural data often break them. A permutation test needs almost none. If the null hypothesis says the condition labels do not matter, then shuffling the labels should not matter either, so you can build the null distribution by shuffling, with the computer doing the work. Today you write permutation tests for two groups and for paired data, use the maximum statistic to test fifty neurons at once without drowning in false positives, and learn the one assumption permutation tests cannot do without.",
+  goals: [
+    "Explain exchangeability and why shuffling labels builds the null distribution",
+    "Implement two-sample and paired (sign-flip) permutation tests",
+    "Control the family-wise error rate across many neurons with the maximum statistic",
+    "Recognise when shuffling is invalid, as for autocorrelated time series",
+  ],
+  plan: [
+    { label: "Predict and exchangeability", minutes: 20 },
+    { label: "Two groups", minutes: 25 },
+    { label: "Paired data: sign flips", minutes: 20 },
+    { label: "Fifty neurons: the maximum statistic", minutes: 40 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "nichols-2002",
+};
+
+<Predict question="You test 50 neurons for a response to a stimulus, each at p below 0.05, and none of them truly responds. What is the chance that at least one is declared responsive: about 5%, about 50%, or about 92%?" />
+
+<Step n={1} title="Exchangeability" minutes={20} />
+
+Suppose you have responses under a control and a drug condition. The null hypothesis says the drug does nothing, so each response would have been the same whichever label it had been given. The labels are then **exchangeable**: every relabelling of the data is equally likely under the null. Compute the statistic (say, the difference in means) for many random relabellings, and the collection is the null distribution. The **permutation p-value** is
+
+$$
+p = \frac{1 + \#\{\text{shuffles with } |T^*| \ge |T_{\text{obs}}|\}}{1 + N_{\text{shuffles}}},
+$$
+
+where the 1s count the observed labelling as one of the possibilities, so $p$ is never zero. No formula, no Gaussian assumption, and any statistic you like: a difference in medians, a decoding accuracy, a correlation.
+
+<Figure caption="A permutation test in action. Shuffle the labels and watch the null distribution of the difference in means build up." credit="Interactive figure by Engram.">
+  <PermutationTest />
+</Figure>
+
+<Video id="N4ZQQqyIf6k" title="Bootstrapping Part 2: Calculating p-values" by="StatQuest with Josh Starmer" note="Josh Starmer shows how resampling the data builds a null distribution and a p-value, the same idea that drives permutation tests." />
+
+<Step n={2} title="Two groups" minutes={25} />
+
+<PyCell id="perm" title="A two-sample permutation test" tests={String.raw`
+  import numpy as np
+  def test_range():
+      "perm_test returns a p-value in (0, 1]"
+      p = perm_test(np.array([1.0, 2, 3]), np.array([4.0, 5, 6]), 999, np.random.default_rng(0))
+      assert 0 < p <= 1
+
+  def test_identical():
+      "identical groups give a large p-value"
+      assert perm_test(np.ones(10), np.ones(10), 999, np.random.default_rng(0)) == 1.0
+
+  def test_agrees():
+      "for Gaussian data, the permutation p-value is within 0.02 of the z-test p-value"
+      assert abs(p_perm - p_z) < 0.02
+`} prompt="Write `perm_test(a, b, n_perm, rng)`: pool the data, shuffle, split into groups of the original sizes, and count shuffles whose absolute difference in means is at least the observed one. Apply it to two groups of 15 Gaussian observations and compare with the z-test p-value."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from math import erf, sqrt
+  def Phi(z): return 0.5 * (1 + erf(z / sqrt(2)))
+
+  def perm_test(a, b, n_perm, rng):
+      obs = abs(b.mean() - a.mean())
+      pooled = np.concatenate([a, b])
+      count = 0
+      for _ in range(n_perm):
+          s = rng.permutation(pooled)
+          if ...:
+              count += 1
+      return ...
+
+  r1 = np.random.default_rng(2002)
+  a, b = r1.normal(0, 1, 15), r1.normal(0.8, 1, 15)
+  p_perm = perm_test(a, b, 9999, r1)
+  z = (b.mean() - a.mean()) / np.sqrt(a.var(ddof=1) / 15 + b.var(ddof=1) / 15)
+  p_z = 2 * (1 - Phi(abs(z)))
+  print(f"permutation p = {p_perm:.4f}, z-test p = {p_z:.4f}")
+`}
+hint="Inside the loop: if abs(s[len(a):].mean() - s[:len(a)].mean()) >= obs. Return (1 + count) / (1 + n_perm)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from math import erf, sqrt
+  def Phi(z): return 0.5 * (1 + erf(z / sqrt(2)))
+
+  def perm_test(a, b, n_perm, rng):
+      obs = abs(b.mean() - a.mean())
+      pooled = np.concatenate([a, b])
+      count = 0
+      for _ in range(n_perm):
+          s = rng.permutation(pooled)
+          if abs(s[len(a):].mean() - s[:len(a)].mean()) >= obs:
+              count += 1
+      return (1 + count) / (1 + n_perm)
+
+  r1 = np.random.default_rng(2002)
+  a, b = r1.normal(0, 1, 15), r1.normal(0.8, 1, 15)
+  p_perm = perm_test(a, b, 9999, r1)
+  z = (b.mean() - a.mean()) / np.sqrt(a.var(ddof=1) / 15 + b.var(ddof=1) / 15)
+  p_z = 2 * (1 - Phi(abs(z)))
+  print(f"permutation p = {p_perm:.4f}, z-test p = {p_z:.4f}")
+`} />
+
+When the data really are Gaussian, the permutation test agrees with the classical test. Its advantage shows when they are not: skewed firing rates, outliers, small samples, or statistics such as decoding accuracy for which no formula exists.
+
+<Step n={3} title="Paired data: sign flips" minutes={20} />
+
+For paired data (baseline and response on the same trial), the null says each trial's difference was as likely to be positive as negative. The exchangeable units are the signs: flip each difference's sign at random and recompute the mean. This **sign-flip test** is the permutation version of the paired t-test.
+
+<PyCell id="signflip" title="The sign-flip test" tests={String.raw`
+  import numpy as np
+  def test_function():
+      "signflip_test returns 1 for differences that are all zero"
+      assert signflip_test(np.zeros(8), 999, np.random.default_rng(0)) == 1.0
+
+  def test_detects():
+      "it detects the response in the drifting neuron (p below 0.05)"
+      assert p_flip < 0.05
+`} prompt="Write `signflip_test(d, n_perm, rng)` using random signs (±1) for each difference, and apply it to yesterday's drifting neuron: 40 trials with baseline and response counts."
+code={String.raw`
+  def signflip_test(d, n_perm, rng):
+      obs = abs(d.mean())
+      signs = rng.choice([-1, 1], size=(n_perm, len(d)))
+      null = ...                                # absolute mean of each sign-flipped set
+      return ...
+
+  r2 = np.random.default_rng(2)
+  drift = 10 + 8 * np.sin(np.linspace(0, 3 * np.pi, 40))
+  d = r2.poisson(drift + 1.5) - r2.poisson(drift)
+  p_flip = signflip_test(d, 9999, r2)
+  print(f"sign-flip p = {p_flip:.4f}")
+`}
+hint="null = np.abs((signs * d).mean(axis=1)); return (1 + np.sum(null >= obs)) / (1 + n_perm)."
+solution={String.raw`
+  def signflip_test(d, n_perm, rng):
+      obs = abs(d.mean())
+      signs = rng.choice([-1, 1], size=(n_perm, len(d)))
+      null = np.abs((signs * d).mean(axis=1))                                # absolute mean of each sign-flipped set
+      return (1 + np.sum(null >= obs)) / (1 + n_perm)
+
+  r2 = np.random.default_rng(2)
+  drift = 10 + 8 * np.sin(np.linspace(0, 3 * np.pi, 40))
+  d = r2.poisson(drift + 1.5) - r2.poisson(drift)
+  p_flip = signflip_test(d, 9999, r2)
+  print(f"sign-flip p = {p_flip:.4f}")
+`} />
+
+The sign-flip test gives p of about 0.046 for the drifting neuron, larger than the 0.02 from yesterday's Gaussian approximation: with 40 trials of skewed, discrete differences, the approximation was optimistic, and the permutation test, which makes no such assumption, is the one to trust.
+
+<Step n={4} title="Fifty neurons: the maximum statistic" minutes={40} />
+
+Testing 50 neurons at $\alpha = 0.05$ each, the chance of at least one false positive when none responds is $1 - 0.95^{50} \approx 0.92$, which answers the prediction. The **family-wise error rate** (FWER), the probability of any false positive, must be controlled across the family of tests.
+
+Permutation tests have an elegant solution (Nichols and Holmes, 2002, today's paper). On each shuffle, apply the *same* relabelling to all neurons and record only the **maximum** statistic across them. A neuron is significant if its observed statistic beats the 95th percentile of that maximum distribution. Because the same shuffle is used for every neuron, any correlations between neurons are automatically respected, which simple corrections like Bonferroni ignore.
+
+<PyCell id="maxstat" title="Correct across neurons with the maximum statistic" tests={String.raw`
+  import numpy as np
+  def test_fwer():
+      "over 200 null experiments, uncorrected testing gives a false positive in most, the maximum statistic in about 5% (at most 10%)"
+      assert fwer_uncorrected > 0.6 and fwer_max <= 0.1
+
+  def test_finds_real():
+      "in the dataset with 5 responsive neurons, the max-statistic method finds at least 3 of them and no others"
+      assert set(found) <= set(range(5)) and len(found) >= 3
+`} prompt="Write `max_stat_test(D, n_perm, rng)` for a matrix D of paired differences (trials × neurons): flip the signs of whole trials (the same flips for all neurons), record the maximum over neurons of |mean / standard error| on each flip, and return the neurons whose observed statistic exceeds the 95th percentile. Then estimate the FWER over 200 null experiments, with and without correction, and apply it to a dataset where neurons 0 to 4 respond."
+code={String.raw`
+  def tstats(D):
+      return np.abs(D.mean(axis=0) / (D.std(axis=0, ddof=1) / np.sqrt(len(D))))
+
+  def max_stat_test(D, n_perm, rng):
+      obs = tstats(D)
+      maxes = np.empty(n_perm)
+      for i in range(n_perm):
+          flips = rng.choice([-1, 1], size=(len(D), 1))      # one sign per trial, shared by all neurons
+          maxes[i] = ...
+      thresh = np.percentile(maxes, 95)
+      return np.flatnonzero(obs > thresh)
+
+  r3 = np.random.default_rng(50)
+  n_tr, n_neur = 30, 50
+  any_fp_raw, any_fp_max = [], []
+  for _ in range(200):
+      D0 = r3.normal(size=(n_tr, n_neur))                   # no neuron responds
+      any_fp_raw.append(np.any(tstats(D0) > 1.96))
+      any_fp_max.append(len(max_stat_test(D0, 300, r3)) > 0)
+  fwer_uncorrected, fwer_max = np.mean(any_fp_raw), np.mean(any_fp_max)
+
+  D1 = r3.normal(size=(n_tr, n_neur)); D1[:, :5] += 1.0         # neurons 0 to 4 respond
+  found = max_stat_test(D1, 2000, r3)
+  print(f"family-wise error: uncorrected {fwer_uncorrected:.2f}, maximum statistic {fwer_max:.2f};  neurons found: {found}")
+`}
+hint="maxes[i] = tstats(D * flips).max()."
+solution={String.raw`
+  def tstats(D):
+      return np.abs(D.mean(axis=0) / (D.std(axis=0, ddof=1) / np.sqrt(len(D))))
+
+  def max_stat_test(D, n_perm, rng):
+      obs = tstats(D)
+      maxes = np.empty(n_perm)
+      for i in range(n_perm):
+          flips = rng.choice([-1, 1], size=(len(D), 1))      # one sign per trial, shared by all neurons
+          maxes[i] = tstats(D * flips).max()
+      thresh = np.percentile(maxes, 95)
+      return np.flatnonzero(obs > thresh)
+
+  r3 = np.random.default_rng(50)
+  n_tr, n_neur = 30, 50
+  any_fp_raw, any_fp_max = [], []
+  for _ in range(200):
+      D0 = r3.normal(size=(n_tr, n_neur))                   # no neuron responds
+      any_fp_raw.append(np.any(tstats(D0) > 1.96))
+      any_fp_max.append(len(max_stat_test(D0, 300, r3)) > 0)
+  fwer_uncorrected, fwer_max = np.mean(any_fp_raw), np.mean(any_fp_max)
+
+  D1 = r3.normal(size=(n_tr, n_neur)); D1[:, :5] += 1.0         # neurons 0 to 4 respond
+  found = max_stat_test(D1, 2000, r3)
+  print(f"family-wise error: uncorrected {fwer_uncorrected:.2f}, maximum statistic {fwer_max:.2f};  neurons found: {found}")
+`} />
+
+<Callout kind="warning">
+
+Permutation tests still assume exchangeability, and it fails for **autocorrelated** data. Shuffling individual time bins of a slowly varying signal destroys its autocorrelation, so the shuffled statistics are too tame and the test finds "significant" relationships between unrelated signals. For time series, shuffle whole trials, or shift one signal circularly in time, as you did for spike-phase locking in Week 11.
+
+</Callout>
+
+<Bridge title="Shuffling in brains and machines"
+  neuro="Shuffle controls are everywhere in neuroscience: shuffling trial labels to test decoders, shuffling spike times to test synchrony, shuffling cells to test assemblies. Each shuffle encodes a null hypothesis, and choosing which structure to keep and which to destroy is the scientific decision."
+  ai="Permutation feature importance shuffles one input feature to see how much a model's accuracy drops. Label-shuffling controls also show that deep networks can memorise random labels, which is evidence about how they generalise.">
+
+Shuffle what the null hypothesis says does not matter, and keep everything else.
+
+</Bridge>
+
+<Prove title="Family-wise error with independent tests" task="Show that for m independent tests of true nulls, each at level α, the probability of at least one false positive is $1 - (1 - \alpha)^m$, and that it is at most $m\alpha$ for any tests, independent or not.">
+
+Under independence, the probability that no test rejects is the product of the individual probabilities, $(1 - \alpha)^m$, so at least one rejects with probability $1 - (1 - \alpha)^m$. For $m = 50$, $\alpha = 0.05$ this is 0.92.
+
+Without independence, use the union bound: $P(\text{any rejects}) \le \sum_i P(\text{test } i \text{ rejects}) = m\alpha$.
+
+Setting the per-test level to $\alpha/m$ therefore keeps the FWER at most $\alpha$: the Bonferroni correction. The maximum statistic does the same job but uses the actual dependence between tests, so it is less conservative when tests are correlated.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "A permutation test builds the null distribution by...", options: ["A formula", "Recomputing the statistic on relabelled data", "Assuming Gaussian noise", "Bootstrapping"], answer: 1, explain: "Exchangeability under H0." },
+  { q: "Why add 1 to the numerator and denominator?", options: ["To make p larger than 1", "To count the observed labelling as one possibility, so p is never 0", "To correct for multiple tests", "It is optional decoration"], answer: 1, explain: "The observed data are one of the permutations." },
+  { q: "For paired data, the permutation test flips...", options: ["Labels between subjects", "The signs of the differences", "Time bins", "Neurons"], answer: 1, explain: "Each difference is symmetric under H0." },
+  { q: "Testing 50 true nulls at 0.05, P(at least one false positive) is about...", options: ["0.05", "0.5", "0.92", "1"], answer: 2, explain: "$1 - 0.95^{50}$." },
+  { q: "The maximum-statistic method controls...", options: ["The false discovery rate", "The family-wise error rate", "The power", "The effect size"], answer: 1, explain: "Using the distribution of the largest null statistic." },
+  { q: "Why use the same shuffle for all neurons?", options: ["Speed", "So correlations between neurons are preserved in the null", "It is required by Bonferroni", "To increase α"], answer: 1, explain: "The null keeps the real dependence." },
+  { q: "Shuffling individual time bins of autocorrelated signals...", options: ["Is always valid", "Makes the test too liberal", "Makes it too conservative", "Has no effect"], answer: 1, explain: "Exchangeability fails." },
+]} />
+
+<Flashcards cards={[
+  { front: "Exchangeability?", back: "Under H0, every relabelling of the data is equally likely." },
+  { front: "Permutation p-value?", back: "(1 + #{|T*| ≥ |T_obs|}) / (1 + N_shuffles)." },
+  { front: "Sign-flip test?", back: "Permutation test for paired data: randomly flip the signs of the differences." },
+  { front: "Family-wise error rate?", back: "Probability of at least one false positive in a family of tests." },
+  { front: "Maximum statistic?", back: "Record the largest statistic over all tests on each shuffle; compare each observed statistic with its 95th percentile." },
+]} />
+
+<Predict revisit question="With 50 null neurons each tested at 0.05, how likely is at least one false positive?" />
+
+<Key title="Before you go">
+<ul>
+<li>Permutation tests build the null by shuffling what the null hypothesis says is irrelevant.</li>
+<li>Sign flips test paired differences; any statistic can be used.</li>
+<li>The maximum statistic controls the family-wise error across many neurons and respects their correlations.</li>
+<li>Exchangeability is the assumption that remains; autocorrelated data need trial shuffles or circular shifts.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Nichols and Holmes (2002), <em>Nonparametric permutation tests for functional neuroimaging</em>.</li>
+<li>Phillip Good, <em>Permutation, Parametric, and Bootstrap Tests of Hypotheses</em> (third edition, 2005), chapters 1 to 3.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="You want to test whether two neurons fire synchronously more often than chance. Describe a shuffle that destroys exactly the structure you are testing, and name one structure it must keep so that the test is fair." />

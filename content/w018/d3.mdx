@@ -1,0 +1,256 @@
+export const meta = {
+  title: "The bootstrap and confidence intervals",
+  intro: "A p-value answers a yes-or-no question. Usually you want more: how big is the effect, and how sure are you? A confidence interval answers both. For a mean there is a formula, but for a median, a decoding accuracy, a preferred orientation or a correlation there often is not. Efron's bootstrap fills the gap by treating your sample as a stand-in for the population and resampling it, with replacement, thousands of times. Today you compute bootstrap standard errors and intervals, check how often they contain the truth, and meet the most common way the bootstrap goes wrong in neuroscience: data with structure, such as neurons recorded in a few animals.",
+  goals: [
+    "Explain what a 95% confidence interval promises, and check it by simulation",
+    "Compute bootstrap standard errors and percentile intervals for any statistic",
+    "Measure the coverage of bootstrap intervals and see when it falls short",
+    "Use a hierarchical bootstrap for nested data such as neurons within animals",
+  ],
+  plan: [
+    { label: "Predict and confidence intervals", minutes: 20 },
+    { label: "The bootstrap", minutes: 30 },
+    { label: "Coverage", minutes: 25 },
+    { label: "Nested data", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "efron-1979",
+};
+
+<Predict question="You record 40 neurons in each of 5 mice and want a 95% interval for the average effect of a drug. You bootstrap by resampling the 200 neurons. Will your interval contain the true effect about 95% of the time, more often, or much less often?" />
+
+<Step n={1} title="Confidence intervals" minutes={20} />
+
+A **95% confidence interval** is a procedure that, applied to repeated experiments, produces intervals containing the true parameter 95% of the time. The promise is about the procedure, not about one interval: after you compute $[2.1, 3.4]$, the truth either is or is not inside it. For a mean with known standard error, the interval $\bar{x} \pm 1.96\,\text{SE}$ is exact for Gaussian data and approximately right for large samples (Week 17's Wald interval).
+
+Confidence intervals are more informative than p-values. An interval that excludes zero is significant at 0.05, but it also says how large the effect might be: $[0.01, 0.02]$ and $[1, 20]$ are both "significant" and mean very different things.
+
+<Video id="hs6bVGQNSIs" title="Confidence Intervals and Bootstrapping" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's introduction to confidence intervals and the bootstrap, from its model-fitting day." />
+
+<Step n={2} title="The bootstrap" minutes={30} />
+
+The sampling distribution of a statistic needs repeated samples from the population, which you do not have. Efron's (1979, today's paper) substitution: use the **empirical distribution** of your sample as a stand-in for the population. Drawing $n$ points *with replacement* from your data mimics drawing a new sample. Repeat $B$ times (1,000 to 10,000), compute the statistic each time, and:
+
+- the standard deviation of the $B$ values is the **bootstrap standard error**;
+- the 2.5th and 97.5th percentiles give a **percentile interval**.
+
+Resampling with replacement is essential: without replacement every resample would be the original data reshuffled.
+
+<Figure caption="Bootstrapping the median of skewed latencies. Compare the bootstrap distribution with the true sampling distribution, which in a real experiment you never see." credit="Interactive figure by Engram.">
+  <BootstrapCI />
+</Figure>
+
+<PyCell id="boot" title="Bootstrap the median" tests={String.raw`
+  import numpy as np
+  def test_boot():
+      "bootstrap returns B statistics computed on resamples"
+      out = bootstrap(np.arange(10.0), np.mean, 500, np.random.default_rng(0))
+      assert out.shape == (500,) and 2 < out.mean() < 7
+
+  def test_se_close():
+      "the bootstrap standard error of the median is within 35% of its true sampling standard deviation"
+      assert abs(se_boot - se_true) / se_true < 0.35
+`} prompt="Write `bootstrap(x, stat, B, rng)` returning B values of `stat` on resamples of x with replacement. Apply it to the median of 30 exponential latencies (mean 50 ms) for `se_boot`, and compare with `se_true`, the standard deviation of the median over 5,000 fresh samples from the true distribution."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1979)
+
+  def bootstrap(x, stat, B, rng):
+      n = len(x)
+      return np.array([...])
+
+  x = rng.exponential(50, 30)
+  boot_meds = bootstrap(x, np.median, 4000, rng)
+  se_boot = boot_meds.std()
+  se_true = np.std([np.median(rng.exponential(50, 30)) for _ in range(5000)])
+  lo, hi = np.percentile(boot_meds, [2.5, 97.5])
+  print(f"sample median {np.median(x):.1f} ms;  bootstrap SE {se_boot:.2f}, true SE {se_true:.2f};  95% interval {lo:.1f} to {hi:.1f}")
+`}
+hint="return np.array([stat(x[rng.integers(0, n, n)]) for _ in range(B)])."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(1979)
+
+  def bootstrap(x, stat, B, rng):
+      n = len(x)
+      return np.array([stat(x[rng.integers(0, n, n)]) for _ in range(B)])
+
+  x = rng.exponential(50, 30)
+  boot_meds = bootstrap(x, np.median, 4000, rng)
+  se_boot = boot_meds.std()
+  se_true = np.std([np.median(rng.exponential(50, 30)) for _ in range(5000)])
+  lo, hi = np.percentile(boot_meds, [2.5, 97.5])
+  print(f"sample median {np.median(x):.1f} ms;  bootstrap SE {se_boot:.2f}, true SE {se_true:.2f};  95% interval {lo:.1f} to {hi:.1f}")
+`} />
+
+<Step n={3} title="Coverage" minutes={25} />
+
+Is a "95%" bootstrap interval really 95%? Only approximately. The bootstrap relies on the sample resembling the population, which works poorly for small samples and for statistics that depend on extreme values (the maximum, for example). Refinements such as the BCa interval correct some of this. The honest check is a simulation of **coverage**, which you can always do for a model.
+
+<PyCell id="coverage" title="How often does the interval contain the truth?" tests={String.raw`
+  import numpy as np
+  def test_coverage():
+      "with n = 50 the coverage is at least 0.91; with n = 8 it is lower than with n = 50"
+      assert cov[50] >= 0.91 and cov[8] < cov[50]
+`} prompt="For samples of size 8 and 50 from an exponential distribution with mean 50, compute 400 percentile bootstrap intervals for the mean (B = 1,000 each) and store the fraction that contain 50 in `cov[n]`."
+code={String.raw`
+  r4 = np.random.default_rng(8)
+  cov = {}
+  for n in (8, 50):
+      hits = 0
+      for _ in range(400):
+          xs = r4.exponential(50, n)
+          bm = xs[r4.integers(0, n, (1000, n))].mean(axis=1)     # 1000 bootstrap means at once
+          lo, hi = ...
+          hits += ...
+      cov[n] = hits / 400
+  print("coverage of 95% percentile intervals:", cov)
+`}
+hint="lo, hi = np.percentile(bm, [2.5, 97.5]); hits += lo <= 50 <= hi."
+solution={String.raw`
+  r4 = np.random.default_rng(8)
+  cov = {}
+  for n in (8, 50):
+      hits = 0
+      for _ in range(400):
+          xs = r4.exponential(50, n)
+          bm = xs[r4.integers(0, n, (1000, n))].mean(axis=1)     # 1000 bootstrap means at once
+          lo, hi = np.percentile(bm, [2.5, 97.5])
+          hits += lo <= 50 <= hi
+      cov[n] = hits / 400
+  print("coverage of 95% percentile intervals:", cov)
+`} />
+
+With 8 skewed observations the "95%" interval contains the truth only about 84% of the time; with 50 about 92%, close but still a little short. Small samples give the bootstrap little to work with.
+
+<Step n={4} title="Nested data" minutes={30} />
+
+Neuroscience data are usually **nested**: trials within neurons, neurons within animals, animals within labs. Neurons from the same animal share its genetics, its surgery and its brain state, so they are not independent. Resampling neurons as if they were independent treats 200 neurons from 5 mice like 200 mice and produces intervals that are far too narrow. The **hierarchical bootstrap** resamples at every level: first draw animals with replacement, then neurons within each drawn animal (Saravanan, Berman and Sober, 2020).
+
+<PyCell id="hier" title="The hierarchical bootstrap" tests={String.raw`
+  import numpy as np
+  def test_widths():
+      "on one dataset, the hierarchical interval is more than twice as wide as the naive one"
+      assert width_hier > 2 * width_naive
+
+  def test_coverage():
+      "over 150 datasets, naive intervals cover the truth less than 60% of the time and hierarchical ones more than 75%"
+      assert cov_naive < 0.6 and cov_hier > 0.75
+`} prompt="Each of 5 mice has its own true effect (mean 1, sd 0.5 between mice); each of 40 neurons per mouse adds noise (sd 1). Write `naive_ci(data, B, rng)` (resample all 200 neurons) and `hier_ci(data, B, rng)` (resample mice, then neurons within each chosen mouse), each returning a 95% percentile interval for the mean effect. Compare widths on one dataset, then coverage of the true mean 1 over 150 datasets."
+code={String.raw`
+  r5 = np.random.default_rng(2020)
+  def make_data(rng, mice=5, per=40):
+      mouse_effect = 1 + 0.5 * rng.normal(size=mice)
+      return mouse_effect[:, None] + rng.normal(size=(mice, per))     # rows are mice
+
+  def naive_ci(data, B, rng):
+      flat = data.ravel()
+      means = flat[rng.integers(0, len(flat), (B, len(flat)))].mean(axis=1)
+      return np.percentile(means, [2.5, 97.5])
+
+  def hier_ci(data, B, rng):
+      m, k = data.shape
+      means = np.empty(B)
+      for b in range(B):
+          mice = ...                                   # m mice drawn with replacement
+          rows = data[mice]
+          cols = rng.integers(0, k, (m, k))            # neurons drawn within each chosen mouse
+          means[b] = ...
+      return np.percentile(means, [2.5, 97.5])
+
+  data = make_data(r5)
+  ci_n, ci_h = naive_ci(data, 2000, r5), hier_ci(data, 2000, r5)
+  width_naive, width_hier = np.diff(ci_n)[0], np.diff(ci_h)[0]
+  cov_naive = np.mean([(lambda c: c[0] <= 1 <= c[1])(naive_ci(make_data(r5), 400, r5)) for _ in range(150)])
+  cov_hier = np.mean([(lambda c: c[0] <= 1 <= c[1])(hier_ci(make_data(r5), 400, r5)) for _ in range(150)])
+  print(f"widths: naive {width_naive:.2f}, hierarchical {width_hier:.2f};  coverage: naive {cov_naive:.2f}, hierarchical {cov_hier:.2f}")
+`}
+hint="mice = rng.integers(0, m, m); means[b] = np.take_along_axis(rows, cols, axis=1).mean()."
+solution={String.raw`
+  r5 = np.random.default_rng(2020)
+  def make_data(rng, mice=5, per=40):
+      mouse_effect = 1 + 0.5 * rng.normal(size=mice)
+      return mouse_effect[:, None] + rng.normal(size=(mice, per))     # rows are mice
+
+  def naive_ci(data, B, rng):
+      flat = data.ravel()
+      means = flat[rng.integers(0, len(flat), (B, len(flat)))].mean(axis=1)
+      return np.percentile(means, [2.5, 97.5])
+
+  def hier_ci(data, B, rng):
+      m, k = data.shape
+      means = np.empty(B)
+      for b in range(B):
+          mice = rng.integers(0, m, m)                                   # m mice drawn with replacement
+          rows = data[mice]
+          cols = rng.integers(0, k, (m, k))            # neurons drawn within each chosen mouse
+          means[b] = np.take_along_axis(rows, cols, axis=1).mean()
+      return np.percentile(means, [2.5, 97.5])
+
+  data = make_data(r5)
+  ci_n, ci_h = naive_ci(data, 2000, r5), hier_ci(data, 2000, r5)
+  width_naive, width_hier = np.diff(ci_n)[0], np.diff(ci_h)[0]
+  cov_naive = np.mean([(lambda c: c[0] <= 1 <= c[1])(naive_ci(make_data(r5), 400, r5)) for _ in range(150)])
+  cov_hier = np.mean([(lambda c: c[0] <= 1 <= c[1])(hier_ci(make_data(r5), 400, r5)) for _ in range(150)])
+  print(f"widths: naive {width_naive:.2f}, hierarchical {width_hier:.2f};  coverage: naive {cov_naive:.2f}, hierarchical {cov_hier:.2f}")
+`} />
+
+The naive interval is about a third as wide as it should be and misses the truth about half the time, which answers the prediction. The hierarchical interval is honest about the fact that you really have five independent units, not 200. Its coverage is still a little below 95%, because five mice are very few for any method; with so few, a model-based approach (Week 19's hierarchical models) can do better.
+
+<Bridge title="Resampling in brains and machines"
+  neuro="Bootstrap intervals are standard for decoding accuracies, tuning parameters and population statistics. The independent unit (the animal, the session, the neuron) must be resampled, and analyses that treat neurons from a few animals as independent are a common source of overconfident claims."
+  ai="Bagging trains each model of an ensemble on a bootstrap resample of the data, which reduces variance; random forests are bagged decision trees. Bootstrap intervals on test accuracy are a cheap way to check whether one model really beats another."> 
+
+Resample the units that were independent in the experiment, and the interval will be as wide as your evidence really is.
+
+</Bridge>
+
+<Prove title="The chance a point is left out" task="In a bootstrap resample of n points drawn with replacement, show that the probability that a given original point does not appear is $(1 - 1/n)^n$, and that this tends to $e^{-1} \approx 0.368$ as n grows.">
+
+Each of the $n$ draws misses the given point with probability $1 - 1/n$, independently, so the probability that all $n$ miss it is $(1 - 1/n)^n$.
+
+As $n \to \infty$, $(1 - 1/n)^n \to e^{-1}$ (the definition of $e$, as in Week 15's Poisson limit), about 0.368.
+
+So each bootstrap resample contains about 63% of the distinct original points, some of them several times. The left-out 37% can serve as a free test set, which is how random forests estimate their own error ("out-of-bag" error).
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "A 95% confidence interval procedure...", options: ["Has a 95% chance of containing the truth after it is computed", "Contains the truth in 95% of repeated experiments", "Contains 95% of the data", "Is the same as a credible interval"], answer: 1, explain: "A property of the procedure." },
+  { q: "The bootstrap resamples...", options: ["Without replacement", "With replacement, from the observed data", "From a Gaussian", "From the prior"], answer: 1, explain: "The empirical distribution stands in for the population." },
+  { q: "The bootstrap standard error is...", options: ["The data's sd", "The sd of the statistic across resamples", "The mean of resamples", "Always σ/√n"], answer: 1, explain: "It approximates the sampling distribution's spread." },
+  { q: "The percentile interval uses...", options: ["Mean ± sd", "The 2.5th and 97.5th percentiles of the bootstrap statistics", "The median", "The maximum"], answer: 1, explain: "Simple and general." },
+  { q: "Bootstrap intervals are least reliable for...", options: ["Large samples", "Small samples and extreme-value statistics", "The mean", "Gaussian data"], answer: 1, explain: "Little information to resample." },
+  { q: "Neurons from a few animals should be bootstrapped by...", options: ["Resampling neurons only", "Resampling animals, then neurons within them", "Not resampling", "Resampling trials only"], answer: 1, explain: "The hierarchical bootstrap." },
+  { q: "A bootstrap resample leaves out about what fraction of distinct points?", options: ["5%", "37%", "50%", "63%"], answer: 1, explain: "$e^{-1}$." },
+]} />
+
+<Flashcards cards={[
+  { front: "Confidence interval?", back: "A procedure that contains the true value in a stated fraction of repeated experiments." },
+  { front: "Bootstrap principle?", back: "Resample the data with replacement to approximate the sampling distribution of a statistic (Efron, 1979)." },
+  { front: "Percentile interval?", back: "2.5th to 97.5th percentiles of the bootstrap statistics." },
+  { front: "Coverage?", back: "The fraction of intervals that contain the truth; check by simulation." },
+  { front: "Hierarchical bootstrap?", back: "Resample at every level of nesting (animals, then neurons, then trials)." },
+]} />
+
+<Predict revisit question="Bootstrapping neurons as independent across 5 mice: how often does the interval contain the truth?" />
+
+<Key title="Before you go">
+<ul>
+<li>Confidence intervals report size and uncertainty; their promise is about repeated use.</li>
+<li>The bootstrap gives standard errors and intervals for any statistic by resampling with replacement.</li>
+<li>Check coverage by simulation; small samples and extreme statistics fall short.</li>
+<li>Resample the independent units; nested data need a hierarchical bootstrap.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Efron (1979), <em>Bootstrap methods: another look at the jackknife</em>, sections 1 and 2.</li>
+<li>Varun Saravanan, Gordon Berman and Samuel Sober (2020), <em>Application of the hierarchical bootstrap to multi-level data in neuroscience</em>, Neurons, Behavior, Data Analysis, and Theory.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="List the levels of nesting in an experiment you know (for example animals, sessions, neurons, trials). Which level would you treat as the independent unit for the main conclusion, and why?" />

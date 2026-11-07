@@ -1,0 +1,240 @@
+export const meta = {
+  title: "Power, sample size and effect size",
+  intro: "A study can only find what it is able to see. Statistical power is the probability that a study detects an effect that is really there, and it depends on the size of the effect, the noise, the number of observations and the significance level. Underpowered studies do not just miss effects: the effects they do report are exaggerated, and sometimes point the wrong way. Today you compute effect sizes, calculate the sample size needed for a target power both from a formula and by simulation, and see with your own simulations why a field of small studies fills its journals with inflated results, the argument of this week's deep read.",
+  goals: [
+    "Express an effect as a standardised effect size, and say why it is more informative than a p-value",
+    "Calculate the sample size for 80% power from the formula and by simulation",
+    "Estimate power by simulation for a realistic neural experiment",
+    "Show that significant results from low-powered studies overestimate effects (type M errors) and can get the sign wrong (type S errors)",
+  ],
+  plan: [
+    { label: "Predict and effect sizes", minutes: 20 },
+    { label: "Power and sample size", minutes: 30 },
+    { label: "Power by simulation", minutes: 25 },
+    { label: "The winner's curse of low power", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "button-2013",
+};
+
+<Predict question="A true effect has size d = 0.3. Many labs study it with 20 participants each, and only the significant results are published. What will the average published effect size be: about 0.3, about 0.15, or about 0.6?" />
+
+<Step n={1} title="Effect sizes" minutes={20} />
+
+A p-value mixes the size of an effect with the amount of data. An **effect size** separates them. The most common, **Cohen's d**, is the difference in means divided by the standard deviation:
+
+$$
+d = \frac{\mu_1 - \mu_0}{\sigma}.
+$$
+
+By convention 0.2 is small, 0.5 medium and 0.8 large, though what counts as important depends on the field. For neural data the natural scale is often physical (spikes per second, percent correct), and reporting the effect with a confidence interval in those units is best of all.
+
+<Video id="Rsc5znwR5FA" title="Statistical Power, Clearly Explained" by="StatQuest with Josh Starmer" note="Josh Starmer explains power with overlapping distributions, the picture in today's figure." />
+
+<Step n={2} title="Power and sample size" minutes={30} />
+
+For a two-sided z-test of a mean with effect size $d$ and $n$ observations, the test statistic is centred on $d\sqrt{n}$ when the effect is real. Power is the chance it lands beyond $\pm z_{1-\alpha/2}$, and solving for the $n$ that gives power $1 - \beta$:
+
+$$
+n \approx \left(\frac{z_{1-\alpha/2} + z_{1-\beta}}{d}\right)^2.
+$$
+
+With $\alpha = 0.05$ and 80% power, $z_{0.975} = 1.96$ and $z_{0.8} = 0.84$, so $n \approx 7.85/d^2$: 32 for a medium effect and 197 for a small one, rounding up. Halving the effect quadruples the sample size.
+
+<Figure caption="Power: the chance that the test statistic crosses the threshold when the effect is real. Change the effect size and sample size, and see the sample size needed for 80% power." credit="Interactive figure by Engram.">
+  <PowerCurve />
+</Figure>
+
+<PyCell id="nformula" title="Sample size for 80% power" tests={String.raw`
+  import numpy as np
+  def test_formula():
+      "n_needed rounds up (1.96 + 0.8416)^2 / d^2"
+      assert n_needed(0.5) == int(np.ceil((1.959964 + 0.841621) ** 2 / 0.25))
+
+  def test_sim():
+      "the simulated power at that sample size is within 0.03 of 0.8"
+      assert abs(power_sim - 0.8) < 0.03
+`} prompt="Write `n_needed(d)` from the formula (round up). For d = 0.5, simulate 20,000 experiments of that size from N(0.5, 1), apply the two-sided z-test with σ = 1, and store the fraction significant in `power_sim`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2013)
+  z_a, z_b = 1.959964, 0.841621
+
+  def n_needed(d):
+      return ...
+
+  n = n_needed(0.5)
+  xbar = rng.normal(0.5, 1, size=(20000, n)).mean(axis=1)
+  power_sim = ...
+  print(f"n for 80% power at d = 0.5: {n};  simulated power {power_sim:.3f};  at d = 0.2: {n_needed(0.2)}")
+`}
+hint="return int(np.ceil(((z_a + z_b) / d) ** 2)); power_sim = np.mean(np.abs(xbar * np.sqrt(n)) > z_a)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rng = np.random.default_rng(2013)
+  z_a, z_b = 1.959964, 0.841621
+
+  def n_needed(d):
+      return int(np.ceil(((z_a + z_b) / d) ** 2))
+
+  n = n_needed(0.5)
+  xbar = rng.normal(0.5, 1, size=(20000, n)).mean(axis=1)
+  power_sim = np.mean(np.abs(xbar * np.sqrt(n)) > z_a)
+  print(f"n for 80% power at d = 0.5: {n};  simulated power {power_sim:.3f};  at d = 0.2: {n_needed(0.2)}")
+`} />
+
+<Step n={3} title="Power by simulation" minutes={25} />
+
+Real experiments rarely fit a formula: Poisson counts, drifting baselines, permutation tests, decoders. Simulation is the general method. Write down a generative model of the experiment with your best guess of the effect and the noise, simulate it many times with your planned analysis, and count how often it succeeds. Change the number of trials until power reaches your target. This is a habit worth forming before every experiment.
+
+<PyCell id="simpower" title="How many trials to detect a response?" tests={String.raw`
+  import numpy as np
+  def test_curve():
+      "power rises with the number of trials"
+      assert np.all(np.diff(powers) > -0.03) and powers[-1] > powers[0]
+
+  def test_target():
+      "trials_80 is the smallest number of trials tried with power at least 0.8"
+      assert powers[list(trial_counts).index(trials_80)] >= 0.8
+      i = list(trial_counts).index(trials_80)
+      assert i == 0 or powers[i - 1] < 0.8
+`} prompt="A neuron fires 5 spikes at baseline and 6 with the stimulus (Poisson), with no drift. For 10, 20, 40, 60, 80 and 120 trials, simulate 2,000 paired experiments each, test the mean difference with the z statistic mean / (sd / √n), and store the power for each in `powers`. Store the smallest trial count with power at least 0.8 in `trials_80`."
+code={String.raw`
+  from math import erf, sqrt
+  trial_counts = [10, 20, 40, 60, 80, 120]
+  powers = []
+  for n_tr in trial_counts:
+      base = rng.poisson(5, (2000, n_tr)); resp = rng.poisson(6, (2000, n_tr))
+      d = resp - base
+      z = ...
+      powers.append(...)
+  powers = np.array(powers)
+  trials_80 = ...
+  print("power by trials:", dict(zip(trial_counts, powers.round(3))), " trials for 80%:", trials_80)
+  plt.plot(trial_counts, powers, "o-"); plt.axhline(0.8, ls="--", c="k"); plt.xlabel("trials"); plt.ylabel("power"); plt.show()
+`}
+hint="z = d.mean(axis=1) / (d.std(axis=1, ddof=1) / np.sqrt(n_tr)); powers.append(np.mean(np.abs(z) > 1.96)); trials_80 = next(t for t, p in zip(trial_counts, powers) if p >= 0.8)."
+solution={String.raw`
+  from math import erf, sqrt
+  trial_counts = [10, 20, 40, 60, 80, 120]
+  powers = []
+  for n_tr in trial_counts:
+      base = rng.poisson(5, (2000, n_tr)); resp = rng.poisson(6, (2000, n_tr))
+      d = resp - base
+      z = d.mean(axis=1) / (d.std(axis=1, ddof=1) / np.sqrt(n_tr))
+      powers.append(np.mean(np.abs(z) > 1.96))
+  powers = np.array(powers)
+  trials_80 = next(t for t, p in zip(trial_counts, powers) if p >= 0.8)
+  print("power by trials:", dict(zip(trial_counts, powers.round(3))), " trials for 80%:", trials_80)
+  plt.plot(trial_counts, powers, "o-"); plt.axhline(0.8, ls="--", c="k"); plt.xlabel("trials"); plt.ylabel("power"); plt.show()
+`} />
+
+A 20% increase in rate, which looks large on a raster, needs about a hundred trials to detect reliably (80 trials give 78% power), because Poisson noise at 5 spikes is large (its sd is over 2 spikes).
+
+<Step n={4} title="The winner's curse of low power" minutes={30} />
+
+Suppose only significant results are reported. With low power, a study reaches significance only when its noise happened to push the estimate far from zero, so the published estimates are inflated: a **type M** (magnitude) error. Occasionally the noise pushes the estimate far in the *wrong* direction and that is significant too: a **type S** (sign) error (Gelman and Carlin, 2014). Button and colleagues (2013, this week's deep read) argued that median power in neuroscience was around 20%, which makes both errors common.
+
+<PyCell id="inflation" title="Exaggerated effects" tests={String.raw`
+  import numpy as np
+  def test_low_power():
+      "with n = 20 and d = 0.3, power is below 0.35"
+      assert power_low < 0.35
+
+  def test_inflated():
+      "significant estimates average more than 1.7 times the true effect"
+      assert exaggeration > 1.7
+
+  def test_high_power():
+      "with n = 200 the exaggeration ratio is below 1.15"
+      assert exaggeration_high < 1.15
+`} prompt="Simulate 20,000 studies of a true effect d = 0.3 with n = 20 (σ = 1). Keep only those significant by the two-sided z-test and compute `power_low`, the `exaggeration` ratio (mean |estimate| among significant studies / 0.3) and `sign_errors` (fraction of significant estimates below zero). Repeat the exaggeration ratio with n = 200 as `exaggeration_high`."
+code={String.raw`
+  def study(n, sims=20000):
+      est = rng.normal(0.3, 1 / np.sqrt(n), sims)       # the estimated effect in each study
+      sig = np.abs(est * np.sqrt(n)) > 1.96
+      return est, sig
+
+  est, sig = study(20)
+  power_low = ...
+  exaggeration = ...
+  sign_errors = ...
+  est_h, sig_h = study(200)
+  exaggeration_high = ...
+  print(f"n = 20: power {power_low:.2f}, published effects {exaggeration:.2f} times too large, wrong sign {sign_errors:.3f};  n = 200: {exaggeration_high:.2f} times")
+`}
+hint="power_low = sig.mean(); exaggeration = np.abs(est[sig]).mean() / 0.3; sign_errors = np.mean(est[sig] < 0); exaggeration_high = np.abs(est_h[sig_h]).mean() / 0.3."
+solution={String.raw`
+  def study(n, sims=20000):
+      est = rng.normal(0.3, 1 / np.sqrt(n), sims)       # the estimated effect in each study
+      sig = np.abs(est * np.sqrt(n)) > 1.96
+      return est, sig
+
+  est, sig = study(20)
+  power_low = sig.mean()
+  exaggeration = np.abs(est[sig]).mean() / 0.3
+  sign_errors = np.mean(est[sig] < 0)
+  est_h, sig_h = study(200)
+  exaggeration_high = np.abs(est_h[sig_h]).mean() / 0.3
+  print(f"n = 20: power {power_low:.2f}, published effects {exaggeration:.2f} times too large, wrong sign {sign_errors:.3f};  n = 200: {exaggeration_high:.2f} times")
+`} />
+
+The published effects average about twice the truth, which answers the prediction (about 0.6). A later, larger replication finds a smaller effect and is wrongly called a "failure to replicate", when the original estimate was simply inflated. The cure is power: plan sample sizes in advance, and treat surprisingly large effects from small studies with suspicion.
+
+<Bridge title="Power in brains and machines"
+  neuro="Animal studies, imaging studies and single-neuron studies are often small for good practical and ethical reasons. Simulation-based power analysis, pre-registration and pooling data across labs (as large collaborations now do) are the main defences against inflated and irreproducible findings."
+  ai="Benchmarks have power too: a test set of a few hundred examples cannot reliably distinguish models that differ by a percentage point. Publishing only the runs and seeds that worked is the machine-learning version of the winner's curse.">
+
+Small studies find small effects rarely, and when they do, they exaggerate them.
+
+</Bridge>
+
+<Prove title="The sample-size formula" task="For a two-sided z-test with effect size d, show that power is approximately $\Phi(d\sqrt{n} - z_{1-\alpha/2})$ when $d\sqrt{n}$ is large, and solve for n to get $n = ((z_{1-\alpha/2} + z_{1-\beta})/d)^2$.">
+
+When the effect is real, $z = \bar{x}\sqrt{n}/\sigma$ is Gaussian with mean $d\sqrt{n}$ and sd 1. Power is $P(z > z_{1-\alpha/2}) + P(z \lt -z_{1-\alpha/2})$; for a positive effect the second term is negligible.
+
+So power $\approx P(Z > z_{1-\alpha/2} - d\sqrt{n}) = \Phi(d\sqrt{n} - z_{1-\alpha/2})$, with $Z$ standard normal.
+
+Setting this equal to $1 - \beta = \Phi(z_{1-\beta})$ gives $d\sqrt{n} - z_{1-\alpha/2} = z_{1-\beta}$, so $n = ((z_{1-\alpha/2} + z_{1-\beta})/d)^2$.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "Cohen's d is...", options: ["The p-value", "The difference in means divided by the standard deviation", "The sample size", "The power"], answer: 1, explain: "A standardised effect size." },
+  { q: "Power depends on...", options: ["Only n", "Effect size, noise, n and α", "Only α", "Only the p-value"], answer: 1, explain: "All of them." },
+  { q: "Halving the effect size multiplies the needed sample size by about...", options: ["2", "4", "0.5", "√2"], answer: 1, explain: "$n \\propto 1/d^2$." },
+  { q: "About how many observations give 80% power for d = 0.5 (z-test, α = 0.05)?", options: ["8", "32", "128", "500"], answer: 1, explain: "7.85 / 0.25." },
+  { q: "A type M error is...", options: ["A wrong sign", "An exaggerated magnitude among significant results", "A false positive", "A false negative"], answer: 1, explain: "Gelman and Carlin (2014)." },
+  { q: "With low power, significant estimates are...", options: ["Unbiased", "Inflated", "Too small", "Exact"], answer: 1, explain: "Only the lucky draws pass." },
+  { q: "The general way to compute power for a complex design is...", options: ["A table", "Simulation of the planned experiment and analysis", "Asking a colleague", "Bonferroni"], answer: 1, explain: "Simulate, analyse, count successes." },
+]} />
+
+<Flashcards cards={[
+  { front: "Cohen's d?", back: "$(\\mu_1 - \\mu_0)/\\sigma$; 0.2 small, 0.5 medium, 0.8 large." },
+  { front: "Sample size for power 1 − β?", back: "$n \\approx ((z_{1-\\alpha/2} + z_{1-\\beta})/d)^2$; about 7.85/d² for 80% power." },
+  { front: "Power by simulation?", back: "Simulate the experiment with assumed effect and noise, run the analysis, count significant results." },
+  { front: "Type M and S errors?", back: "Exaggerated magnitude and wrong sign among significant results, common at low power." },
+  { front: "Button and colleagues (2013)?", back: "Median power in neuroscience about 20%; low power inflates effects and lowers the chance findings are true." },
+]} />
+
+<Predict revisit question="With d = 0.3 and n = 20, what is the average published (significant) effect size?" />
+
+<Key title="Before you go">
+<ul>
+<li>Report effect sizes and intervals, not only p-values.</li>
+<li>Sample size grows like 1/d²; plan it with a formula or by simulation.</li>
+<li>Simulate the actual experiment and analysis to estimate power.</li>
+<li>Low power exaggerates published effects and can flip their sign.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>This week's deep read: Button and colleagues (2013), <em>Power failure: why small sample size undermines the reliability of neuroscience</em>. Start the first pass today.</li>
+<li>Andrew Gelman and John Carlin (2014), <em>Beyond power calculations: assessing type S (sign) and type M (magnitude) errors</em>, Perspectives on Psychological Science 9, 641 to 651.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Plan a small experiment you might run. Write down your best guess of the effect and the noise, and how you would simulate it to choose the number of trials or animals before collecting any data." />

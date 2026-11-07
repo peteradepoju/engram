@@ -1,0 +1,251 @@
+export const meta = {
+  title: "Many tests at once: false discoveries and double dipping",
+  intro: "Modern recordings test hundreds of neurons, thousands of voxels and dozens of time windows at once, and every analysis involves choices. Each extra test or choice is another chance for noise to look like a finding. Today you meet the false discovery rate, the practical alternative to controlling every false positive, and implement the Benjamini-Hochberg procedure. Then you meet two subtler traps: double dipping, where the same data are used to select and to measure, and the garden of forking paths, where trying several reasonable analyses and reporting the best one quietly multiplies false positives. Both can make pure noise look like a discovery, and both are easy to avoid once you can see them.",
+  goals: [
+    "Distinguish the family-wise error rate from the false discovery rate",
+    "Implement the Benjamini-Hochberg procedure and compare it with Bonferroni",
+    "Show that selecting and measuring on the same data produces effects from pure noise, and fix it",
+    "Estimate how much analysis flexibility inflates false positives, and explain pre-registration",
+  ],
+  plan: [
+    { label: "Predict and the false discovery rate", minutes: 25 },
+    { label: "Benjamini-Hochberg", minutes: 30 },
+    { label: "Double dipping", minutes: 25 },
+    { label: "Forking paths", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "benjamini-1995",
+};
+
+<Predict question="You record 200 neurons that, in truth, do not respond to a stimulus. You select the 20 with the largest response on all trials, then report their average response on those same trials. Will that average be close to zero, or clearly positive?" />
+
+<Step n={1} title="The false discovery rate" minutes={25} />
+
+Yesterday's family-wise error rate (FWER) controls the chance of *any* false positive. With thousands of tests that is very strict, and real effects are missed. Benjamini and Hochberg (1995, today's paper) proposed a different target. If $R$ tests are declared significant and $V$ of them are false, the **false discovery rate** is
+
+$$
+\text{FDR} = \mathbb{E}\left[\frac{V}{\max(R, 1)}\right],
+$$
+
+the expected fraction of discoveries that are wrong. Controlling the FDR at 5% means that, on average, 95% of what you report is real, a sensible goal when you will follow up the findings.
+
+<Figure caption="Many tests at once: sorted p-values against an uncorrected threshold, Bonferroni and the Benjamini-Hochberg line." credit="Interactive figure by Engram.">
+  <MultipleTests />
+</Figure>
+
+<Video id="K8LQSvtjcEo" title="False Discovery Rates, FDR, clearly explained" by="StatQuest with Josh Starmer" note="Josh Starmer explains the false discovery rate and the Benjamini-Hochberg procedure with a worked example." />
+
+<Step n={2} title="Benjamini-Hochberg" minutes={30} />
+
+The **Benjamini-Hochberg** (BH) procedure for $m$ tests at level $q$:
+
+1. Sort the p-values: $p_{(1)} \le p_{(2)} \le \cdots \le p_{(m)}$.
+2. Find the largest $k$ with $p_{(k)} \le \tfrac{k}{m}q$.
+3. Declare the $k$ smallest significant.
+
+Bonferroni compares every p-value with $q/m$; BH lets the threshold rise in proportion to the rank, so when many effects are real it finds many more of them.
+
+<PyCell id="bh" title="Implement Benjamini-Hochberg" tests={String.raw`
+  import numpy as np
+  def test_bh_example():
+      "benjamini_hochberg finds the right discoveries in a small example"
+      p = np.array([0.001, 0.008, 0.039, 0.041, 0.042, 0.06, 0.074, 0.205])
+      assert set(np.flatnonzero(benjamini_hochberg(p, 0.05))) == {0, 1}
+
+  def test_fdr():
+      "over 300 simulated studies, BH keeps the false discovery proportion near or below 0.05 (below 0.07)"
+      assert np.mean(fdp_bh) < 0.07
+
+  def test_power():
+      "BH finds more real effects than Bonferroni"
+      assert np.mean(power_bh) > np.mean(power_bon) + 0.1
+`} prompt="Write `benjamini_hochberg(p, q)` returning a boolean array of discoveries. Then simulate 300 studies of 1,000 tests, 10% of them real (z shifted by 3), and record for BH and for Bonferroni the false discovery proportion and the fraction of real effects found."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from math import erf, sqrt
+  rng = np.random.default_rng(1995)
+  Phi = np.vectorize(lambda z: 0.5 * (1 + erf(z / sqrt(2))))
+
+  def benjamini_hochberg(p, q):
+      m = len(p)
+      order = np.argsort(p)
+      passed = p[order] <= np.arange(1, m + 1) / m * q
+      k = ...                                       # largest rank that passes (0 if none)
+      out = np.zeros(m, bool)
+      out[order[:k]] = True
+      return out
+
+  fdp_bh, power_bh, power_bon = [], [], []
+  for _ in range(300):
+      real = np.arange(1000) < 100
+      z = rng.normal(size=1000) + 3 * real
+      p = 2 * (1 - Phi(np.abs(z)))
+      d_bh = benjamini_hochberg(p, 0.05)
+      d_bon = ...
+      fdp_bh.append(np.sum(d_bh & ~real) / max(d_bh.sum(), 1))
+      power_bh.append(np.mean(d_bh[real])); power_bon.append(np.mean(d_bon[real]))
+  print(f"BH: false discovery proportion {np.mean(fdp_bh):.3f}, real effects found {np.mean(power_bh):.2f};  Bonferroni finds {np.mean(power_bon):.2f}")
+`}
+hint="k = np.flatnonzero(passed).max() + 1 if passed.any() else 0; d_bon = p < 0.05 / 1000."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from math import erf, sqrt
+  rng = np.random.default_rng(1995)
+  Phi = np.vectorize(lambda z: 0.5 * (1 + erf(z / sqrt(2))))
+
+  def benjamini_hochberg(p, q):
+      m = len(p)
+      order = np.argsort(p)
+      passed = p[order] <= np.arange(1, m + 1) / m * q
+      k = np.flatnonzero(passed).max() + 1 if passed.any() else 0                                       # largest rank that passes (0 if none)
+      out = np.zeros(m, bool)
+      out[order[:k]] = True
+      return out
+
+  fdp_bh, power_bh, power_bon = [], [], []
+  for _ in range(300):
+      real = np.arange(1000) < 100
+      z = rng.normal(size=1000) + 3 * real
+      p = 2 * (1 - Phi(np.abs(z)))
+      d_bh = benjamini_hochberg(p, 0.05)
+      d_bon = p < 0.05 / 1000
+      fdp_bh.append(np.sum(d_bh & ~real) / max(d_bh.sum(), 1))
+      power_bh.append(np.mean(d_bh[real])); power_bon.append(np.mean(d_bon[real]))
+  print(f"BH: false discovery proportion {np.mean(fdp_bh):.3f}, real effects found {np.mean(power_bh):.2f};  Bonferroni finds {np.mean(power_bon):.2f}")
+`} />
+
+<Step n={3} title="Double dipping" minutes={25} />
+
+**Double dipping**, or circular analysis, uses the same data to select something and then to measure it (Kriegeskorte and colleagues, 2009). Choose the "most responsive" neurons, voxels or time windows on all the data, then report their response on the same data, and you report the winner's curse of Week 17 at scale: noise that happened to look like a response was what got them selected. The fix is the one you already know: select on one half of the data and measure on the other, or use cross-validation.
+
+<PyCell id="dip" title="A response from pure noise" tests={String.raw`
+  import numpy as np
+  def test_circular():
+      "the circular estimate is clearly positive although no neuron responds (above 0.3)"
+      assert circular > 0.3
+
+  def test_split():
+      "the split-half estimate is close to zero (within 0.1)"
+      assert abs(split) < 0.1
+`} prompt="200 neurons have no true response; each has 20 trials of response-minus-baseline differences with sd 1. Select the 20 neurons with the largest mean difference over all trials and report their average over those same trials (`circular`). Then select on trials 1 to 10 and report on trials 11 to 20 (`split`)."
+code={String.raw`
+  r6 = np.random.default_rng(2009)
+  D = r6.normal(size=(20, 200))                 # trials x neurons, pure noise
+  top = np.argsort(D.mean(axis=0))[-20:]
+  circular = ...
+  top_half = np.argsort(D[:10].mean(axis=0))[-20:]
+  split = ...
+  print(f"circular estimate {circular:.3f};  split-half estimate {split:.3f}")
+`}
+hint="circular = D[:, top].mean(); split = D[10:, top_half].mean()."
+solution={String.raw`
+  r6 = np.random.default_rng(2009)
+  D = r6.normal(size=(20, 200))                 # trials x neurons, pure noise
+  top = np.argsort(D.mean(axis=0))[-20:]
+  circular = D[:, top].mean()
+  top_half = np.argsort(D[:10].mean(axis=0))[-20:]
+  split = D[10:, top_half].mean()
+  print(f"circular estimate {circular:.3f};  split-half estimate {split:.3f}")
+`} />
+
+The circular analysis reports a solid "response" from neurons that do nothing, which answers the prediction. The independent half shows the truth. The same error hides in many forms: decoders whose features were selected on all trials, regions of interest defined by the effect being tested, time windows chosen where the difference looked largest.
+
+<Step n={4} title="Forking paths" minutes={25} />
+
+Even without explicit multiple tests, an analysis has many choices: which time window, which trials to exclude, which baseline, which test. Each is defensible, but if they are made after seeing the data, choosing the version that "works" is a multiple comparison in disguise. Gelman and Loken called this the **garden of forking paths**. The defence is to fix choices in advance, ideally in a **pre-registration**, or to report all of them.
+
+<PyCell id="forks" title="Five reasonable windows" tests={String.raw`
+  import numpy as np
+  def test_single():
+      "a single pre-chosen window gives about 5% false positives (within 2.5 points)"
+      assert abs(fp_single - 0.05) < 0.025
+
+  def test_best_of_five():
+      "reporting the best of five windows gives at least twice as many"
+      assert fp_best > 2 * fp_single
+`} prompt="Simulate 4,000 null experiments, each with 30 trials of a neuron's spike counts in 5 overlapping time windows (counts in adjacent windows share spikes, so they are correlated). For each experiment, test the first window only (`fp_single`), and also report the smallest p-value across the five windows (`fp_best`), counting false positives at 0.05."
+code={String.raw`
+  fp1, fp5 = [], []
+  for _ in range(4000):
+      bins = r6.normal(size=(30, 7))                 # 7 small time bins of noise per trial
+      windows = np.column_stack([bins[:, i:i + 3].sum(axis=1) for i in range(5)])    # 5 overlapping windows
+      z = windows.mean(axis=0) / (windows.std(axis=0, ddof=1) / np.sqrt(30))
+      p = 2 * (1 - Phi(np.abs(z)))
+      fp1.append(...)
+      fp5.append(...)
+  fp_single, fp_best = np.mean(fp1), np.mean(fp5)
+  print(f"false positive rate: one pre-chosen window {fp_single:.3f}, best of five {fp_best:.3f}")
+`}
+hint="fp1.append(p[0] < 0.05); fp5.append(p.min() < 0.05)."
+solution={String.raw`
+  fp1, fp5 = [], []
+  for _ in range(4000):
+      bins = r6.normal(size=(30, 7))                 # 7 small time bins of noise per trial
+      windows = np.column_stack([bins[:, i:i + 3].sum(axis=1) for i in range(5)])    # 5 overlapping windows
+      z = windows.mean(axis=0) / (windows.std(axis=0, ddof=1) / np.sqrt(30))
+      p = 2 * (1 - Phi(np.abs(z)))
+      fp1.append(p[0] < 0.05)
+      fp5.append(p.min() < 0.05)
+  fp_single, fp_best = np.mean(fp1), np.mean(fp5)
+  print(f"false positive rate: one pre-chosen window {fp_single:.3f}, best of five {fp_best:.3f}")
+`} />
+
+A single pre-chosen window gives close to 5% (slightly more, because the Gaussian approximation is a little optimistic with 30 trials). Five correlated choices more than double the false positive rate, to over 20%, and real analyses have far more than five. None of this requires bad faith: it is enough to look at the data before deciding how to analyse them.
+
+<Bridge title="Many tests in brains and machines"
+  neuro="Imaging, large-scale electrophysiology and genetics all test thousands of hypotheses at once, and FDR control is standard. Circular analysis was common in early neuroimaging until Kriegeskorte and colleagues (2009) showed how often it inflated results; registered reports and data sharing are now widespread defences."
+  ai="Hyperparameter search is a garden of forking paths: tuning on the test set, or trying many seeds and reporting the best, inflates reported performance. Held-out test sets used once, and reporting the spread over seeds, are the machine learning equivalents of pre-registration.">
+
+Decide what you will test before you look, and never measure on the data you selected with.
+
+</Bridge>
+
+<Prove title="Bonferroni controls the family-wise error rate" task="Show that rejecting each of m hypotheses when its p-value is below α/m gives a family-wise error rate of at most α, whatever the dependence between the tests.">
+
+Let $I_0$ be the set of true null hypotheses, with $m_0 \le m$ members. A family-wise error means at least one $p_i \lt \alpha/m$ with $i \in I_0$.
+
+By the union bound, $P\left(\bigcup_{i \in I_0}\{p_i \lt \alpha/m\}\right) \le \sum_{i \in I_0} P(p_i \lt \alpha/m) = m_0\cdot\frac{\alpha}{m} \le \alpha$, using that each null p-value is uniform (Day 1).
+
+No independence was needed. The price is power: when the tests are positively correlated, or many effects are real, the bound is far from tight.
+
+</Prove>
+
+<Quiz id="quiz" questions={[
+  { q: "The false discovery rate is...", options: ["P(any false positive)", "The expected fraction of discoveries that are false", "α", "1 − power"], answer: 1, explain: "Benjamini and Hochberg (1995)." },
+  { q: "Benjamini-Hochberg compares the k-th smallest p-value with...", options: ["q/m", "(k/m)q", "q", "k/q"], answer: 1, explain: "A threshold rising with rank." },
+  { q: "Compared with Bonferroni, BH usually...", options: ["Finds fewer effects", "Finds more real effects, allowing a controlled fraction of false ones", "Controls FWER more strictly", "Needs no p-values"], answer: 1, explain: "Different target, more power." },
+  { q: "Double dipping means...", options: ["Testing twice", "Selecting and measuring on the same data", "Using two decoders", "Bootstrapping"], answer: 1, explain: "Circular analysis." },
+  { q: "The fix for double dipping is...", options: ["More neurons", "Selecting on independent data from the data used to measure", "A smaller α", "Bonferroni"], answer: 1, explain: "Split-half or cross-validation." },
+  { q: "The garden of forking paths refers to...", options: ["Decision trees", "Data-dependent analysis choices inflating false positives", "Branching dendrites", "Multiple experimenters"], answer: 1, explain: "Gelman and Loken." },
+  { q: "Pre-registration helps because...", options: ["It increases power", "It fixes analysis choices before seeing the data", "It removes noise", "It replaces statistics"], answer: 1, explain: "No forking after the fact." },
+]} />
+
+<Flashcards cards={[
+  { front: "FWER and FDR?", back: "P(any false positive) against the expected fraction of discoveries that are false." },
+  { front: "Benjamini-Hochberg?", back: "Sort p; find largest k with p(k) ≤ (k/m)q; reject the k smallest." },
+  { front: "Bonferroni?", back: "Reject when p < α/m; controls FWER for any dependence." },
+  { front: "Double dipping?", back: "Selecting and measuring on the same data; inflates effects (Kriegeskorte and colleagues, 2009)." },
+  { front: "Garden of forking paths?", back: "Analysis choices made after seeing the data act as hidden multiple comparisons." },
+]} />
+
+<Predict revisit question="Selecting the 20 most responsive of 200 null neurons and measuring on the same trials: near zero or clearly positive?" />
+
+<Key title="Before you go">
+<ul>
+<li>With many tests, control the FWER (Bonferroni, maximum statistic) or the FDR (Benjamini-Hochberg).</li>
+<li>BH finds far more real effects when many exist, at the price of a controlled fraction of false ones.</li>
+<li>Never select and measure on the same data.</li>
+<li>Fix analysis choices in advance, or report every path you tried.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Benjamini and Hochberg (1995), <em>Controlling the false discovery rate</em>, sections 1 to 3.</li>
+<li>Nikolaus Kriegeskorte, W. Kyle Simmons, Patrick Bellgowan and Chris Baker (2009), <em>Circular analysis in systems neuroscience: the dangers of double dipping</em>, Nature Neuroscience 12, 535 to 540.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Write a short pre-registration for an analysis you might run: the hypothesis, the exact test, the time window, the exclusion rules and the correction for multiple comparisons. Which of these choices would you have been most tempted to change after seeing the data?" />

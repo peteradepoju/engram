@@ -1,0 +1,312 @@
+export const meta = {
+  title: "Forge: Week 18 challenge, quiz and deep read",
+  intro: "This week was about deciding what the data really support: tests and p-values, permutation tests, the bootstrap, power, and the traps of multiple comparisons, double dipping and forking paths. Today's challenge gives you three analyses of the kind that appear in real papers, each with a tempting wrong answer. Is a drug effect real when it is measured in many neurons from a few animals? Is a decoder above chance, or did feature selection leak the answer? Which of 300 neurons are really tuned? Then the quiz and a critique of the paper that made power a central concern in neuroscience.",
+  goals: [
+    "Choose the right unit of analysis for nested data and compare naive, animal-level and hierarchical answers",
+    "Test a decoder's accuracy by permutation without leaking information through feature selection",
+    "Screen hundreds of neurons for tuning with permutation tests and the Benjamini-Hochberg procedure",
+    "Critique the evidence that neuroscience is underpowered",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "button-2013",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. With 20 independent null tests at 0.05, the chance of at least one false positive?
+2. The sample size for 80% power when d = 0.4?
+3. The Bonferroni threshold for 300 tests at 0.05?
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from math import erf, sqrt
+  print("1.", round(1 - 0.95 ** 20, 3))
+  print("2.", int(np.ceil(((1.959964 + 0.841621) / 0.4) ** 2)))
+  print("3.", 0.05 / 300)
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: the unit of analysis.** A drug is tested on 6 mice, with 12 neurons recorded in each before and after the drug. The data are firing-rate changes, one per neuron. Each mouse has its own response to the drug, and the drug's true average effect is small. Analyse the data three ways: as 72 independent neurons, as 6 mouse averages, and with a hierarchical bootstrap.
+
+<PyCell code={String.raw`
+  Phi = np.vectorize(lambda z: 0.5 * (1 + erf(z / sqrt(2))))
+  rng = np.random.default_rng(2013)
+  mice, per = 6, 12
+  mouse_effect = 0.3 + 1.0 * rng.normal(size=mice)            # mice differ a lot
+  change = mouse_effect[:, None] + 0.8 * rng.normal(size=(mice, per))
+  print("mouse averages:", change.mean(axis=1).round(2))
+`} />
+
+<PyCell id="partA" title="Part A: neurons, mice or both?" tests={String.raw`
+  import numpy as np
+  def test_naive():
+      "the naive test treating 72 neurons as independent gives p below 0.05"
+      assert p_naive < 0.05
+
+  def test_mouse():
+      "the sign-flip test on the 6 mouse averages does not reach 0.05"
+      assert p_mouse > 0.05
+
+  def test_hier():
+      "the hierarchical bootstrap interval includes zero, and is more than twice as wide as the naive interval"
+      assert ci_hier[0] < 0 < ci_hier[1] and np.diff(ci_hier)[0] > 2 * np.diff(ci_naive)[0]
+`} prompt="Compute `p_naive` (z-test on all 72 changes), `p_mouse` (sign-flip test on the 6 mouse averages, using all 64 sign patterns exactly), and 95% percentile intervals for the mean change from a naive bootstrap over neurons (`ci_naive`) and a hierarchical bootstrap over mice then neurons (`ci_hier`), each with 4,000 resamples."
+code={String.raw`
+  flat = change.ravel()
+  z = flat.mean() / (flat.std(ddof=1) / np.sqrt(flat.size))
+  p_naive = 2 * (1 - Phi(abs(z)))
+
+  m_avg = change.mean(axis=1)
+  signs = np.array([[1 if (k >> j) & 1 else -1 for j in range(mice)] for k in range(2 ** mice)])
+  p_mouse = ...                                   # fraction of the 64 sign patterns with |mean| at least the observed
+
+  boot_naive = flat[rng.integers(0, flat.size, (4000, flat.size))].mean(axis=1)
+  ci_naive = np.percentile(boot_naive, [2.5, 97.5])
+  boot_h = []
+  for _ in range(4000):
+      pick = rng.integers(0, mice, mice)
+      boot_h.append(...)                          # resample neurons within each picked mouse, then average
+  ci_hier = np.percentile(boot_h, [2.5, 97.5])
+  print(f"naive p = {p_naive:.4f};  mouse-level p = {p_mouse:.4f};  naive CI {ci_naive.round(2)};  hierarchical CI {ci_hier.round(2)}")
+`}
+hint="p_mouse = np.mean(np.abs((signs * m_avg).mean(axis=1)) >= abs(m_avg.mean())). boot_h.append(np.take_along_axis(change[pick], rng.integers(0, per, (mice, per)), axis=1).mean())."
+solution={String.raw`
+  flat = change.ravel()
+  z = flat.mean() / (flat.std(ddof=1) / np.sqrt(flat.size))
+  p_naive = 2 * (1 - Phi(abs(z)))
+
+  m_avg = change.mean(axis=1)
+  signs = np.array([[1 if (k >> j) & 1 else -1 for j in range(mice)] for k in range(2 ** mice)])
+  p_mouse = np.mean(np.abs((signs * m_avg).mean(axis=1)) >= abs(m_avg.mean()))                                   # fraction of the 64 sign patterns with |mean| at least the observed
+
+  boot_naive = flat[rng.integers(0, flat.size, (4000, flat.size))].mean(axis=1)
+  ci_naive = np.percentile(boot_naive, [2.5, 97.5])
+  boot_h = []
+  for _ in range(4000):
+      pick = rng.integers(0, mice, mice)
+      boot_h.append(np.take_along_axis(change[pick], rng.integers(0, per, (mice, per)), axis=1).mean())                          # resample neurons within each picked mouse, then average
+  ci_hier = np.percentile(boot_h, [2.5, 97.5])
+  print(f"naive p = {p_naive:.4f};  mouse-level p = {p_mouse:.4f};  naive CI {ci_naive.round(2)};  hierarchical CI {ci_hier.round(2)}")
+`} />
+
+Treating 72 neurons as independent declares a drug effect; respecting the fact that the drug was given to 6 mice, which respond very differently, does not. With only 6 mice the exact sign-flip test has just 64 possible relabellings, so its smallest possible p-value is 2/64, about 0.03: the experiment could never give strong evidence, a power problem built into the design.
+
+**Part B: is the decoder above chance?** Two hundred neurons are recorded on 100 trials of two conditions, but none of them carries any information about the condition. A decoder picks the 5 neurons with the largest difference between conditions and classifies by the nearest class mean, with 5-fold cross-validation. Compare picking the 5 neurons once on all the data (leaky) with picking them inside each training fold (honest).
+
+<PyCell code={String.raw`
+  r_b = np.random.default_rng(0)
+  Xn = r_b.normal(size=(100, 200))                 # no information at all
+  yb = np.repeat([0, 1], 50)
+
+  def select(X, y, k=5):
+      t = np.abs(X[y == 1].mean(0) - X[y == 0].mean(0)) / np.sqrt(X[y == 1].var(0) / (y == 1).sum() + X[y == 0].var(0) / (y == 0).sum())
+      return np.argsort(t)[-k:]
+
+  def nearest_mean(Xtr, ytr, Xte):
+      m0, m1 = Xtr[ytr == 0].mean(0), Xtr[ytr == 1].mean(0)
+      return (((Xte - m1) ** 2).sum(1) < ((Xte - m0) ** 2).sum(1)).astype(int)
+`} />
+
+<PyCell id="partB" title="Part B: leaky and honest cross-validation" tests={String.raw`
+  import numpy as np
+  def test_leaky():
+      "selecting neurons on all trials gives an accuracy well above chance (above 0.65) from pure noise"
+      assert acc_leaky > 0.65
+
+  def test_honest():
+      "selecting inside each fold gives an accuracy near chance (0.35 to 0.65)"
+      assert 0.35 < acc_honest < 0.65
+
+  def test_perm():
+      "the permutation test of the honest pipeline does not find the decoder significant"
+      assert p_honest > 0.05
+`} prompt="Write `cv_accuracy(X, y, honest, rng)` with 5 folds: if `honest`, select neurons on each training fold; otherwise select once on all data. Compute `acc_leaky` and `acc_honest`, then a permutation p-value `p_honest` for the honest pipeline from 100 shuffles of the labels."
+code={String.raw`
+  def cv_accuracy(X, y, honest, rng):
+      folds = np.array_split(rng.permutation(len(y)), 5)
+      feats_all = select(X, y)
+      correct = 0
+      for f in folds:
+          tr = np.setdiff1d(np.arange(len(y)), f)
+          feats = ...
+          pred = nearest_mean(X[tr][:, feats], y[tr], X[f][:, feats])
+          correct += np.sum(pred == y[f])
+      return correct / len(y)
+
+  acc_leaky = cv_accuracy(Xn, yb, False, r_b)
+  acc_honest = cv_accuracy(Xn, yb, True, r_b)
+  null = [cv_accuracy(Xn, r_b.permutation(yb), True, r_b) for _ in range(100)]
+  p_honest = ...
+  print(f"leaky accuracy {acc_leaky:.2f};  honest accuracy {acc_honest:.2f} (permutation p = {p_honest:.2f})")
+`}
+hint="feats = select(X[tr], y[tr]) if honest else feats_all; p_honest = (1 + np.sum(np.array(null) >= acc_honest)) / 101."
+solution={String.raw`
+  def cv_accuracy(X, y, honest, rng):
+      folds = np.array_split(rng.permutation(len(y)), 5)
+      feats_all = select(X, y)
+      correct = 0
+      for f in folds:
+          tr = np.setdiff1d(np.arange(len(y)), f)
+          feats = select(X[tr], y[tr]) if honest else feats_all
+          pred = nearest_mean(X[tr][:, feats], y[tr], X[f][:, feats])
+          correct += np.sum(pred == y[f])
+      return correct / len(y)
+
+  acc_leaky = cv_accuracy(Xn, yb, False, r_b)
+  acc_honest = cv_accuracy(Xn, yb, True, r_b)
+  null = [cv_accuracy(Xn, r_b.permutation(yb), True, r_b) for _ in range(100)]
+  p_honest = (1 + np.sum(np.array(null) >= acc_honest)) / 101
+  print(f"leaky accuracy {acc_leaky:.2f};  honest accuracy {acc_honest:.2f} (permutation p = {p_honest:.2f})")
+`} />
+
+Cross-validation alone does not protect you: if any step that looks at the labels (feature selection, choosing a window, tuning a parameter) happens outside the folds, the test folds have already leaked into the model. Every such step must be inside the loop, and the permutation test must shuffle labels and rerun the whole pipeline.
+
+**Part C: which neurons are tuned?** You record 300 neurons at 8 orientations, 10 trials each. Some are truly tuned. For each neuron, measure the tuning strength as the variance of its 8 mean responses, and test it by shuffling the orientation labels across trials. Then control the false discovery rate.
+
+<PyCell id="partC" title="Part C: 300 permutation tests and BH" tests={String.raw`
+  import numpy as np
+  def test_pvals():
+      "there is one permutation p-value per neuron, all in (0, 1]"
+      assert pvals.shape == (300,) and pvals.min() > 0 and pvals.max() <= 1
+
+  def test_bh_fdp():
+      "BH discoveries are mostly real: false discovery proportion below 0.15"
+      assert np.sum(found & ~tuned) / max(found.sum(), 1) < 0.15
+
+  def test_uncorrected_worse():
+      "uncorrected p below 0.05 gives more false discoveries than BH"
+      assert np.sum((pvals < 0.05) & ~tuned) > np.sum(found & ~tuned)
+`} prompt="Simulate the 300 neurons (the first 60 tuned), compute each neuron's tuning statistic, and its permutation p-value from 500 shuffles of the orientation labels (use the same shuffles for every neuron, vectorised). Store `pvals`, then apply Benjamini-Hochberg at q = 0.05 to get `found`."
+code={String.raw`
+  r_c = np.random.default_rng(300)
+  n_neur, n_ori, n_tr = 300, 8, 10
+  tuned = np.arange(n_neur) < 60
+  ori = np.repeat(np.arange(n_ori), n_tr)                          # 80 trials
+  pref = r_c.integers(0, n_ori, n_neur)
+  mean_rate = 5 + 2.0 * tuned[:, None] * np.cos(2 * np.pi * (np.arange(n_ori)[None] - pref[:, None]) / n_ori)
+  R = r_c.poisson(mean_rate[:, ori])                                # neurons x trials
+
+  def tuning_stat(R, labels):
+      means = np.stack([R[:, labels == o].mean(axis=1) for o in range(n_ori)], axis=1)
+      return means.var(axis=1)
+
+  obs = tuning_stat(R, ori)
+  null = np.stack([tuning_stat(R, r_c.permutation(ori)) for _ in range(500)], axis=1)   # neurons x shuffles
+  pvals = ...
+
+  def benjamini_hochberg(p, q):
+      m = len(p); order = np.argsort(p)
+      passed = p[order] <= np.arange(1, m + 1) / m * q
+      k = np.flatnonzero(passed).max() + 1 if passed.any() else 0
+      out = np.zeros(m, bool); out[order[:k]] = True
+      return out
+
+  found = ...
+  print(f"uncorrected: {np.sum(pvals < 0.05)} found, {np.sum((pvals < 0.05) & ~tuned)} false;  BH: {found.sum()} found, {np.sum(found & ~tuned)} false;  truly tuned: {tuned.sum()}")
+`}
+hint="pvals = (1 + np.sum(null >= obs[:, None], axis=1)) / 501; found = benjamini_hochberg(pvals, 0.05)."
+solution={String.raw`
+  r_c = np.random.default_rng(300)
+  n_neur, n_ori, n_tr = 300, 8, 10
+  tuned = np.arange(n_neur) < 60
+  ori = np.repeat(np.arange(n_ori), n_tr)                          # 80 trials
+  pref = r_c.integers(0, n_ori, n_neur)
+  mean_rate = 5 + 2.0 * tuned[:, None] * np.cos(2 * np.pi * (np.arange(n_ori)[None] - pref[:, None]) / n_ori)
+  R = r_c.poisson(mean_rate[:, ori])                                # neurons x trials
+
+  def tuning_stat(R, labels):
+      means = np.stack([R[:, labels == o].mean(axis=1) for o in range(n_ori)], axis=1)
+      return means.var(axis=1)
+
+  obs = tuning_stat(R, ori)
+  null = np.stack([tuning_stat(R, r_c.permutation(ori)) for _ in range(500)], axis=1)   # neurons x shuffles
+  pvals = (1 + np.sum(null >= obs[:, None], axis=1)) / 501
+
+  def benjamini_hochberg(p, q):
+      m = len(p); order = np.argsort(p)
+      passed = p[order] <= np.arange(1, m + 1) / m * q
+      k = np.flatnonzero(passed).max() + 1 if passed.any() else 0
+      out = np.zeros(m, bool); out[order[:k]] = True
+      return out
+
+  found = benjamini_hochberg(pvals, 0.05)
+  print(f"uncorrected: {np.sum(pvals < 0.05)} found, {np.sum((pvals < 0.05) & ~tuned)} false;  BH: {found.sum()} found, {np.sum(found & ~tuned)} false;  truly tuned: {tuned.sum()}")
+`} />
+
+Uncorrected testing finds 72 neurons, 12 of them false; Benjamini-Hochberg finds 60 with only 2 false. One subtlety: with 500 shuffles the smallest possible p-value is 1/501, about 0.002, and a single discovery would need $p \le (1/300)\times 0.05 \approx 0.00017$. BH works here only because many neurons are tuned at once, so the threshold it needs rises with their rank. If just a handful were tuned, it would find nothing at all: permutation tests combined with multiple-comparison corrections need many shuffles, or the maximum statistic of Day 2.
+
+**Part D (written).** Answer in your journal: which of today's three wrong answers have you seen in published work, and how would you check a paper for each?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The smallest permutation p-value" task="Show that an exact permutation test with N possible relabellings cannot give a p-value below 1/N, and apply this to a sign-flip test with 6 subjects.">
+
+The observed labelling is itself one of the $N$ relabellings, and its statistic is at least as extreme as itself, so at least 1 of the $N$ counts towards the p-value. The smallest possible p-value is therefore $1/N$.
+
+A sign-flip test on 6 subjects has $2^6 = 64$ patterns. For a two-sided test, the observed pattern and its mirror image (all signs flipped) give the same $|\bar{d}|$, so the minimum is $2/64 \approx 0.031$.
+
+No result from 6 subjects can therefore reach $p \lt 0.01$, whatever the effect. The number of independent units limits the strength of the evidence a design can ever provide.
+
+</Prove>
+
+<Prove title="2. BH with independent tests controls FDR (a special case)" task="Suppose all m hypotheses are true nulls with independent uniform p-values. Show that the BH procedure at level q makes at least one discovery with probability at most q, so its FDR is at most q in this case.">
+
+When all nulls are true, every discovery is false, so the false discovery proportion is 1 if anything is found and 0 otherwise. The FDR is then the probability of finding anything.
+
+BH finds something exactly when some $p_{(k)} \le (k/m)q$. Simes (1986) showed that, for independent uniform p-values, the probability of this event is exactly $q$.
+
+So FDR $= q$ when all nulls are true: in this case controlling the FDR is the same as controlling the FWER. With real effects present, BH is far more permissive than FWER control, but its FDR is still at most $q$, as Benjamini and Hochberg proved.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 18 quiz (15 questions)" questions={[
+  { q: "A p-value measures...", options: ["The probability H0 is true", "How surprising the data are under H0", "The effect size", "The power"], answer: 1, explain: "A tail probability under the null." },
+  { q: "Under H0, p-values are...", options: ["Near zero", "Uniform", "Gaussian", "Always above 0.5"], answer: 1, explain: "That is calibration." },
+  { q: "A paired design gains power by...", options: ["More trials", "Removing variability shared within pairs", "A lower α", "Bootstrapping"], answer: 1, explain: "Shared drift cancels." },
+  { q: "A permutation test needs...", options: ["Gaussian data", "Exchangeability under H0", "Large samples", "Known variance"], answer: 1, explain: "The one remaining assumption." },
+  { q: "The maximum statistic controls...", options: ["FDR", "FWER", "Power", "Effect size"], answer: 1, explain: "Using the null distribution of the largest statistic." },
+  { q: "The bootstrap resamples...", options: ["Without replacement", "With replacement", "From a prior", "Only once"], answer: 1, explain: "Efron (1979)." },
+  { q: "For neurons nested in animals, the bootstrap should resample...", options: ["Neurons only", "Animals, then neurons", "Trials only", "Nothing"], answer: 1, explain: "Hierarchical bootstrap." },
+  { q: "A 95% confidence interval procedure...", options: ["Contains 95% of the data", "Contains the truth in 95% of repeated experiments", "Has a 95% chance of containing the truth once computed", "Is a credible interval"], answer: 1, explain: "A property of the procedure." },
+  { q: "Sample size for 80% power scales like...", options: ["1/d", "1/d²", "d", "d²"], answer: 1, explain: "About 7.85/d²." },
+  { q: "Significant results from low-powered studies are...", options: ["Unbiased", "Exaggerated on average", "Too small", "Always correct in sign"], answer: 1, explain: "Type M errors." },
+  { q: "Median power in neuroscience, according to Button and colleagues, was about...", options: ["80%", "50%", "20%", "5%"], answer: 2, explain: "About 21% in 2011 meta-analyses." },
+  { q: "The false discovery rate is...", options: ["P(any false positive)", "The expected fraction of discoveries that are false", "α", "1 − power"], answer: 1, explain: "Benjamini and Hochberg." },
+  { q: "Double dipping means...", options: ["Testing twice", "Selecting and measuring on the same data", "Using two datasets", "Bootstrapping twice"], answer: 1, explain: "Circular analysis." },
+  { q: "Feature selection on all data before cross-validation...", options: ["Is harmless", "Leaks information and inflates accuracy", "Lowers accuracy", "Is required"], answer: 1, explain: "Part B." },
+  { q: "The garden of forking paths inflates...", options: ["Power", "False positives through data-dependent choices", "Sample size", "Effect sizes only when n is large"], answer: 1, explain: "Hidden multiple comparisons." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Button and colleagues (2013) its third pass and write your critique under the five headings. Focus on one question: **does the paper's estimate of median power really describe neuroscience, and does low power explain unreliable findings on its own?** Consider how power was estimated from meta-analyses (whose effect sizes are themselves inflated by publication bias, Day 4), which subfields were included and which were not, the role of the unit of analysis (Part A) and of analysis flexibility (Day 5), and what has changed in the field since.
+
+<Callout kind="research">
+
+Large collaborative projects, such as the International Brain Laboratory's standardised experiments in many labs, are one response to low power and poor reproducibility. Choose a finding you care about and design a multi-lab replication: how many animals per lab, how many labs, and how you would analyse the nested data.
+
+</Callout>
+
+<Key title="Week 18 review checklist">
+<ul>
+<li>I can set up a test, compute and interpret a p-value, and explain what it does not mean.</li>
+<li>I can run permutation and sign-flip tests and control the FWER with the maximum statistic.</li>
+<li>I can bootstrap standard errors and intervals, check coverage, and resample nested data properly.</li>
+<li>I can compute effect sizes and plan sample sizes by formula or simulation.</li>
+<li>I can control the FDR with Benjamini-Hochberg and avoid double dipping and forking paths.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part D: which of today's wrong answers have you seen in published work, and how would you check a paper for each? Then sketch your multi-lab replication." />
