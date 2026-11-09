@@ -1,0 +1,228 @@
+export const meta = {
+  title: "How many dimensions? Reconstruction and cross-validation",
+  intro: "Yesterday's answer to how many dimensions the reaching activity uses was 'between 6 and 18, depending how you ask'. Today you make it sharper. First you see how well a few components rebuild each neuron's response. Then you face the real problem: more components always describe the data better, so variance explained cannot tell structure from noise. Cross-validation can, but plain PCA cannot overfit held-out data, so you will use a scheme that holds out neurons and conditions at once. Finally you ask whether the population uses the same dimensions throughout the movement, the question behind today's paper.",
+  goals: [
+    "Reconstruct each neuron's activity from a few components and measure how well it fits",
+    "Explain why reconstruction error cannot choose the dimensionality",
+    "Choose the number of dimensions by bi-cross-validation over neurons and conditions",
+    "Compare the subspaces used early and late in the movement with an alignment index",
+  ],
+  plan: [
+    { label: "Set up and reconstruction", minutes: 30 },
+    { label: "Why reconstruction cannot choose", minutes: 15 },
+    { label: "Bi-cross-validation", minutes: 35 },
+    { label: "Do the dimensions change?", minutes: 25 },
+    { label: "Quiz and journal", minutes: 15 },
+  ],
+  paper: "kaufman-2014",
+};
+
+<Predict question="You fit PCA on half the neurons and use the components to predict the other half, judging the prediction on reach conditions the fit never saw. As you add components, does the prediction keep improving, level off, or eventually get worse?" />
+
+<Step n={1} title="Set up and reconstruction" minutes={30} />
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  data = np.load(dataset("churchland2012_reach.npz"))
+  rates, times = data["rates"].astype(float), data["times"]
+  C, T, N = rates.shape
+  Xn = rates / (rates.max(axis=(0, 1)) - rates.min(axis=(0, 1)) + 5)
+  X = Xn - Xn.mean(axis=0, keepdims=True)
+  win = (times >= -50) & (times <= 150)
+  Xw = X[:, win, :]
+  D = Xw.reshape(-1, N); mu = D.mean(axis=0)
+  U, S, Vt = np.linalg.svd(D - mu, full_matrices=False)
+  print("ready:", D.shape)
+`} />
+
+Keeping $k$ components replaces every population state by its projection onto their span, $\hat{D} = \mu + (D - \mu)V_kV_k^\top$. Each neuron's activity is then rebuilt from $k$ shared signals.
+
+<PyCell id="recon" title="Rebuilding each neuron from six components" tests={String.raw`
+  import numpy as np
+  def test_r2():
+      "r2_neuron holds each neuron's R squared for the rank-6 reconstruction"
+      V6 = Vt[:6].T; Dh = mu + (D - mu) @ V6 @ V6.T
+      ref = 1 - ((D - Dh) ** 2).sum(0) / ((D - mu) ** 2).sum(0)
+      assert r2_neuron.shape == (N,) and np.allclose(r2_neuron, ref)
+
+  def test_median():
+      "median_r2 is the median over neurons"
+      assert abs(median_r2 - np.median(r2_neuron)) < 1e-12
+`} prompt="Write `reconstruct(k)`, which returns the rank-k reconstruction of D. Compute each neuron's R² for k = 6 in `r2_neuron` (one minus its residual sum of squares over its total sum of squares about its mean) and the median `median_r2`."
+code={String.raw`
+  def reconstruct(k):
+      Vk = Vt[:k].T
+      return ...
+
+  Dh = reconstruct(6)
+  r2_neuron = ...
+  median_r2 = np.median(r2_neuron)
+  print(f"rank 6: median neuron R2 {median_r2:.2f};  a quarter of neurons below {np.percentile(r2_neuron, 25):.2f}")
+  best = np.argmax(np.ptp(D, axis=0))
+  plt.plot(D[:21, best], label="data, condition 1"); plt.plot(Dh[:21, best], "--", label="6 components")
+  plt.legend(); plt.xlabel("time bin"); plt.show()
+`}
+hint="return mu + (D - mu) @ Vk @ Vk.T; r2_neuron = 1 - ((D - Dh) ** 2).sum(0) / ((D - mu) ** 2).sum(0)."
+solution={String.raw`
+  def reconstruct(k):
+      Vk = Vt[:k].T
+      return mu + (D - mu) @ Vk @ Vk.T
+
+  Dh = reconstruct(6)
+  r2_neuron = 1 - ((D - Dh) ** 2).sum(0) / ((D - mu) ** 2).sum(0)
+  median_r2 = np.median(r2_neuron)
+  print(f"rank 6: median neuron R2 {median_r2:.2f};  a quarter of neurons below {np.percentile(r2_neuron, 25):.2f}")
+  best = np.argmax(np.ptp(D, axis=0))
+  plt.plot(D[:21, best], label="data, condition 1"); plt.plot(Dh[:21, best], "--", label="6 components")
+  plt.legend(); plt.xlabel("time bin"); plt.show()
+`} />
+
+Six components rebuild the median neuron with an R² of 0.47, and a quarter of neurons fall below 0.26. Six dimensions capture the broad shape of the population's activity but leave much of individual neurons' responses unexplained, which is either structure in higher dimensions or noise. Reconstruction alone cannot say which.
+
+<Step n={2} title="Why reconstruction cannot choose" minutes={15} />
+
+Adding a component can only reduce the reconstruction error, on the data used for the fit and on new data alike: projecting onto a bigger subspace never moves a point further from where it was. So the error falls all the way to zero at $k = 218$, and no amount of held-out conditions changes that. To see where structure ends and noise begins, the model must make a *prediction* that extra components can make worse. The trick, **bi-cross-validation** (Owen and Perry, 2009), is to hold out neurons as well as conditions: find $k$ components from one half of the neurons on training conditions, learn by regression how they predict the other half of the neurons, and test that prediction on held-out conditions. Now each extra component adds regression weights that can fit noise in the training conditions, and the test score eventually falls.
+
+<Video id="oO0bbInoO_0" title="PCA for dimensionality reduction" by="Neuromatch Academy" note="Neuromatch's tutorial video on choosing how many principal components to keep and what is lost by dropping the rest." />
+
+<Step n={3} title="Bi-cross-validation" minutes={35} />
+
+<PyCell id="bicv" title="Choosing k on held-out neurons and conditions" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "scores holds a mean held-out R squared for every k in ks"
+      assert len(scores) == len(ks) and all(-1 < s < 1 for s in scores)
+
+  def test_peak():
+      "the score rises from k = 1, peaks in the middle of the range and falls again by k = 80"
+      i = int(np.argmax(scores))
+      assert scores[0] < scores[i] and 10 <= ks[i] <= 50 and scores[-1] < scores[i]
+`} prompt="Complete `bicv(k)`: for each of 10 random splits (local rng seed 7) into halves of conditions (A, B) and neurons (n1, n2), fit PCA on the training block (A, n1), get latents for A and B by projecting their n1 activity, fit a least-squares regression (with an intercept) from latents to n2 on A, and score the prediction of n2 on B by R². Return the mean. Evaluate it for every k in `ks`."
+code={String.raw`
+  def bicv(k, reps=10):
+      r = np.random.default_rng(7); out = []
+      for _ in range(reps):
+          cp, npm = r.permutation(C), r.permutation(N)
+          A, B, n1, n2 = cp[:C // 2], cp[C // 2:], npm[:N // 2], npm[N // 2:]
+          DA1 = Xw[A][:, :, n1].reshape(-1, len(n1)); m1 = DA1.mean(0)
+          Vk = np.linalg.svd(DA1 - m1, full_matrices=False)[2][:k].T
+          LA = (DA1 - m1) @ Vk
+          LB = (Xw[B][:, :, n1].reshape(-1, len(n1)) - m1) @ Vk
+          YA = Xw[A][:, :, n2].reshape(-1, len(n2)); YB = Xw[B][:, :, n2].reshape(-1, len(n2))
+          W = ...                                   # regression from [LA, 1] to YA
+          pred = np.c_[LB, np.ones(len(LB))] @ W
+          out.append(...)                           # R squared of pred on YB
+      return np.mean(out)
+
+  ks = [1, 2, 4, 6, 8, 10, 15, 20, 30, 40, 60, 80]
+  scores = [bicv(k) for k in ks]
+  print({k: round(float(s), 3) for k, s in zip(ks, scores)})
+  plt.plot(ks, scores, "o-"); plt.xlabel("k"); plt.ylabel("held-out R2"); plt.show()
+`}
+hint="W = np.linalg.lstsq(np.c_[LA, np.ones(len(LA))], YA, rcond=None)[0]; out.append(1 - np.sum((YB - pred) ** 2) / np.sum((YB - YB.mean(0)) ** 2))."
+solution={String.raw`
+  def bicv(k, reps=10):
+      r = np.random.default_rng(7); out = []
+      for _ in range(reps):
+          cp, npm = r.permutation(C), r.permutation(N)
+          A, B, n1, n2 = cp[:C // 2], cp[C // 2:], npm[:N // 2], npm[N // 2:]
+          DA1 = Xw[A][:, :, n1].reshape(-1, len(n1)); m1 = DA1.mean(0)
+          Vk = np.linalg.svd(DA1 - m1, full_matrices=False)[2][:k].T
+          LA = (DA1 - m1) @ Vk
+          LB = (Xw[B][:, :, n1].reshape(-1, len(n1)) - m1) @ Vk
+          YA = Xw[A][:, :, n2].reshape(-1, len(n2)); YB = Xw[B][:, :, n2].reshape(-1, len(n2))
+          W = np.linalg.lstsq(np.c_[LA, np.ones(len(LA))], YA, rcond=None)[0]                                   # regression from [LA, 1] to YA
+          pred = np.c_[LB, np.ones(len(LB))] @ W
+          out.append(1 - np.sum((YB - pred) ** 2) / np.sum((YB - YB.mean(0)) ** 2))                           # R squared of pred on YB
+      return np.mean(out)
+
+  ks = [1, 2, 4, 6, 8, 10, 15, 20, 30, 40, 60, 80]
+  scores = [bicv(k) for k in ks]
+  print({k: round(float(s), 3) for k, s in zip(ks, scores)})
+  plt.plot(ks, scores, "o-"); plt.xlabel("k"); plt.ylabel("held-out R2"); plt.show()
+`} />
+
+The held-out score rises steeply at first (0.18 with one component, 0.48 with six), keeps creeping up to a peak of 0.63 around 20 to 30 components, then falls to 0.50 by 80, as the regression starts fitting noise. That answers the prediction: it improves, levels off and then gets worse. By this test the reaching activity has roughly 20 to 30 predictable dimensions, more than the six usually drawn, though most of the predictable variance is in the first ten or so. Report the curve, not just its peak: the plateau is broad.
+
+<Step n={4} title="Do the dimensions change?" minutes={25} />
+
+Kaufman and colleagues (2014, today's paper) showed that preparatory activity in motor cortex lies largely in dimensions that a linear readout to the muscles ignores, the **output-null** space, and that movement activity moves into the **output-potent** space. A related, testable idea: does the population use different dimensions early and late in the movement? Take the top four components of an early window (−50 to 40 ms) and ask how much of the late window's (100 to 190 ms) variance they capture, relative to the late window's own top four components. This **alignment index** is 1 if the subspaces are the same, and for random directions it would be small.
+
+<PyCell id="align" title="Early and late subspaces" tests={String.raw`
+  import numpy as np
+  def test_range():
+      "the alignment index lies between 0 and 1"
+      assert 0 < align < 1 and 0 < align_random < 1
+
+  def test_compare():
+      "the early subspace captures much less of the late activity than the late subspace does (index below 0.5), but far more than random directions"
+      assert align < 0.5 and align > 2 * align_random
+`} prompt="Write `top_dirs(mask, k=4)`, the top k principal directions (as columns) of X restricted to the times in mask. Compute `align`: the late window's variance captured by the early directions divided by the variance captured by its own top four. Compute `align_random` the same way with four random orthonormal directions (local rng seed 0, QR of a normal matrix)."
+code={String.raw`
+  def top_dirs(mask, k=4):
+      Dm = X[:, mask].reshape(-1, N); Dm = Dm - Dm.mean(0)
+      return np.linalg.svd(Dm, full_matrices=False)[2][:k].T
+
+  early, late = (times >= -50) & (times <= 40), (times >= 100) & (times <= 190)
+  DL = X[:, late].reshape(-1, N); DL = DL - DL.mean(0)
+  own = np.sum(np.linalg.svd(DL, compute_uv=False)[:4] ** 2)
+  align = ...
+  Q = np.linalg.qr(np.random.default_rng(0).normal(size=(N, 4)))[0]
+  align_random = ...
+  print(f"alignment index early to late: {align:.2f};  random directions: {align_random:.2f}")
+`}
+hint="align = np.sum((DL @ top_dirs(early)) ** 2) / own; align_random = np.sum((DL @ Q) ** 2) / own."
+solution={String.raw`
+  def top_dirs(mask, k=4):
+      Dm = X[:, mask].reshape(-1, N); Dm = Dm - Dm.mean(0)
+      return np.linalg.svd(Dm, full_matrices=False)[2][:k].T
+
+  early, late = (times >= -50) & (times <= 40), (times >= 100) & (times <= 190)
+  DL = X[:, late].reshape(-1, N); DL = DL - DL.mean(0)
+  own = np.sum(np.linalg.svd(DL, compute_uv=False)[:4] ** 2)
+  align = np.sum((DL @ top_dirs(early)) ** 2) / own
+  Q = np.linalg.qr(np.random.default_rng(0).normal(size=(N, 4)))[0]
+  align_random = np.sum((DL @ Q) ** 2) / own
+  print(f"alignment index early to late: {align:.2f};  random directions: {align_random:.2f}")
+`} />
+
+The early window's top four directions capture only 19% as much of the late activity as the late window's own top four, against 4% for random directions. The population does not keep using the same few dimensions through the movement: as the reach unfolds, activity moves into largely different directions, as Elsayed and colleagues (2016) found for preparation and movement. This matters for Day 4: a dynamical system can produce exactly this, by rotating the state out of the dimensions it started in.
+
+<Bridge title="Choosing dimensions in brains and machines"
+  neuro="How many dimensions a population uses, and whether they change between preparation, movement and rest, is one of the main ways modern systems neuroscience describes a circuit. Output-null dimensions offer a general way for cortex to compute internally without driving behaviour."
+  ai="Bi-cross-validation is one answer to a general problem in machine learning: choosing model complexity when the fit can always improve. The same idea, holding out parts of a matrix rather than whole rows, underlies validation for matrix completion and recommender systems.">
+
+Choose dimensionality by prediction on held-out data, not by variance explained.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A rank-k reconstruction replaces each state by...", options: ["Its mean", "Its projection onto the top k components", "A random vector", "Its largest neuron"], answer: 1, explain: "μ + (D − μ)V_kV_kᵀ." },
+  { q: "Reconstruction error on held-out conditions, as k grows...", options: ["Eventually rises", "Never increases", "Is constant", "Is random"], answer: 1, explain: "Projection onto a bigger subspace never moves a point further away." },
+  { q: "Bi-cross-validation holds out...", options: ["Only conditions", "Only neurons", "Both neurons and conditions", "Time points"], answer: 2, explain: "Owen and Perry (2009)." },
+  { q: "In bi-cross-validation, too many components...", options: ["Always help", "Let the regression fit noise, so the held-out score falls", "Are impossible", "Remove noise"], answer: 1, explain: "Overfitting appears." },
+  { q: "Output-null dimensions are patterns of activity that...", options: ["Drive muscles strongly", "A linear readout ignores", "Are noise", "Only exist in sensory cortex"], answer: 1, explain: "Kaufman and colleagues (2014)." },
+  { q: "An alignment index near 0.2 between early and late windows means...", options: ["The same dimensions are used", "Activity largely moves into different dimensions", "No activity late", "PCA failed"], answer: 1, explain: "Far from 1, though above random." },
+]} />
+
+<Predict revisit question="As components are added in bi-cross-validation, does the held-out prediction keep improving, level off or get worse?" />
+
+<Key title="Before you go">
+<ul>
+<li>Six components rebuild many neurons well, but not all.</li>
+<li>Reconstruction error cannot choose k; bi-cross-validation can, because extra components can hurt.</li>
+<li>The held-out score peaks at an intermediate k, larger than the six components usually drawn.</li>
+<li>Early and late movement activity use largely different dimensions.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Kaufman, Churchland, Ryu and Shenoy (2014), <em>Cortical activity in the null space: permitting preparation without movement</em>.</li>
+<li>Owen and Perry (2009), <em>Bi-cross-validation of the SVD and the nonnegative matrix factorization</em>, Annals of Applied Statistics 3(2), 564 to 594.</li>
+<li>Elsayed, Lara, Kaufman, Churchland and Cunningham (2016), <em>Reorganization between preparatory and movement population responses in motor cortex</em>, Nature Communications 7, 13239.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Write the dimensionality paragraph of your report: the variance-explained numbers, the bi-cross-validated choice of k with its uncertainty across splits, and what the alignment index adds. Say clearly what 'dimensionality' means here and what it does not." />

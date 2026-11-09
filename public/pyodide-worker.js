@@ -30,6 +30,7 @@ function boot() {
     pyodide = await loadPyodide({ indexURL: INDEX_URL });
     pyodide.runPython("import os; os.environ['MPLBACKEND'] = 'AGG'");
     pyodide.runPython(FIG_CAPTURE);
+    pyodide.runPython("import builtins\ndef dataset(name):\n    return '/data/' + name\nbuiltins.dataset = dataset");
     postMessage({ type: "ready", version: pyodide.version });
   })();
   return ready;
@@ -42,6 +43,20 @@ function scope(name) {
     scopes.set(name, ns);
   }
   return scopes.get(name);
+}
+
+// Lessons load course data with dataset("name"); fetch each named file from /data/ into Pyodide's file system once.
+const fetched = new Set();
+async function fetchDatasets(code) {
+  for (const m of code.matchAll(/dataset\(\s*["']([\w.-]+)["']\s*\)/g)) {
+    const name = m[1];
+    if (fetched.has(name)) continue;
+    const res = await fetch(new URL("/data/" + name, self.location.origin));
+    if (!res.ok) throw new Error("Could not download the dataset " + name);
+    pyodide.FS.mkdirTree("/data");
+    pyodide.FS.writeFile("/data/" + name, new Uint8Array(await res.arrayBuffer()));
+    fetched.add(name);
+  }
 }
 
 // Runs are handled one at a time, in order: output and namespaces must not interleave.
@@ -68,6 +83,7 @@ async function handle(m) {
     const all = [m.code, m.tests || ""].join("\n");
     await pyodide.loadPackagesFromImports(all, { messageCallback: () => {} });
 
+    await fetchDatasets(all);
     const ns = scope(m.scope || "default");
     let value = null;
     let error = null;

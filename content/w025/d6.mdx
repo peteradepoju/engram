@@ -1,0 +1,243 @@
+export const meta = {
+  title: "Project report and deep read",
+  intro: "Five days ago you had a tensor of 1.4 million numbers. Now you have an analysis: the reaching activity is low-dimensional in a measurable sense, a single linear rule predicts how it evolves on reaches it was not fitted to, much of that rule is rotation, and the rotation survives nulls that keep each neuron's responses, the data's covariances, or only timing differences. Today you check that the conclusion does not hinge on the choices you made, assemble the report, and then read the original paper critically, now that you know exactly what its analysis does.",
+  goals: [
+    "Test whether the main result is robust to the normalisation, the number of components and the time window",
+    "Collect every number in the report from one reproducible function",
+    "Write a two-page report with four figures",
+    "Critique Churchland and colleagues (2012) in light of your own analysis",
+  ],
+  plan: [
+    { label: "Robustness", minutes: 30 },
+    { label: "One function, every number", minutes: 25 },
+    { label: "Writing the report", minutes: 30 },
+    { label: "Project quiz", minutes: 10 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "churchland-2012",
+};
+
+<Step n={1} title="Robustness" minutes={30} />
+
+Three choices could have shaped the result: the soft-normalisation constant (5 spikes/s), the number of components (6) and the window (−50 to 150 ms). A conclusion worth reporting should hold across sensible alternatives. Rerun the rotational fit over a grid of choices.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  data = np.load(dataset("churchland2012_reach.npz"))
+  rates, times = data["rates"].astype(float), data["times"]
+  C, T, N = rates.shape
+  dt = 0.01
+
+  def preprocess(soft):
+      Xs = rates / (rates.max(axis=(0, 1)) - rates.min(axis=(0, 1)) + soft + 1e-9)
+      return Xs - Xs.mean(axis=0, keepdims=True)
+
+  def rotation_r2(A, k=6):
+      D = A.reshape(-1, A.shape[-1]); mu = D.mean(0)
+      Vt = np.linalg.svd(D - mu, full_matrices=False)[2]
+      Z = (A - mu) @ Vt[:k].T
+      Zm, dZ = Z[:, :-1].reshape(-1, k), (np.diff(Z, axis=1) / dt).reshape(-1, k)
+      basis = []
+      for i in range(k):
+          for j in range(i + 1, k):
+              E = np.zeros((k, k)); E[i, j], E[j, i] = 1, -1; basis.append(E)
+      G = np.stack([(Zm @ E.T).ravel() for E in basis], axis=1)
+      h = np.linalg.lstsq(G, dZ.ravel(), rcond=None)[0]
+      return 1 - np.sum((dZ.ravel() - G @ h) ** 2) / np.sum((dZ - dZ.mean(0)) ** 2)
+  print("ready")
+`} />
+
+<PyCell id="robust" title="Does the result depend on my choices?" tests={String.raw`
+  import numpy as np
+  def test_grid():
+      "grid holds 18 values, one per combination, keyed by (soft, k, window)"
+      assert len(grid) == 18 and all(len(key) == 3 for key in grid)
+
+  def test_robust():
+      "every combination gives a rotational R squared above 0.2, at least ten times the largest null (0.02)"
+      assert min(grid.values()) > 0.2
+`} prompt="Fill `grid` with the rotational R² for every combination of soft-normalisation constant (0, 5, 20 spikes/s), number of components (4, 6, 8) and window ((−50, 150) or (0, 200) ms), keyed by the tuple (soft, k, window)."
+code={String.raw`
+  grid = {}
+  for soft in (0, 5, 20):
+      X = preprocess(soft)
+      for k in (4, 6, 8):
+          for window in ((-50, 150), (0, 200)):
+              mask = (times >= window[0]) & (times <= window[1])
+              grid[(soft, k, window)] = ...
+  for key, v in grid.items():
+      print(key, round(float(v), 3))
+  print(f"range {min(grid.values()):.2f} to {max(grid.values()):.2f}")
+`}
+hint="grid[(soft, k, window)] = rotation_r2(X[:, mask], k)."
+solution={String.raw`
+  grid = {}
+  for soft in (0, 5, 20):
+      X = preprocess(soft)
+      for k in (4, 6, 8):
+          for window in ((-50, 150), (0, 200)):
+              mask = (times >= window[0]) & (times <= window[1])
+              grid[(soft, k, window)] = rotation_r2(X[:, mask], k)
+  for key, v in grid.items():
+      print(key, round(float(v), 3))
+  print(f"range {min(grid.values()):.2f} to {max(grid.values()):.2f}")
+`} />
+
+Across all 18 combinations the rotational fit ranges from 0.21 to 0.60. It is weakest with only four components in the later window, where the rotation partly falls outside the top four, and strongest with eight. The normalisation constant barely matters once six or more components are kept. Every value is more than ten times the largest null from Day 5, so the conclusion does not depend on these choices; report the range, not only the 0.49 of your main analysis.
+
+<Step n={2} title="One function, every number" minutes={25} />
+
+Numbers copied by hand into a report drift away from the code. Gather every quantity the report quotes into one function that runs from the raw data, so that anyone, including you in six months, can regenerate the report's numbers with one call.
+
+<PyCell id="summary" title="The report's numbers" tests={String.raw`
+  import numpy as np
+  def test_keys():
+      "summary returns all the report's quantities"
+      need = {"n_neurons", "n_conditions", "var_top6", "participation_ratio", "r2_full", "r2_rotation", "rotation_hz"}
+      assert need <= set(summary.keys())
+
+  def test_values():
+      "the values agree with the week's results"
+      assert summary["n_neurons"] == 218 and summary["n_conditions"] == 108
+      assert abs(summary["var_top6"] - 0.611) < 0.005 and abs(summary["r2_rotation"] - 0.489) < 0.005
+      assert 10 < summary["participation_ratio"] < 11.5 and abs(summary["rotation_hz"] - 1.27) < 0.02 and summary["r2_full"] > summary["r2_rotation"]
+`} prompt="Complete `project_summary()` so that it computes, from the raw rates with soft constant 5, six components and the window −50 to 150 ms: the numbers of neurons and conditions, the variance in the top six components, the participation ratio, the R² of the free and rotational fits, and the top rotation frequency in Hz. Store its result in `summary`."
+code={String.raw`
+  def project_summary():
+      X = preprocess(5)
+      A = X[:, (times >= -50) & (times <= 150)]
+      D = A.reshape(-1, N); mu = D.mean(0)
+      _, S, Vt = np.linalg.svd(D - mu, full_matrices=False)
+      lam = S ** 2
+      Z = (A - mu) @ Vt[:6].T
+      Zm, dZ = Z[:, :-1].reshape(-1, 6), (np.diff(Z, axis=1) / dt).reshape(-1, 6)
+      M_full = np.linalg.lstsq(Zm, dZ, rcond=None)[0].T
+      r2_full = 1 - np.sum((dZ - Zm @ M_full.T) ** 2) / np.sum((dZ - dZ.mean(0)) ** 2)
+      basis = []
+      for i in range(6):
+          for j in range(i + 1, 6):
+              E = np.zeros((6, 6)); E[i, j], E[j, i] = 1, -1; basis.append(E)
+      G = np.stack([(Zm @ E.T).ravel() for E in basis], axis=1)
+      M_skew = sum(c * E for c, E in zip(np.linalg.lstsq(G, dZ.ravel(), rcond=None)[0], basis))
+      return {
+          "n_neurons": N, "n_conditions": C,
+          "var_top6": ...,
+          "participation_ratio": ...,
+          "r2_full": r2_full,
+          "r2_rotation": rotation_r2(A),
+          "rotation_hz": ...,
+      }
+
+  summary = project_summary()
+  for k, v in summary.items():
+      print(f"{k:22s} {v:.3f}" if isinstance(v, float) else f"{k:22s} {v}")
+`}
+hint="var_top6: lam[:6].sum() / lam.sum(); participation_ratio: lam.sum() ** 2 / (lam ** 2).sum(); rotation_hz: np.max(np.linalg.eigvals(M_skew).imag) / (2 * np.pi)."
+solution={String.raw`
+  def project_summary():
+      X = preprocess(5)
+      A = X[:, (times >= -50) & (times <= 150)]
+      D = A.reshape(-1, N); mu = D.mean(0)
+      _, S, Vt = np.linalg.svd(D - mu, full_matrices=False)
+      lam = S ** 2
+      Z = (A - mu) @ Vt[:6].T
+      Zm, dZ = Z[:, :-1].reshape(-1, 6), (np.diff(Z, axis=1) / dt).reshape(-1, 6)
+      M_full = np.linalg.lstsq(Zm, dZ, rcond=None)[0].T
+      r2_full = 1 - np.sum((dZ - Zm @ M_full.T) ** 2) / np.sum((dZ - dZ.mean(0)) ** 2)
+      basis = []
+      for i in range(6):
+          for j in range(i + 1, 6):
+              E = np.zeros((6, 6)); E[i, j], E[j, i] = 1, -1; basis.append(E)
+      G = np.stack([(Zm @ E.T).ravel() for E in basis], axis=1)
+      M_skew = sum(c * E for c, E in zip(np.linalg.lstsq(G, dZ.ravel(), rcond=None)[0], basis))
+      return {
+          "n_neurons": N, "n_conditions": C,
+          "var_top6": float(lam[:6].sum() / lam.sum()),
+          "participation_ratio": float(lam.sum() ** 2 / (lam ** 2).sum()),
+          "r2_full": float(r2_full),
+          "r2_rotation": float(rotation_r2(A)),
+          "rotation_hz": float(np.max(np.linalg.eigvals(M_skew).imag) / (2 * np.pi)),
+      }
+
+  summary = project_summary()
+  for k, v in summary.items():
+      print(f"{k:22s} {v:.3f}" if isinstance(v, float) else f"{k:22s} {v}")
+`} />
+
+<Step n={3} title="Writing the report" minutes={30} />
+
+<Callout kind="note">
+
+**Report structure (two pages, four figures).**
+
+1. **Question** (one paragraph): is motor cortex activity during reaching consistent with a low-dimensional dynamical system, and in particular with rotational dynamics?
+2. **Data and preprocessing**: the task, the recording, trial averaging, soft normalisation, removal of the cross-condition mean, the window. Credit the authors.
+3. **Dimensionality** (Figure 2): variance explained, participation ratio, the bi-cross-validated curve with its peak and plateau, and the alignment between early and late subspaces.
+4. **Dynamics** (Figure 3): free and rotational fits, in sample and on held-out conditions; the frequency; the consistency across conditions; the jPCA plot.
+5. **Controls and robustness** (Figure 4): each null model, why it is a fair alternative, its numbers; the robustness grid.
+6. **Limitations**: trial-averaged data, one monkey, linear models, the simplified surrogate, what the rotation does not reveal about mechanism.
+7. **Conclusion** in two sentences, with the main numbers.
+
+Figure 1 shows example neurons. Every number should come from `project_summary()` or from a cell you can rerun.
+
+</Callout>
+
+Two short derivations belong in an appendix, because they justify steps of the analysis.
+
+<Prove title="1. Skew-symmetric dynamics only rotate" task="Show that if $M^\top = -M$, then the length of $\mathbf z(t)$ is constant along every solution of $\dot{\mathbf z} = M\mathbf z$, and that every eigenvalue of $M$ is purely imaginary.">
+
+$\frac{\mathrm d}{\mathrm dt}\lVert\mathbf z\rVert^2 = 2\mathbf z^\top\dot{\mathbf z} = 2\mathbf z^\top M\mathbf z$. A number equals its transpose, so $\mathbf z^\top M\mathbf z = \mathbf z^\top M^\top\mathbf z = -\mathbf z^\top M\mathbf z$, hence it is zero, and the length is constant.
+
+For an eigenvector $\mathbf v$ with $M\mathbf v = \lambda\mathbf v$, use the conjugate transpose: $\bar{\mathbf v}^\top M\mathbf v = \lambda\lVert\mathbf v\rVert^2$. Taking the conjugate transpose of the left side and using $M^\top = -M$ (with $M$ real) gives $\bar{\mathbf v}^\top M^\top\mathbf v = -\bar{\mathbf v}^\top M\mathbf v$, so $\bar\lambda = -\lambda$: $\lambda$ is purely imaginary.
+
+So a skew-symmetric fit can only describe turning, which is why its R² measures how much of the population's evolution is rotation, and why the free fit's positive real parts (growth) are what it misses.
+
+</Prove>
+
+<Prove title="2. More components never worsen reconstruction" task="Let $V_k$ have $k$ orthonormal columns and $V_{k+1}$ add one more orthonormal column $\mathbf u$. Show that for any vector $\mathbf x$, $\lVert\mathbf x - V_{k+1}V_{k+1}^\top\mathbf x\rVert^2 \le \lVert\mathbf x - V_kV_k^\top\mathbf x\rVert^2$, which is why Day 3 needed bi-cross-validation.">
+
+Since the columns are orthonormal, $V_{k+1}V_{k+1}^\top = V_kV_k^\top + \mathbf u\mathbf u^\top$. Write $\mathbf r = \mathbf x - V_kV_k^\top\mathbf x$, the residual with $k$ components; it is orthogonal to the columns of $V_k$.
+
+The new residual is $\mathbf r - \mathbf u\mathbf u^\top\mathbf x = \mathbf r - (\mathbf u^\top\mathbf r)\mathbf u$, because $\mathbf u^\top\mathbf x = \mathbf u^\top\mathbf r$ ($\mathbf u$ is orthogonal to $V_k$). By Pythagoras its squared length is $\lVert\mathbf r\rVert^2 - (\mathbf u^\top\mathbf r)^2 \le \lVert\mathbf r\rVert^2$.
+
+This holds for any $\mathbf x$, including held-out data, so reconstruction error on new conditions can only fall as components are added and cannot detect overfitting.
+
+</Prove>
+
+<Step n={4} title="Project quiz" minutes={10} />
+
+<Quiz id="weekly" title="Week 25 project quiz" questions={[
+  { q: "The dataset is...", options: ["Single trials from one neuron", "Trial-averaged rates of 218 neurons over 108 conditions", "Muscle recordings", "A simulation"], answer: 1, explain: "Churchland and colleagues (2012), monkey N." },
+  { q: "Soft normalisation prevents...", options: ["Rotation", "A few high-rate neurons dominating the variance", "Noise", "Overfitting"], answer: 1, explain: "Range plus 5 spikes/s." },
+  { q: "About how much variance do six components hold?", options: ["10%", "61%", "95%", "100%"], answer: 1, explain: "Day 2." },
+  { q: "Bi-cross-validation found the best held-out prediction at about...", options: ["1 component", "20 to 30 components", "218 components", "0 components"], answer: 1, explain: "A broad peak." },
+  { q: "The free linear fit explained about ...% of the derivative's variance on held-out conditions.", options: ["10", "63", "95", "0"], answer: 1, explain: "Day 4." },
+  { q: "The rotational fit explained about...", options: ["0.01", "0.49", "0.99", "0.25"], answer: 1, explain: "Three quarters of the free fit." },
+  { q: "The fastest rotation has a frequency of about...", options: ["0.1 Hz", "1.3 Hz", "40 Hz", "10 Hz"], answer: 1, explain: "A period of about 0.8 s." },
+  { q: "Time-shifted copies of one response gave rotations that were...", options: ["Absent", "Stronger than the real data's", "Identical to noise", "Negative"], answer: 1, explain: "Rotation alone does not prove dynamics." },
+  { q: "The timing explanation fails for the real data because...", options: ["Shifts are huge", "Time shifts explain under 1% of the condition-specific variance", "There is no timing", "PCA is wrong"], answer: 1, explain: "Reaches differ in pattern, not just timing." },
+  { q: "The result was robust because rotational R² stayed...", options: ["Above 0.2 for every choice tested", "Exactly 0.489", "Below the nulls", "Zero for k = 4"], answer: 0, explain: "Normalisation, components and window." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Churchland, Cunningham, Kaufman, Foster, Nuyujukian, Ryu and Shenoy (2012) its third pass and write your critique under the five headings. You have now reproduced its central analysis, so focus on one question: **do rotations in jPCA show that motor cortex generates movement as a dynamical system?** Consider what your controls ruled out and what they did not; that a skew-symmetric fit describes trajectories but does not identify the circuit that produces them (rotations could be driven by inputs from elsewhere, such as the thalamus or cerebellum); that the analysis uses trial-averaged data and a linear model in six dimensions; how the authors' own control datasets (including muscle activity and non-dynamical models) were chosen; and what later work, from network models trained to produce muscle activity to the critiques of rotation analyses, has added.
+
+<Callout kind="research">
+
+Your analysis used trial-averaged data, which hides how single trials vary. Read about latent factor methods for single trials, such as LFADS (Pandarinath and colleagues, 2018), and design an analysis that would test whether the rotational dynamics you found also govern trial-to-trial variability, for example whether trials that start further along the rotation also end further along it. What data would you need?
+
+</Callout>
+
+<Key title="Part 1 project checklist">
+<ul>
+<li>My notebook runs from top to bottom and regenerates every number in the report.</li>
+<li>I can state the dimensionality of the data in two ways and justify my choice of k with held-out data.</li>
+<li>I can report free and rotational fits, in and out of sample, with the frequency and consistency of rotation.</li>
+<li>I can name each control, what it rules out and what it leaves open.</li>
+<li>I have shown the result is robust to my analysis choices, and listed its limitations.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Write the two-sentence conclusion of your report, with numbers. Then, in the critique, say which single additional experiment or analysis would most change your confidence that motor cortex is a rotational dynamical system, and why." />

@@ -1,0 +1,194 @@
+export const meta = {
+  title: "Principal components of a population",
+  intro: "Yesterday's 218 neurons looked bewilderingly varied. Today you ask whether the population as a whole is simpler than its members: whether the activity, which could in principle point in 218 independent directions, actually stays close to a space of far fewer. Principal component analysis, from Week 7, is the tool. You will run it on the reaching data, measure how many dimensions the activity uses in two different ways, and draw the population's trajectories in its leading components, the second figure of your report.",
+  goals: [
+    "Run PCA on the reaching data with the SVD and check it against the covariance eigendecomposition",
+    "Measure dimensionality by variance explained and by the participation ratio",
+    "Project every condition onto the leading components and plot trajectories",
+    "Explain what PCA can and cannot say about the circuit",
+  ],
+  plan: [
+    { label: "Set up and recap", minutes: 20 },
+    { label: "PCA of the population", minutes: 35 },
+    { label: "How many dimensions?", minutes: 25 },
+    { label: "Trajectories", minutes: 25 },
+    { label: "Quiz and journal", minutes: 15 },
+  ],
+  paper: "cunningham-2014",
+};
+
+<Predict question="The analysis window has 108 conditions × 21 time points of activity from 218 neurons. How many principal components do you expect to need to capture 80% of the variance: about 3, about 10, or about 100?" />
+
+<Step n={1} title="Set up and recap" minutes={20} />
+
+Each lesson page runs its own Python, so start by repeating Day 1's preprocessing. As in the original paper, the main analyses use the window from 50 ms before to 150 ms after movement onset, when the movement is being generated: 21 time points. Stacking conditions and times gives a data matrix with $108 \times 21 = 2{,}268$ rows (population states) and 218 columns (neurons).
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  data = np.load(dataset("churchland2012_reach.npz"))
+  rates, times = data["rates"].astype(float), data["times"]
+  C, T, N = rates.shape
+  Xn = rates / (rates.max(axis=(0, 1)) - rates.min(axis=(0, 1)) + 5)     # soft normalisation
+  X = Xn - Xn.mean(axis=0, keepdims=True)                                 # remove the cross-condition mean
+  win = (times >= -50) & (times <= 150)
+  Xw = X[:, win, :]                                                       # conditions x 21 times x neurons
+  D = Xw.reshape(-1, N)                                                   # 2268 population states x 218 neurons
+  print("data matrix:", D.shape)
+`} />
+
+PCA finds orthogonal directions in neuron space, ordered by how much variance of the data they capture (Week 7). With the data matrix centred, its singular value decomposition $D = USV^\top$ gives everything: the rows of $V^\top$ are the principal directions, the squared singular values are proportional to the variance along each, and $US$ holds the coordinates of every state.
+
+<Video id="-f6T9--oM0E" title="PCA" by="Neuromatch Academy" note="Neuromatch's tutorial video on principal component analysis as finding the directions of greatest variance, the method applied to real data today." />
+
+<Step n={2} title="PCA of the population" minutes={35} />
+
+<PyCell id="pca" title="PCA two ways" tests={String.raw`
+  import numpy as np
+  def test_ve():
+      "ve holds the fraction of variance per component, decreasing and summing to 1"
+      assert abs(ve.sum() - 1) < 1e-9 and np.all(np.diff(ve) <= 1e-12)
+
+  def test_eigh():
+      "the SVD variances match the eigenvalues of the covariance matrix"
+      lam = np.sort(np.linalg.eigvalsh(np.cov(D, rowvar=False)))[::-1]
+      assert np.allclose(ve[:10], lam[:10] / lam.sum(), atol=1e-9)
+
+  def test_V():
+      "the rows of Vt are orthonormal"
+      assert np.allclose(Vt[:6] @ Vt[:6].T, np.eye(6), atol=1e-9)
+`} prompt="Centre D by subtracting the mean of each neuron (column), take its SVD, and store the principal directions in `Vt` and the fraction of variance explained by each component in `ve`. The test compares your answer with the eigenvalues of the covariance matrix."
+code={String.raw`
+  mu = D.mean(axis=0)
+  U, S, Vt = ...
+  ve = ...
+  print("variance explained by the first six components:", ve[:6].round(3), " total", ve[:6].sum().round(3))
+`}
+hint="U, S, Vt = np.linalg.svd(D - mu, full_matrices=False); ve = S ** 2 / np.sum(S ** 2)."
+solution={String.raw`
+  mu = D.mean(axis=0)
+  U, S, Vt = np.linalg.svd(D - mu, full_matrices=False)
+  ve = S ** 2 / np.sum(S ** 2)
+  print("variance explained by the first six components:", ve[:6].round(3), " total", ve[:6].sum().round(3))
+`} />
+
+The first component captures 24% of the variance, the second 12%, and the first six together 61%, all from population states of 218 neurons. The SVD and the covariance eigendecomposition agree, as they must; the SVD is preferred because it never forms the covariance matrix, which loses precision.
+
+<Step n={3} title="How many dimensions?" minutes={25} />
+
+There is no single right answer to "how many dimensions". Two common summaries: the number of components needed to reach a fixed share of the variance, such as 80%, and the **participation ratio**,
+
+$$
+\mathrm{PR} = \frac{\left(\sum_i\lambda_i\right)^2}{\sum_i\lambda_i^2},
+$$
+
+which equals $d$ when the variance is spread equally over $d$ components and falls smoothly as it concentrates. Neither separates signal from noise; tomorrow you will use held-out data to do that.
+
+<Figure caption="Variance explained by each principal component of the reaching data, with the running total. Change how many components are kept." credit="Interactive figure by Engram. Data: Churchland and colleagues (2012).">
+  <ReachScree />
+</Figure>
+
+<PyCell id="dims" title="Two measures of dimensionality" tests={String.raw`
+  import numpy as np
+  def test_k80():
+      "k80 is the smallest number of components whose cumulative variance reaches 80%"
+      cum = np.cumsum(ve)
+      assert cum[k80 - 1] >= 0.8 and (k80 == 1 or cum[k80 - 2] < 0.8)
+
+  def test_pr():
+      "pr is the participation ratio of the eigenvalues"
+      lam = S ** 2
+      assert abs(pr - lam.sum() ** 2 / (lam ** 2).sum()) < 1e-9
+`} prompt="Compute `k80`, the number of components needed to explain 80% of the variance, and `pr`, the participation ratio of the eigenvalues (S²)."
+code={String.raw`
+  k80 = ...
+  lam = S ** 2
+  pr = ...
+  print(f"{k80} components reach 80% of the variance;  participation ratio {pr:.1f};  out of {N} neurons")
+`}
+hint="k80 = int(np.searchsorted(np.cumsum(ve), 0.8) + 1); pr = lam.sum() ** 2 / (lam ** 2).sum()."
+solution={String.raw`
+  k80 = int(np.searchsorted(np.cumsum(ve), 0.8) + 1)
+  lam = S ** 2
+  pr = lam.sum() ** 2 / (lam ** 2).sum()
+  print(f"{k80} components reach 80% of the variance;  participation ratio {pr:.1f};  out of {N} neurons")
+`} />
+
+Eighteen components are needed to reach 80% of the variance, and the participation ratio is 10.7. That answers the prediction: about 10 to 20, far fewer than 218 but more than a handful. The two measures disagree because the variance falls off gradually; neither knows which of the small components are signal. Note too that this is the dimensionality of trial-averaged activity across 108 conditions in a 200 ms window; single trials, other tasks or other windows can give different answers.
+
+<Step n={4} title="Trajectories" minutes={25} />
+
+Projecting each condition's activity onto the first few components turns 108 tables of numbers into 108 curves, **neural trajectories**, that can be drawn and compared. Keep six components, as the original analysis did, for the rest of the week.
+
+<PyCell id="traj" title="Population trajectories" tests={String.raw`
+  import numpy as np
+  def test_Z():
+      "Z holds the projections onto the first six components, shape conditions x 21 x 6"
+      assert Z.shape == (C, 21, 6) and np.allclose(Z, (Xw - mu) @ Vt[:6].T)
+
+  def test_var():
+      "the variance of each projected component equals its eigenvalue divided by the number of states"
+      assert np.allclose(Z.reshape(-1, 6).var(axis=0), S[:6] ** 2 / D.shape[0])
+`} prompt="Project the windowed data onto the first six principal directions to get `Z` (conditions × 21 × 6), then plot every condition's trajectory in PC1 against PC2, marking its starting point."
+code={String.raw`
+  Z = ...
+  fig, ax = plt.subplots(figsize=(5, 5))
+  for c in range(C):
+      ax.plot(Z[c, :, 0], Z[c, :, 1], lw=0.7)
+      ax.plot(Z[c, 0, 0], Z[c, 0, 1], "k.", ms=3)
+  ax.set_xlabel("PC1"); ax.set_ylabel("PC2"); ax.set_aspect("equal"); plt.show()
+  print("projected variances:", Z.reshape(-1, 6).var(axis=0).round(4))
+`}
+hint="Z = (Xw - mu) @ Vt[:6].T."
+solution={String.raw`
+  Z = (Xw - mu) @ Vt[:6].T
+  fig, ax = plt.subplots(figsize=(5, 5))
+  for c in range(C):
+      ax.plot(Z[c, :, 0], Z[c, :, 1], lw=0.7)
+      ax.plot(Z[c, 0, 0], Z[c, 0, 1], "k.", ms=3)
+  ax.set_xlabel("PC1"); ax.set_ylabel("PC2"); ax.set_aspect("equal"); plt.show()
+  print("projected variances:", Z.reshape(-1, 6).var(axis=0).round(4))
+`} />
+
+<Figure caption="All 108 conditions as trajectories in a chosen pair of principal components, coloured by starting position. Change the pair and the time." credit="Interactive figure by Engram. Data: Churchland and colleagues (2012).">
+  <ReachTrajectories />
+</Figure>
+
+Look at different pairs of components. In some, conditions start in different places and fan out; in others, many conditions seem to swing round together. The eye is good at seeing patterns and bad at judging whether they are real. Principal components are chosen to capture variance, not dynamics, so a rotation, if there is one, need not lie in any single pair of them. Day 4 asks the question properly.
+
+<Bridge title="Dimensionality in brains and machines"
+  neuro="Low-dimensional population activity has been found in motor, prefrontal and sensory cortex. Whether it reflects the circuit's true degrees of freedom or the simplicity of laboratory tasks is debated: Gao and Ganguli argued that measured dimensionality is often limited by task complexity rather than by the brain."
+  ai="The same analysis is applied to the hidden layers of trained networks, whose representations are also often far lower-dimensional than their width. Comparing the dimensionality of brain and network activity on the same task is one of the standard tests in NeuroAI.">
+
+Many neurons, few dimensions: but measure how few, and ask why.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The data matrix for PCA has rows that are...", options: ["Neurons", "Population states (a condition at a time point)", "Conditions only", "Times only"], answer: 1, explain: "2,268 states × 218 neurons." },
+  { q: "The variance along each principal direction is proportional to...", options: ["The singular value", "The squared singular value", "The number of neurons", "The mean rate"], answer: 1, explain: "λ = s²/(n − 1)." },
+  { q: "The participation ratio equals d when...", options: ["One component dominates", "Variance is spread equally over d components", "There are d neurons", "d conditions"], answer: 1, explain: "(Σλ)²/Σλ²." },
+  { q: "PCA chooses directions that...", options: ["Maximise variance", "Maximise rotation", "Predict behaviour", "Minimise firing"], answer: 0, explain: "Not dynamics, not behaviour." },
+  { q: "Variance explained alone cannot tell you...", options: ["How much variance a component has", "Which dimensions are signal rather than noise", "The order of components", "The total variance"], answer: 1, explain: "That needs held-out data (Day 3)." },
+  { q: "A rotation in the population must lie in...", options: ["PC1 and PC2", "Some plane, not necessarily a pair of principal components", "PC5 and PC6", "No plane"], answer: 1, explain: "PCA is not looking for rotations." },
+]} />
+
+<Predict revisit question="How many components capture 80% of the variance of 218 reaching neurons?" />
+
+<Key title="Before you go">
+<ul>
+<li>PCA of the reaching data: SVD of a centred 2,268 × 218 matrix.</li>
+<li>A few components hold most of the variance; the participation ratio summarises how spread it is.</li>
+<li>Projecting onto six components turns each condition into a trajectory.</li>
+<li>Patterns in projections suggest hypotheses; they do not test them.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Cunningham and Yu (2014), <em>Dimensionality reduction for large-scale neural recordings</em>.</li>
+<li>Gao and Ganguli (2015), <em>On simplicity and complexity in the brave new world of large-scale neuroscience</em>, Current Opinion in Neurobiology 32, 148 to 155.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Draft the methods paragraph for your PCA: the window, the normalisation, the mean subtraction, how you computed the components, and which numbers you will report. Then note one choice you are unsure about and how you could test whether it matters." />

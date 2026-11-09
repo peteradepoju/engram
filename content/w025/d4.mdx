@@ -1,0 +1,250 @@
+export const meta = {
+  title: "Rotational dynamics: fitting dx/dt = Mx and jPCA",
+  intro: "Today is the heart of the project. If motor cortex is a dynamical system, the population's next move should be predictable from where it is now. Week 22 taught you what a linear system ẋ = Mx can do; now you fit one to the reaching data. You will estimate M by least squares, test it on held-out reaches, and then constrain it to pure rotation, as Churchland and colleagues did with jPCA. Finally you find the plane in which the population turns fastest and draw the third figure of your report.",
+  goals: [
+    "Estimate the time derivative of population trajectories and fit dZ/dt = MZ by least squares",
+    "Evaluate the fit on held-out conditions",
+    "Fit a skew-symmetric (purely rotational) M and compare it with the unconstrained fit",
+    "Find the plane of strongest rotation, its frequency and how consistently conditions rotate",
+  ],
+  plan: [
+    { label: "Set up and the idea", minutes: 20 },
+    { label: "Fitting a linear dynamical system", minutes: 30 },
+    { label: "Pure rotation", minutes: 30 },
+    { label: "The jPCA plane", minutes: 25 },
+    { label: "Quiz and journal", minutes: 15 },
+  ],
+  paper: "churchland-2012",
+};
+
+<Predict question="You fit dZ/dt = MZ in six principal components, once with M free (36 numbers) and once with M forced to be a pure rotation (15 numbers). The free fit explains about 65% of the variance of dZ/dt. Roughly how much will the pure rotation explain: 10%, 50% or 64%?" />
+
+<Step n={1} title="Set up and the idea" minutes={20} />
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  data = np.load(dataset("churchland2012_reach.npz"))
+  rates, times = data["rates"].astype(float), data["times"]
+  C, T, N = rates.shape
+  Xn = rates / (rates.max(axis=(0, 1)) - rates.min(axis=(0, 1)) + 5)
+  X = Xn - Xn.mean(axis=0, keepdims=True)
+  win = (times >= -50) & (times <= 150)
+  Xw = X[:, win, :]
+  D = Xw.reshape(-1, N); mu = D.mean(axis=0)
+  Vt = np.linalg.svd(D - mu, full_matrices=False)[2]
+  Z = (Xw - mu) @ Vt[:6].T                       # conditions x 21 times x 6 components
+  dt = 0.01                                     # 10 ms bins, in seconds
+  print("Z:", Z.shape)
+`} />
+
+The hypothesis is that the six-dimensional state $\mathbf z$ obeys $\dot{\mathbf z} = M\mathbf z$ with the **same** $M$ for every reach. Different reaches start from different preparatory states and the shared dynamics carry each one forward. To test it, estimate the derivative at each time by a finite difference, $\dot{\mathbf z}(t) \approx (\mathbf z(t + \Delta t) - \mathbf z(t))/\Delta t$, and ask how well $M\mathbf z(t)$ predicts it. With every state as a row, this is linear regression, the least squares of Week 5, with six outputs.
+
+<Video id="XRw3Jt4Qr2Y" title="Emerging Brain Computer Interfaces with Krishna Shenoy" by="Krishna Shenoy" note="A talk by Krishna Shenoy, whose laboratory recorded this week's data, on brain-computer interfaces that read out motor cortex population activity, the practical side of understanding its dynamics." />
+
+<Step n={2} title="Fitting a linear dynamical system" minutes={30} />
+
+<PyCell id="full" title="An unconstrained linear fit" tests={String.raw`
+  import numpy as np
+  def test_pairs():
+      "Zm and dZ stack every condition's states and finite-difference derivatives"
+      assert Zm.shape == (C * 20, 6) and np.allclose(dZ, (np.diff(Z, axis=1) / dt).reshape(-1, 6))
+
+  def test_fit():
+      "M_full is the least-squares solution and r2_full its R squared"
+      Mref = np.linalg.lstsq(Zm, dZ, rcond=None)[0].T
+      assert np.allclose(M_full, Mref) and abs(r2_full - r2(Zm, dZ, Mref)) < 1e-12
+
+  def test_heldout():
+      "the held-out R squared on odd conditions is a little below the in-sample value"
+      assert 0.5 < r2_full_test < r2_full
+`} prompt="Write `pairs(Zc)` returning the states (all but the last time point) and finite-difference derivatives of a set of conditions, stacked into rows, and `fit_full(Zm, dZ)`, which returns M from the least-squares solution of Zm Mᵀ = dZ. Fit all conditions for `M_full` and `r2_full`, then fit even conditions and test on odd ones for `r2_full_test`."
+code={String.raw`
+  def pairs(Zc):
+      return Zc[:, :-1].reshape(-1, 6), ...
+
+  def r2(Zm, dZ, M):
+      return 1 - np.sum((dZ - Zm @ M.T) ** 2) / np.sum((dZ - dZ.mean(0)) ** 2)
+
+  def fit_full(Zm, dZ):
+      return ...
+
+  Zm, dZ = pairs(Z)
+  M_full = fit_full(Zm, dZ); r2_full = r2(Zm, dZ, M_full)
+  even, odd = np.arange(0, C, 2), np.arange(1, C, 2)
+  r2_full_test = r2(*pairs(Z[odd]), fit_full(*pairs(Z[even])))
+  print(f"R2 {r2_full:.3f} in sample, {r2_full_test:.3f} on held-out conditions")
+  print("eigenvalues of M (per second):", np.round(np.linalg.eigvals(M_full), 2))
+`}
+hint="pairs returns (np.diff(Zc, axis=1) / dt).reshape(-1, 6) as its second value; fit_full returns np.linalg.lstsq(Zm, dZ, rcond=None)[0].T."
+solution={String.raw`
+  def pairs(Zc):
+      return Zc[:, :-1].reshape(-1, 6), (np.diff(Zc, axis=1) / dt).reshape(-1, 6)
+
+  def r2(Zm, dZ, M):
+      return 1 - np.sum((dZ - Zm @ M.T) ** 2) / np.sum((dZ - dZ.mean(0)) ** 2)
+
+  def fit_full(Zm, dZ):
+      return np.linalg.lstsq(Zm, dZ, rcond=None)[0].T
+
+  Zm, dZ = pairs(Z)
+  M_full = fit_full(Zm, dZ); r2_full = r2(Zm, dZ, M_full)
+  even, odd = np.arange(0, C, 2), np.arange(1, C, 2)
+  r2_full_test = r2(*pairs(Z[odd]), fit_full(*pairs(Z[even])))
+  print(f"R2 {r2_full:.3f} in sample, {r2_full_test:.3f} on held-out conditions")
+  print("eigenvalues of M (per second):", np.round(np.linalg.eigvals(M_full), 2))
+`} />
+
+One matrix, the same for all 108 reaches, predicts 65% of the variance of the population's rate of change, and 63% on reaches it was not fitted to, so the fit is not just memorising conditions. Its eigenvalues are revealing: two complex pairs, oscillations at $8.27/2\pi \approx 1.3$ Hz and $4.34/2\pi \approx 0.7$ Hz, and all with positive real parts. In this window, as the movement gets under way, activity grows as well as turns.
+
+<Step n={3} title="Pure rotation" minutes={30} />
+
+Churchland and colleagues asked a sharper question: how much of the evolution is pure **rotation**? A matrix that only rotates, never stretching or shrinking, is **skew-symmetric**, $M^\top = -M$: its eigenvalues are purely imaginary (Week 22), so every mode circles without growing or decaying. A $6 \times 6$ skew-symmetric matrix has 15 free numbers, the entries above the diagonal, and $\dot{\mathbf z} = M\mathbf z$ is still linear in them. Build one basis matrix $E_{ij}$ (1 at $(i, j)$, −1 at $(j, i)$) per pair, and the fit is ordinary least squares on 15 coefficients.
+
+<PyCell id="skew" title="Fitting a rotation" tests={String.raw`
+  import numpy as np
+  def test_skew():
+      "M_skew is skew-symmetric"
+      assert np.allclose(M_skew, -M_skew.T)
+
+  def test_best():
+      "M_skew is the best skew-symmetric fit: random skew perturbations never improve it"
+      r = np.random.default_rng(3)
+      for _ in range(20):
+          P = r.normal(size=(6, 6)) * 0.5; P = P - P.T
+          assert r2(Zm, dZ, M_skew + P) <= r2_skew + 1e-12
+
+  def test_values():
+      "the rotation explains less than the free fit but more than half as much, also on held-out conditions"
+      assert 0.5 * r2_full < r2_skew < r2_full and 0.5 * r2_full_test < r2_skew_test < r2_full_test
+`} prompt="Complete `fit_skew(Zm, dZ)`: build the 15 basis matrices, form the design matrix whose columns are the flattened predictions Zm Eᵀ for each basis matrix, solve for the coefficients by least squares and return their weighted sum. Fit all conditions for `M_skew` and `r2_skew`, and even-to-odd for `r2_skew_test`."
+code={String.raw`
+  basis = []
+  for i in range(6):
+      for j in range(i + 1, 6):
+          E = np.zeros((6, 6)); E[i, j], E[j, i] = 1, -1
+          basis.append(E)
+
+  def fit_skew(Zm, dZ):
+      G = np.stack([(Zm @ E.T).ravel() for E in basis], axis=1)
+      h = ...
+      return sum(c * E for c, E in zip(h, basis))
+
+  M_skew = fit_skew(Zm, dZ); r2_skew = r2(Zm, dZ, M_skew)
+  r2_skew_test = ...
+  print(f"rotation only: R2 {r2_skew:.3f} in sample, {r2_skew_test:.3f} held out;  ratio to the free fit {r2_skew / r2_full:.2f}")
+`}
+hint="h = np.linalg.lstsq(G, dZ.ravel(), rcond=None)[0]; r2_skew_test = r2(*pairs(Z[odd]), fit_skew(*pairs(Z[even])))."
+solution={String.raw`
+  basis = []
+  for i in range(6):
+      for j in range(i + 1, 6):
+          E = np.zeros((6, 6)); E[i, j], E[j, i] = 1, -1
+          basis.append(E)
+
+  def fit_skew(Zm, dZ):
+      G = np.stack([(Zm @ E.T).ravel() for E in basis], axis=1)
+      h = np.linalg.lstsq(G, dZ.ravel(), rcond=None)[0]
+      return sum(c * E for c, E in zip(h, basis))
+
+  M_skew = fit_skew(Zm, dZ); r2_skew = r2(Zm, dZ, M_skew)
+  r2_skew_test = r2(*pairs(Z[odd]), fit_skew(*pairs(Z[even])))
+  print(f"rotation only: R2 {r2_skew:.3f} in sample, {r2_skew_test:.3f} held out;  ratio to the free fit {r2_skew / r2_full:.2f}")
+`} />
+
+Pure rotation explains 49% of the variance of the derivative (47% on held-out reaches), three quarters of what the free fit achieves with less than half the parameters. That answers the prediction: about 50%. Much of what the population does from moment to moment is turn, and what the rotational model misses is largely the growth seen in the free fit's eigenvalues.
+
+<Step n={4} title="The jPCA plane" minutes={25} />
+
+The eigenvalues of $M_\text{skew}$ come in pairs $\pm i\omega$, one pair per plane of rotation. The pair with the largest $\omega$ marks the plane in which the population turns fastest; its eigenvector's real and imaginary parts span that plane. Projecting the data onto it gives the **jPCA** plot, and $\omega/2\pi$ is the rotation frequency.
+
+<PyCell id="jpca" title="The plane of fastest rotation" tests={String.raw`
+  import numpy as np
+  def test_plane():
+      "P has two orthonormal columns spanning the real and imaginary parts of the top eigenvector"
+      ev, V = np.linalg.eig(M_skew); i = np.argmax(ev.imag)
+      B = np.stack([V[:, i].real, V[:, i].imag], 1)
+      assert np.allclose(P.T @ P, np.eye(2), atol=1e-9) and np.allclose(P @ (P.T @ B), B, atol=1e-9)
+
+  def test_freq():
+      "freq_hz is the top rotation frequency, between 0.5 and 3 Hz"
+      assert abs(freq_hz - np.max(np.linalg.eigvals(M_skew).imag) / (2 * np.pi)) < 1e-9 and 0.5 < freq_hz < 3
+
+  def test_consistent():
+      "more than 90% of conditions rotate in the majority direction"
+      assert frac_same > 0.9
+`} prompt="Find the eigenvalue of M_skew with the largest imaginary part, form `P` by orthonormalising (QR) the real and imaginary parts of its eigenvector, and project Z onto it to get `J`. Store the frequency in Hz in `freq_hz`. For each condition, take the sign of its mean angular velocity in the plane (the average of J₁ dJ₂ − J₂ dJ₁), and store the fraction of conditions that share the majority sign in `frac_same`."
+code={String.raw`
+  ev, V = np.linalg.eig(M_skew)
+  i = np.argmax(ev.imag)
+  P = ...
+  J = Z @ P                                       # conditions x 21 x 2
+  freq_hz = ...
+  dJ = np.diff(J, axis=1)
+  spin = (J[:, :-1, 0] * dJ[:, :, 1] - J[:, :-1, 1] * dJ[:, :, 0]).mean(axis=1)
+  frac_same = ...
+  print(f"rotation at {freq_hz:.2f} Hz;  {100 * frac_same:.0f}% of conditions turn the same way")
+  fig, ax = plt.subplots(figsize=(5, 5))
+  for c in range(C):
+      ax.plot(J[c, :, 0], J[c, :, 1], lw=0.7); ax.plot(J[c, -1, 0], J[c, -1, 1], "k.", ms=3)
+  ax.set_aspect("equal"); ax.set_xlabel("jPC1"); ax.set_ylabel("jPC2"); plt.show()
+`}
+hint="P = np.linalg.qr(np.stack([V[:, i].real, V[:, i].imag], 1))[0]; freq_hz = ev[i].imag / (2 * np.pi); s = np.sign(spin); frac_same = np.mean(s == np.sign(s.sum()))."
+solution={String.raw`
+  ev, V = np.linalg.eig(M_skew)
+  i = np.argmax(ev.imag)
+  P = np.linalg.qr(np.stack([V[:, i].real, V[:, i].imag], 1))[0]
+  J = Z @ P                                       # conditions x 21 x 2
+  freq_hz = ev[i].imag / (2 * np.pi)
+  dJ = np.diff(J, axis=1)
+  spin = (J[:, :-1, 0] * dJ[:, :, 1] - J[:, :-1, 1] * dJ[:, :, 0]).mean(axis=1)
+  s = np.sign(spin); frac_same = np.mean(s == np.sign(s.sum()))
+  print(f"rotation at {freq_hz:.2f} Hz;  {100 * frac_same:.0f}% of conditions turn the same way")
+  fig, ax = plt.subplots(figsize=(5, 5))
+  for c in range(C):
+      ax.plot(J[c, :, 0], J[c, :, 1], lw=0.7); ax.plot(J[c, -1, 0], J[c, -1, 1], "k.", ms=3)
+  ax.set_aspect("equal"); ax.set_xlabel("jPC1"); ax.set_ylabel("jPC2"); plt.show()
+`} />
+
+<Figure caption="The reaching data projected onto the plane of fastest rotation, with a control that shuffles conditions independently for each neuron." credit="Interactive figure by Engram, after Churchland and colleagues (2012). Data: Churchland and colleagues (2012).">
+  <JPCAPlane />
+</Figure>
+
+The fastest plane rotates at 1.27 Hz, a period of about 0.8 s, so in the 200 ms window each condition turns through roughly a quarter of a cycle. Ninety-five per cent of the conditions turn the same way, and they are ordered: neighbouring starting states stay neighbours as they rotate. In the figure, tick the control box: when conditions are shuffled independently for each neuron, which keeps every neuron's own responses but destroys how they are coordinated, the rotational fit falls from 0.49 to 0.01. Whatever the rotation is, it is a property of the population, not of single neurons. Tomorrow you ask whether it could still come from something simpler than dynamics.
+
+<Bridge title="Rotations in brains and machines"
+  neuro="Rotational population dynamics have since been reported in motor cortex across species and tasks, and in other areas such as supplementary motor area and parts of the brainstem. Their interpretation, as the signature of a pattern generator for multiphasic muscle commands, remains debated (Day 5)."
+  ai="Recurrent networks trained to produce the muscle activity of reaching develop rotational dynamics resembling the data (Sussillo and colleagues, 2015), one of the first comparisons between a trained network and a recorded population at the level of dynamics rather than single units.">
+
+Fit the dynamics, test them on held-out reaches, and only then draw the rotation.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Fitting dZ/dt = MZ with the same M for every condition tests whether...", options: ["Each neuron is tuned", "The population evolves by shared dynamics from different starting states", "Rates are Poisson", "PCA worked"], answer: 1, explain: "A dynamical system hypothesis." },
+  { q: "The derivative is estimated by...", options: ["Fourier transform", "A finite difference between neighbouring time bins", "The mean rate", "PCA"], answer: 1, explain: "(z(t + Δt) − z(t))/Δt." },
+  { q: "A skew-symmetric matrix has eigenvalues that are...", options: ["Real and negative", "Purely imaginary", "All zero", "Real and positive"], answer: 1, explain: "Pure rotation." },
+  { q: "A 6 × 6 skew-symmetric matrix has how many free entries?", options: ["6", "15", "21", "36"], answer: 1, explain: "6 × 5 / 2." },
+  { q: "The jPCA plane is spanned by...", options: ["PC1 and PC2", "The real and imaginary parts of M_skew's top eigenvector", "Two random neurons", "The mean and variance"], answer: 1, explain: "The plane of fastest rotation." },
+  { q: "Held-out conditions are used to check that the dynamics...", options: ["Are skew", "Generalise beyond the reaches used to fit them", "Are fast", "Are low-dimensional"], answer: 1, explain: "Guarding against overfitting." },
+]} />
+
+<Predict revisit question="If the free fit explains 65%, how much does a pure rotation explain?" />
+
+<Key title="Before you go">
+<ul>
+<li>A single linear M predicts about two thirds of the variance of the population's derivative, and generalises to held-out reaches.</li>
+<li>Constrained to pure rotation, M still explains three quarters as much.</li>
+<li>The plane of fastest rotation turns at about 1.3 Hz, and almost every condition turns the same way.</li>
+<li>Whether this means motor cortex is a rotational dynamical system is tomorrow's question.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper (deep read): Churchland, Cunningham, Kaufman, Foster, Nuyujukian, Ryu and Shenoy (2012), <em>Neural population dynamics during reaching</em>.</li>
+<li>Sussillo, Churchland, Kaufman and Shenoy (2015), <em>A neural network that finds a naturalistic solution for the production of muscle activity</em>, Nature Neuroscience 18(7), 1025 to 1033.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Write the results paragraph on dynamics: in-sample and held-out R² for the free and rotational fits, the frequency, the consistency across conditions, and one sentence on what these numbers do and do not establish." />

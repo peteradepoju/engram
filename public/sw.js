@@ -1,6 +1,6 @@
 /* Engram service worker: makes the installed app quick to open and lets lessons you have visited open offline.
    Pages always come from the network first, so new lessons appear straight away; the cache is only a fallback. */
-const VERSION = "engram-v3";
+const VERSION = "engram-v4";
 const STATIC = `${VERSION}-static`;
 const PAGES = `${VERSION}-pages`;
 const MAX_PAGES = 120;
@@ -32,7 +32,7 @@ self.addEventListener("fetch", (event) => {
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/auth") || url.pathname === "/sw.js") return;
 
   // Build files are content-hashed, so they never change: cache first.
-  if (url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/icons/") || url.pathname.startsWith("/notebooks/") || url.pathname === "/pyodide-worker.js") {
+  if (url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/icons/") || url.pathname.startsWith("/notebooks/") || url.pathname.startsWith("/data/") || url.pathname === "/pyodide-worker.js") {
     event.respondWith((async () => {
       const cache = await caches.open(STATIC);
       const hit = await cache.match(req);

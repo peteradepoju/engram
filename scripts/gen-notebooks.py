@@ -12,11 +12,22 @@ def md(text):
 def code(text):
     return {"cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [], "source": text.strip("\n")}
 
+DATASET_CELL = """import os, urllib.request
+def dataset(name):
+    \"\"\"Downloads an Engram dataset the first time it is used and returns its local path.\"\"\"
+    if not os.path.exists(name):
+        urllib.request.urlretrieve("https://engram-neuroai.vercel.app/data/" + name, name)
+    return name
+"""
+
 for lesson in all_lessons():
     src = open(os.path.join(ROOT, lesson[:4], lesson[4:] + ".mdx")).read()
     title = re.search(r'title: "([^"]+)"', src).group(1)
     w, d = int(lesson[1:4]), int(lesson[5])
     nb = [md(f"# Week {w}, Day {d}: {title}\n\nCompanion notebook for the Engram lesson at https://engram-neuroai.vercel.app/learn/{lesson[:4]}/{lesson[4:]}.\nRun the cells in order. Exercises have a checks cell after them: run it to test your answer.")]
+    if "dataset(" in src:
+        nb.append(md("This lesson uses a dataset from the Engram site. Run this cell first: it downloads the file once and defines `dataset()`."))
+        nb.append(code(DATASET_CELL))
     for m in re.finditer(r"<PyCell(.*?)/>", src, re.S):
         attrs = m.group(1)
         props = {k: textwrap.dedent(v) for k, v in re.findall(r'(\w+)=\{String\.raw`(.*?)`\}', attrs, re.S)}

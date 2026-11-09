@@ -11,6 +11,10 @@ def cells(src):
         ident = re.search(r'\bid="([^"]+)"', m.group(1))
         yield ident.group(1) if ident else None, props
 
+DATA = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "public", "data"))
+import builtins
+builtins.dataset = lambda name: os.path.join(DATA, name)   # same helper the browser and Colab provide
+
 def run_tests(ns, tests):
     exec(tests, ns)
     fails = []

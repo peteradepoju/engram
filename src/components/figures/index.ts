@@ -114,3 +114,8 @@ export { MarkovChannel } from "./markov-channel";
 export { DriftDiffusion } from "./drift-diffusion";
 export { OUProcess } from "./ou-process";
 export { ForwardDiffusion } from "./forward-diffusion";
+export { ReachPSTH } from "./reach-psth";
+export { ReachScree } from "./reach-scree";
+export { ReachTrajectories } from "./reach-trajectories";
+export { JPCAPlane } from "./jpca-plane";
+export { SequenceRotation } from "./sequence-rotation";

@@ -1,0 +1,257 @@
+export const meta = {
+  title: "Controls: what else could make rotations?",
+  intro: "Yesterday a rotational model explained half the variance of the population's rate of change, and almost every reach turned the same way. Impressive, but is it surprising? Rotations could be a byproduct of simpler things: each neuron's response being smooth in time, neurons being correlated, or a common sequence of activity merely shifted in time from one reach to another. A result only means something if those explanations are ruled out. Today you build three null models, measure the rotation each one produces, and find out which explanations survive. This is the fourth figure of your report, and the part reviewers read most closely.",
+  goals: [
+    "Build a condition-shuffle null distribution and compute a p-value for the rotational fit",
+    "Generate surrogate data that match the data's covariance across time and across neurons, and test them",
+    "Show that a time-shifted common sequence produces strong rotations, then test whether the real data are time-shifted",
+    "Explain what the controls establish and what they leave open",
+  ],
+  plan: [
+    { label: "Set up and the logic of controls", minutes: 20 },
+    { label: "Shuffling conditions", minutes: 25 },
+    { label: "Matching the covariances", minutes: 30 },
+    { label: "Is it only timing?", minutes: 30 },
+    { label: "Quiz and journal", minutes: 15 },
+  ],
+  paper: "elsayed-2017",
+};
+
+<Predict question="Take one common pattern of activity across the population and, for each of 108 conditions, shift it earlier or later in time by a random amount of up to 40 ms. Nothing else differs between conditions. Run the same rotational analysis. Will it find rotations weaker than the real data's, similar, or stronger?" />
+
+<Step n={1} title="Set up and the logic of controls" minutes={20} />
+
+The whole pipeline from Days 2 to 4 fits in one function: take a conditions × times × neurons array (already normalised and with the cross-condition mean removed), run PCA, fit the skew-symmetric dynamics and return its R². Applying the same function to the data and to surrogates guarantees the comparison is fair.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  data = np.load(dataset("churchland2012_reach.npz"))
+  rates, times = data["rates"].astype(float), data["times"]
+  C, T, N = rates.shape
+  Xn = rates / (rates.max(axis=(0, 1)) - rates.min(axis=(0, 1)) + 5)
+  X = Xn - Xn.mean(axis=0, keepdims=True)
+  win = (times >= -50) & (times <= 150); tw = times[win]
+  Xw = X[:, win, :]
+  dt = 0.01
+  basis = []
+  for i in range(6):
+      for j in range(i + 1, 6):
+          E = np.zeros((6, 6)); E[i, j], E[j, i] = 1, -1; basis.append(E)
+
+  def rotation_r2(A):
+      """PCA to six components, then the R squared of the best skew-symmetric fit of dZ/dt = MZ."""
+      D = A.reshape(-1, A.shape[-1]); mu = D.mean(0)
+      Vt = np.linalg.svd(D - mu, full_matrices=False)[2]
+      Z = (A - mu) @ Vt[:6].T
+      Zm, dZ = Z[:, :-1].reshape(-1, 6), (np.diff(Z, axis=1) / dt).reshape(-1, 6)
+      G = np.stack([(Zm @ E.T).ravel() for E in basis], axis=1)
+      h = np.linalg.lstsq(G, dZ.ravel(), rcond=None)[0]
+      return 1 - np.sum((dZ.ravel() - G @ h) ** 2) / np.sum((dZ - dZ.mean(0)) ** 2)
+
+  real = rotation_r2(Xw)
+  print(f"real data: rotational R2 = {real:.3f}")
+`} />
+
+A control asks: if only feature F of the data were present, how strong would the effect be? If the real effect is no stronger than in data that have F and nothing else, F is enough to explain it. Elsayed and Cunningham (2017, today's paper) made this systematic, generating surrogates that keep the data's correlations across time, neurons and conditions but are otherwise random.
+
+<Video id="2Zb93aOWioM" title="PCA Applications" by="Neuromatch Academy" note="Neuromatch's tutorial video on applying PCA to neural data, including the pitfalls of reading structure into projections, the reason today's controls are needed." />
+
+<Step n={2} title="Shuffling conditions" minutes={25} />
+
+Shuffle the 108 condition labels independently for each neuron. Every neuron keeps exactly its own set of responses, but which response goes with which reach no longer matches across neurons, so any coordination is destroyed.
+
+<PyCell id="shuffle" title="A condition-shuffle null" tests={String.raw`
+  import numpy as np
+  def test_null():
+      "null_shuffle holds 20 rotational R squared values from shuffled data, all far below the real value"
+      assert len(null_shuffle) == 20 and max(null_shuffle) < real / 5
+
+  def test_p():
+      "p_shuffle is (1 + number of nulls at least as large as real) / 21"
+      assert abs(p_shuffle - (1 + np.sum(np.array(null_shuffle) >= real)) / 21) < 1e-12
+`} prompt="Using a local rng (seed 0), make 20 shuffled copies of Xw, permuting the conditions independently for each neuron, and store their rotational R² values in `null_shuffle`. Compute the permutation p-value `p_shuffle` as in Week 18."
+code={String.raw`
+  r_s = np.random.default_rng(0)
+  null_shuffle = []
+  for _ in range(20):
+      Y = Xw.copy()
+      for n in range(N):
+          Y[:, :, n] = ...
+      null_shuffle.append(rotation_r2(Y))
+  p_shuffle = ...
+  print(f"shuffled: median {np.median(null_shuffle):.3f}, max {max(null_shuffle):.3f};  real {real:.3f};  p = {p_shuffle:.3f}")
+`}
+hint="Y[:, :, n] = Xw[r_s.permutation(C), :, n]; p_shuffle = (1 + np.sum(np.array(null_shuffle) >= real)) / 21."
+solution={String.raw`
+  r_s = np.random.default_rng(0)
+  null_shuffle = []
+  for _ in range(20):
+      Y = Xw.copy()
+      for n in range(N):
+          Y[:, :, n] = Xw[r_s.permutation(C), :, n]
+      null_shuffle.append(rotation_r2(Y))
+  p_shuffle = (1 + np.sum(np.array(null_shuffle) >= real)) / 21
+  print(f"shuffled: median {np.median(null_shuffle):.3f}, max {max(null_shuffle):.3f};  real {real:.3f};  p = {p_shuffle:.3f}")
+`} />
+
+The 20 shuffled datasets give rotational fits between 0.004 and 0.014, against 0.489 for the real data. The p-value, 0.048, is simply the smallest that 20 shuffles can give, $1/21$; with more shuffles it would be smaller still, since the real value is more than thirty times the largest null. Coordination across neurons is essential: individual neurons' responses do not produce the rotation by themselves.
+
+<Step n={3} title="Matching the covariances" minutes={30} />
+
+The shuffle destroys too much: it also removes the correlations between neurons that any population has. A fairer null keeps the data's **temporal covariance** (how each time point covaries with each other, averaged over conditions and neurons) and its **neural covariance** (how neurons covary), and is otherwise random. One simple way, a separable Gaussian model, draws standard normal noise $G$ for each condition and shapes it on both sides: $Y_c = L_t G_c L_n^\top$, where $L_tL_t^\top$ is the temporal covariance and $L_nL_n^\top$ the neural covariance. Elsayed and Cunningham's method also matches the covariance across conditions; this simpler version is a good first test.
+
+<PyCell id="surrogate" title="A covariance-matched surrogate" tests={String.raw`
+  import numpy as np
+  def test_cov():
+      "the surrogates reproduce the temporal covariance of the data to within 20% on the diagonal"
+      Ysur = make_surrogate(np.random.default_rng(9))
+      St_s = np.einsum("ctn,csn->ts", Ysur, Ysur) / (C * N)
+      assert np.allclose(np.diag(St_s), np.diag(St), rtol=0.2)
+
+  def test_null():
+      "null_cov holds 20 values, all far below the real rotational R squared"
+      assert len(null_cov) == 20 and max(null_cov) < real / 5
+`} prompt="Compute the temporal covariance `St` (21 × 21, averaged over conditions and neurons) and the neural covariance `Sn` (218 × 218, averaged over conditions and times). Factor them (Cholesky for St, rescaled by N / trace(Sn) so that the total variance comes out right; eigenvectors scaled by the square roots of the clipped eigenvalues for Sn), complete `make_surrogate(r)` and store the rotational R² of 20 surrogates (local rng seed 1) in `null_cov`."
+code={String.raw`
+  Tw = Xw.shape[1]
+  St = np.einsum("ctn,csn->ts", Xw, Xw) / (C * N)
+  Sn = ...
+  Lt = np.linalg.cholesky(St * N / np.trace(Sn) + 1e-9 * np.eye(Tw))   # scaled so the total variance matches
+  w, V = np.linalg.eigh(Sn); Ln = V * np.sqrt(np.clip(w, 0, None))
+
+  def make_surrogate(r):
+      G = r.normal(size=(C, Tw, N))
+      return ...                                    # L_t G_c L_n^T for every condition
+
+  r_c = np.random.default_rng(1)
+  null_cov = [rotation_r2(make_surrogate(r_c)) for _ in range(20)]
+  print(f"covariance-matched surrogates: median {np.median(null_cov):.3f}, max {max(null_cov):.3f};  real {real:.3f}")
+`}
+hint="Sn = np.einsum('ctn,ctm->nm', Xw, Xw) / (C * Tw); return np.einsum('ts,csn->ctn', Lt, G) @ Ln.T."
+solution={String.raw`
+  Tw = Xw.shape[1]
+  St = np.einsum("ctn,csn->ts", Xw, Xw) / (C * N)
+  Sn = np.einsum("ctn,ctm->nm", Xw, Xw) / (C * Tw)
+  Lt = np.linalg.cholesky(St * N / np.trace(Sn) + 1e-9 * np.eye(Tw))   # scaled so the total variance matches
+  w, V = np.linalg.eigh(Sn); Ln = V * np.sqrt(np.clip(w, 0, None))
+
+  def make_surrogate(r):
+      G = r.normal(size=(C, Tw, N))
+      return np.einsum("ts,csn->ctn", Lt, G) @ Ln.T                                    # L_t G_c L_n^T for every condition
+
+  r_c = np.random.default_rng(1)
+  null_cov = [rotation_r2(make_surrogate(r_c)) for _ in range(20)]
+  print(f"covariance-matched surrogates: median {np.median(null_cov):.3f}, max {max(null_cov):.3f};  real {real:.3f}")
+`} />
+
+Surrogates with the data's temporal and neural covariance give rotational fits between about 0.00 and 0.02. Smooth responses and correlated neurons are not enough: the rotation depends on how the population's activity is organised across conditions, which this separable surrogate does not keep. Elsayed and Cunningham's full method also matches the covariance across conditions; they found that motor cortex rotations exceeded even those surrogates, but that test is stricter than yours.
+
+<Step n={4} title="Is it only timing?" minutes={30} />
+
+Now a sharper alternative. Suppose every reach used the same pattern of activity, and reaches differed only in **when** it happened, a little earlier or later. After the cross-condition mean is removed, what remains is roughly the shift times the pattern's rate of change, and as a sequence unfolds that difference can swing round. Test this in two steps: build such data and see whether the analysis finds rotations; then ask whether the real data look like that.
+
+<Figure caption="Simulated neurons that fire in a fixed sequence, with no dynamics at all, projected onto their top two principal components. Change the burst width and how orderly the sequence is." credit="Interactive figure by Engram, after the argument of Lebedev and colleagues (2019).">
+  <SequenceRotation />
+</Figure>
+
+<PyCell id="timing" title="Timing alone" tests={String.raw`
+  import numpy as np
+  def test_synthetic():
+      "the time-shifted synthetic data give a rotational R squared above the real data's"
+      assert r2_shifted > real
+
+  def test_fit():
+      "best_shift holds one shift per condition from the allowed set, and timing_r2 is the share of the real condition-specific variance the timing model explains"
+      assert len(best_shift) == C and set(best_shift) <= set(shifts.tolist())
+      assert -0.1 < timing_r2 < 0.2
+`} prompt="(a) Build synthetic data: shift each neuron's real condition-averaged response (the mean of Xn over conditions) by a random amount for each condition (uniform within ±40 ms, local rng seed 2, using `shifted`), remove the cross-condition mean, take the window, and store its rotational R² in `r2_shifted`. (b) For each real condition, find the shift in `shifts` whose shifted mean response best matches that condition in the window (least squares), store the shifts in `best_shift`, and compute `timing_r2`, the fraction of the real windowed X explained by the mean-removed timing model."
+code={String.raw`
+  mean_resp = Xn.mean(axis=0)                     # times x neurons, the common response
+
+  def shifted(s):
+      """The common response delayed by s ms (negative s = earlier), by linear interpolation."""
+      return np.stack([np.interp(times - s, times, mean_resp[:, n]) for n in range(N)], axis=1)
+
+  r_t = np.random.default_rng(2)
+  Ysyn = np.stack([shifted(s) for s in r_t.uniform(-40, 40, C)])
+  Ysyn = Ysyn - Ysyn.mean(axis=0, keepdims=True)
+  r2_shifted = ...
+
+  shifts = np.arange(-60, 61, 5)
+  library = {s: shifted(s) for s in shifts}
+  best_shift, fit = [], np.zeros_like(Xn)
+  for c in range(C):
+      errs = [np.sum((Xn[c][win] - library[s][win]) ** 2) for s in shifts]
+      s = shifts[int(np.argmin(errs))]
+      best_shift.append(s); fit[c] = library[s]
+  model = (fit - fit.mean(axis=0, keepdims=True))[:, win]
+  timing_r2 = ...
+  print(f"time-shifted synthetic data: rotational R2 {r2_shifted:.3f} (real {real:.3f})")
+  print(f"real data: best shifts from {min(best_shift)} to {max(best_shift)} ms;  timing model explains {100 * timing_r2:.1f}% of the condition-specific variance")
+`}
+hint="r2_shifted = rotation_r2(Ysyn[:, win]); timing_r2 = 1 - np.sum((Xw - model) ** 2) / np.sum(Xw ** 2)."
+solution={String.raw`
+  mean_resp = Xn.mean(axis=0)                     # times x neurons, the common response
+
+  def shifted(s):
+      """The common response delayed by s ms (negative s = earlier), by linear interpolation."""
+      return np.stack([np.interp(times - s, times, mean_resp[:, n]) for n in range(N)], axis=1)
+
+  r_t = np.random.default_rng(2)
+  Ysyn = np.stack([shifted(s) for s in r_t.uniform(-40, 40, C)])
+  Ysyn = Ysyn - Ysyn.mean(axis=0, keepdims=True)
+  r2_shifted = rotation_r2(Ysyn[:, win])
+
+  shifts = np.arange(-60, 61, 5)
+  library = {s: shifted(s) for s in shifts}
+  best_shift, fit = [], np.zeros_like(Xn)
+  for c in range(C):
+      errs = [np.sum((Xn[c][win] - library[s][win]) ** 2) for s in shifts]
+      s = shifts[int(np.argmin(errs))]
+      best_shift.append(s); fit[c] = library[s]
+  model = (fit - fit.mean(axis=0, keepdims=True))[:, win]
+  timing_r2 = 1 - np.sum((Xw - model) ** 2) / np.sum(Xw ** 2)
+  print(f"time-shifted synthetic data: rotational R2 {r2_shifted:.3f} (real {real:.3f})")
+  print(f"real data: best shifts from {min(best_shift)} to {max(best_shift)} ms;  timing model explains {100 * timing_r2:.1f}% of the condition-specific variance")
+`} />
+
+The time-shifted synthetic data give a rotational fit of 0.85, much stronger than the real data's 0.49. That answers the prediction: stronger. Rotation, even strong and consistent rotation, can come from nothing more than reaches differing in timing, so by itself it is not proof of dynamics. But the real data do not behave like that. The best-fitting shifts are only ±10 ms, and the timing model explains just 0.5% of the real condition-specific variance: the reaches differ in the pattern of activity, not merely its timing. This explanation can be ruled out for these data, which is a stronger conclusion than ignoring it.
+
+<Bridge title="Controls in brains and machines"
+  neuro="Population analyses find structure easily, because high-dimensional data contain many patterns. The field's response has been to make null models explicit: shuffles, surrogates matched to known statistics, and simulations of simpler mechanisms. A finding is as strong as the best null it beats."
+  ai="The same discipline applies to interpreting trained networks. A feature found by probing a network's activity must be compared with what the probe finds in an untrained network or in shuffled data, or it may reflect the probe rather than the network.">
+
+Rotation alone is not evidence of dynamics; rotation that survives the right nulls is.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A control analysis asks...", options: ["Whether the code runs", "How strong the effect would be if only a simpler feature were present", "Which neuron is best", "How to plot the data"], answer: 1, explain: "Is the simpler explanation enough?" },
+  { q: "Shuffling conditions independently per neuron keeps...", options: ["Coordination across neurons", "Each neuron's own responses", "Nothing", "The rotation"], answer: 1, explain: "But breaks which response goes with which reach across neurons." },
+  { q: "A covariance-matched surrogate preserves...", options: ["The exact data", "Correlations across time and neurons, nothing else", "Only the mean", "Spike times"], answer: 1, explain: "A maximum-entropy-style null." },
+  { q: "A common response shifted in time differently for each condition...", options: ["Cannot rotate", "Produces strong rotations after the cross-condition mean is removed", "Is the same as noise", "Removes all variance"], answer: 1, explain: "The difference is shift times the response's rate of change." },
+  { q: "To rule out the timing explanation for real data, you showed that...", options: ["Shifted data do not rotate", "The real data are poorly described as time-shifted copies of one response", "Neurons have no timing", "Rotation is slow"], answer: 1, explain: "Timing explains well under 1% of the condition-specific variance." },
+  { q: "A finding is only as strong as...", options: ["Its p-value", "The best null model it beats", "Its figure", "The number of neurons"], answer: 1, explain: "Choose nulls that encode real alternative explanations." },
+]} />
+
+<Predict revisit question="If reaches differed only in the timing of one common pattern, would the rotational analysis find weaker, similar or stronger rotations than in the real data?" />
+
+<Key title="Before you go">
+<ul>
+<li>Run the identical pipeline on data and nulls.</li>
+<li>Condition shuffles and covariance-matched surrogates give almost no rotation; the real data's rotation is far stronger.</li>
+<li>Time-shifted copies of one response rotate even more strongly, so rotation by itself does not prove dynamics.</li>
+<li>The real data are not time-shifted copies, so that explanation fails here; richer alternatives remain to be tested.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Elsayed and Cunningham (2017), <em>Structure in neural population recordings: an expected byproduct of simpler phenomena?</em></li>
+<li>Lebedev and colleagues (2019), <em>Analysis of neuronal ensemble activity reveals the pitfalls and shortcomings of rotation dynamics</em>, Scientific Reports.</li>
+<li>Churchland and Shenoy (2024), <em>Preparatory activity and the expansive null-space</em>, Nature Reviews Neuroscience, for where the field has moved since.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Write the controls section of your report: each null, why it is a fair alternative, the numbers, and a final paragraph on which explanations remain untested (think about how Elsayed and Cunningham also matched covariance across conditions, and about trial-to-trial variability, which trial-averaged data cannot show)." />
