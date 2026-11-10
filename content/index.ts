@@ -162,4 +162,10 @@ export const LESSONS: Record<string, () => Promise<any>> = {
   "w029d4": () => import("./w029/d4.mdx"),
   "w029d5": () => import("./w029/d5.mdx"),
   "w029d6": () => import("./w029/d6.mdx"),
+  "w030d1": () => import("./w030/d1.mdx"),
+  "w030d2": () => import("./w030/d2.mdx"),
+  "w030d3": () => import("./w030/d3.mdx"),
+  "w030d4": () => import("./w030/d4.mdx"),
+  "w030d5": () => import("./w030/d5.mdx"),
+  "w030d6": () => import("./w030/d6.mdx"),
 };

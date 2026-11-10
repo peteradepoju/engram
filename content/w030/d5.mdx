@@ -1,0 +1,244 @@
+export const meta = {
+  title: "Many channels, one behaviour: the channel zoo and degeneracy",
+  intro: "The squid axon gets by with two voltage-gated currents. A typical mammalian neuron expresses a dozen or more: several kinds of sodium, potassium and calcium channels, channels opened by calcium, and channels opened by hyperpolarisation. Today you survey that zoo and then ask a question it raises. If a neuron's behaviour depends on so many conductances, how precisely must each be set? You will sample hundreds of random versions of the Hodgkin-Huxley model, find the ones that fire like the original, and discover that they are scattered over a wide range of parameters, constrained only in combination. This is degeneracy, and it changes how we should think about fitting models to neurons, and networks to data.",
+  goals: [
+    "Name the main families of ion channels beyond the HH sodium and potassium channels, and their roles",
+    "Simulate many parameter sets at once with vectorised code",
+    "Show that very different conductance combinations can produce the same firing",
+    "Explain degeneracy, its consequences for model fitting, and how homeostasis might exploit it",
+  ],
+  plan: [
+    { label: "Predict and the channel zoo", minutes: 20 },
+    { label: "Searching parameter space", minutes: 35 },
+    { label: "Good models lie in a valley", minutes: 25 },
+    { label: "Degeneracy, fitting and homeostasis", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "prinz-2004",
+};
+
+<Predict question="You draw the sodium and potassium conductances of a Hodgkin-Huxley neuron at random, each anywhere within a factor of two of the original, and keep only the models that fire within 3 Hz of the original's rate at the same input. Will the kept models have conductances close to the original, or spread across most of the range?" />
+
+<Step n={1} title="The channel zoo" minutes={20} />
+
+The human genome codes for over 140 voltage-gated ion channel subunits, and each neuron expresses its own selection. A few families do most of the work in neuronal firing:
+
+| Current | Opened by | Typical role |
+|---|---|---|
+| Fast Na⁺ (Nav1.x) | depolarisation | the upstroke of the spike |
+| Persistent Na⁺ | depolarisation, no inactivation | boosts subthreshold depolarisation |
+| Delayed-rectifier K⁺ (Kv) | depolarisation, slowly | repolarisation |
+| A-type K⁺ | depolarisation, transient | delays the first spike, allows slow firing |
+| M-type K⁺ (Kv7) | depolarisation, very slowly | spike-frequency adaptation |
+| Ca²⁺ (L, N, P/Q, T types) | depolarisation | transmitter release, bursts, dendritic spikes |
+| Ca²⁺-activated K⁺ (BK, SK) | internal calcium | afterhyperpolarisation, adaptation |
+| HCN (I_h) | hyperpolarisation | rebound, resonance, pacemaking |
+
+Each current shapes behaviour in a characteristic way. The A-type current, for example, converts a neuron that can only fire fast (class 2, like the HH model) into one that can fire arbitrarily slowly (class 1, Week 23), as Connor and Stevens showed in 1971. Calcium currents with calcium-activated potassium currents give bursting. The HCN current makes a neuron resonate at a preferred frequency of input.
+
+<Video id="fsYrmQAmApA" title="Detailed biophysical models (Neuronal Dynamics 2.5)" by="Wulfram Gerstner (EPFL)" note="Wulfram Gerstner extends the Hodgkin-Huxley framework to the many channel types of real neurons, including calcium and calcium-dependent currents, and what they add to firing." />
+
+<Step n={2} title="Searching parameter space" minutes={35} />
+
+With many conductances, a model has many parameters, and measuring each one in the same cell is rarely possible. So modellers often search: draw parameter sets, simulate each, and keep those that reproduce the target behaviour. Prinz, Bucher and Marder (2004), today's paper, did this for a three-neuron circuit of the crab stomatogastric ganglion, simulating over 20 million versions, and found that very different circuits produced nearly identical rhythms.
+
+You can see the same effect in a single HH neuron. The trick is to simulate hundreds of models at once: put each parameter in an array, one entry per model, and let NumPy update them all in each time step.
+
+<PyCell id="search" title="Hundreds of neurons at once" tests={String.raw`
+  import numpy as np
+  def test_rates():
+      "the original HH parameters fire at about 68 Hz, and some random models are silent"
+      assert 66 < f_hh < 71 and np.sum(f == 0) > 0
+
+  def test_good():
+      "good marks models within 3 Hz of the original rate, and there are more than 20 of them"
+      assert np.array_equal(good, np.abs(f - f_hh) <= 3) and good.sum() > 20
+`} prompt="`rate_of(gNa, gK, gL)` simulates one HH model per entry of the arrays for 130 ms at 10 μA/cm² and returns each model's firing rate after the first 30 ms. Draw 300 models with gNa uniform on 60 to 240, gK on 18 to 72 and gL on 0.15 to 0.6 (local rng, seed 30), compute their rates `f` and the original's rate `f_hh`, and mark as `good` those within 3 Hz of the original."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  ENa, EK, EL = 50.0, -77.0, -54.387
+
+  def rates(V):
+      V = V + 1e-7
+      an = 0.01 * (V + 55) / (1 - np.exp(-(V + 55) / 10)); bn = 0.125 * np.exp(-(V + 65) / 80)
+      am = 0.1 * (V + 40) / (1 - np.exp(-(V + 40) / 10)); bm = 4.0 * np.exp(-(V + 65) / 18)
+      ah = 0.07 * np.exp(-(V + 65) / 20); bh = 1 / (1 + np.exp(-(V + 35) / 10))
+      return an, bn, am, bm, ah, bh
+
+  def rate_of(gNa, gK, gL, I=10.0, T=130.0, dt=0.01):
+      k = gNa.size
+      V = np.full(k, -65.0); n = np.full(k, 0.3177); m = np.full(k, 0.0529); h = np.full(k, 0.5961)
+      first = np.full(k, np.nan); last = np.full(k, np.nan); count = np.zeros(k)
+      for i in range(int(T / dt)):
+          an, bn, am, bm, ah, bh = rates(V)
+          dV = I - gNa * m**3 * h * (V - ENa) - gK * n**4 * (V - EK) - gL * (V - EL)
+          n += dt * (an * (1 - n) - bn * n); m += dt * (am * (1 - m) - bm * m); h += dt * (ah * (1 - h) - bh * h)
+          Vnew = V + dt * dV
+          if i * dt >= 30:
+              up = (Vnew > 0) & (V <= 0)
+              first = np.where(up & np.isnan(first), i * dt, first); last = np.where(up, i * dt, last); count += up
+          V = Vnew
+      span = np.where(count >= 2, last - first, 1.0)
+      return np.where(count >= 2, 1000 * (count - 1) / span, 0.0)
+
+  r = np.random.default_rng(30)
+  N = 300
+  gNa = r.uniform(60, 240, N); gK = r.uniform(18, 72, N); gL = r.uniform(0.15, 0.6, N)
+  f = ...
+  f_hh = rate_of(np.array([120.0]), np.array([36.0]), np.array([0.3]))[0]
+  good = ...
+  print(f"original HH: {f_hh:.1f} Hz;  {np.sum(f == 0)} silent models, {good.sum()} of {N} within 3 Hz of the original")
+  print(f"good models: gNa from {gNa[good].min():.0f} to {gNa[good].max():.0f}, gK from {gK[good].min():.0f} to {gK[good].max():.0f}, gL from {gL[good].min():.2f} to {gL[good].max():.2f}")
+  plt.scatter(gNa, gK, c="lightgray", s=10); plt.scatter(gNa[good], gK[good], c="C3", s=14)
+  plt.scatter([120], [36], marker="*", s=150, c="k"); plt.xlabel("gNa (mS/cm^2)"); plt.ylabel("gK (mS/cm^2)"); plt.show()
+`}
+hint="f = rate_of(gNa, gK, gL); good = np.abs(f - f_hh) <= 3."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  ENa, EK, EL = 50.0, -77.0, -54.387
+
+  def rates(V):
+      V = V + 1e-7
+      an = 0.01 * (V + 55) / (1 - np.exp(-(V + 55) / 10)); bn = 0.125 * np.exp(-(V + 65) / 80)
+      am = 0.1 * (V + 40) / (1 - np.exp(-(V + 40) / 10)); bm = 4.0 * np.exp(-(V + 65) / 18)
+      ah = 0.07 * np.exp(-(V + 65) / 20); bh = 1 / (1 + np.exp(-(V + 35) / 10))
+      return an, bn, am, bm, ah, bh
+
+  def rate_of(gNa, gK, gL, I=10.0, T=130.0, dt=0.01):
+      k = gNa.size
+      V = np.full(k, -65.0); n = np.full(k, 0.3177); m = np.full(k, 0.0529); h = np.full(k, 0.5961)
+      first = np.full(k, np.nan); last = np.full(k, np.nan); count = np.zeros(k)
+      for i in range(int(T / dt)):
+          an, bn, am, bm, ah, bh = rates(V)
+          dV = I - gNa * m**3 * h * (V - ENa) - gK * n**4 * (V - EK) - gL * (V - EL)
+          n += dt * (an * (1 - n) - bn * n); m += dt * (am * (1 - m) - bm * m); h += dt * (ah * (1 - h) - bh * h)
+          Vnew = V + dt * dV
+          if i * dt >= 30:
+              up = (Vnew > 0) & (V <= 0)
+              first = np.where(up & np.isnan(first), i * dt, first); last = np.where(up, i * dt, last); count += up
+          V = Vnew
+      span = np.where(count >= 2, last - first, 1.0)
+      return np.where(count >= 2, 1000 * (count - 1) / span, 0.0)
+
+  r = np.random.default_rng(30)
+  N = 300
+  gNa = r.uniform(60, 240, N); gK = r.uniform(18, 72, N); gL = r.uniform(0.15, 0.6, N)
+  f = rate_of(gNa, gK, gL)
+  f_hh = rate_of(np.array([120.0]), np.array([36.0]), np.array([0.3]))[0]
+  good = np.abs(f - f_hh) <= 3
+  print(f"original HH: {f_hh:.1f} Hz;  {np.sum(f == 0)} silent models, {good.sum()} of {N} within 3 Hz of the original")
+  print(f"good models: gNa from {gNa[good].min():.0f} to {gNa[good].max():.0f}, gK from {gK[good].min():.0f} to {gK[good].max():.0f}, gL from {gL[good].min():.2f} to {gL[good].max():.2f}")
+  plt.scatter(gNa, gK, c="lightgray", s=10); plt.scatter(gNa[good], gK[good], c="C3", s=14)
+  plt.scatter([120], [36], marker="*", s=150, c="k"); plt.xlabel("gNa (mS/cm^2)"); plt.ylabel("gK (mS/cm^2)"); plt.show()
+`} />
+
+The original fires at 68 Hz. Of 300 random models, 141 are silent at this input and 41 fire within 3 Hz of the original. Those 41 are spread across almost the whole range sampled: sodium conductance from 70 to 239 mS/cm², potassium from 25 to 60, leak from 0.15 to 0.58. That answers the prediction: matching the firing rate hardly constrains any single conductance.
+
+<Figure caption="Random HH models in the plane of sodium and potassium conductance, coloured by firing rate. Set the target rate and the tolerance." credit="Interactive figure by Engram, after the parameter searches of Prinz, Bucher and Marder (2004).">
+  <Degeneracy />
+</Figure>
+
+<Step n={3} title="Good models lie in a valley" minutes={25} />
+
+The good models are not scattered at random: they line up. What matters for the firing rate here is mainly the balance of sodium to potassium conductance, so a model with more of one can compensate with more of the other. Individually the conductances vary several-fold; in combination they are tightly constrained.
+
+<PyCell id="valley" title="Correlated conductances" tests={String.raw`
+  import numpy as np
+  def test_corr():
+      "rho is the correlation of gNa and gK among good models, and exceeds 0.8"
+      assert abs(rho - np.corrcoef(gNa[good], gK[good])[0, 1]) < 1e-12 and rho > 0.8
+
+  def test_cv():
+      "the ratio gK / gNa varies much less among good models than among all models"
+      assert cv_good < 0.6 * cv_all
+`} prompt="Among the good models, compute the correlation `rho` between gNa and gK, and the coefficient of variation (standard deviation over mean) of the ratio gK / gNa among good models (`cv_good`) and among all models (`cv_all`). Then simulate the model whose conductances are the averages of the good models'."
+code={String.raw`
+  rho = ...
+  ratio_all, ratio_good = gK / gNa, gK[good] / gNa[good]
+  cv_all = ...
+  cv_good = ...
+  f_avg = rate_of(np.array([gNa[good].mean()]), np.array([gK[good].mean()]), np.array([gL[good].mean()]))[0]
+  print(f"correlation of gNa and gK among good models: {rho:.2f}")
+  print(f"variation of gK/gNa: {cv_good:.2f} among good models, {cv_all:.2f} among all")
+  print(f"the average good model fires at {f_avg:.1f} Hz (target {f_hh:.1f})")
+`}
+hint="rho = np.corrcoef(gNa[good], gK[good])[0, 1]; cv_all = ratio_all.std() / ratio_all.mean(); cv_good = ratio_good.std() / ratio_good.mean()."
+solution={String.raw`
+  rho = np.corrcoef(gNa[good], gK[good])[0, 1]
+  ratio_all, ratio_good = gK / gNa, gK[good] / gNa[good]
+  cv_all = ratio_all.std() / ratio_all.mean()
+  cv_good = ratio_good.std() / ratio_good.mean()
+  f_avg = rate_of(np.array([gNa[good].mean()]), np.array([gK[good].mean()]), np.array([gL[good].mean()]))[0]
+  print(f"correlation of gNa and gK among good models: {rho:.2f}")
+  print(f"variation of gK/gNa: {cv_good:.2f} among good models, {cv_all:.2f} among all")
+  print(f"the average good model fires at {f_avg:.1f} Hz (target {f_hh:.1f})")
+`} />
+
+Among the good models, gNa and gK are correlated at 0.96, and the ratio gK/gNa varies by only 11%, against 55% across all models. The good models lie along a narrow valley in which the balance of potassium to sodium is nearly fixed while the overall scale is free. Here the valley is close to a straight line, so the average of the good models is itself a good model, firing at 69 Hz. That is not guaranteed in general.
+
+<Step n={4} title="Degeneracy, fitting and homeostasis" minutes={25} />
+
+**Degeneracy** is the ability of different elements to produce the same output. Its consequences reach well beyond this model.
+
+- **Fitting is not identification.** If many parameter sets fit a recording equally well, the fitted values of individual conductances mean little, unless other measurements break the tie. A good fit tells you the model can reproduce the data, not that its parameters are the cell's.
+- **Variability is expected.** Measurements in identified neurons of the crab and lobster, cells that do the same job in every animal, find their channel expression varying two- to sixfold between animals, with correlations between channel types like the valley above (Schulz, Goaillard and Marder, 2006).
+- **Averages can mislead.** Averaging the conductances of many good neurons works here because the valley is nearly straight, but when the set of good models is curved, the average lies outside it and the averaged model fails, as Golowasch and colleagues (2002) showed for a model neuron.
+- **Homeostasis can exploit it.** If a neuron regulates its channel expression to keep some quantity, such as its average internal calcium, at a target, it will drift to some point in the valley, different in different cells. Models of this kind, by O'Leary, Marder and colleagues, reproduce the correlations seen in real neurons.
+
+<Callout kind="research">
+
+Degeneracy suggests a question for deep learning: are the many networks that reach similar loss from different initialisations also scattered along valleys, and do they share internal structure despite different weights? Work on mode connectivity and representational similarity across trained networks addresses this. Read about mode connectivity and write down one experiment, with small networks, that would test whether good solutions lie on a connected, curved valley like the good models here.
+
+</Callout>
+
+<Bridge title="Many solutions, one behaviour"
+  neuro="Neurons and circuits that behave alike can be built from very different parts. Evolution and development need not tune every conductance precisely; they need only stay within a valley of good solutions, and homeostatic regulation can keep them there."
+  ai="Overparameterised neural networks have the same property: many weight settings give the same loss, which is part of why training them is easy and why their individual weights are hard to interpret. Comparing networks or brains therefore has to be done at the level of what they compute, through behaviour or representations, rather than parameter by parameter.">
+
+Do not ask which parameters a system has; ask which combinations matter.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The A-type potassium current allows a neuron to...", options: ["Fire only at high rates", "Fire at arbitrarily low rates (class 1 excitability)", "Never fire", "Release transmitter"], answer: 1, explain: "Connor and Stevens." },
+  { q: "HCN channels (I_h) are opened by...", options: ["Depolarisation", "Hyperpolarisation", "Calcium", "Light"], answer: 1, explain: "They give rebound and resonance." },
+  { q: "Calcium-activated potassium channels contribute to...", options: ["The spike's upstroke", "Afterhyperpolarisation and adaptation", "Synaptic vesicle fusion", "The resting potential only"], answer: 1, explain: "BK and SK channels." },
+  { q: "Degeneracy means...", options: ["Neurons die", "Different combinations of parameters produce the same behaviour", "A model has no parameters", "Channels are identical"], answer: 1, explain: "Prinz, Bucher and Marder." },
+  { q: "In today's search, good models had...", options: ["Conductances close to the original", "Widely varying conductances with gNa and gK correlated", "No potassium", "Identical leak"], answer: 1, explain: "A valley in parameter space." },
+  { q: "A consequence of degeneracy for model fitting is that...", options: ["Fitted parameters are always unique", "A good fit does not identify the true parameters", "Fitting is impossible", "Noise disappears"], answer: 1, explain: "Many parameter sets fit equally well." },
+  { q: "Averaging the parameters of good models can fail when...", options: ["The set of good models is curved", "There are many models", "The models are linear", "Noise is low"], answer: 0, explain: "Golowasch and colleagues (2002)." },
+  { q: "Vectorised simulation means...", options: ["Simulating one model at a time", "Updating many models at once with array operations", "Using vectors for space", "A different integration method"], answer: 1, explain: "One array entry per model." },
+]} />
+
+<Flashcards cards={[
+  { front: "Main channel families beyond HH?", back: "Persistent Na⁺, A-type K⁺, M-type K⁺, Ca²⁺ channels, Ca²⁺-activated K⁺ (BK, SK), HCN (I_h)." },
+  { front: "Degeneracy?", back: "Many different parameter combinations give the same behaviour; good models lie in valleys of parameter space." },
+  { front: "Prinz, Bucher and Marder (2004)?", back: "Over 20 million versions of a three-cell circuit; very different conductances produced nearly the same pyloric rhythm." },
+  { front: "Why do good models correlate?", back: "Behaviour depends on combinations, such as the balance of sodium to potassium, so one conductance compensates for another." },
+  { front: "Homeostatic regulation?", back: "Cells adjust channel expression to keep an activity signal (such as calcium) at a target, landing at different points in the valley." },
+]} />
+
+<Predict revisit question="Will random HH models that fire like the original have conductances close to the original's?" />
+
+<Key title="Before you go">
+<ul>
+<li>Real neurons combine many channel types, each shaping firing in a characteristic way.</li>
+<li>Vectorised simulation lets you explore hundreds of models at once.</li>
+<li>Different conductance combinations produce the same firing: degeneracy.</li>
+<li>Good models lie along valleys; fitting does not identify parameters, and averages can mislead.</li>
+<li>Homeostatic regulation may let each neuron find its own point in the valley.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Prinz, Bucher and Marder (2004), <em>Similar network activity from disparate circuit parameters</em>.</li>
+<li>Marder and Goaillard (2006), <em>Variability, compensation and homeostasis in neuron and network function</em>, Nature Reviews Neuroscience 7, 563 to 574.</li>
+<li>Golowasch, Goldman, Abbott and Marder (2002), <em>Failure of averaging in the construction of a conductance-based neuron model</em>, Journal of Neurophysiology 87(2), 1129 to 1131.</li>
+<li>Bean (2007), <em>The action potential in mammalian central neurons</em>, Nature Reviews Neuroscience 8, 451 to 465.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Suppose you fit a detailed model to recordings from one neuron and find a set of conductances that reproduces its firing perfectly. Using today's results, write what you can and cannot conclude about that neuron's channels, and name one extra measurement that would most reduce the ambiguity." />

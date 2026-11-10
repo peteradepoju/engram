@@ -1,0 +1,334 @@
+export const meta = {
+  title: "Inactivation, recovery and the refractory period",
+  intro: "The sodium conductance rises and then falls, even while the voltage stays high. Hodgkin and Huxley called the fall inactivation and described it with a third kind of particle, h, which closes on depolarisation, slowly. Today you study h with the protocols they invented: prepulses that reveal how many sodium channels are available at each voltage, and pairs of pulses that time how fast inactivated channels recover. Then you use h, with n, to explain why a neuron cannot fire twice in quick succession, and why releasing a neuron from hyperpolarisation can make it fire.",
+  goals: [
+    "Explain inactivation as a separate gate that closes on depolarisation",
+    "Measure steady-state inactivation with a prepulse protocol and fit it",
+    "Measure recovery from inactivation with a two-pulse protocol",
+    "Explain the absolute and relative refractory periods in terms of h and n",
+    "Explain anode-break excitation",
+  ],
+  plan: [
+    { label: "Predict and the dual effect", minutes: 20 },
+    { label: "Steady-state inactivation", minutes: 30 },
+    { label: "Recovery from inactivation", minutes: 25 },
+    { label: "Refractoriness and rebound", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "hodgkin-huxley-1952c",
+};
+
+<Predict question="A neuron is held for a while at -55 mV, just 10 mV above its usual rest, and then depolarised strongly. Compared with the same test from -65 mV, will its sodium current be about the same, somewhat smaller, or much smaller?" />
+
+<Step n={1} title="The dual effect" minutes={20} />
+
+Depolarisation does two things to the sodium conductance, as Hodgkin and Huxley put it in the title of today's paper: it switches it on quickly and switches it off slowly. They described this with two kinds of gate in series. The $m$ gates open on depolarisation with a time constant of a fraction of a millisecond; the $h$ gate closes on depolarisation with a time constant of about a millisecond at 0 mV. A channel conducts only when all three $m$ gates and the $h$ gate are open, so $g_{Na} = \bar g_{Na}m^3h$. At rest, $h_\infty$ is about 0.6: four in ten sodium channels are already inactivated.
+
+The two gates also differ in their steady states: $m_\infty$ rises with voltage, $h_\infty$ falls. Their product $m_\infty^3h_\infty$ is nearly zero at every voltage, which is why a steady depolarisation produces only a transient sodium current. Only the overlap of the two curves, around -60 to -40 mV, leaves a small steady **window current**.
+
+<Video id="ZX1skUJbBpc" title="Hodgkin-Huxley model (Neuronal Dynamics 2.3)" by="Wulfram Gerstner (EPFL)" note="Wulfram Gerstner goes through the Hodgkin-Huxley model, with the steady states and time constants of m, h and n, and how they produce the action potential and refractoriness." />
+
+<Step n={2} title="Steady-state inactivation" minutes={30} />
+
+To measure $h_\infty$, hold the membrane at a prepulse voltage long enough for $h$ to settle (several of its time constants), then step to a fixed test voltage such as 0 mV. The $m$ gates open in a fraction of a millisecond, much faster than $h$ can change, so the peak sodium current measures how many channels were not inactivated at the prepulse voltage.
+
+<Figure caption="Two-pulse and prepulse protocols. Set the prepulse voltage and the interval between pulses to see the sodium current that the second step can draw." credit="Interactive figure by Engram, using the Hodgkin-Huxley equations.">
+  <InactivationProtocol />
+</Figure>
+
+<PyCell id="ssinact" title="The availability curve" tests={String.raw`
+  import numpy as np
+  def test_peaks():
+      "rel is the peak test conductance after each prepulse, divided by the largest"
+      assert np.allclose(rel, peaks / peaks.max()) and abs(rel[0] - 1) < 1e-3
+
+  def test_fit():
+      "the fitted half-inactivation voltage is between -68 and -58 mV and the slope factor between 5 and 10 mV"
+      assert -68 < V_half < -58 and 5 < k_slope < 10
+`} prompt="For prepulse voltages from -120 to -20 mV, assume h and m have settled to their steady values. Compute the peak sodium conductance during a 10 ms test step to 0 mV, store the normalised peaks in `rel`, and fit 1 / (1 + exp((V - V_half) / k)) by grid search."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def rates(V):
+      V = V + 1e-7
+      an = 0.01 * (V + 55) / (1 - np.exp(-(V + 55) / 10)); bn = 0.125 * np.exp(-(V + 65) / 80)
+      am = 0.1 * (V + 40) / (1 - np.exp(-(V + 40) / 10)); bm = 4.0 * np.exp(-(V + 65) / 18)
+      ah = 0.07 * np.exp(-(V + 65) / 20); bh = 1 / (1 + np.exp(-(V + 35) / 10))
+      return {"n": (an, bn), "m": (am, bm), "h": (ah, bh)}
+
+  def inf_tau(V, g):
+      a, b = rates(V)[g]
+      return a / (a + b), 1 / (a + b)
+
+  t = np.arange(0, 10, 0.01)
+
+  def relax(x0, V, g):
+      xinf, tau = inf_tau(V, g)
+      return xinf - (xinf - x0) * np.exp(-t / tau)
+
+  Vpre = np.arange(-120, -19, 5.0)
+  peaks = np.array([(120 * relax(inf_tau(v, "m")[0], 0.0, "m") ** 3 * relax(inf_tau(v, "h")[0], 0.0, "h")).max() for v in Vpre])
+  rel = ...
+  best = (np.inf, None, None)
+  for vh in np.arange(-90, -30.01, 0.5):
+      for k in np.arange(2, 15.01, 0.1):
+          err = ...
+          if err < best[0]:
+              best = (err, vh, k)
+  _, V_half, k_slope = best
+  print(f"half-inactivation {V_half:.1f} mV, slope factor {k_slope:.1f} mV;  available at -65 mV: {np.interp(-65, Vpre, rel):.2f}, at -55 mV: {np.interp(-55, Vpre, rel):.2f}")
+  plt.plot(Vpre, rel, "o"); plt.plot(Vpre, 1 / (1 + np.exp((Vpre - V_half) / k_slope)))
+  plt.xlabel("prepulse voltage (mV)"); plt.ylabel("fraction available"); plt.show()
+`}
+hint="rel = peaks / peaks.max(); err = np.sum((rel - 1 / (1 + np.exp((Vpre - vh) / k))) ** 2)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def rates(V):
+      V = V + 1e-7
+      an = 0.01 * (V + 55) / (1 - np.exp(-(V + 55) / 10)); bn = 0.125 * np.exp(-(V + 65) / 80)
+      am = 0.1 * (V + 40) / (1 - np.exp(-(V + 40) / 10)); bm = 4.0 * np.exp(-(V + 65) / 18)
+      ah = 0.07 * np.exp(-(V + 65) / 20); bh = 1 / (1 + np.exp(-(V + 35) / 10))
+      return {"n": (an, bn), "m": (am, bm), "h": (ah, bh)}
+
+  def inf_tau(V, g):
+      a, b = rates(V)[g]
+      return a / (a + b), 1 / (a + b)
+
+  t = np.arange(0, 10, 0.01)
+
+  def relax(x0, V, g):
+      xinf, tau = inf_tau(V, g)
+      return xinf - (xinf - x0) * np.exp(-t / tau)
+
+  Vpre = np.arange(-120, -19, 5.0)
+  peaks = np.array([(120 * relax(inf_tau(v, "m")[0], 0.0, "m") ** 3 * relax(inf_tau(v, "h")[0], 0.0, "h")).max() for v in Vpre])
+  rel = peaks / peaks.max()
+  best = (np.inf, None, None)
+  for vh in np.arange(-90, -30.01, 0.5):
+      for k in np.arange(2, 15.01, 0.1):
+          err = np.sum((rel - 1 / (1 + np.exp((Vpre - vh) / k))) ** 2)
+          if err < best[0]:
+              best = (err, vh, k)
+  _, V_half, k_slope = best
+  print(f"half-inactivation {V_half:.1f} mV, slope factor {k_slope:.1f} mV;  available at -65 mV: {np.interp(-65, Vpre, rel):.2f}, at -55 mV: {np.interp(-55, Vpre, rel):.2f}")
+  plt.plot(Vpre, rel, "o"); plt.plot(Vpre, 1 / (1 + np.exp((Vpre - V_half) / k_slope)))
+  plt.xlabel("prepulse voltage (mV)"); plt.ylabel("fraction available"); plt.show()
+`} />
+
+Availability is half-maximal at -62 mV, with a slope factor of 7.3 mV: steep, and centred close to rest. At -65 mV 60% of the sodium channels are available; at -55 mV only 28%. That answers the prediction: holding a neuron 10 mV above rest roughly halves the sodium current it can produce. This is why slow depolarisation, for example by raised external potassium, makes neurons less excitable rather than more, and why a strong sustained depolarising current can stop a neuron firing altogether, a state called depolarisation block.
+
+<Step n={3} title="Recovery from inactivation" minutes={25} />
+
+How quickly do inactivated channels come back? Inactivate them with a long step to 0 mV, return to rest for an interval $\Delta t$, then test. The fraction available after the interval traces the recovery of $h$ at the resting voltage: $h(\Delta t) = h_\infty - (h_\infty - h_{inact})e^{-\Delta t/\tau_h}$.
+
+<PyCell id="recovery" title="Timing the recovery" tests={String.raw`
+  import numpy as np
+  def test_h():
+      "h_after is the value of h after recovering at -65 mV for each interval, starting from h at the end of 30 ms at 0 mV"
+      hinf, tau = inf_tau(-65.0, "h"); h0 = inf_tau(0.0, "h")[0]
+      assert np.allclose(h_after, hinf - (hinf - h0) * np.exp(-dts / tau), atol=1e-3)
+
+  def test_tau():
+      "the fitted recovery time constant is within 0.5 ms of tau_h at -65 mV"
+      assert abs(tau_rec - inf_tau(-65.0, "h")[1]) < 0.5
+`} prompt="After 30 ms at 0 mV, h has fallen to its steady value there. Compute `h_after`, the value of h after recovery intervals `dts` at -65 mV. Then fit the recovery time constant `tau_rec` by a straight-line fit of ln(h_inf(-65) - h_after) against the interval."
+code={String.raw`
+  dts = np.array([1, 2, 4, 6, 8, 12, 16, 24, 32.0])
+  h_inact = inf_tau(0.0, "h")[0]
+  hinf_rest, tau_h_rest = inf_tau(-65.0, "h")
+  h_after = ...
+  slope = np.polyfit(dts, np.log(hinf_rest - h_after), 1)[0]
+  tau_rec = ...
+  print(f"recovery time constant {tau_rec:.2f} ms (tau_h at -65 mV is {tau_h_rest:.2f} ms)")
+  print("fraction of resting availability:", np.round(h_after / hinf_rest, 2))
+`}
+hint="h_after = hinf_rest - (hinf_rest - h_inact) * np.exp(-dts / tau_h_rest); tau_rec = -1 / slope."
+solution={String.raw`
+  dts = np.array([1, 2, 4, 6, 8, 12, 16, 24, 32.0])
+  h_inact = inf_tau(0.0, "h")[0]
+  hinf_rest, tau_h_rest = inf_tau(-65.0, "h")
+  h_after = hinf_rest - (hinf_rest - h_inact) * np.exp(-dts / tau_h_rest)
+  slope = np.polyfit(dts, np.log(hinf_rest - h_after), 1)[0]
+  tau_rec = -1 / slope
+  print(f"recovery time constant {tau_rec:.2f} ms (tau_h at -65 mV is {tau_h_rest:.2f} ms)")
+  print("fraction of resting availability:", np.round(h_after / hinf_rest, 2))
+`} />
+
+Recovery at -65 mV has a time constant of 8.5 ms in the squid model: after 4 ms only 38% of the channels are back, after 16 ms 85%. In a real experiment the data would be noisy and the fit would recover the time constant with an error, but the logic is the same. Mammalian sodium channels at body temperature recover much faster, in a few milliseconds, which is part of how some neurons fire at hundreds of hertz.
+
+<Step n={4} title="Refractoriness and rebound" minutes={30} />
+
+After a spike, $h$ is low (sodium channels inactivated) and $n$ is high (potassium channels still open). Both make a second spike harder: fewer sodium channels can open, and more potassium current opposes them. For a few milliseconds no stimulus can fire the neuron, the **absolute refractory period**; then a stronger-than-usual stimulus can, the **relative refractory period**. In Week 21's Forge you saw this happen; now you can measure it and explain it.
+
+<PyCell id="refractory" title="Measuring the refractory period" tests={String.raw`
+  import numpy as np
+  def test_absolute():
+      "at 4 ms no pulse up to 200 uA/cm^2 fires a second spike"
+      assert thresholds[4] is None
+
+  def test_relative():
+      "thresholds fall with interval, and at 20 ms are below twice the resting threshold"
+      vals = [thresholds[i] for i in (6, 8, 10, 14, 20)]
+      assert all(a > b for a, b in zip(vals, vals[1:])) and thresholds[20] < 2 * rest_threshold
+`} prompt="`fires(amp, isi)` simulates a spike triggered at 2 ms and a 0.5 ms test pulse of amplitude amp starting isi ms later, and reports whether the test pulse fires a second spike. Complete the bisection that finds the smallest amplitude that fires, for each interval, storing None if even 200 μA/cm² fails."
+code={String.raw`
+  import math
+
+  def rates_f(V):
+      V = V + 1e-7
+      return (0.01 * (V + 55) / (1 - math.exp(-(V + 55) / 10)), 0.125 * math.exp(-(V + 65) / 80),
+              0.1 * (V + 40) / (1 - math.exp(-(V + 40) / 10)), 4.0 * math.exp(-(V + 65) / 18),
+              0.07 * math.exp(-(V + 65) / 20), 1 / (1 + math.exp(-(V + 35) / 10)))
+
+  def simulate(I, T, dt=0.02):
+      V, n, m, h = -65.0, 0.3177, 0.0529, 0.5961
+      out = []
+      for k in range(int(T / dt)):
+          an, bn, am, bm, ah, bh = rates_f(V)
+          dV = I(k * dt) - 120 * m**3 * h * (V - 50) - 36 * n**4 * (V + 77) - 0.3 * (V + 54.387)
+          n += dt * (an * (1 - n) - bn * n); m += dt * (am * (1 - m) - bm * m); h += dt * (ah * (1 - h) - bh * h)
+          V += dt * dV
+          out.append(V)
+      return out
+
+  def fires(amp, isi):
+      V = simulate(lambda t: 20.0 if 2 <= t < 3 else (amp if 2 + isi <= t < 2.5 + isi else 0.0), 2 + isi + 10)
+      return max(V[int((2 + isi) / 0.02):]) > 0
+
+  def threshold(test):
+      lo, hi = 0.0, 200.0
+      if not test(hi):
+          return None
+      for _ in range(10):
+          mid = (lo + hi) / 2
+          ...
+      return hi
+
+  rest_threshold = threshold(lambda a: max(simulate(lambda t: a if 2 <= t < 2.5 else 0.0, 12)) > 0)
+  thresholds = {isi: threshold(lambda a, isi=isi: fires(a, isi)) for isi in (4, 6, 8, 10, 14, 20)}
+  print(f"threshold at rest: {rest_threshold:.1f} uA/cm^2 for 0.5 ms")
+  for isi, th in thresholds.items():
+      print(f"{isi:2d} ms after the first spike: " + ("no second spike" if th is None else f"{th:6.1f} uA/cm^2 ({th / rest_threshold:.1f} x rest)"))
+`}
+hint="Inside the loop: if test(mid): hi = mid, else: lo = mid."
+solution={String.raw`
+  import math
+
+  def rates_f(V):
+      V = V + 1e-7
+      return (0.01 * (V + 55) / (1 - math.exp(-(V + 55) / 10)), 0.125 * math.exp(-(V + 65) / 80),
+              0.1 * (V + 40) / (1 - math.exp(-(V + 40) / 10)), 4.0 * math.exp(-(V + 65) / 18),
+              0.07 * math.exp(-(V + 65) / 20), 1 / (1 + math.exp(-(V + 35) / 10)))
+
+  def simulate(I, T, dt=0.02):
+      V, n, m, h = -65.0, 0.3177, 0.0529, 0.5961
+      out = []
+      for k in range(int(T / dt)):
+          an, bn, am, bm, ah, bh = rates_f(V)
+          dV = I(k * dt) - 120 * m**3 * h * (V - 50) - 36 * n**4 * (V + 77) - 0.3 * (V + 54.387)
+          n += dt * (an * (1 - n) - bn * n); m += dt * (am * (1 - m) - bm * m); h += dt * (ah * (1 - h) - bh * h)
+          V += dt * dV
+          out.append(V)
+      return out
+
+  def fires(amp, isi):
+      V = simulate(lambda t: 20.0 if 2 <= t < 3 else (amp if 2 + isi <= t < 2.5 + isi else 0.0), 2 + isi + 10)
+      return max(V[int((2 + isi) / 0.02):]) > 0
+
+  def threshold(test):
+      lo, hi = 0.0, 200.0
+      if not test(hi):
+          return None
+      for _ in range(10):
+          mid = (lo + hi) / 2
+          if test(mid):
+              hi = mid
+          else:
+              lo = mid
+      return hi
+
+  rest_threshold = threshold(lambda a: max(simulate(lambda t: a if 2 <= t < 2.5 else 0.0, 12)) > 0)
+  thresholds = {isi: threshold(lambda a, isi=isi: fires(a, isi)) for isi in (4, 6, 8, 10, 14, 20)}
+  print(f"threshold at rest: {rest_threshold:.1f} uA/cm^2 for 0.5 ms")
+  for isi, th in thresholds.items():
+      print(f"{isi:2d} ms after the first spike: " + ("no second spike" if th is None else f"{th:6.1f} uA/cm^2 ({th / rest_threshold:.1f} x rest)"))
+`} />
+
+For 4 ms after the first stimulus no pulse up to 200 μA/cm² fires a second spike: the absolute refractory period. At 6 ms it takes 15 times the resting threshold, at 10 ms 3.4 times and at 14 ms 1.4 times: the relative refractory period, as $h$ recovers and $n$ closes. At 20 ms the threshold is slightly below its resting value, 0.9 times. The undershoot after the spike briefly hyperpolarised the membrane, which raised $h$ above its resting value, so for a while the neuron is more excitable than at rest. That same mechanism, pushed further, produces the next effect.
+
+The same gates explain a stranger effect. Hyperpolarise the axon for a while and then release it: the neuron can fire a spike with no depolarising stimulus at all. During the hyperpolarisation $h$ rises above its resting value (more sodium channels become available) and $n$ falls (fewer potassium channels are open). When the voltage returns towards rest, the membrane is briefly more excitable than at rest, and the overshoot of the return carries it past threshold. Hodgkin and Huxley called this **anode-break excitation**; in neurons with dedicated currents for it, rebound firing after inhibition is a common way of generating rhythms.
+
+<PyCell id="rebound" title="Anode-break excitation" tests={String.raw`
+  import numpy as np
+  def test_rebound():
+      "a -5 uA/cm^2 step for 20 ms followed by release produces a spike above 0 mV, while -2 does not"
+      assert peak[-5] > 0 and peak[-2] < 0
+`} prompt="Simulate 50 ms with a hyperpolarising current of amplitude amp from 5 to 25 ms and nothing else, for amp = -2, -5 and -10 μA/cm². Store the peak voltage after the release (from 25 ms on) in `peak[amp]`."
+code={String.raw`
+  peak = {}
+  for amp in (-2, -5, -10):
+      V = simulate(lambda t, amp=amp: amp if 5 <= t < 25 else 0.0, 50)
+      peak[amp] = ...
+      print(f"{amp:3d} uA/cm^2 for 20 ms, then release: peak {peak[amp]:6.1f} mV")
+`}
+hint="peak[amp] = max(V[int(25 / 0.02):])."
+solution={String.raw`
+  peak = {}
+  for amp in (-2, -5, -10):
+      V = simulate(lambda t, amp=amp: amp if 5 <= t < 25 else 0.0, 50)
+      peak[amp] = max(V[int(25 / 0.02):])
+      print(f"{amp:3d} uA/cm^2 for 20 ms, then release: peak {peak[amp]:6.1f} mV")
+`} />
+
+A small hyperpolarisation of -2 μA/cm² only produces a bump on release; -5 μA/cm² and more produce a full spike. A model with a fixed voltage threshold could never do this: excitability depends on the state of the gates, not on the voltage alone.
+
+<Bridge title="Availability and memory"
+  neuro="Inactivation gives a neuron a short-term memory of its own recent voltage: depolarisation leaves fewer channels available, hyperpolarisation more. Refractoriness, rebound firing and the dependence of excitability on recent history all follow from one slow gate."
+  ai="Spiking networks used in machine learning usually include an explicit refractory period or a resetting threshold, a crude version of this memory. Adaptive thresholds that rise after each spike, as in the adaptive LIF neurons of recent spiking-network work, give networks a slow internal state that helps on tasks needing memory over hundreds of milliseconds.">
+
+A neuron's response depends on what it did a moment ago, because its channels remember.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Sodium inactivation is described by the gate...", options: ["m, which opens on depolarisation", "h, which closes on depolarisation", "n", "None: it is a fixed delay"], answer: 1, explain: "g_Na = ḡ m³h." },
+  { q: "Compared with m, the h gate is...", options: ["Faster", "Slower", "Identical", "Not voltage-dependent"], answer: 1, explain: "That is why the sodium current is transient." },
+  { q: "Steady-state inactivation is measured by...", options: ["A single step", "Prepulses to different voltages followed by a fixed test step", "Removing sodium", "Recording spikes"], answer: 1, explain: "The peak test current measures availability." },
+  { q: "Holding a neuron 10 mV above rest...", options: ["Increases the sodium current available", "Inactivates a large fraction of sodium channels", "Has no effect", "Blocks potassium channels"], answer: 1, explain: "h∞ falls steeply around rest." },
+  { q: "Recovery from inactivation is measured with...", options: ["Two pulses separated by a variable interval", "One long step", "Noise analysis", "A ramp"], answer: 0, explain: "The second pulse tests how much has recovered." },
+  { q: "During the absolute refractory period...", options: ["Only a strong stimulus fires a spike", "No stimulus fires a spike", "The neuron fires spontaneously", "The neuron is hyperpolarised permanently"], answer: 1, explain: "h too low, n too high." },
+  { q: "Anode-break excitation is...", options: ["A spike after release from hyperpolarisation", "Damage from strong current", "Block by TTX", "A synaptic effect"], answer: 0, explain: "h is raised and n lowered by the hyperpolarisation." },
+  { q: "The window current arises where...", options: ["m∞ and h∞ overlap, so a small steady sodium conductance remains", "The pump reverses", "Potassium is blocked", "The axon is myelinated"], answer: 0, explain: "Around -60 to -40 mV." },
+]} />
+
+<Flashcards cards={[
+  { front: "The dual effect?", back: "Depolarisation activates sodium channels quickly (m) and inactivates them slowly (h)." },
+  { front: "Prepulse protocol?", back: "Hold at a prepulse voltage until h settles, then step to a test voltage; the peak current traces $h_\\infty(V)$." },
+  { front: "Two-pulse protocol?", back: "Inactivate, return to rest for an interval, test again; recovery follows $\\tau_h$ at rest." },
+  { front: "Refractory periods?", back: "Absolute: no stimulus fires. Relative: a stronger stimulus is needed. Both from low h and high n after a spike." },
+  { front: "Anode-break excitation?", back: "Release from hyperpolarisation fires a spike, because h rose and n fell during it." },
+]} />
+
+<Predict revisit question="Held 10 mV above rest before a test step, how large is the sodium current compared with from rest?" />
+
+<Key title="Before you go">
+<ul>
+<li>Sodium channels have fast activation (m) and slower inactivation (h) gates in series.</li>
+<li>Prepulses reveal steady-state availability; paired pulses reveal recovery time.</li>
+<li>Small sustained depolarisations inactivate many sodium channels and reduce excitability.</li>
+<li>Refractoriness and anode-break excitation both come from the slow gates h and n, not from a fixed threshold.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Hodgkin and Huxley (1952), <em>The dual effect of membrane potential on sodium conductance in the giant axon of Loligo</em>.</li>
+<li>Hille (2001), <em>Ion Channels of Excitable Membranes</em>, chapter 2, on the classical description of sodium and potassium channels.</li>
+<li>Gerstner, Kistler, Naud and Paninski (2014), <em>Neuronal Dynamics</em>, Cambridge University Press, chapter 2 (free online).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Explain to someone who knows only the integrate-and-fire neuron why a hyperpolarising current can make a Hodgkin-Huxley neuron fire. Then name one real situation in the brain where a neuron is released from strong inhibition, and what rebound firing might do there." />

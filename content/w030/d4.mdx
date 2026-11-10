@@ -1,0 +1,253 @@
+export const meta = {
+  title: "The cost of a spike: overlapping currents and temperature",
+  intro: "Week 28 found that the brain's energy budget allows each neuron only about one spike per second on average, at a cost of around a billion ATP molecules per spike once synapses are included. Today you look inside a single action potential to see where its cost comes from. You will decompose the spike into its sodium and potassium currents, measure how much more sodium enters than the minimum needed to charge the membrane, find that the squid model is strikingly wasteful at its native temperature, and see how temperature and the timing of the currents change both the cost and the shape of the spike. Mammalian axons, it turns out, are far more economical.",
+  goals: [
+    "Decompose a simulated action potential into its ionic currents",
+    "Compute the sodium charge per spike and compare it with the minimum needed to charge the membrane",
+    "Scale the Hodgkin-Huxley model with temperature using a Q10 factor",
+    "Explain why overlapping sodium and potassium currents waste energy",
+    "Estimate the ATP cost of a spike in a neuron",
+  ],
+  plan: [
+    { label: "Predict and currents during a spike", minutes: 25 },
+    { label: "The sodium bill", minutes: 25 },
+    { label: "Temperature", minutes: 30 },
+    { label: "ATP per spike", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "alle-2009",
+};
+
+<Predict question="To raise a membrane by 100 mV takes a fixed charge, C times 100 mV. In the Hodgkin-Huxley model at the squid's 6.3 °C, how much sodium charge actually enters during a spike: about the same, about twice, or more than ten times that minimum?" />
+
+<Step n={1} title="Currents during a spike" minutes={25} />
+
+In a spike, as opposed to a voltage-clamp step, the voltage moves and the currents respond. During the rise, sodium current flows in and charges the membrane; during the fall, potassium current flows out and discharges it. If the two currents were perfectly separated in time, the sodium entering would equal the charge needed to depolarise the membrane, $C\,\Delta V$, and no more. But whenever both flow at once, some sodium current is cancelled by potassium current instead of charging the membrane, and both ions must later be pumped back at a cost in ATP (Week 29, Day 5).
+
+<Video id="9zD430EQga8" title="Biophysical neuron models" by="Dan Goodman (Neuroscience for Machine Learners)" note="Dan Goodman walks through the Hodgkin-Huxley model and its biophysical descendants, with simulations of how the currents shape the spike." />
+
+<PyCell id="currents" title="Decomposing the spike" tests={String.raw`
+  import numpy as np
+  def test_charges():
+      "Q_Na is the inward sodium charge and Q_min is C times the spike's amplitude from rest"
+      assert abs(Q_Na - (-np.sum(np.minimum(INa, 0)) * dt)) < 1e-9 and abs(Q_min - (max(V) + 65)) < 1e-9
+
+  def test_ratio():
+      "at 6.3 C the sodium entry is more than ten times the minimum"
+      assert ratio > 10
+`} prompt="`spike(phi)` simulates a spike evoked by a 0.3 ms pulse of 100 μA/cm² and returns the voltage and the sodium and potassium currents, with all rates multiplied by phi. At phi = 1, compute the inward sodium charge `Q_Na` (nC/cm², the integral of the negative part of INa), the minimum charge `Q_min` = C (V_peak - V_rest) with C = 1 μF/cm², and their `ratio`."
+code={String.raw`
+  import math
+  import numpy as np
+  import matplotlib.pyplot as plt
+  dt = 0.002
+
+  def rates_f(V, phi=1.0):
+      V = V + 1e-7
+      r = (0.01 * (V + 55) / (1 - math.exp(-(V + 55) / 10)), 0.125 * math.exp(-(V + 65) / 80),
+           0.1 * (V + 40) / (1 - math.exp(-(V + 40) / 10)), 4.0 * math.exp(-(V + 65) / 18),
+           0.07 * math.exp(-(V + 65) / 20), 1 / (1 + math.exp(-(V + 35) / 10)))
+      return [phi * x for x in r]
+
+  def spike(phi, T=10.0):
+      V, n, m, h = -65.0, 0.3177, 0.0529, 0.5961
+      Vs, INa, IK = [], [], []
+      for k in range(int(T / dt)):
+          an, bn, am, bm, ah, bh = rates_f(V, phi)
+          ina, ik = 120 * m**3 * h * (V - 50), 36 * n**4 * (V + 77)
+          I = 100.0 if 1 <= k * dt < 1.3 else 0.0
+          n += dt * (an * (1 - n) - bn * n); m += dt * (am * (1 - m) - bm * m); h += dt * (ah * (1 - h) - bh * h)
+          V += dt * (I - ina - ik - 0.3 * (V + 54.387))
+          Vs.append(V); INa.append(ina); IK.append(ik)
+      return np.array(Vs), np.array(INa), np.array(IK)
+
+  V, INa, IK = spike(1.0)
+  Q_Na = ...
+  Q_min = ...
+  ratio = Q_Na / Q_min
+  print(f"peak {V.max():.1f} mV; sodium charge {Q_Na:.0f} nC/cm^2, minimum {Q_min:.0f} nC/cm^2, ratio {ratio:.1f}")
+  tt = np.arange(len(V)) * dt
+  fig, ax = plt.subplots(2, 1, sharex=True)
+  ax[0].plot(tt, V); ax[0].set_ylabel("V (mV)")
+  ax[1].plot(tt, INa, label="I_Na"); ax[1].plot(tt, IK, label="I_K"); ax[1].set_ylabel("uA/cm^2"); ax[1].legend()
+  ax[1].set_xlabel("ms"); plt.show()
+`}
+hint="Q_Na = -np.sum(np.minimum(INa, 0)) * dt; Q_min = 1.0 * (V.max() + 65)."
+solution={String.raw`
+  import math
+  import numpy as np
+  import matplotlib.pyplot as plt
+  dt = 0.002
+
+  def rates_f(V, phi=1.0):
+      V = V + 1e-7
+      r = (0.01 * (V + 55) / (1 - math.exp(-(V + 55) / 10)), 0.125 * math.exp(-(V + 65) / 80),
+           0.1 * (V + 40) / (1 - math.exp(-(V + 40) / 10)), 4.0 * math.exp(-(V + 65) / 18),
+           0.07 * math.exp(-(V + 65) / 20), 1 / (1 + math.exp(-(V + 35) / 10)))
+      return [phi * x for x in r]
+
+  def spike(phi, T=10.0):
+      V, n, m, h = -65.0, 0.3177, 0.0529, 0.5961
+      Vs, INa, IK = [], [], []
+      for k in range(int(T / dt)):
+          an, bn, am, bm, ah, bh = rates_f(V, phi)
+          ina, ik = 120 * m**3 * h * (V - 50), 36 * n**4 * (V + 77)
+          I = 100.0 if 1 <= k * dt < 1.3 else 0.0
+          n += dt * (an * (1 - n) - bn * n); m += dt * (am * (1 - m) - bm * m); h += dt * (ah * (1 - h) - bh * h)
+          V += dt * (I - ina - ik - 0.3 * (V + 54.387))
+          Vs.append(V); INa.append(ina); IK.append(ik)
+      return np.array(Vs), np.array(INa), np.array(IK)
+
+  V, INa, IK = spike(1.0)
+  Q_Na = -np.sum(np.minimum(INa, 0)) * dt
+  Q_min = 1.0 * (V.max() + 65)
+  ratio = Q_Na / Q_min
+  print(f"peak {V.max():.1f} mV; sodium charge {Q_Na:.0f} nC/cm^2, minimum {Q_min:.0f} nC/cm^2, ratio {ratio:.1f}")
+  tt = np.arange(len(V)) * dt
+  fig, ax = plt.subplots(2, 1, sharex=True)
+  ax[0].plot(tt, V); ax[0].set_ylabel("V (mV)")
+  ax[1].plot(tt, INa, label="I_Na"); ax[1].plot(tt, IK, label="I_K"); ax[1].set_ylabel("uA/cm^2"); ax[1].legend()
+  ax[1].set_xlabel("ms"); plt.show()
+`} />
+
+The spike peaks at 41 mV, so the minimum charge is 106 nC/cm². The sodium charge that actually enters is 1,411 nC/cm², 13 times the minimum. That answers the prediction. Most of it enters after the peak, when it is no longer charging the membrane but fighting the potassium current, as the plot of the two currents shows.
+
+<Step n={2} title="The sodium bill" minutes={25} />
+
+Why is the squid model so wasteful? Look at the currents in your plot. The sodium current does not stop at the peak. Because $h$ closes slowly, sodium channels stay open through much of the falling phase, while the potassium current, which opens slowly too, is already large. For a millisecond or more the two currents flow against each other, sodium in and potassium out, and that cancelled charge is pure cost.
+
+Two changes would reduce the waste: faster sodium inactivation, so that sodium stops flowing once the peak is reached, and delayed potassium activation, so that potassium starts only then. Today's paper, by Alle, Roth and Geiger (2009), measured the currents during action potentials in mammalian axons, the mossy fibres of the hippocampus at near body temperature, and found exactly that: sodium entry only about 1.3 times the minimum. Their measurements, and later ones by Carter and Bean (2009) on cell bodies, showed that mammalian spikes are far more economical than the squid model, though fast-spiking neurons pay more.
+
+<Figure caption="A Hodgkin-Huxley spike and its currents at different temperatures, with the sodium charge compared with the minimum. Set the temperature." credit="Interactive figure by Engram, using the Hodgkin-Huxley equations with Q10 = 3.">
+  <SpikeCurrents />
+</Figure>
+
+<Step n={3} title="Temperature" minutes={30} />
+
+Hodgkin and Huxley measured at 6.3 °C and specified how their rates scale with temperature: all $\alpha$ and $\beta$ are multiplied by $\phi = Q_{10}^{(T - 6.3)/10}$, with $Q_{10} = 3$, meaning each rise of 10 °C speeds every gate threefold. The membrane capacitance and conductances do not change, so warming makes the gates faster relative to the membrane's own charging. That changes the spike's shape and its cost.
+
+<PyCell id="temperature" title="Warming the squid" tests={String.raw`
+  import numpy as np
+  def test_phi():
+      "phi is 3 raised to (T - 6.3) / 10"
+      assert all(abs(table[T][0] - 3 ** ((T - 6.3) / 10)) < 1e-9 for T in table)
+
+  def test_trends():
+      "the ratio falls from above 10 at 6.3 C to between 3 and 5 at 18.5 C, and the spike narrows"
+      assert table[6.3][3] > 10 and 3 < table[18.5][3] < 5 and table[26][2] < table[6.3][2] / 3
+`} prompt="For temperatures 6.3, 10, 18.5 and 26 °C, compute phi, run `spike(phi)`, and store in `table[T]` the tuple (phi, peak voltage, half-width in ms, sodium ratio). The half-width is the time the voltage spends above the midpoint between rest (-65 mV) and the peak."
+code={String.raw`
+  table = {}
+  for T in (6.3, 10, 18.5, 26):
+      phi = ...
+      V, INa, IK = spike(phi)
+      peak = V.max()
+      half_width = ...
+      ratio_T = (-np.sum(np.minimum(INa, 0)) * dt) / (peak + 65)
+      table[T] = (phi, peak, half_width, ratio_T)
+      print(f"{T:4.1f} C: phi {phi:5.2f}, peak {peak:5.1f} mV, half-width {half_width:.2f} ms, sodium {ratio_T:.1f} x minimum")
+`}
+hint="phi = 3 ** ((T - 6.3) / 10); half_width = np.sum(V > (peak - 65) / 2) * dt."
+solution={String.raw`
+  table = {}
+  for T in (6.3, 10, 18.5, 26):
+      phi = 3 ** ((T - 6.3) / 10)
+      V, INa, IK = spike(phi)
+      peak = V.max()
+      half_width = np.sum(V > (peak - 65) / 2) * dt
+      ratio_T = (-np.sum(np.minimum(INa, 0)) * dt) / (peak + 65)
+      table[T] = (phi, peak, half_width, ratio_T)
+      print(f"{T:4.1f} C: phi {phi:5.2f}, peak {peak:5.1f} mV, half-width {half_width:.2f} ms, sodium {ratio_T:.1f} x minimum")
+`} />
+
+Warming from 6.3 to 26 °C narrows the spike from 1.5 to 0.22 ms and lowers its peak from 41 to 23 mV, while sodium entry falls from 13 to 2.2 times the minimum. At 18.5 °C the ratio is 4.0, close to the figure of about four often quoted for the squid axon. Faster gates mean that inactivation and potassium activation catch up with the rising phase, so the currents overlap less. The price is a smaller spike: in this model, warming beyond about 30 °C shrinks it towards the depolarisation produced by the stimulus alone, a form of heat block that real squid axons also show.
+
+<Callout kind="warning">
+
+A $Q_{10}$ of 3 applied to every rate is a convenience, not a law. Different channels have different temperature sensitivities, conductances themselves rise with temperature (with a $Q_{10}$ nearer 1.5), and pumps and synapses have their own. Simulating a mammalian neuron by warming the squid model gives the right direction of change but not the right numbers, which is why models of mammalian neurons are fitted to mammalian data.
+
+</Callout>
+
+<Step n={4} title="ATP per spike" minutes={25} />
+
+The Na⁺/K⁺ pump spends one ATP for every three sodium ions it removes. So the cost of a spike follows from the sodium charge: the minimum $C\,\Delta V$ per unit area, times the overlap factor, times the neuron's membrane area, converted to ions and divided by three.
+
+<PyCell id="atp" title="What a spike costs" tests={String.raw`
+  import numpy as np
+  def test_atp():
+      "atp gives the overlap factor times C dV times the area, divided by e and by 3"
+      assert abs(atp(1.3) - 1.3 * 1e-6 * 0.1 * 2e-4 / 1.602e-19 / 3) < 1
+
+  def test_compare():
+      "the mammalian-like spike costs about 5e7 ATP and the squid-like one about ten times more"
+      assert 3e7 < atp(1.3) < 8e7 and 8 < atp(13) / atp(1.3) < 12
+`} prompt="A cortical pyramidal neuron has about 20,000 μm² (2 × 10⁻⁴ cm²) of membrane that each spike charges by 100 mV (a simplification: in reality the spike spreads into only part of the dendrites, but the axon adds area). Write `atp(f)` giving ATP molecules per spike for an overlap factor f, and compare f = 1.3 (mammalian axons) with f = 13 (the squid model at 6.3 °C)."
+code={String.raw`
+  e, c_m, dV, area = 1.602e-19, 1e-6, 0.1, 2e-4      # C, F/cm^2, V, cm^2
+
+  def atp(f):
+      return ...
+
+  for f in (1.3, 4, 13):
+      print(f"overlap {f:4.1f}: {atp(f):.1e} ATP per spike, {atp(f) * 8e-20 * 1e12:.1f} pJ")
+`}
+hint="return f * c_m * dV * area / e / 3."
+solution={String.raw`
+  e, c_m, dV, area = 1.602e-19, 1e-6, 0.1, 2e-4      # C, F/cm^2, V, cm^2
+
+  def atp(f):
+      return f * c_m * dV * area / e / 3
+
+  for f in (1.3, 4, 13):
+      print(f"overlap {f:4.1f}: {atp(f):.1e} ATP per spike, {atp(f) * 8e-20 * 1e12:.1f} pJ")
+`} />
+
+An economical mammalian spike in a neuron with 20,000 μm² of membrane costs about $5 \times 10^7$ ATP; the squid model's overlap would make it $5 \times 10^8$. Add the much larger cost of the synaptic currents the spike triggers in its targets, and the total reaches the $10^9$ ATP per spike of Week 28's budget. That answers the prediction from the other side: the squid's thirteenfold waste would have made a human brain unaffordable, and the efficiency Alle and colleagues found is part of what makes it possible.
+
+<Bridge title="Energy as a design constraint"
+  neuro="Evolution has tuned the kinetics of mammalian sodium and potassium channels so that their currents barely overlap, cutting the cost of each spike several-fold compared with the squid. Where neurons must fire fast, as in fast-spiking interneurons, they accept a higher cost."
+  ai="Energy per operation is now a first-order constraint in AI hardware too. Neuromorphic chips such as Intel's Loihi and IBM's TrueNorth spend energy only when a spike occurs, and much of the effort in efficient AI, from sparse activations to low-precision arithmetic, is a search for the equivalent of non-overlapping currents: doing the needed work without paying twice for it.">
+
+A spike's cost is not fixed by physics: it depends on timing, and timing can be tuned.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The minimum charge needed for a spike of amplitude ΔV is...", options: ["C ΔV", "g ΔV", "ΔV / C", "Zero"], answer: 0, explain: "Charging a capacitor." },
+  { q: "Extra sodium enters, beyond the minimum, because...", options: ["The pump runs backwards", "Sodium and potassium currents overlap and partly cancel", "Capacitance increases", "Chloride flows in"], answer: 1, explain: "Cancelled charge is wasted." },
+  { q: "In the HH model at 6.3 °C, sodium entry is about...", options: ["Equal to the minimum", "Twice the minimum", "More than ten times the minimum", "Less than the minimum"], answer: 2, explain: "Slow inactivation, slow potassium." },
+  { q: "Alle and colleagues found that in hippocampal mossy fibres sodium entry is about...", options: ["1.3 times the minimum", "4 times", "13 times", "100 times"], answer: 0, explain: "Energy-efficient action potentials." },
+  { q: "A Q10 of 3 means...", options: ["Rates triple for each 10 °C rise", "Rates fall threefold for each 10 °C rise", "Conductances triple", "Nothing changes"], answer: 0, explain: "φ = 3^((T - 6.3)/10)." },
+  { q: "Warming the HH model makes the spike...", options: ["Wider and taller", "Narrower and smaller, and cheaper in sodium", "Unchanged", "Longer-lasting"], answer: 1, explain: "Faster gates relative to the membrane." },
+  { q: "The Na⁺/K⁺ pump uses one ATP per...", options: ["Sodium ion", "Three sodium ions", "Ten sodium ions", "Potassium ion"], answer: 1, explain: "3 Na⁺ out, 2 K⁺ in." },
+  { q: "Most of the energy cost of signalling in grey matter goes on...", options: ["Resting potentials only", "Spikes and especially the synaptic currents they trigger", "Glia", "Heat"], answer: 1, explain: "Attwell and Laughlin's budget." },
+]} />
+
+<Flashcards cards={[
+  { front: "Minimum charge for a spike?", back: "$C\\,\\Delta V$, about 100 nC/cm² for 100 mV at 1 μF/cm²." },
+  { front: "Sodium overlap factor?", back: "Sodium charge divided by $C\\,\\Delta V$: about 13 for the HH model at 6.3 °C, about 4 at 18.5 °C, about 1.3 in mammalian mossy fibres." },
+  { front: "Temperature scaling in HH?", back: "Multiply all rates by $\\phi = 3^{(T - 6.3)/10}$; conductances and capacitance unchanged." },
+  { front: "ATP per spike?", back: "Sodium ions entering divided by 3; about $5\\times10^7$ for a mammalian neuron's own spike, more with synaptic costs." },
+  { front: "How do mammalian axons save energy?", back: "Fast sodium inactivation and delayed potassium activation, so the currents barely overlap." },
+]} />
+
+<Predict revisit question="How much sodium enters during an HH spike at 6.3 °C, compared with the minimum?" />
+
+<Key title="Before you go">
+<ul>
+<li>A spike needs at least C ΔV of charge; overlapping sodium and potassium currents waste more.</li>
+<li>The HH model at 6.3 °C lets in about thirteen times the minimum; warming it makes spikes narrower and cheaper.</li>
+<li>Mammalian axons separate the currents in time and come close to the minimum.</li>
+<li>The pump's 3:1 ratio converts sodium entry into an ATP cost per spike.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Alle, Roth and Geiger (2009), <em>Energy-efficient action potentials in hippocampal mossy fibers</em>.</li>
+<li>Carter and Bean (2009), <em>Sodium entry during action potentials of mammalian neurons: incomplete inactivation and reduced metabolic efficiency in fast-spiking neurons</em>, Neuron 64(6), 898 to 909.</li>
+<li>Sengupta, Stemmler, Laughlin and Niven (2010), <em>Action potential energy efficiency varies among neuron types in vertebrates and invertebrates</em>, PLoS Computational Biology 6(7), e1000840.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If energy matters so much, why might a fast-spiking interneuron accept spikes that cost more? Think about what its sodium and potassium channels must do to let it fire at several hundred hertz, and what that requires of their timing." />

@@ -1,0 +1,276 @@
+export const meta = {
+  title: "The voltage clamp: separating sodium and potassium currents",
+  intro: "You have already simulated the Hodgkin-Huxley equations, in Weeks 21 to 23, as a piece of mathematics. This week is about where they came from: a set of experiments in Plymouth in 1949 that turned the sodium hypothesis of last week into a quantitative model. Today you rerun the central experiment. You will clamp a simulated squid axon at a series of voltages, see the brief inward current and the sustained outward one that Hodgkin and Huxley saw, separate them as they did, convert currents into conductances, and find that conductance, not current, is the quantity that behaves simply.",
+  goals: [
+    "Explain how the voltage clamp works and why it was needed",
+    "Describe the current recorded during a voltage step and identify its components",
+    "Separate sodium and potassium currents and convert them to conductances",
+    "Measure the voltage dependence of peak conductance and fit it with a Boltzmann function",
+  ],
+  plan: [
+    { label: "Predict and the experiment", minutes: 20 },
+    { label: "Clamping a simulated axon", minutes: 30 },
+    { label: "Separating the currents", minutes: 30 },
+    { label: "Conductance, not current", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "hodgkin-huxley-1952a",
+};
+
+<Predict question="A squid axon is clamped from rest (-65 mV) to 0 mV. The current flows inward for about a millisecond, then outward for as long as the step lasts. Which ions carry the early inward current and the late outward current?" />
+
+<Step n={1} title="The experiment" minutes={20} />
+
+By 1949 Hodgkin and Katz had shown that a spike is a rise in sodium permeability. The question was how that permeability depends on voltage and time. A spike cannot answer it directly, because during a spike the voltage changes the permeabilities and the permeabilities change the voltage, all at once. The **voltage clamp**, developed by Kenneth Cole and George Marmont and refined by Hodgkin, Huxley and Katz, breaks the loop. A feedback amplifier measures the membrane voltage, compares it with a command, and injects whatever current is needed to hold the two equal. With the voltage fixed, the capacitive current is zero after the step, so the injected current equals the current through the ion channels, and the channels' dependence on voltage and time can be studied one voltage at a time.
+
+Two features of the squid made this possible (Week 29, Day 3). The giant axon, up to a millimetre across, could take a long silver wire along its axis, which held a long stretch of membrane at one voltage (no space-clamp problem) through a low resistance (little series-resistance error). And its large size meant large currents, measurable with the electronics of 1949.
+
+<Video id="88tKZLGOr3M" title="4. Hodgkin-Huxley Model Part 1" by="Michale Fee (MIT 9.40 Introduction to Neural Computation, MIT OpenCourseWare)" note="Michale Fee's lecture introduces the voltage clamp, the currents it reveals and how Hodgkin and Huxley turned them into a model. Part 2 is tomorrow's video." />
+
+<Step n={2} title="Clamping a simulated axon" minutes={30} />
+
+With the voltage held at $V$, each gating variable obeys a linear equation with constant coefficients (Week 21), so it relaxes exponentially from its resting value to its steady value at $V$:
+
+$$
+x(t) = x_\infty(V) - \left(x_\infty(V) - x_\infty(V_{rest})\right)e^{-t/\tau_x(V)}, \qquad x_\infty = \frac{\alpha_x}{\alpha_x + \beta_x}, \quad \tau_x = \frac{1}{\alpha_x + \beta_x}.
+$$
+
+The clamp currents follow without integrating anything: $I_{Na} = \bar g_{Na}m^3h(V - E_{Na})$ and $I_K = \bar g_Kn^4(V - E_K)$. You will use the rate functions of Week 21 (in the modern convention, with rest at -65 mV).
+
+<PyCell id="clamp" title="Currents under voltage clamp" tests={String.raw`
+  import numpy as np
+  def test_gates():
+      "gate returns the exponential relaxation from rest towards the steady value"
+      ninf, tau = inf_tau(0.0, "n"); n0 = inf_tau(-65.0, "n")[0]
+      assert np.allclose(gate(0.0, "n", t), ninf - (ninf - n0) * np.exp(-t / tau))
+
+  def test_currents():
+      "at 0 mV the sodium current is inward at first and the potassium current outward and sustained"
+      INa, IK = clamp(0.0)
+      assert INa.min() < -1000 and abs(INa[-1]) < 100 and IK[-1] > 1500
+`} prompt="Write `gate(V, name, t)`, which returns a gating variable's time course after a step from -65 mV to V, using `inf_tau`. Then complete `clamp(V)`, returning the sodium and potassium currents. Run it for steps from -45 to +75 mV."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  gNa, gK, gL, ENa, EK, EL = 120.0, 36.0, 0.3, 50.0, -77.0, -54.387
+
+  def rates(V):
+      V = V + 1e-7                                     # avoids 0/0 at -55 and -40 mV
+      an = 0.01 * (V + 55) / (1 - np.exp(-(V + 55) / 10)); bn = 0.125 * np.exp(-(V + 65) / 80)
+      am = 0.1 * (V + 40) / (1 - np.exp(-(V + 40) / 10)); bm = 4.0 * np.exp(-(V + 65) / 18)
+      ah = 0.07 * np.exp(-(V + 65) / 20); bh = 1 / (1 + np.exp(-(V + 35) / 10))
+      return {"n": (an, bn), "m": (am, bm), "h": (ah, bh)}
+
+  def inf_tau(V, name):
+      a, b = rates(V)[name]
+      return a / (a + b), 1 / (a + b)
+
+  t = np.arange(0, 10, 0.01)                           # ms
+
+  def gate(V, name, t):
+      xinf, tau = inf_tau(V, name)
+      x0 = inf_tau(-65.0, name)[0]
+      return ...
+
+  def clamp(V):
+      m, h, n = gate(V, "m", t), gate(V, "h", t), gate(V, "n", t)
+      INa = ...
+      IK = ...
+      return INa, IK
+
+  for V in range(-45, 80, 20):
+      INa, IK = clamp(V)
+      plt.plot(t, INa + IK, label=f"{V} mV")
+      print(f"{V:4d} mV: peak sodium {INa[np.argmax(abs(INa))]:7.0f}, potassium at 10 ms {IK[-1]:6.0f} uA/cm^2")
+  plt.xlabel("ms"); plt.ylabel("total ionic current (uA/cm^2)"); plt.legend(); plt.show()
+`}
+hint="return xinf - (xinf - x0) * np.exp(-t / tau); INa = gNa * m**3 * h * (V - ENa); IK = gK * n**4 * (V - EK)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  gNa, gK, gL, ENa, EK, EL = 120.0, 36.0, 0.3, 50.0, -77.0, -54.387
+
+  def rates(V):
+      V = V + 1e-7                                     # avoids 0/0 at -55 and -40 mV
+      an = 0.01 * (V + 55) / (1 - np.exp(-(V + 55) / 10)); bn = 0.125 * np.exp(-(V + 65) / 80)
+      am = 0.1 * (V + 40) / (1 - np.exp(-(V + 40) / 10)); bm = 4.0 * np.exp(-(V + 65) / 18)
+      ah = 0.07 * np.exp(-(V + 65) / 20); bh = 1 / (1 + np.exp(-(V + 35) / 10))
+      return {"n": (an, bn), "m": (am, bm), "h": (ah, bh)}
+
+  def inf_tau(V, name):
+      a, b = rates(V)[name]
+      return a / (a + b), 1 / (a + b)
+
+  t = np.arange(0, 10, 0.01)                           # ms
+
+  def gate(V, name, t):
+      xinf, tau = inf_tau(V, name)
+      x0 = inf_tau(-65.0, name)[0]
+      return xinf - (xinf - x0) * np.exp(-t / tau)
+
+  def clamp(V):
+      m, h, n = gate(V, "m", t), gate(V, "h", t), gate(V, "n", t)
+      INa = gNa * m**3 * h * (V - ENa)
+      IK = gK * n**4 * (V - EK)
+      return INa, IK
+
+  for V in range(-45, 80, 20):
+      INa, IK = clamp(V)
+      plt.plot(t, INa + IK, label=f"{V} mV")
+      print(f"{V:4d} mV: peak sodium {INa[np.argmax(abs(INa))]:7.0f}, potassium at 10 ms {IK[-1]:6.0f} uA/cm^2")
+  plt.xlabel("ms"); plt.ylabel("total ionic current (uA/cm^2)"); plt.legend(); plt.show()
+`} />
+
+At -45 mV the currents are small. From -25 mV upwards each step gives the pattern Hodgkin and Huxley recorded: an inward sodium current that peaks within a millisecond, then an outward potassium current that grows and stays. The peak sodium current is largest near -5 mV, about 1.5 mA/cm², and shrinks at higher voltages, even though more channels open, because the driving force $V - E_{Na}$ shrinks; at +55 and +75 mV, above $E_{Na}$, it flows outward. The potassium current only grows. That answers the prediction: sodium carries the early inward current and potassium the late outward one.
+
+<Figure caption="The ionic current during a voltage-clamp step, and its sodium and potassium parts. Set the step voltage." credit="Interactive figure by Engram, using the Hodgkin-Huxley equations.">
+  <VoltageClamp />
+</Figure>
+
+<Step n={3} title="Separating the currents" minutes={30} />
+
+The recorded current is the sum of both. Hodgkin and Huxley separated them, in today's paper, by replacing most of the external sodium with choline, which does not pass through sodium channels: that shifts $E_{Na}$ and changes the sodium current while leaving the early potassium current alone. They then assumed that each current depends only on its own ion's concentrations, the **independence principle**, to reconstruct each component. Since the 1960s the same separation has been done more simply with toxins. **Tetrodotoxin** (TTX), from the puffer fish, blocks sodium channels; **tetraethylammonium** (TEA) blocks potassium channels. Record before and after TTX, and the difference is the sodium current.
+
+<PyCell id="separate" title="Subtracting the TTX-resistant current" tests={String.raw`
+  import numpy as np
+  def test_subtract():
+      "I_Na_est is the control current minus the current in TTX"
+      assert np.allclose(I_Na_est, I_control - I_ttx)
+
+  def test_conductance():
+      "the conductances divide each current by its driving force, and peak g_Na is near 29 mS/cm^2 at 0 mV"
+      assert np.allclose(g_Na_est, I_Na_est / (0.0 - ENa)) and np.allclose(g_K_est, I_ttx / (0.0 - EK))
+      assert 27 < g_Na_est.max() < 31
+`} prompt="Two noisy recordings at 0 mV are simulated: the control current and the current after TTX (which leaves only potassium and a small leak, here omitted). Recover the sodium current `I_Na_est` by subtraction, then the conductances `g_Na_est` and `g_K_est` by dividing each current by its driving force at 0 mV."
+code={String.raw`
+  r = np.random.default_rng(1952)
+  INa, IK = clamp(0.0)
+  I_control = INa + IK + r.normal(0, 15, t.size)
+  I_ttx = IK + r.normal(0, 15, t.size)
+
+  I_Na_est = ...
+  g_Na_est = ...
+  g_K_est = ...
+  print(f"peak g_Na {g_Na_est.max():.1f} mS/cm^2 at {t[np.argmax(g_Na_est)]:.2f} ms; g_K at 10 ms {g_K_est[-1]:.1f} mS/cm^2")
+  plt.plot(t, g_Na_est, label="g_Na"); plt.plot(t, g_K_est, label="g_K")
+  plt.xlabel("ms"); plt.ylabel("conductance (mS/cm^2)"); plt.legend(); plt.show()
+`}
+hint="I_Na_est = I_control - I_ttx; g_Na_est = I_Na_est / (0.0 - ENa); g_K_est = I_ttx / (0.0 - EK)."
+solution={String.raw`
+  r = np.random.default_rng(1952)
+  INa, IK = clamp(0.0)
+  I_control = INa + IK + r.normal(0, 15, t.size)
+  I_ttx = IK + r.normal(0, 15, t.size)
+
+  I_Na_est = I_control - I_ttx
+  g_Na_est = I_Na_est / (0.0 - ENa)
+  g_K_est = I_ttx / (0.0 - EK)
+  print(f"peak g_Na {g_Na_est.max():.1f} mS/cm^2 at {t[np.argmax(g_Na_est)]:.2f} ms; g_K at 10 ms {g_K_est[-1]:.1f} mS/cm^2")
+  plt.plot(t, g_Na_est, label="g_Na"); plt.plot(t, g_K_est, label="g_K")
+  plt.xlabel("ms"); plt.ylabel("conductance (mS/cm^2)"); plt.legend(); plt.show()
+`} />
+
+Subtraction recovers the sodium current, and dividing by the driving force gives a sodium conductance that peaks at about 30 mS/cm² after 0.6 ms and then decays almost to nothing, while the potassium conductance rises after a delay to 24 mS/cm² and stays there. These two shapes, one transient and one delayed and sustained, are what the model had to explain. Note that dividing by the driving force amplifies noise where the driving force is small, so steps close to a reversal potential give poor estimates of conductance.
+
+<Step n={4} title="Conductance, not current" minutes={25} />
+
+Currents are awkward to compare across voltages: the sodium current shrinks as the step approaches $E_{Na}$ and reverses above it, even though the channels open more and more. Dividing by the driving force removes that. The peak sodium conductance rises smoothly and monotonically with voltage, in an S-shaped **activation curve**, the first sign that the channels are opened by a voltage-sensitive mechanism (tomorrow's subject).
+
+<PyCell id="activation" title="The activation curve" tests={String.raw`
+  import numpy as np
+  def test_peaks():
+      "g_peak holds the peak sodium conductance at each voltage"
+      INa, _ = clamp(Vs[5])
+      assert abs(g_peak[5] - (INa / (Vs[5] - ENa)).max()) < 1e-9
+
+  def test_fit():
+      "the Boltzmann fit has its half-activation between -20 and -5 mV and a slope factor between 10 and 20 mV"
+      assert -20 < V_half < -5 and 10 < k_slope < 20
+`} prompt="For steps from -70 to +45 mV in 5 mV steps (skipping +50, where the driving force is zero), compute the peak sodium conductance `g_peak`. Fit g_max / (1 + exp(-(V - V_half) / k)) by grid search over V_half from -50 to 0 and k from 2 to 20, with g_max fixed at the largest value."
+code={String.raw`
+  Vs = np.arange(-70, 46, 5.0)
+  g_peak = np.array([0.0 for V in Vs])            # replace 0.0 with the peak sodium conductance at V
+  gmax = g_peak.max()
+  best = (np.inf, None, None)
+  for vh in np.arange(-50, 0.01, 0.5):
+      for k in np.arange(2, 20.01, 0.25):
+          err = ...
+          if err < best[0]:
+              best = (err, vh, k)
+  _, V_half, k_slope = best
+  print(f"half-activation {V_half:.1f} mV, slope factor {k_slope:.2f} mV")
+  plt.plot(Vs, g_peak, "o"); plt.plot(Vs, gmax / (1 + np.exp(-(Vs - V_half) / k_slope)))
+  plt.xlabel("step voltage (mV)"); plt.ylabel("peak g_Na (mS/cm^2)"); plt.show()
+`}
+hint="g_peak = np.array([(clamp(V)[0] / (V - ENa)).max() for V in Vs]); err = np.sum((g_peak - gmax / (1 + np.exp(-(Vs - vh) / k))) ** 2)."
+solution={String.raw`
+  Vs = np.arange(-70, 46, 5.0)
+  g_peak = np.array([(clamp(V)[0] / (V - ENa)).max() for V in Vs])
+  gmax = g_peak.max()
+  best = (np.inf, None, None)
+  for vh in np.arange(-50, 0.01, 0.5):
+      for k in np.arange(2, 20.01, 0.25):
+          err = np.sum((g_peak - gmax / (1 + np.exp(-(Vs - vh) / k))) ** 2)
+          if err < best[0]:
+              best = (err, vh, k)
+  _, V_half, k_slope = best
+  print(f"half-activation {V_half:.1f} mV, slope factor {k_slope:.2f} mV")
+  plt.plot(Vs, g_peak, "o"); plt.plot(Vs, gmax / (1 + np.exp(-(Vs - V_half) / k_slope)))
+  plt.xlabel("step voltage (mV)"); plt.ylabel("peak g_Na (mS/cm^2)"); plt.show()
+`} />
+
+The peak sodium conductance is half-maximal at about -12 mV, with a slope factor of 15.5 mV. The curve is shallower than the activation of a single $m$ gate would suggest, because the peak mixes activation ($m^3$) with inactivation, which has already begun by the time the peak is reached; separating the two needs the protocols of Day 3. Curves like this one are the first numbers reported for every newly characterised channel.
+
+<Callout kind="history">
+
+The experiments were done in the summer of 1949 at the Marine Biological Association in Plymouth, where squid were caught. The analysis took longer than the experiments: Huxley computed the propagated action potential by hand on a mechanical calculator, over about three weeks, because the Cambridge computer was out of action. The five papers appeared in 1952, and Hodgkin and Huxley shared the 1963 Nobel Prize in Physiology or Medicine with John Eccles.
+
+</Callout>
+
+<Bridge title="Clamp one variable to see the rest"
+  neuro="A spike is a loop: voltage opens channels, channels change voltage. The voltage clamp cuts the loop by holding one variable fixed, so that the others can be measured as functions of it. Most of what is known about ion channels was learned this way."
+  ai="Interpretability research does the same to networks: activation patching and ablation hold or replace one internal variable and measure the effect on the rest, cutting the loops through which components influence each other. The logic of the clamp, intervene on one variable and observe the response, is the logic of causal analysis in any system with feedback.">
+
+To understand a system with feedback, hold part of it still.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The voltage clamp holds the membrane voltage fixed by...", options: ["Blocking all channels", "Feedback: injecting whatever current is needed", "Removing the ions", "Cooling the axon"], answer: 1, explain: "The injected current equals the ionic current." },
+  { q: "During a step to 0 mV, the early current is...", options: ["Outward, carried by potassium", "Inward, carried by sodium", "Capacitive only", "Carried by chloride"], answer: 1, explain: "Sodium channels open first." },
+  { q: "The late, sustained current is...", options: ["Inward sodium", "Outward potassium", "Zero", "Calcium"], answer: 1, explain: "Potassium channels open slowly and stay open." },
+  { q: "Why does the voltage clamp make the capacitive current vanish after the step?", options: ["Capacitance is zero", "dV/dt is zero when the voltage is held", "Ions stop moving", "The amplifier removes it by filtering"], answer: 1, explain: "I_C = C dV/dt." },
+  { q: "TTX blocks...", options: ["Potassium channels", "Sodium channels", "Chloride channels", "The pump"], answer: 1, explain: "Tetrodotoxin, from the puffer fish." },
+  { q: "Above E_Na, the sodium current during a step is...", options: ["Inward", "Outward", "Zero", "Undefined"], answer: 1, explain: "The driving force reverses." },
+  { q: "Peak sodium conductance as a function of step voltage is...", options: ["Bell-shaped", "Sigmoidal, rising with voltage", "Constant", "Falling with voltage"], answer: 1, explain: "The activation curve." },
+  { q: "The squid giant axon suited the voltage clamp because...", options: ["It has no potassium channels", "Its size allowed an axial wire, giving a good space clamp", "It is warm", "It has myelin"], answer: 1, explain: "A long stretch held at one voltage." },
+]} />
+
+<Flashcards cards={[
+  { front: "Voltage clamp?", back: "Feedback holds the membrane at a command voltage; the injected current equals the ionic current, since $C\\,dV/dt = 0$." },
+  { front: "Current during a depolarising step?", back: "A brief inward sodium current, then a sustained outward potassium current." },
+  { front: "How are the currents separated?", back: "Originally by replacing sodium with choline (Hodgkin and Huxley); now with TTX for sodium and TEA for potassium." },
+  { front: "Conductance from a clamp current?", back: "$g = I/(V - E)$: dividing by the driving force removes the reversal and reveals the channels' opening." },
+  { front: "Gating variable during a clamp step?", back: "$x(t) = x_\\infty - (x_\\infty - x_0)e^{-t/\\tau_x}$, with $x_\\infty = \\alpha/(\\alpha + \\beta)$ and $\\tau_x = 1/(\\alpha + \\beta)$." },
+]} />
+
+<Predict revisit question="Which ions carry the early inward and the late outward current during a voltage-clamp step to 0 mV?" />
+
+<Key title="Before you go">
+<ul>
+<li>The voltage clamp cuts the feedback between voltage and channels, so currents can be measured at fixed voltages.</li>
+<li>A depolarising step produces a fast, transient inward sodium current and a slow, sustained outward potassium current.</li>
+<li>Ion substitution or toxins separate the two; dividing by the driving force gives conductances.</li>
+<li>Peak sodium conductance rises sigmoidally with voltage, the activation curve.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Hodgkin and Huxley (1952), <em>Currents carried by sodium and potassium ions through the membrane of the giant axon of Loligo</em>.</li>
+<li>Hodgkin, Huxley and Katz (1952), <em>Measurement of current-voltage relations in the membrane of the giant axon of Loligo</em>, Journal of Physiology 116(4), 424 to 448: the voltage-clamp method itself.</li>
+<li>Hodgkin (1976), <em>Chance and design in electrophysiology: an informal account of certain experiments on nerve carried out between 1934 and 1952</em>, Journal of Physiology 263(1), 1 to 21.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Hodgkin and Huxley's separation by ion substitution relied on the independence principle: each ion's current depends only on its own concentrations. Write down one way that assumption could fail, given what you learned about channels last week, and how the toxin method avoids or does not avoid the problem." />

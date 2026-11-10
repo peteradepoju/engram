@@ -1,0 +1,258 @@
+export const meta = {
+  title: "Forge: Week 30 challenge, quiz and deep read",
+  intro: "This week took the Hodgkin-Huxley model apart: the voltage clamp and the separation of currents, gates as charged particles and the fits that gave n⁴ and m³h, inactivation and refractoriness, the energy cost of a spike, and the many channels and parameter combinations of real neurons. Today's challenge puts you in Hodgkin and Huxley's place. From noisy voltage-clamp records of the potassium conductance you will fit the gating kinetics, voltage by voltage, build them into a model, and test whether your model fires the same spike train as the one that generated the data. Then the quiz, and a critique of the paper in which the currents were separated.",
+  goals: [
+    "Fit steady states and time constants of a gating variable from voltage-clamp data",
+    "Convert them to rate functions and use them in a working model",
+    "Validate a fitted model against behaviour it was not fitted to",
+    "Critique the separation of ionic currents by ion substitution",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "hodgkin-huxley-1952a",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. At 0 mV, what is the driving force on sodium (E_Na = +50 mV) and on potassium (E_K = -77 mV)?
+2. A gate has $x_\infty$ = 0.8 and $\tau$ = 2 ms at some voltage. What are α and β?
+3. By what factor does a $Q_{10}$ of 3 speed the gates between 6.3 °C and 36.3 °C?
+
+<PyCell code={String.raw`
+  print("1. sodium", 0 - 50, "mV (inward), potassium", 0 - (-77), "mV (outward)")
+  print("2. alpha =", 0.8 / 2, "per ms, beta =", round(0.2 / 2, 3), "per ms")
+  print("3.", 3 ** 3, "times faster")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: fitting the potassium gate.** The cell below simulates voltage-clamp steps from -65 mV to 14 voltages between -80 and +50 mV, and records the potassium conductance (after TTX) for 25 ms with noise of 0.1 mS/cm². For each voltage, estimate $n_\infty$ from the final conductance, $n_\infty = (g_{end}/\bar g_K)^{1/4}$, fit $\tau_n$ by grid search with the model $\bar g_K(n_\infty - (n_\infty - n_0)e^{-t/\tau})^4$, and convert to $\alpha_n$ and $\beta_n$.
+
+<PyCell id="partA" title="Part A: kinetics from clamp records" tests={String.raw`
+  import numpy as np
+  def test_ninf():
+      "ninf_fit uses the mean of the last 40 samples of each record"
+      assert np.allclose(ninf_fit, np.maximum(data[:, -40:].mean(1), 1e-6) ** 0.25 / gK ** 0.25)
+
+  def test_rates():
+      "alpha_fit and beta_fit come from the fits and match the true rates within 10% from -50 mV upwards"
+      assert np.allclose(alpha_fit, ninf_fit / tau_fit) and np.allclose(beta_fit, (1 - ninf_fit) / tau_fit)
+      sel = Vs >= -50
+      assert np.all(np.abs(alpha_fit[sel] / an_(Vs[sel]) - 1) < 0.1) and np.all(np.abs(beta_fit[sel] / bn_(Vs[sel]) - 1) < 0.1)
+`} prompt="Complete the loop: for each record g, compute n∞ from the last 40 samples, find the τ on the grid `taus` that minimises the squared error, and append both. Then compute `alpha_fit` and `beta_fit`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  gK = 36.0
+  def an_(V): V = V + 1e-7; return 0.01 * (V + 55) / (1 - np.exp(-(V + 55) / 10))
+  def bn_(V): return 0.125 * np.exp(-(V + 65) / 80)
+
+  r = np.random.default_rng(1952)
+  t = np.arange(0, 25, 0.05)
+  Vs = np.arange(-80, 51, 10.0)
+  n0 = an_(-65.0) / (an_(-65.0) + bn_(-65.0))
+  data = np.array([gK * (an_(V) / (an_(V) + bn_(V)) - (an_(V) / (an_(V) + bn_(V)) - n0) * np.exp(-t * (an_(V) + bn_(V)))) ** 4
+                   + r.normal(0, 0.1, t.size) for V in Vs])
+
+  taus = np.linspace(0.2, 12, 1181)
+  ninf_list, tau_list = [], []
+  for g in data:
+      ni = ...
+      errs = ...
+      ninf_list.append(ni); tau_list.append(taus[int(np.argmin(errs))])
+  ninf_fit, tau_fit = np.array(ninf_list), np.array(tau_list)
+  alpha_fit = ...
+  beta_fit = ...
+  for V, a, b in zip(Vs, alpha_fit, beta_fit):
+      print(f"{V:5.0f} mV: alpha {a:.4f} (true {an_(V):.4f}), beta {b:.4f} (true {bn_(V):.4f})")
+`}
+hint="ni = max(g[-40:].mean(), 1e-6) ** 0.25 / gK ** 0.25; errs = [np.sum((g - gK * (ni - (ni - n0) * np.exp(-t / tt)) ** 4) ** 2) for tt in taus]; alpha_fit = ninf_fit / tau_fit; beta_fit = (1 - ninf_fit) / tau_fit."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  gK = 36.0
+  def an_(V): V = V + 1e-7; return 0.01 * (V + 55) / (1 - np.exp(-(V + 55) / 10))
+  def bn_(V): return 0.125 * np.exp(-(V + 65) / 80)
+
+  r = np.random.default_rng(1952)
+  t = np.arange(0, 25, 0.05)
+  Vs = np.arange(-80, 51, 10.0)
+  n0 = an_(-65.0) / (an_(-65.0) + bn_(-65.0))
+  data = np.array([gK * (an_(V) / (an_(V) + bn_(V)) - (an_(V) / (an_(V) + bn_(V)) - n0) * np.exp(-t * (an_(V) + bn_(V)))) ** 4
+                   + r.normal(0, 0.1, t.size) for V in Vs])
+
+  taus = np.linspace(0.2, 12, 1181)
+  ninf_list, tau_list = [], []
+  for g in data:
+      ni = max(g[-40:].mean(), 1e-6) ** 0.25 / gK ** 0.25
+      errs = [np.sum((g - gK * (ni - (ni - n0) * np.exp(-t / tt)) ** 4) ** 2) for tt in taus]
+      ninf_list.append(ni); tau_list.append(taus[int(np.argmin(errs))])
+  ninf_fit, tau_fit = np.array(ninf_list), np.array(tau_list)
+  alpha_fit = ninf_fit / tau_fit
+  beta_fit = (1 - ninf_fit) / tau_fit
+  for V, a, b in zip(Vs, alpha_fit, beta_fit):
+      print(f"{V:5.0f} mV: alpha {a:.4f} (true {an_(V):.4f}), beta {b:.4f} (true {bn_(V):.4f})")
+`} />
+
+From -50 mV upwards the fitted rates agree with the true functions to within about 1%. Below that they go wrong: at -80 mV the fitted α comes out at 0.0085 per ms against a true 0.022, because there the conductance is $n^4$ of a small number, a few hundredths of a mS/cm², and the noise swamps it. Hodgkin and Huxley had the same problem and leaned on steps from hyperpolarised holding potentials and on the tails of currents after repolarisation to pin down the rates at negative voltages.
+
+**Part B: does the fitted model fire correctly?** A model is tested by what it was not fitted to. Replace the potassium rate functions of the HH model with your fitted values, interpolated linearly between the 14 voltages, keep everything else, and inject 10 μA/cm² from 5 ms. Compare the spike train with that of the original model.
+
+<PyCell id="partB" title="Part B: from clamp to spikes" tests={String.raw`
+  import numpy as np
+  def test_spikes():
+      "both models fire the same number of spikes in 60 ms, with peaks within 2 mV"
+      assert len(spikes_true) == len(spikes_fit) >= 3 and abs(peak_true - peak_fit) < 2
+
+  def test_isi():
+      "the fitted model's mean interspike interval is within 10% of the original's"
+      assert abs(isi_fit - isi_true) / isi_true < 0.1
+`} prompt="`simulate(use_fit)` runs the model with either the true or the fitted potassium rates. Find the spike times (upward crossings of 0 mV) of both runs, `spikes_true` and `spikes_fit`, their peak voltages, and mean interspike intervals `isi_true` and `isi_fit`."
+code={String.raw`
+  import math
+
+  def other_rates(V):
+      V = V + 1e-7
+      return (0.1 * (V + 40) / (1 - math.exp(-(V + 40) / 10)), 4.0 * math.exp(-(V + 65) / 18),
+              0.07 * math.exp(-(V + 65) / 20), 1 / (1 + math.exp(-(V + 35) / 10)))
+
+  def simulate(use_fit, I=10.0, T=60.0, dt=0.01):
+      V, n, m, h = -65.0, n0, 0.0529, 0.5961
+      out = np.empty(int(T / dt))
+      for k in range(len(out)):
+          am, bm, ah, bh = other_rates(V)
+          if use_fit:
+              an, bn = np.interp(V, Vs, alpha_fit), np.interp(V, Vs, beta_fit)
+          else:
+              an, bn = an_(V), bn_(V)
+          dV = (I if k * dt >= 5 else 0.0) - 120 * m**3 * h * (V - 50) - gK * n**4 * (V + 77) - 0.3 * (V + 54.387)
+          n += dt * (an * (1 - n) - bn * n); m += dt * (am * (1 - m) - bm * m); h += dt * (ah * (1 - h) - bh * h)
+          V += dt * dV
+          out[k] = V
+      return out
+
+  def spike_times(v, dt=0.01):
+      return ...
+
+  v_true, v_fit = simulate(False), simulate(True)
+  spikes_true, spikes_fit = spike_times(v_true), spike_times(v_fit)
+  peak_true, peak_fit = v_true.max(), v_fit.max()
+  isi_true, isi_fit = np.diff(spikes_true).mean(), np.diff(spikes_fit).mean()
+  print(f"original: {len(spikes_true)} spikes, peak {peak_true:.1f} mV, mean interval {isi_true:.2f} ms")
+  print(f"fitted:   {len(spikes_fit)} spikes, peak {peak_fit:.1f} mV, mean interval {isi_fit:.2f} ms")
+  tt = np.arange(len(v_true)) * 0.01
+  plt.plot(tt, v_true, label="original"); plt.plot(tt, v_fit, "--", label="fitted potassium kinetics")
+  plt.xlabel("ms"); plt.ylabel("V (mV)"); plt.legend(); plt.show()
+`}
+hint="return np.where((v[1:] > 0) & (v[:-1] <= 0))[0] * dt."
+solution={String.raw`
+  import math
+
+  def other_rates(V):
+      V = V + 1e-7
+      return (0.1 * (V + 40) / (1 - math.exp(-(V + 40) / 10)), 4.0 * math.exp(-(V + 65) / 18),
+              0.07 * math.exp(-(V + 65) / 20), 1 / (1 + math.exp(-(V + 35) / 10)))
+
+  def simulate(use_fit, I=10.0, T=60.0, dt=0.01):
+      V, n, m, h = -65.0, n0, 0.0529, 0.5961
+      out = np.empty(int(T / dt))
+      for k in range(len(out)):
+          am, bm, ah, bh = other_rates(V)
+          if use_fit:
+              an, bn = np.interp(V, Vs, alpha_fit), np.interp(V, Vs, beta_fit)
+          else:
+              an, bn = an_(V), bn_(V)
+          dV = (I if k * dt >= 5 else 0.0) - 120 * m**3 * h * (V - 50) - gK * n**4 * (V + 77) - 0.3 * (V + 54.387)
+          n += dt * (an * (1 - n) - bn * n); m += dt * (am * (1 - m) - bm * m); h += dt * (ah * (1 - h) - bh * h)
+          V += dt * dV
+          out[k] = V
+      return out
+
+  def spike_times(v, dt=0.01):
+      return np.where((v[1:] > 0) & (v[:-1] <= 0))[0] * dt
+
+  v_true, v_fit = simulate(False), simulate(True)
+  spikes_true, spikes_fit = spike_times(v_true), spike_times(v_fit)
+  peak_true, peak_fit = v_true.max(), v_fit.max()
+  isi_true, isi_fit = np.diff(spikes_true).mean(), np.diff(spikes_fit).mean()
+  print(f"original: {len(spikes_true)} spikes, peak {peak_true:.1f} mV, mean interval {isi_true:.2f} ms")
+  print(f"fitted:   {len(spikes_fit)} spikes, peak {peak_fit:.1f} mV, mean interval {isi_fit:.2f} ms")
+  tt = np.arange(len(v_true)) * 0.01
+  plt.plot(tt, v_true, label="original"); plt.plot(tt, v_fit, "--", label="fitted potassium kinetics")
+  plt.xlabel("ms"); plt.ylabel("V (mV)"); plt.legend(); plt.show()
+`} />
+
+Both models fire 4 spikes, with peaks of 40.5 and 40.3 mV, but the fitted model's interval is 13.9 ms against 14.7, about 5% shorter. The error comes from the poorly fitted rates below -50 mV, which govern the slow recovery between spikes: the voltages where the data were weakest are exactly the ones that set the firing rate. Hodgkin and Huxley validated their model in the same spirit, by predicting the shape and speed of the propagated spike, which it had not been fitted to, within about 10%.
+
+**Part C (written).** Answer in your journal: your fitted rates were least accurate at hyperpolarised voltages. Why there, and what experiment would you add to the protocol to fix it? Then use Day 5's lesson on degeneracy to say whether matching the spike train in Part B proves that your potassium kinetics are right.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. Why a power gives a delay" task="Starting from $n(0) = 0$, the gate rises as $n(t) = n_\infty(1 - e^{-t/\tau})$. Show that for $t \ll \tau$ the conductance $\bar g n^p$ grows like $t^p$, so that its first $p - 1$ time derivatives vanish at $t = 0$.">
+
+For small $t$, $1 - e^{-t/\tau} = t/\tau - t^2/(2\tau^2) + \dots \approx t/\tau$ (Week 9's Taylor series).
+
+So $n(t) \approx n_\infty t/\tau$ and $\bar g n^p \approx \bar g (n_\infty/\tau)^p t^p$.
+
+A function that starts like $t^p$ has its first $p - 1$ derivatives equal to zero at the origin: it leaves zero flat, with a delay that is more pronounced the larger $p$ is. With $p = 1$ the conductance would rise at full speed immediately, which the potassium records did not.
+
+</Prove>
+
+<Prove title="2. Temperature changes shape, not just speed" task="Multiply every rate in the HH model by $\phi$. Show that the gating equations in time $t$ are identical to the original gating equations in rescaled time $s = \phi t$, but that the membrane equation is not, and explain why warming therefore changes the spike's shape.">
+
+Each gating equation becomes $\frac{dx}{dt} = \phi[\alpha(V)(1 - x) - \beta(V)x]$. With $s = \phi t$, $\frac{dx}{ds} = \frac{1}{\phi}\frac{dx}{dt} = \alpha(1 - x) - \beta x$: the original equation.
+
+The membrane equation $C\frac{dV}{dt} = I - I_{ion}$ becomes $C\phi\frac{dV}{ds} = I - I_{ion}$ in the new time: it is as if the capacitance had been multiplied by $\phi$.
+
+So warming by $\phi$ is equivalent to keeping the gates as they were and making the membrane $\phi$ times slower to charge. The gates now outrun the voltage, which is why the spike shrinks, and above a certain $\phi$ the sodium current inactivates before it can charge the membrane: the heat block of Day 4.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 30 quiz (15 questions)" questions={[
+  { q: "The voltage clamp works by...", options: ["Blocking channels", "Feedback current that holds the voltage at a command", "Cooling the axon", "Removing ions"], answer: 1, explain: "Day 1." },
+  { q: "During a step to 0 mV, the early inward current is carried by...", options: ["Potassium", "Sodium", "Chloride", "Calcium"], answer: 1, explain: "Day 1." },
+  { q: "TTX blocks...", options: ["Sodium channels", "Potassium channels", "The pump", "Synapses"], answer: 0, explain: "Day 1." },
+  { q: "Conductance is obtained from a clamp current by...", options: ["Multiplying by time", "Dividing by the driving force", "Integrating", "Taking the logarithm"], answer: 1, explain: "g = I/(V - E)." },
+  { q: "The steepness of a Boltzmann activation curve measures...", options: ["Temperature only", "The gating charge", "Channel number", "Capacitance"], answer: 1, explain: "k = V_T/z." },
+  { q: "The S-shaped rise of g_K is why HH used...", options: ["n", "n⁴", "m³h", "h"], answer: 1, explain: "Day 2." },
+  { q: "Gating currents were first recorded by...", options: ["Hodgkin and Huxley", "Neher and Sakmann", "Armstrong and Bezanilla", "Cole and Curtis"], answer: 2, explain: "1973." },
+  { q: "Steady-state inactivation is measured with...", options: ["Prepulses then a fixed test step", "A single long step", "Noise analysis", "Current clamp"], answer: 0, explain: "Day 3." },
+  { q: "The absolute refractory period is caused mainly by...", options: ["Low h and high n", "High m", "The pump", "Capacitance"], answer: 0, explain: "Day 3." },
+  { q: "Anode-break excitation follows...", options: ["Release from hyperpolarisation", "A strong depolarisation", "TTX", "Warming"], answer: 0, explain: "Day 3." },
+  { q: "In the HH model at 6.3 °C, sodium entry per spike is about how many times the minimum?", options: ["1.3", "4", "13", "100"], answer: 2, explain: "Day 4." },
+  { q: "Warming the HH model with Q10 = 3 makes the spike...", options: ["Wider", "Narrower and cheaper", "Unchanged", "Larger"], answer: 1, explain: "Day 4." },
+  { q: "Mammalian axons save energy by...", options: ["Overlapping currents more", "Separating sodium and potassium currents in time", "Using chloride", "Having no potassium channels"], answer: 1, explain: "Alle and colleagues." },
+  { q: "Degeneracy means...", options: ["One parameter set per behaviour", "Many parameter sets give the same behaviour", "Neurons degenerate with age", "Channels are noisy"], answer: 1, explain: "Day 5." },
+  { q: "Matching a spike train with a fitted model proves...", options: ["The fitted parameters are the true ones", "The model can reproduce the data, not that its parameters are unique", "Nothing at all", "The data are wrong"], answer: 1, explain: "Degeneracy and Part C." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Hodgkin and Huxley's *Currents carried by sodium and potassium ions through the membrane of the giant axon of Loligo* its third pass and write your critique under the five headings. Focus on one question: **how securely were the two currents separated?** Consider the logic of replacing sodium with choline; the independence principle and what it assumes about each ion's movement; the assumption that the potassium current is unaffected by the sodium substitution early in a step; how their separated currents compare with what TTX and TEA later showed; and what errors in the separation would have done to the fitted kinetics you reproduced in Part A. End with how much of the 1952 model would change if the separation had been off by 10%.
+
+<Callout kind="research">
+
+Modern channel models replace Hodgkin and Huxley's independent gates with Markov schemes in which a channel passes through several closed states before opening and can inactivate from closed states as well as open ones. Take the five-state potassium channel model obtained by expanding $n^4$ into states with 0 to 4 activated subunits (rates $4\alpha, 3\alpha, 2\alpha, \alpha$ forwards and $\beta, 2\beta, 3\beta, 4\beta$ backwards), simulate a voltage-clamp step, and show that its open probability matches $n^4$ exactly. Then change one rate so the subunits cooperate, and see what changes in the clamp records that the HH form could not fit.
+
+</Callout>
+
+<Key title="Week 30 review checklist">
+<ul>
+<li>I can explain the voltage clamp, separate sodium and potassium currents, and convert currents to conductances.</li>
+<li>I can derive Boltzmann activation, estimate gating charge, and explain the powers in n⁴ and m³h.</li>
+<li>I can measure inactivation and recovery with standard protocols and explain refractoriness and anode-break excitation.</li>
+<li>I can compute the sodium cost of a spike and how temperature changes it.</li>
+<li>I can explain degeneracy and why fitting a model does not identify its parameters.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then write one paragraph on what you now see differently in the Hodgkin-Huxley equations, which you first met in Week 21 as mathematics, after a week of seeing how they were measured." />

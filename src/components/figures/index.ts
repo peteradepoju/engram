@@ -134,3 +134,8 @@ export { GHKResting } from "./ghk-resting";
 export { CellSize } from "./cell-size";
 export { ShuntingInhibition } from "./shunting-inhibition";
 export { ChannelNoise } from "./channel-noise";
+export { VoltageClamp } from "./voltage-clamp";
+export { GatePower } from "./gate-power";
+export { InactivationProtocol } from "./inactivation-protocol";
+export { SpikeCurrents } from "./spike-currents";
+export { Degeneracy } from "./degeneracy";

@@ -1,0 +1,298 @@
+export const meta = {
+  title: "Fitting the gates: why n to the fourth power",
+  intro: "Yesterday's conductances rose, and in the case of sodium fell, along curves with characteristic shapes. Hodgkin and Huxley turned those shapes into equations by imagining gates: charged particles in the membrane that move in the electric field and must all be in the right place for a channel to conduct. Today you follow their reasoning. You will see why a voltage-sensing particle opens with a Boltzmann curve, find the gating charge from its steepness, discover from the delayed rise of the potassium conductance that four particles are needed, and fit the rate functions that the model is built from. Then you meet the experiment that, twenty years later, detected the particles' movement directly.",
+  goals: [
+    "Derive the open probability of a two-state charged gate from the Boltzmann distribution",
+    "Estimate an effective gating charge from the steepness of an activation curve",
+    "Show from the shape of a conductance's rise that it is controlled by several independent particles",
+    "Recover rate functions from fitted time constants and steady states",
+    "Describe gating currents and what they showed",
+  ],
+  plan: [
+    { label: "Predict and gates as charges", minutes: 25 },
+    { label: "The delayed rise: why a power", minutes: 30 },
+    { label: "From time constants to rate functions", minutes: 30 },
+    { label: "Gating currents", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "armstrong-bezanilla-1973",
+};
+
+<Predict question="After a depolarising step, the potassium conductance does not rise like a simple exponential, starting at full speed; it starts slowly and then accelerates, an S-shaped onset. What simple mechanism could produce that delay?" />
+
+<Step n={1} title="Gates as charged particles" minutes={25} />
+
+A channel that is opened by voltage must contain something that feels the electric field: charged parts of the protein, the **voltage sensor**. Model the simplest case, a particle with charge $ze$ that can sit in a closed position or an open position, with the open position further across the membrane. Last week's Boltzmann distribution gives the probability of each.
+
+<Derivation title="The Boltzmann activation curve">
+<div>
+
+Moving the particle from closed to open changes its energy by $\Delta U = \Delta U_0 - zeV$: an intrinsic part $\Delta U_0$ from the protein, and an electrical part that a depolarisation lowers (for a positive charge moving outward).
+
+</div>
+<div>
+
+At equilibrium, $\frac{p_{open}}{p_{closed}} = e^{-\Delta U/k_BT}$. With $p_{open} + p_{closed} = 1$:
+
+$$
+p_{open}(V) = \frac{1}{1 + e^{-(V - V_{1/2})/k}}, \qquad k = \frac{k_BT}{ze} = \frac{V_T}{z},
+$$
+
+where $V_{1/2} = \Delta U_0/(ze)$ is the voltage at which the particle is equally likely in either position.
+
+</div>
+<div>
+
+The steepness of the curve measures the charge: a slope factor $k$ means an effective gating charge $z = V_T/k$. At the squid's 6.3 °C, $V_T$ = 24.1 mV, so a slope factor of 24 mV means one elementary charge, and one of 6 mV means four.
+
+</div>
+</Derivation>
+
+The same physics gives the rates. If the particle must cross an energy barrier to move, each direction's rate depends exponentially on voltage, which is why Hodgkin and Huxley's $\alpha$ and $\beta$ functions are exponentials or close to them. Their exact forms were chosen to fit data, not derived, and some (such as $\alpha_n$, of the form $x/(1 - e^{-x})$) are empirical.
+
+<PyCell id="charge" title="How much charge moves?" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "the fitted curve minimises squared error on the grid, with a slope factor between 15 and 20 mV"
+      err = lambda vh, k: np.sum((ninf - 1 / (1 + np.exp(-(V - vh) / k))) ** 2)
+      assert abs(err(V_half, k_slope) - min(err(vh, k) for vh in np.arange(-80, 0.1, 0.5) for k in np.arange(5, 30.01, 0.1))) < 1e-9
+      assert 15 < k_slope < 20
+
+  def test_charge():
+      "z is V_T at 6.3 C divided by the slope factor, between 1 and 2 elementary charges"
+      assert abs(z - 24.08 / k_slope) < 1e-9 and 1 < z < 2
+`} prompt="Compute n∞(V) from the HH rate functions for V from -100 to +40 mV, fit a Boltzmann curve by grid search over V_half from -80 to 0 mV and k from 5 to 30 mV, and convert the slope factor into an effective charge `z` per particle."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def rates_n(V):
+      V = V + 1e-7
+      return 0.01 * (V + 55) / (1 - np.exp(-(V + 55) / 10)), 0.125 * np.exp(-(V + 65) / 80)
+
+  V = np.arange(-100, 41, 1.0)
+  an, bn = rates_n(V)
+  ninf = an / (an + bn)
+  best = (np.inf, None, None)
+  for vh in np.arange(-80, 0.1, 0.5):
+      for k in np.arange(5, 30.01, 0.1):
+          err = np.sum((ninf - 1 / (1 + np.exp(-(V - vh) / k))) ** 2)
+          if err < best[0]:
+              best = (err, vh, k)
+  _, V_half, k_slope = best
+  z = ...
+  print(f"n_inf: V_half {V_half:.1f} mV, slope factor {k_slope:.1f} mV, about {z:.2f} elementary charges per particle")
+  plt.plot(V, ninf, label="n_inf"); plt.plot(V, ninf ** 4, label="n_inf^4 (the conductance)")
+  plt.xlabel("V (mV)"); plt.legend(); plt.show()
+`}
+hint="z = 24.08 / k_slope."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def rates_n(V):
+      V = V + 1e-7
+      return 0.01 * (V + 55) / (1 - np.exp(-(V + 55) / 10)), 0.125 * np.exp(-(V + 65) / 80)
+
+  V = np.arange(-100, 41, 1.0)
+  an, bn = rates_n(V)
+  ninf = an / (an + bn)
+  best = (np.inf, None, None)
+  for vh in np.arange(-80, 0.1, 0.5):
+      for k in np.arange(5, 30.01, 0.1):
+          err = np.sum((ninf - 1 / (1 + np.exp(-(V - vh) / k))) ** 2)
+          if err < best[0]:
+              best = (err, vh, k)
+  _, V_half, k_slope = best
+  z = 24.08 / k_slope
+  print(f"n_inf: V_half {V_half:.1f} mV, slope factor {k_slope:.1f} mV, about {z:.2f} elementary charges per particle")
+  plt.plot(V, ninf, label="n_inf"); plt.plot(V, ninf ** 4, label="n_inf^4 (the conductance)")
+  plt.xlabel("V (mV)"); plt.legend(); plt.show()
+`} />
+
+Each $n$ particle behaves as if it carried about 1.4 elementary charges, with a slope factor of 18 mV. Since the conductance needs four particles, a channel moves about four times that, roughly 5.5 charges, when it opens. Measurements on cloned potassium channels give about 12 to 13 charges per channel: the HH particles are a simplification, but the right kind.
+
+<Video id="K1pxJVdqlxw" title="5. Hodgkin-Huxley Model Part 2" by="Michale Fee (MIT 9.40 Introduction to Neural Computation, MIT OpenCourseWare)" note="The second half of Michale Fee's treatment: gating variables, their steady states and time constants, and how they combine into the conductances of the model." />
+
+<Step n={2} title="The delayed rise: why a power" minutes={30} />
+
+If a single gate controlled the potassium channel, the conductance after a step would follow the gate: an exponential, rising at its fastest at the start. The measured conductance instead starts slowly. Suppose the channel opens only when $p$ independent gates are all open. Each gate rises as $n(t) = n_\infty - (n_\infty - n_0)e^{-t/\tau}$, and the channel's open probability is $n(t)^p$. Near the start, when $n_0$ is small, $n^p$ grows like $t^p$: a delay that lengthens with $p$. Hodgkin and Huxley found that $p = 4$ fitted their potassium data and $m^3h$ their sodium data.
+
+<Figure caption="The potassium conductance after a step to +20 mV (dots: simulated data) and the best fit for each power p. Choose p." credit="Interactive figure by Engram.">
+  <GatePower />
+</Figure>
+
+<PyCell id="power" title="Fitting the power" tests={String.raw`
+  import numpy as np
+  def test_model():
+      "model gives (a - (a - b) e^(-t/tau))^p with a and b the p-th roots of the final and initial conductances"
+      a, b = (g_end / gK) ** 0.25, (g0 / gK) ** 0.25
+      assert np.allclose(model(4, 1.3), gK * (a - (a - b) * np.exp(-t / 1.3)) ** 4)
+
+  def test_best():
+      "the best power is 4 and its time constant is within 0.1 ms of the true 1.26 ms"
+      assert p_best == 4 and abs(tau_best - 1.26) < 0.1
+`} prompt="The array `g` holds a noisy potassium conductance after a step from -65 to +20 mV. For each power p from 1 to 6, fit the time constant by grid search with the model gK (a - (a - b) e^(-t/τ))^p, where a and b are the p-th roots of the final and initial conductances divided by gK. Report the error for each p and the best p and τ."
+code={String.raw`
+  r = np.random.default_rng(30)
+  gK = 36.0
+  t = np.arange(0, 20, 0.01)
+  n0, ninf, tau_true = 0.3177, 0.9457, 1.2600
+  g = gK * (ninf - (ninf - n0) * np.exp(-t / tau_true)) ** 4 + r.normal(0, 0.3, t.size)
+  g_end, g0 = gK * ninf ** 4, gK * n0 ** 4              # final and initial values, known from the records
+
+  def model(p, tau):
+      a, b = (g_end / gK) ** (1 / p), (g0 / gK) ** (1 / p)
+      return ...
+
+  taus = np.linspace(0.3, 5, 471)
+  results = {}
+  for p in range(1, 7):
+      errs = [np.sum((g - model(p, tau)) ** 2) for tau in taus]
+      results[p] = (min(errs), taus[int(np.argmin(errs))])
+      print(f"p = {p}: error {results[p][0]:8.1f}, tau {results[p][1]:.2f} ms")
+  p_best = ...
+  tau_best = results[p_best][1]
+  plt.plot(t, g, ".", ms=1, label="data")
+  for p in (1, 4):
+      plt.plot(t, model(p, results[p][1]), label=f"p = {p}")
+  plt.xlim(0, 6); plt.xlabel("ms"); plt.ylabel("g_K (mS/cm^2)"); plt.legend(); plt.show()
+`}
+hint="return gK * (a - (a - b) * np.exp(-t / tau)) ** p; p_best = min(results, key=lambda p: results[p][0])."
+solution={String.raw`
+  r = np.random.default_rng(30)
+  gK = 36.0
+  t = np.arange(0, 20, 0.01)
+  n0, ninf, tau_true = 0.3177, 0.9457, 1.2600
+  g = gK * (ninf - (ninf - n0) * np.exp(-t / tau_true)) ** 4 + r.normal(0, 0.3, t.size)
+  g_end, g0 = gK * ninf ** 4, gK * n0 ** 4              # final and initial values, known from the records
+
+  def model(p, tau):
+      a, b = (g_end / gK) ** (1 / p), (g0 / gK) ** (1 / p)
+      return gK * (a - (a - b) * np.exp(-t / tau)) ** p
+
+  taus = np.linspace(0.3, 5, 471)
+  results = {}
+  for p in range(1, 7):
+      errs = [np.sum((g - model(p, tau)) ** 2) for tau in taus]
+      results[p] = (min(errs), taus[int(np.argmin(errs))])
+      print(f"p = {p}: error {results[p][0]:8.1f}, tau {results[p][1]:.2f} ms")
+  p_best = min(results, key=lambda p: results[p][0])
+  tau_best = results[p_best][1]
+  plt.plot(t, g, ".", ms=1, label="data")
+  for p in (1, 4):
+      plt.plot(t, model(p, results[p][1]), label=f"p = {p}")
+  plt.xlim(0, 6); plt.xlabel("ms"); plt.ylabel("g_K (mS/cm^2)"); plt.legend(); plt.show()
+`} />
+
+The error falls sharply from $p = 1$ (2,790) to $p = 3$ (212) and is lowest at $p = 4$ (179), with a time constant of 1.26 ms, the true value; $p = 5$ and 6 give 192 and 215. The data rule out one or two particles decisively but separate three to six much less clearly, because the power is constrained mainly by the first fraction of a millisecond of the rise, a few noisy samples. Hodgkin and Huxley chose 4 as the smallest power that fitted well. Forty years later, potassium channels turned out to be built from four identical subunits, each with its own voltage sensor, which gave the choice a physical meaning.
+
+<Step n={3} title="From time constants to rate functions" minutes={30} />
+
+Fitting each step gives two numbers per voltage, $x_\infty(V)$ and $\tau_x(V)$. Inverting $x_\infty = \alpha/(\alpha + \beta)$ and $\tau_x = 1/(\alpha + \beta)$ gives the rates:
+
+$$
+\alpha_x(V) = \frac{x_\infty(V)}{\tau_x(V)}, \qquad \beta_x(V) = \frac{1 - x_\infty(V)}{\tau_x(V)}.
+$$
+
+Hodgkin and Huxley plotted these against voltage and chose simple functions that passed through the points. You will do the same for $\beta_n$, whose form is a plain exponential, $\beta_n = A e^{-(V + 65)/B}$, so that a straight-line fit to $\ln\beta_n$ against $V$ recovers $A$ and $B$.
+
+<PyCell id="ratefit" title="Recovering a rate function" tests={String.raw`
+  import numpy as np
+  def test_rates():
+      "alpha and beta are computed from n_inf and tau"
+      assert np.allclose(alpha, ninf_fit / tau_fit) and np.allclose(beta, (1 - ninf_fit) / tau_fit)
+
+  def test_fit():
+      "the exponential fit recovers A within 15% of 0.125 per ms and B within 15% of 80 mV"
+      assert abs(A - 0.125) / 0.125 < 0.15 and abs(B - 80) / 80 < 0.15
+`} prompt="The arrays `ninf_fit` and `tau_fit` hold steady states and time constants fitted at 14 voltages, with 5% errors. Compute `alpha` and `beta`, then fit a straight line to ln(beta) against V + 65 and recover A and B in beta = A exp(-(V + 65) / B)."
+code={String.raw`
+  r2 = np.random.default_rng(52)
+  Vs = np.arange(-80, 51, 10.0)
+  an, bn = rates_n(Vs)
+  ninf_fit = np.clip(an / (an + bn) * (1 + 0.05 * r2.normal(size=Vs.size)), 0, 0.99)
+  tau_fit = 1 / (an + bn) * (1 + 0.05 * r2.normal(size=Vs.size))
+
+  alpha = ...
+  beta = ...
+  slope, intercept = np.polyfit(Vs + 65, np.log(beta), 1)
+  A = ...
+  B = ...
+  print(f"beta_n = {A:.3f} exp(-(V + 65) / {B:.1f});  Hodgkin and Huxley: 0.125 exp(-(V + 65) / 80)")
+  plt.semilogy(Vs, beta, "o", label="beta from fits"); plt.semilogy(Vs, A * np.exp(-(Vs + 65) / B), label="fit")
+  plt.semilogy(Vs, alpha, "s", label="alpha from fits"); plt.xlabel("V (mV)"); plt.ylabel("rate (1/ms)"); plt.legend(); plt.show()
+`}
+hint="alpha = ninf_fit / tau_fit; beta = (1 - ninf_fit) / tau_fit; A = np.exp(intercept); B = -1 / slope."
+solution={String.raw`
+  r2 = np.random.default_rng(52)
+  Vs = np.arange(-80, 51, 10.0)
+  an, bn = rates_n(Vs)
+  ninf_fit = np.clip(an / (an + bn) * (1 + 0.05 * r2.normal(size=Vs.size)), 0, 0.99)
+  tau_fit = 1 / (an + bn) * (1 + 0.05 * r2.normal(size=Vs.size))
+
+  alpha = ninf_fit / tau_fit
+  beta = (1 - ninf_fit) / tau_fit
+  slope, intercept = np.polyfit(Vs + 65, np.log(beta), 1)
+  A = np.exp(intercept)
+  B = -1 / slope
+  print(f"beta_n = {A:.3f} exp(-(V + 65) / {B:.1f});  Hodgkin and Huxley: 0.125 exp(-(V + 65) / 80)")
+  plt.semilogy(Vs, beta, "o", label="beta from fits"); plt.semilogy(Vs, A * np.exp(-(Vs + 65) / B), label="fit")
+  plt.semilogy(Vs, alpha, "s", label="alpha from fits"); plt.xlabel("V (mV)"); plt.ylabel("rate (1/ms)"); plt.legend(); plt.show()
+`} />
+
+With 5% errors in the fitted steady states and time constants, the line gives $\beta_n = 0.122\,e^{-(V + 65)/71.8}$, close to Hodgkin and Huxley's 0.125 and 80 mV. The rates scatter more than the fits they come from, because each rate combines two noisy numbers, and the scatter grows wherever $x_\infty$ is close to 0 or 1, since one of the two rates is then computed from a small difference. With real data of this quality, several functional forms fit almost equally well, which is one reason later models of the same channels use different formulas.
+
+<Step n={4} title="Gating currents" minutes={20} />
+
+Hodgkin and Huxley's particles were a hypothesis. If they were real charges moving across the membrane, their movement should itself be a tiny current, flowing for a fraction of a millisecond when the voltage steps, before the channels open. In 1973 Clay Armstrong and Francisco Bezanilla, today's paper, found it. They removed the ionic currents (by replacing permeant ions with impermeant ones and blocking the rest) and subtracted the large linear capacitive current using pulses of opposite sign. What remained was an outward current at the start of a depolarising step and an inward one at its end: the **gating current**, the sensors moving out and back.
+
+Its properties matched the theory. The charge it carried saturated at large depolarisations, as a fixed number of charged sensors would; its voltage dependence was Boltzmann-like; and it preceded the opening of sodium channels. Later, cloning revealed the sensors themselves, the S4 segments of the channel protein, each studded with positive amino acids every third residue. Counting the charge they move, about 12 to 13 elementary charges per potassium channel, explains the steep voltage dependence that lets a few millivolts switch a neuron from rest to firing.
+
+<Bridge title="From curve fitting to mechanism"
+  neuro="Hodgkin and Huxley chose their powers and rate functions to fit curves, and said plainly that the particles were a formal device. Yet the device pointed at real structure: charged sensors that move in the field and several subunits that must all be ready. A good phenomenological model can be a map to mechanisms that are discovered later."
+  ai="Deep networks are often fitted phenomenologically too, and interpretability asks whether their internal variables correspond to anything real. The history of the HH gates suggests a test: a fitted internal variable earns belief when it predicts a new measurement, as the gating current was predicted before it was seen.">
+
+Fit first; then ask what in the world would make your fitted variables real, and go and measure it.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A two-state charged gate has an open probability that depends on voltage as...", options: ["A straight line", "A Boltzmann (logistic) function", "A Gaussian", "A step"], answer: 1, explain: "From the Boltzmann distribution." },
+  { q: "A steeper activation curve means...", options: ["Less gating charge", "More gating charge", "A higher temperature", "Fewer channels"], answer: 1, explain: "k = V_T / z." },
+  { q: "The S-shaped onset of the potassium conductance is explained by...", options: ["A single gate", "Several independent gates that must all open", "Inactivation", "The pump"], answer: 1, explain: "n^p grows like t^p at first." },
+  { q: "Hodgkin and Huxley's potassium conductance is proportional to...", options: ["n", "n²", "n³h", "n⁴"], answer: 3, explain: "Four particles." },
+  { q: "Given x∞ and τ_x at a voltage, α_x equals...", options: ["x∞ τ_x", "x∞ / τ_x", "(1 - x∞) / τ_x", "1 / τ_x"], answer: 1, explain: "x∞ = α/(α + β), τ = 1/(α + β)." },
+  { q: "The gating current is...", options: ["The current through open channels", "The current from voltage sensors moving within the membrane", "The pump current", "The leak current"], answer: 1, explain: "Armstrong and Bezanilla (1973)." },
+  { q: "The gating current at the start of a depolarising step is...", options: ["Inward", "Outward", "Zero", "Oscillatory"], answer: 1, explain: "Positive sensors move outward." },
+  { q: "The voltage sensors of channels were later identified as...", options: ["The selectivity filter", "The S4 segments with positive residues", "The pore helices", "Lipids"], answer: 1, explain: "Charged transmembrane segments." },
+]} />
+
+<Flashcards cards={[
+  { front: "Boltzmann activation?", back: "$p_{open} = 1/(1 + e^{-(V - V_{1/2})/k})$ with slope factor $k = V_T/z$." },
+  { front: "Why $n^4$?", back: "The potassium conductance rises after a delay, as if four independent particles must all be in place; $n^p$ grows like $t^p$ at first." },
+  { front: "Rates from fits?", back: "$\\alpha = x_\\infty/\\tau$, $\\beta = (1 - x_\\infty)/\\tau$." },
+  { front: "Gating current?", back: "A small, brief current from voltage sensors moving in the membrane, preceding channel opening; first recorded by Armstrong and Bezanilla in 1973." },
+  { front: "Gating charge of a potassium channel?", back: "About 12 to 13 elementary charges per channel, which makes opening steeply voltage-dependent." },
+]} />
+
+<Predict revisit question="What mechanism could make the potassium conductance rise with an S-shaped delay?" />
+
+<Key title="Before you go">
+<ul>
+<li>A charged particle in the membrane field opens with a Boltzmann curve whose steepness measures its charge.</li>
+<li>Delayed, S-shaped rises reveal several independent particles: n⁴ for potassium, m³h for sodium.</li>
+<li>Fitted steady states and time constants give the rate functions α and β.</li>
+<li>Gating currents showed that the particles are real moving charges, later identified in the S4 segments.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Armstrong and Bezanilla (1973), <em>Currents related to movement of the gating particles of the sodium channels</em>.</li>
+<li>Hodgkin and Huxley (1952), <em>A quantitative description of membrane current and its application to conduction and excitation in nerve</em> (Week 21's deep read): reread the section on the potassium conductance with today's fits in mind.</li>
+<li>Bezanilla (2008), <em>How membrane proteins sense voltage</em>, Nature Reviews Molecular Cell Biology 9, 323 to 332.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Hodgkin and Huxley wrote that their particles were a convenient description, not a claim about mechanism. List two predictions of the particle picture that could have been wrong, and say for each what experiment, available today, would test it." />
