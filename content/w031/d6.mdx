@@ -1,0 +1,294 @@
+export const meta = {
+  title: "Forge: Week 31 challenge, quiz and deep read",
+  intro: "This week went down the ladder of neuron models: from Hodgkin-Huxley to two variables, to the exponential integrate-and-fire with one, then back up with adaptation to the AdEx; and it asked how irregular and how reliable spike trains are, and how well simple models predict them. Today's challenge is the full modelling workflow on a neuron whose parameters are hidden from you. You will fit an EIF model to a noisy recording with the dynamic I-V method, predict the neuron's spikes on a new input, score the prediction against the neuron's own reliability, and discover that one biased parameter costs a third of the score, and how an independent measurement from Week 29 recovers it. Then the quiz, and a critique of Softky and Koch.",
+  goals: [
+    "Fit an EIF model to a noisy voltage recording with the dynamic I-V method",
+    "Predict spike times on held-out input and score them with the coincidence factor",
+    "Compare a model's score with the neuron's intrinsic reliability",
+    "Diagnose a biased parameter and correct it with an independent measurement",
+    "Critique the argument that irregular firing rules out temporal integration",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "softky-koch-1993",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. An EIF neuron has gL = 10 nS, EL = -70 mV, VT = -50 mV and ΔT = 2 mV. What is its rheobase?
+2. A neuron's free voltage has mean 12 mV and sd 4 mV, with threshold at 15 mV. Is it mean-driven or fluctuation-driven?
+3. Two independent spike trains of 20 Hz are compared with a ±2 ms window. Roughly what fraction of spikes coincide by chance?
+
+<PyCell code={String.raw`
+  print("1.", 10 * (-50 + 70 - 2), "pA")
+  print("2. fluctuation-driven: the mean is below threshold, so spikes need fluctuations")
+  print("3. about", 2 * 0.020 * 2, "of spikes (2 x rate x window)")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: fit the hidden neuron.** The cell below simulates a 5 s recording from an EIF neuron with internal noise, driven by a fluctuating current, and gives you the current `I_train` and the voltage `V_train` (with spikes marked at +20 mV). Its parameters are hidden in `hidden`; do not look until the end. Estimate the capacitance by variance minimisation in the bin from -69 to -67 mV, then fit the EIF function to the dynamic I-V curve.
+
+<PyCell id="partA" title="Part A: the dynamic I-V fit" tests={String.raw`
+  import numpy as np
+  def test_exclusion():
+      "ok excludes 1 ms before to 5 ms after each spike and voltages above -42 mV"
+      assert not ok[spike_idx[0]] and not ok[spike_idx[0] + 90] and not np.any(ok & (V_train >= -42))
+
+  def test_fit():
+      "the fit returns a parameter dictionary with EL within 1.5 mV of -68 and VT within 2 mV of -50"
+      assert abs(fit_var["EL"] + 68) < 1.5 and abs(fit_var["VT"] + 50) < 2
+`} prompt="Complete `fit_eif(C)`: compute F = (C dV/dt - I)/C on the allowed samples, bin it by voltage from -75 to -44 mV in 1 mV bins (keeping bins with more than 30 samples), and fit the EIF form by grid search over ΔT (0.4 to 4) and VT (-58 to -44), returning a dictionary of C, gL, EL, VT, DT and Vr = -58."
+code={String.raw`
+  import numpy as np
+  import math
+  dt = 0.05
+
+  def ou(T, mu, sd, tau, seed):
+      n = int(T / dt); r = np.random.default_rng(seed); x = np.empty(n); v = 0.0
+      a = math.exp(-dt / tau); xi = r.normal(size=n)
+      for k in range(n):
+          v = a * v + math.sqrt(1 - a * a) * xi[k]; x[k] = v
+      return mu + sd * x
+
+  def neuron(I, p, noise=0.0, seed=0, record=False):
+      n = len(I); r = np.random.default_rng(seed); eta = r.normal(size=n) * noise / math.sqrt(dt)
+      V = np.empty(n); v = p["EL"]; last = -1e9; sp = []
+      for k in range(n):
+          t = k * dt
+          if t - last < 2.0:
+              v = p["Vr"]; V[k] = v; continue
+          v += dt * (-p["gL"] * (v - p["EL"]) + p["gL"] * p["DT"] * math.exp(min((v - p["VT"]) / p["DT"], 20)) + I[k] + eta[k]) / p["C"]
+          if v > -30:
+              sp.append(k); last = t; V[k] = 20.0; v = p["Vr"]; continue
+          V[k] = v
+      return (V, np.array(sp)) if record else np.array(sp) * dt
+
+  hidden = dict(C=150.0, gL=8.0, EL=-68.0, VT=-50.0, DT=1.0, Vr=-58.0)     # do not peek
+  I_train = ou(5000, 120, 100, 5, 21)
+  V_train, spike_idx = neuron(I_train, hidden, noise=10.0, seed=3, record=True)
+  dVdt = np.append((V_train[1:] - V_train[:-1]) / dt, 0.0)
+  ok = np.ones(len(V_train), bool)
+  for s in spike_idx:
+      ok[max(0, s - 20):s + 100] = False
+  ok &= V_train < -42
+
+  def var_for(C):
+      keep = ok & (V_train > -69) & (V_train < -67)
+      return (I_train - C * dVdt)[keep].var()
+
+  def fit_eif(C):
+      ...
+
+  Cs = np.arange(80, 250, 2.0)
+  C_var = Cs[int(np.argmin([var_for(c) for c in Cs]))]
+  fit_var = fit_eif(C_var)
+  print({k: round(float(v), 2) for k, v in fit_var.items()})
+`}
+hint="F = ((C * dVdt - I_train) / C)[ok]; Vm = V_train[ok]; bin and average as on Day 2; in the grid, X = np.column_stack([-c + DT * np.exp((c - VT) / DT), np.ones(c.size)]); tau = 1 / coef[0]; EL = coef[1] * tau; return dict(C=C, gL=C / tau, EL=EL, VT=VT, DT=DT, Vr=-58.0)."
+solution={String.raw`
+  import numpy as np
+  import math
+  dt = 0.05
+
+  def ou(T, mu, sd, tau, seed):
+      n = int(T / dt); r = np.random.default_rng(seed); x = np.empty(n); v = 0.0
+      a = math.exp(-dt / tau); xi = r.normal(size=n)
+      for k in range(n):
+          v = a * v + math.sqrt(1 - a * a) * xi[k]; x[k] = v
+      return mu + sd * x
+
+  def neuron(I, p, noise=0.0, seed=0, record=False):
+      n = len(I); r = np.random.default_rng(seed); eta = r.normal(size=n) * noise / math.sqrt(dt)
+      V = np.empty(n); v = p["EL"]; last = -1e9; sp = []
+      for k in range(n):
+          t = k * dt
+          if t - last < 2.0:
+              v = p["Vr"]; V[k] = v; continue
+          v += dt * (-p["gL"] * (v - p["EL"]) + p["gL"] * p["DT"] * math.exp(min((v - p["VT"]) / p["DT"], 20)) + I[k] + eta[k]) / p["C"]
+          if v > -30:
+              sp.append(k); last = t; V[k] = 20.0; v = p["Vr"]; continue
+          V[k] = v
+      return (V, np.array(sp)) if record else np.array(sp) * dt
+
+  hidden = dict(C=150.0, gL=8.0, EL=-68.0, VT=-50.0, DT=1.0, Vr=-58.0)     # do not peek
+  I_train = ou(5000, 120, 100, 5, 21)
+  V_train, spike_idx = neuron(I_train, hidden, noise=10.0, seed=3, record=True)
+  dVdt = np.append((V_train[1:] - V_train[:-1]) / dt, 0.0)
+  ok = np.ones(len(V_train), bool)
+  for s in spike_idx:
+      ok[max(0, s - 20):s + 100] = False
+  ok &= V_train < -42
+
+  def var_for(C):
+      keep = ok & (V_train > -69) & (V_train < -67)
+      return (I_train - C * dVdt)[keep].var()
+
+  def fit_eif(C):
+      F = ((C * dVdt - I_train) / C)[ok]; Vm = V_train[ok]
+      edges = np.arange(-75, -43.9, 1.0); c = (edges[1:] + edges[:-1]) / 2
+      counts = np.array([np.sum((Vm >= a) & (Vm < b)) for a, b in zip(edges[:-1], edges[1:])])
+      Fm = np.array([F[(Vm >= a) & (Vm < b)].mean() if m > 30 else np.nan for a, b, m in zip(edges[:-1], edges[1:], counts)])
+      g = ~np.isnan(Fm); c, Fm = c[g], Fm[g]
+      best = (np.inf, None, None, None)
+      for DT in np.arange(0.4, 4.0, 0.05):
+          for VT in np.arange(-58, -44, 0.1):
+              X = np.column_stack([-c + DT * np.exp((c - VT) / DT), np.ones(c.size)])
+              coef = np.linalg.lstsq(X, Fm, rcond=None)[0]
+              err = np.sum((X @ coef - Fm) ** 2)
+              if err < best[0]:
+                  best = (err, DT, VT, coef)
+      _, DT, VT, coef = best
+      tau = 1 / coef[0]
+      return dict(C=C, gL=C / tau, EL=coef[1] * tau, VT=VT, DT=DT, Vr=-58.0)
+
+  Cs = np.arange(80, 250, 2.0)
+  C_var = Cs[int(np.argmin([var_for(c) for c in Cs]))]
+  fit_var = fit_eif(C_var)
+  print({k: round(float(v), 2) for k, v in fit_var.items()})
+`} />
+
+**Part B: predict on new input.** Drive the hidden neuron with a new 2 s input four times (its noise differs each time) to measure its intrinsic reliability. Then simulate your fitted model, without noise, on the same input and score it.
+
+<PyCell id="partB" title="Part B: scoring the prediction" tests={String.raw`
+  import numpy as np
+  def test_reliability():
+      "the neuron's intrinsic reliability is above 0.7"
+      assert g_int > 0.7
+
+  def test_score():
+      "the model's coincidence with the trials is computed and falls short of the intrinsic reliability"
+      assert abs(g_var - np.mean([coincidence(pred_var, r_, 2000) for r_ in repeats])) < 1e-12 and g_var < g_int - 0.1
+`} prompt="Write `coincidence(s1, s2, T)` as on Day 5. Compute the intrinsic reliability `g_int` (mean pairwise Γ across the four repeats) and the score `g_var` of your fitted model's prediction `pred_var` against the repeats."
+code={String.raw`
+  def coincidence(s1, s2, T, delta=2.0):
+      ...
+
+  I_test = ou(2000, 120, 100, 5, 22)
+  repeats = [neuron(I_test, hidden, noise=10.0, seed=s) for s in range(4)]
+  g_int = ...
+  pred_var = neuron(I_test, fit_var)
+  g_var = ...
+  print(f"neuron fires {np.mean([len(r_) for r_ in repeats]) / 2:.1f} Hz, model {len(pred_var) / 2:.1f} Hz")
+  print(f"intrinsic reliability {g_int:.2f};  model {g_var:.2f}  ({g_var / g_int:.0%} of the ceiling)")
+`}
+hint="Copy coincidence from Day 5. g_int = np.mean([coincidence(repeats[i], repeats[j], 2000) for i in range(4) for j in range(4) if i != j]); g_var = np.mean([coincidence(pred_var, r_, 2000) for r_ in repeats])."
+solution={String.raw`
+  def coincidence(s1, s2, T, delta=2.0):
+      if len(s1) == 0 or len(s2) == 0:
+          return 0.0
+      n_coinc = sum(np.any(np.abs(s2 - t) <= delta) for t in s1)
+      nu = len(s2) / T
+      return (n_coinc - 2 * nu * delta * len(s1)) / (0.5 * (len(s1) + len(s2))) / (1 - 2 * nu * delta)
+
+  I_test = ou(2000, 120, 100, 5, 22)
+  repeats = [neuron(I_test, hidden, noise=10.0, seed=s) for s in range(4)]
+  g_int = np.mean([coincidence(repeats[i], repeats[j], 2000) for i in range(4) for j in range(4) if i != j])
+  pred_var = neuron(I_test, fit_var)
+  g_var = np.mean([coincidence(pred_var, r_, 2000) for r_ in repeats])
+  print(f"neuron fires {np.mean([len(r_) for r_ in repeats]) / 2:.1f} Hz, model {len(pred_var) / 2:.1f} Hz")
+  print(f"intrinsic reliability {g_int:.2f};  model {g_var:.2f}  ({g_var / g_int:.0%} of the ceiling)")
+`} />
+
+The neuron's repeated trials agree at 0.85: it is a reliable cell. The fitted model fires at about the right rate, 17 against 16 Hz, but scores only 0.54, 64% of the ceiling. Something in the fit is off.
+
+**Part C: find the culprit.** Compare `fit_var` with `hidden` now. One parameter is badly off: the capacitance, which came out near 126 pF instead of 150. The variance method assumes that the only fluctuations at fixed voltage come from errors in $C$; the neuron's own noise adds fluctuations that are correlated with $dV/dt$, and that biases $C$ downwards. Suppose a membrane test (Week 29, Day 3) measured the capacitance independently at 150 pF. Refit with that value and score again.
+
+<PyCell id="partC" title="Part C: an independent measurement" tests={String.raw`
+  import numpy as np
+  def test_refit():
+      "the refit uses C = 150 pF and scores within 0.1 of the intrinsic reliability"
+      assert fit_mt["C"] == 150.0 and g_mt > g_int - 0.1 and g_mt > g_var + 0.15
+`} prompt="Refit with `fit_eif(150.0)`, predict the test spikes with it (`pred_mt`), and score it (`g_mt`)."
+code={String.raw`
+  fit_mt = ...
+  pred_mt = ...
+  g_mt = ...
+  print({k: round(float(v), 2) for k, v in fit_mt.items()})
+  print(f"hidden: {hidden}")
+  print(f"score with C from the variance method {g_var:.2f}, with C from a membrane test {g_mt:.2f}, ceiling {g_int:.2f}")
+`}
+hint="fit_mt = fit_eif(150.0); pred_mt = neuron(I_test, fit_mt); g_mt = np.mean([coincidence(pred_mt, r_, 2000) for r_ in repeats])."
+solution={String.raw`
+  fit_mt = fit_eif(150.0)
+  pred_mt = neuron(I_test, fit_mt)
+  g_mt = np.mean([coincidence(pred_mt, r_, 2000) for r_ in repeats])
+  print({k: round(float(v), 2) for k, v in fit_mt.items()})
+  print(f"hidden: {hidden}")
+  print(f"score with C from the variance method {g_var:.2f}, with C from a membrane test {g_mt:.2f}, ceiling {g_int:.2f}")
+`} />
+
+With the capacitance fixed at 150 pF, the fit gives gL = 7.9 nS, EL = -68.2 mV, VT = -50.2 mV and ΔT = 1.3 mV, close to the hidden values, and the score rises to 0.85, the ceiling. One parameter wrong by 16% cost a third of the predictive power, and the other parameters, fitted conditional on it, quietly absorbed the error. The variance method works well when the neuron's own noise is small compared with the injected current; when it is not, an independent measurement is worth more than a cleverer fit.
+
+**Part D (written).** Answer in your journal: what general lesson about fitting models to noisy data does Part C illustrate? Name one other parameter in this week's models that might be biased by noise in a similar way, and the independent measurement you would use to check it.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The EIF rheobase" task="For $C\dot V = I - G(V)$ with $G(V) = g_L(V - E_L) - g_L\Delta_Te^{(V - V_T)/\Delta_T}$, show that $G$ has a single maximum at $V = V_T$ and that the rheobase is $g_L(V_T - E_L - \Delta_T)$.">
+
+$G'(V) = g_L - g_Le^{(V - V_T)/\Delta_T}$, which is zero only at $V = V_T$. $G''(V) = -\frac{g_L}{\Delta_T}e^{(V - V_T)/\Delta_T}$ is negative everywhere, so this is a maximum.
+
+At $V_T$, $G(V_T) = g_L(V_T - E_L) - g_L\Delta_T$.
+
+Fixed points satisfy $G(V) = I$; since $G$ has a single maximum, there are two fixed points for $I \lt G(V_T)$, one at $I = G(V_T)$ and none above. Without a fixed point the voltage runs away: the rheobase is $g_L(V_T - E_L - \Delta_T)$.
+
+</Prove>
+
+<Prove title="2. Shot-noise variance" task="A voltage receives jumps of size $w$ at Poisson times with rate $r$, each decaying as $we^{-t/\tau}$. Using Campbell's theorem (the variance of a sum of independent pulses is $r\int_0^\infty h(t)^2\,dt$ for pulse shape $h$), show that the variance is $\frac{\tau}{2}w^2r$.">
+
+Here $h(t) = we^{-t/\tau}$, so $\int_0^\infty h(t)^2\,dt = w^2\int_0^\infty e^{-2t/\tau}\,dt = w^2\frac{\tau}{2}$.
+
+Multiplying by the rate gives $\sigma^2 = \frac{\tau}{2}w^2r$.
+
+Independent excitatory and inhibitory streams add their variances, $\frac{\tau}{2}(w_e^2r_e + w_i^2r_i)$, while their means subtract: the formula behind Day 4's balance.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 31 quiz (15 questions)" questions={[
+  { q: "Rinzel's reduction of HH replaces m with...", options: ["n", "Its steady state m∞(V)", "A constant", "h"], answer: 1, explain: "Day 1." },
+  { q: "In the reduction, h is replaced by...", options: ["A linear function of n", "m", "1", "A random variable"], answer: 0, explain: "Day 1." },
+  { q: "The Morris-Lecar model's inward current is carried by...", options: ["Sodium", "Calcium", "Chloride", "Potassium"], answer: 1, explain: "Day 1." },
+  { q: "The EIF's exponential term comes from...", options: ["The leak", "Sodium activation near threshold", "Potassium", "The pump"], answer: 1, explain: "Day 2." },
+  { q: "The EIF rheobase is...", options: ["g_L(V_T - E_L)", "g_L(V_T - E_L - Δ_T)", "Zero", "C V_T"], answer: 1, explain: "Day 2." },
+  { q: "The dynamic I-V curve averages...", options: ["I - C dV/dt by voltage", "Spike counts", "Peak currents", "Capacitance"], answer: 0, explain: "Day 2." },
+  { q: "In AdEx, spike-triggered adaptation is set by...", options: ["a", "b", "Δ_T", "V_T"], answer: 1, explain: "Day 3." },
+  { q: "A high reset in AdEx tends to produce...", options: ["Bursting", "Silence", "Tonic firing only", "Lower rates only"], answer: 0, explain: "Day 3." },
+  { q: "An adaptation index near zero indicates...", options: ["Tonic firing", "Strong adaptation", "Bursting", "Phasic firing"], answer: 0, explain: "Day 3." },
+  { q: "Purely excitatory, mean-driven input makes an LIF fire...", options: ["Irregularly", "Regularly", "Not at all", "In bursts"], answer: 1, explain: "Day 4." },
+  { q: "Balanced excitation and inhibition increase...", options: ["The mean only", "The fluctuations, while keeping the mean", "The threshold", "The reset"], answer: 1, explain: "Day 4." },
+  { q: "Reliable spike timing across trials arises with...", options: ["Constant input", "Frozen fluctuating input", "No input", "Strong noise"], answer: 1, explain: "Day 5." },
+  { q: "The coincidence factor of two independent trains is about...", options: ["0", "0.5", "1", "-1"], answer: 0, explain: "Day 5." },
+  { q: "A model's score should be compared with...", options: ["Zero", "The neuron's intrinsic reliability", "The firing rate", "The number of parameters"], answer: 1, explain: "The noise ceiling." },
+  { q: "In the Forge, the variance method underestimated C because...", options: ["The grid was too coarse", "The neuron's internal noise is correlated with dV/dt", "Spikes were included", "The input was too small"], answer: 1, explain: "Part C." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Softky and Koch (1993) its third pass and write your critique under the five headings. Focus on one question: **does irregular firing rule out temporal integration?** Consider what inputs their model neurons received and whether inhibition was included; how they estimated the number of inputs needed to reach threshold; what Day 4 showed about mean-driven and fluctuation-driven regimes; Shadlen and Newsome's reply (Week 15) and van Vreeswijk and Sompolinsky's balanced networks; and which of Softky and Koch's alternatives, such as coincidence detection by active dendrites, has since found support (Week 32 takes this up). End with what experiment, in a behaving animal, would best distinguish between the two views.
+
+<Callout kind="research">
+
+Combine Days 3 and 5: build an AdEx "neuron" with spike-triggered adaptation and internal noise, fit only an EIF to it with the dynamic I-V method, and score its predictions. Then look at where the EIF's predicted spikes go wrong (early in high-rate periods, presumably). Extend the fit to include adaptation, for example by adding to the dynamic I-V curve a term that depends on the time since the last spike, as Badel and colleagues did, and measure how much of the gap to the ceiling you close.
+
+</Callout>
+
+<Key title="Week 31 review checklist">
+<ul>
+<li>I can reduce Hodgkin-Huxley to two variables and simulate the Morris-Lecar model in both excitability classes.</li>
+<li>I can derive the EIF from the sodium current, compute its rheobase and fit it with the dynamic I-V method.</li>
+<li>I can produce and classify AdEx firing patterns and explain bursting from the reset.</li>
+<li>I can explain regular and irregular firing in terms of mean-driven and fluctuation-driven regimes.</li>
+<li>I can score spike-time predictions with the coincidence factor against a noise ceiling.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part D. Then write a paragraph on which model from this week you would choose to put into a network of a million neurons, and why, given what each keeps and what each loses." />

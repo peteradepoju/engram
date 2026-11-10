@@ -1,0 +1,239 @@
+export const meta = {
+  title: "Spike timing: reliability and how well simple models predict",
+  intro: "Yesterday's neurons fired at random moments because their inputs were random. Does that mean a neuron's spike times carry no information beyond its rate? In 1995 Mainen and Sejnowski gave the same neuron the same input many times and found that the answer depends on the input: a constant current gives spike times that wander from trial to trial, a fluctuating one gives spikes that line up to within a millisecond. Today you reproduce that result, learn the coincidence factor used to compare spike trains, and use it to ask how well simple models predict the spike times of a noisy neuron. You will find that a good model can predict a neuron better than the neuron predicts itself, and see why.",
+  goals: [
+    "Show that fluctuating inputs produce reliable spike timing while constant inputs do not",
+    "Compute the coincidence factor between spike trains, corrected for chance",
+    "Measure a neuron's intrinsic reliability and compare model predictions against it",
+    "Compare how well the EIF and LIF models predict spike times",
+  ],
+  plan: [
+    { label: "Predict and reliability", minutes: 25 },
+    { label: "The coincidence factor", minutes: 25 },
+    { label: "Predicting spikes with models", minutes: 35 },
+    { label: "How good is good enough?", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "mainen-sejnowski-1995",
+};
+
+<Predict question="A neuron with some internal noise is given the same 1 s input ten times. In one experiment the input is a constant current; in the other, a fixed (frozen) fluctuating current with the same mean. In which case will its spike times line up across the ten trials?" />
+
+<Step n={1} title="Reliability" minutes={25} />
+
+Mainen and Sejnowski (1995), today's paper, recorded from pyramidal neurons in slices of rat cortex. A constant current step made each neuron fire regularly, but after the first few spikes the timing drifted from trial to trial, because small amounts of internal noise (from channels, Week 29) shifted each interval a little and the shifts accumulated. The same neuron driven by a fluctuating current, frozen so that it was identical on every trial, fired spikes that lined up across trials to within about a millisecond, for the whole second. The fluctuations kept resetting the timing: each steep rise in the input forced a spike at the same moment, whatever the neuron's recent history.
+
+<Figure caption="Rasters of ten trials of a noisy EIF neuron, driven by a constant current or by a frozen fluctuating one with the same mean. Set the neuron's internal noise." credit="Interactive figure by Engram, after Mainen and Sejnowski (1995).">
+  <Reliability />
+</Figure>
+
+<Video id="vHUUcPRqzCk" title="Quality of integrate-and-fire models (Neuronal Dynamics 1.5)" by="Wulfram Gerstner (EPFL)" note="Wulfram Gerstner shows how well integrate-and-fire models predict the spike times of real neurons driven by fluctuating currents, and how the comparison is made fair." />
+
+<Step n={2} title="The coincidence factor" minutes={25} />
+
+To compare two spike trains, count how many spikes in one have a partner in the other within a window $\pm\Delta$, typically 2 ms. Some coincidences happen by chance: if the second train has rate $\nu$, a Poisson train would match a given spike with probability about $2\nu\Delta$. The **coincidence factor** (Kistler and colleagues, 1997) subtracts the chance count and normalises:
+
+$$
+\Gamma = \frac{N_{coinc} - 2\nu\Delta N_1}{\frac{1}{2}(N_1 + N_2)}\cdot\frac{1}{1 - 2\nu\Delta}.
+$$
+
+$\Gamma$ is 1 for identical trains and about 0 for unrelated ones.
+
+<PyCell id="gamma" title="Comparing spike trains" tests={String.raw`
+  import numpy as np
+  def test_identical():
+      "identical trains give 1"
+      s = np.array([10.0, 50, 90, 130])
+      assert abs(coincidence(s, s, 200) - 1) < 1e-9
+
+  def test_random():
+      "independent Poisson trains give a value near 0"
+      assert abs(g_random) < 0.15
+`} prompt="Write `coincidence(s1, s2, T, delta=2.0)`: count the spikes in s1 with a spike of s2 within delta ms, subtract the chance count 2 ν δ N1 (ν the rate of s2 per ms), normalise by half the total number of spikes and divide by 1 - 2 ν δ. Test it on two independent random trains of 40 spikes in 2 s."
+code={String.raw`
+  import numpy as np
+  import math
+  import matplotlib.pyplot as plt
+
+  def coincidence(s1, s2, T, delta=2.0):
+      if len(s1) == 0 or len(s2) == 0:
+          return 0.0
+      n_coinc = ...
+      nu = len(s2) / T
+      return ...
+
+  r = np.random.default_rng(0)
+  a, b = np.sort(r.uniform(0, 2000, 40)), np.sort(r.uniform(0, 2000, 40))
+  g_random = coincidence(a, b, 2000)
+  print(f"identical: {coincidence(a, a, 2000):.2f};  independent: {g_random:.2f};  shifted by 1 ms: {coincidence(a, a + 1, 2000):.2f};  by 3 ms: {coincidence(a, a + 3, 2000):.2f}")
+`}
+hint="n_coinc = sum(np.any(np.abs(s2 - t) <= delta) for t in s1); return (n_coinc - 2 * nu * delta * len(s1)) / (0.5 * (len(s1) + len(s2))) / (1 - 2 * nu * delta)."
+solution={String.raw`
+  import numpy as np
+  import math
+  import matplotlib.pyplot as plt
+
+  def coincidence(s1, s2, T, delta=2.0):
+      if len(s1) == 0 or len(s2) == 0:
+          return 0.0
+      n_coinc = sum(np.any(np.abs(s2 - t) <= delta) for t in s1)
+      nu = len(s2) / T
+      return (n_coinc - 2 * nu * delta * len(s1)) / (0.5 * (len(s1) + len(s2))) / (1 - 2 * nu * delta)
+
+  r = np.random.default_rng(0)
+  a, b = np.sort(r.uniform(0, 2000, 40)), np.sort(r.uniform(0, 2000, 40))
+  g_random = coincidence(a, b, 2000)
+  print(f"identical: {coincidence(a, a, 2000):.2f};  independent: {g_random:.2f};  shifted by 1 ms: {coincidence(a, a + 1, 2000):.2f};  by 3 ms: {coincidence(a, a + 3, 2000):.2f}")
+`} />
+
+Identical trains give 1, independent ones -0.06, zero up to chance, and a 1 ms shift still counts as perfect agreement while a 3 ms shift, outside the window, scores about zero. The window defines the precision you are asking about; 2 ms is a common choice for cortical neurons.
+
+<Step n={3} title="Predicting spikes with models" minutes={35} />
+
+Now treat a noisy EIF neuron as the "recorded" cell. First measure its **intrinsic reliability**: the average $\Gamma$ between its own repeated trials with the same frozen input. Then predict its spikes with two models: the same EIF without noise, and an LIF neuron with the same leak whose threshold is chosen to fire the same number of spikes.
+
+<PyCell id="predict" title="EIF against LIF" tests={String.raw`
+  import numpy as np
+  def test_dc():
+      "with constant input the neuron's trials barely agree (below 0.3), with frozen noise they agree well (above 0.4)"
+      assert g_dc < 0.3 and g_int > 0.4
+
+  def test_models():
+      "the noise-free EIF predicts the trials at least as well as they predict each other, and the LIF does much worse"
+      assert g_eif >= g_int - 0.05 and g_lif < g_eif - 0.2
+`} prompt="`eif(I, noise, seed, lif=False, Vth=None)` returns spike times. Measure `g_dc`, the mean coincidence between 6 trials with constant input, and `g_int`, the same for the frozen fluctuating input. Then compute `g_eif`, the mean coincidence of the noise-free EIF with each noisy trial, and `g_lif` for the LIF whose threshold (searched from -54 to -46 mV) best matches the mean spike count."
+code={String.raw`
+  dt, T = 0.05, 2000.0
+  n = int(T / dt)
+
+  def ou(mu, sd, tau, seed):
+      r = np.random.default_rng(seed); x = np.empty(n); v = 0.0; a = math.exp(-dt / tau); xi = r.normal(size=n)
+      for k in range(n):
+          v = a * v + math.sqrt(1 - a * a) * xi[k]; x[k] = v
+      return mu + sd * x
+
+  def eif(I, noise=0.0, seed=0, lif=False, Vth=None, C=200.0, gL=10.0, EL=-65.0, VT=-52.0, DT=1.5, Vr=-60.0):
+      r = np.random.default_rng(seed); eta = r.normal(size=n) * noise / math.sqrt(dt)
+      v, last, spikes = EL, -1e9, []
+      for k in range(n):
+          t = k * dt
+          if t - last < 2.0:
+              continue
+          ex = 0.0 if lif else gL * DT * math.exp(min((v - VT) / DT, 20))
+          v += dt * (-gL * (v - EL) + ex + I[k] + eta[k]) / C
+          if (lif and v >= Vth) or (not lif and v > -30):
+              spikes.append(t); last = t; v = Vr
+      return np.array(spikes)
+
+  def mean_pairwise(trains):
+      return np.mean([coincidence(trains[i], trains[j], T) for i in range(len(trains)) for j in range(len(trains)) if i != j])
+
+  I_dc = np.full(n, 200.0)
+  I_fl = ou(200.0, 150.0, 3.0, 11)
+  g_dc = mean_pairwise([eif(I_dc, 30.0, s) for s in range(6)])
+  trials = [eif(I_fl, 30.0, s) for s in range(6)]
+  g_int = ...
+  s_eif = eif(I_fl)
+  g_eif = ...
+  n_target = np.mean([len(t) for t in trials])
+  best = min(((abs(len(eif(I_fl, lif=True, Vth=v)) - n_target), v) for v in np.arange(-54, -46, 0.25)))
+  s_lif = eif(I_fl, lif=True, Vth=best[1])
+  g_lif = ...
+  print(f"constant input, trial to trial: {g_dc:.2f};  frozen noise, trial to trial: {g_int:.2f}")
+  print(f"noise-free EIF against the trials: {g_eif:.2f};  LIF (threshold {best[1]:.2f} mV): {g_lif:.2f}")
+`}
+hint="g_int = mean_pairwise(trials); g_eif = np.mean([coincidence(s_eif, t, T) for t in trials]); g_lif = np.mean([coincidence(s_lif, t, T) for t in trials])."
+solution={String.raw`
+  dt, T = 0.05, 2000.0
+  n = int(T / dt)
+
+  def ou(mu, sd, tau, seed):
+      r = np.random.default_rng(seed); x = np.empty(n); v = 0.0; a = math.exp(-dt / tau); xi = r.normal(size=n)
+      for k in range(n):
+          v = a * v + math.sqrt(1 - a * a) * xi[k]; x[k] = v
+      return mu + sd * x
+
+  def eif(I, noise=0.0, seed=0, lif=False, Vth=None, C=200.0, gL=10.0, EL=-65.0, VT=-52.0, DT=1.5, Vr=-60.0):
+      r = np.random.default_rng(seed); eta = r.normal(size=n) * noise / math.sqrt(dt)
+      v, last, spikes = EL, -1e9, []
+      for k in range(n):
+          t = k * dt
+          if t - last < 2.0:
+              continue
+          ex = 0.0 if lif else gL * DT * math.exp(min((v - VT) / DT, 20))
+          v += dt * (-gL * (v - EL) + ex + I[k] + eta[k]) / C
+          if (lif and v >= Vth) or (not lif and v > -30):
+              spikes.append(t); last = t; v = Vr
+      return np.array(spikes)
+
+  def mean_pairwise(trains):
+      return np.mean([coincidence(trains[i], trains[j], T) for i in range(len(trains)) for j in range(len(trains)) if i != j])
+
+  I_dc = np.full(n, 200.0)
+  I_fl = ou(200.0, 150.0, 3.0, 11)
+  g_dc = mean_pairwise([eif(I_dc, 30.0, s) for s in range(6)])
+  trials = [eif(I_fl, 30.0, s) for s in range(6)]
+  g_int = mean_pairwise(trials)
+  s_eif = eif(I_fl)
+  g_eif = np.mean([coincidence(s_eif, t, T) for t in trials])
+  n_target = np.mean([len(t) for t in trials])
+  best = min(((abs(len(eif(I_fl, lif=True, Vth=v)) - n_target), v) for v in np.arange(-54, -46, 0.25)))
+  s_lif = eif(I_fl, lif=True, Vth=best[1])
+  g_lif = np.mean([coincidence(s_lif, t, T) for t in trials])
+  print(f"constant input, trial to trial: {g_dc:.2f};  frozen noise, trial to trial: {g_int:.2f}")
+  print(f"noise-free EIF against the trials: {g_eif:.2f};  LIF (threshold {best[1]:.2f} mV): {g_lif:.2f}")
+`} />
+
+With constant input the neuron's trials agree at only 0.09; with the frozen fluctuating input, at 0.61. That answers the prediction. The noise-free EIF matches the trials at 0.74, better than they match each other: each trial carries its own noise, which the deterministic model lacks, so the model sits closer to every trial than the trials sit to one another. The LIF, with the same leak and a threshold tuned to give the same number of spikes, scores only 0.26: without the exponential run-up, its hard threshold puts many spikes at the wrong moments.
+
+<Step n={4} title="How good is good enough?" minutes={20} />
+
+The comparison you just made is the logic of the spike-timing prediction competitions run by Gerstner's group around 2008 (Jolivet and colleagues), in which modellers received recordings of real neurons driven by fluctuating currents and had to predict spike times on a held-out stimulus. Scores were reported as $\Gamma$ divided by the neuron's intrinsic reliability. Simple threshold models with adaptation, of the kind this week has built, predicted a large fraction of the reliably timed spikes of cortical pyramidal cells, and did about as well as far more detailed biophysical models. The lesson is not that detail never matters, but that for the input-output behaviour of the soma, a few well-chosen variables carry most of what can be predicted.
+
+<Bridge title="Reliable timing and benchmarks"
+  neuro="Neurons can time spikes to within a millisecond when their input fluctuates, so spike timing can carry information beyond rate. Whether it does in a given circuit is an experimental question, but the machinery allows it."
+  ai="The spike-prediction competitions are a model for benchmarking in AI: a held-out test set, a score normalised by the ceiling set by noise in the data, and models of very different complexity compared on equal terms. A benchmark without a noise ceiling cannot tell you when a model has learned everything there is to learn.">
+
+A model can only be as good as the data are repeatable; measure that ceiling before judging the model.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Mainen and Sejnowski found that spike timing was reliable across trials when the input was...", options: ["A constant current", "A frozen fluctuating current", "Absent", "A ramp"], answer: 1, explain: "Fluctuations reset the timing." },
+  { q: "With constant input, spike times drift across trials because...", options: ["The input changes", "Internal noise shifts each interval and the shifts accumulate", "The neuron adapts", "Recording errors"], answer: 1, explain: "Phase diffusion." },
+  { q: "The coincidence factor is about 0 for...", options: ["Identical trains", "Independent trains", "Shifted trains by 0.5 ms", "Reliable neurons"], answer: 1, explain: "Chance coincidences are subtracted." },
+  { q: "The coincidence window Δ is typically...", options: ["0.01 ms", "2 ms", "200 ms", "1 s"], answer: 1, explain: "A few milliseconds." },
+  { q: "Intrinsic reliability is...", options: ["The coincidence factor between repeated trials of the same neuron", "The firing rate", "The membrane time constant", "The model's error"], answer: 0, explain: "The ceiling for prediction." },
+  { q: "A noise-free model can match a noisy neuron's trials better than they match each other because...", options: ["It cheats", "It predicts the reproducible part without adding its own noise", "Models are always better", "The trials are identical"], answer: 1, explain: "Each trial has its own noise; the model has none." },
+  { q: "In the comparison, the LIF neuron predicted spike times...", options: ["Better than the EIF", "Much worse than the EIF", "Perfectly", "Exactly as well"], answer: 1, explain: "Its hard threshold mismatches spike initiation." },
+  { q: "In spike-prediction competitions, simple adaptive threshold models...", options: ["Failed completely", "Predicted much of what was predictable, close to detailed models", "Were not tested", "Beat the noise ceiling by far"], answer: 1, explain: "Jolivet and colleagues (2008)." },
+]} />
+
+<Flashcards cards={[
+  { front: "Reliability of spike timing?", back: "Frozen fluctuating input gives spikes aligned within about 1 ms across trials; constant input gives drifting timing (Mainen and Sejnowski, 1995)." },
+  { front: "Coincidence factor $\\Gamma$?", back: "Coincidences within ±Δ minus the chance number, normalised: 1 for identical trains, about 0 for independent ones." },
+  { front: "Intrinsic reliability?", back: "$\\Gamma$ between repeated trials of the same neuron with the same input: the ceiling for prediction." },
+  { front: "Why can a model beat a single trial?", back: "A deterministic model predicts the reproducible component of the response without the trial's own noise." },
+  { front: "Lesson of spike-prediction competitions?", back: "Simple threshold models with adaptation predict much of the predictable spike timing of cortical neurons." },
+]} />
+
+<Predict revisit question="With constant versus frozen fluctuating input, which gives spike times that line up across trials?" />
+
+<Key title="Before you go">
+<ul>
+<li>Fluctuating inputs make spike timing reliable; constant inputs let it drift.</li>
+<li>The coincidence factor compares spike trains, corrected for chance.</li>
+<li>A neuron's own trial-to-trial agreement sets the ceiling for prediction.</li>
+<li>The EIF predicts spike times far better than the LIF; simple adaptive models do well on real neurons.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Mainen and Sejnowski (1995), <em>Reliability of spike timing in neocortical neurons</em>.</li>
+<li>Jolivet, Schürmann, Berger, Naud, Gerstner and Roth (2008), <em>The quantitative single-neuron modeling competition</em>, Biological Cybernetics 99, 417 to 426.</li>
+<li>Kistler, Gerstner and van Hemmen (1997), <em>Reduction of the Hodgkin-Huxley equations to a single-variable threshold model</em>, Neural Computation 9(5), 1015 to 1045: where the coincidence factor was introduced.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If neurons can time spikes to a millisecond when driven by fluctuating inputs, and cortical inputs fluctuate, why do many models of the brain still use firing rates? Give one argument for rates and one for spike timing, and say what experiment would decide between them in a sensory area of your choice." />

@@ -139,3 +139,8 @@ export { GatePower } from "./gate-power";
 export { InactivationProtocol } from "./inactivation-protocol";
 export { SpikeCurrents } from "./spike-currents";
 export { Degeneracy } from "./degeneracy";
+export { ReducedPhasePlane } from "./reduced-phase-plane";
+export { EIFFlow } from "./eif-flow";
+export { AdExPatterns } from "./adex-patterns";
+export { BalancedInput } from "./balanced-input";
+export { Reliability } from "./reliability";

@@ -1,0 +1,326 @@
+export const meta = {
+  title: "The exponential integrate-and-fire: where the spike begins",
+  intro: "The leaky integrate-and-fire neuron of Week 21 has a hard threshold: the voltage climbs, touches a line and is reset. Real spikes do not start at a line. They start where the sodium current, growing exponentially with voltage, overtakes the leak and runs away. Today you derive the exponential integrate-and-fire neuron from that sodium current, as Fourcaud-Trocmé and colleagues did in 2003, find what its two new parameters mean, work out its rheobase, and then learn the dynamic I-V method, which reads the model's parameters straight from a voltage recording. You will test the method where the answer is known before the Forge applies it.",
+  goals: [
+    "Derive the exponential term of the EIF model from the sodium current with instantaneous activation",
+    "Interpret the slope factor and threshold parameters and compute the rheobase",
+    "Estimate capacitance and the dynamic I-V curve from a noisy-input recording",
+    "Fit EIF parameters to a dynamic I-V curve and check them against ground truth",
+  ],
+  plan: [
+    { label: "Predict and where the exponential comes from", minutes: 25 },
+    { label: "The EIF model and its rheobase", minutes: 25 },
+    { label: "The dynamic I-V curve", minutes: 40 },
+    { label: "Sharp or soft spike onset", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "fourcaud-trocme-2003",
+};
+
+<Predict question="In the leaky integrate-and-fire neuron the threshold is a fixed voltage. In a neuron whose spikes start with an exponentially growing sodium current, is there still a voltage above which it always fires, and is the minimum steady current needed to fire set by that voltage alone?" />
+
+<Step n={1} title="Where the exponential comes from" minutes={25} />
+
+Below threshold, the sodium channels' activation is fast (Day 1) and sits at the foot of its sigmoid curve, where a Boltzmann function is close to an exponential. With $h$ near its resting value, the sodium current is then
+
+$$
+I_{Na}(V) \approx -\bar g_{Na}h_0\,m_\infty(V)^3(E_{Na} - V) \propto e^{3(V - V_m)/k_m},
+$$
+
+an inward current that grows exponentially, with a slope factor a third of the activation's, since three gates must open. Add it to the leak, and the membrane equation becomes the **exponential integrate-and-fire** (EIF) model:
+
+$$
+C\frac{dV}{dt} = -g_L(V - E_L) + g_L\Delta_T\,e^{(V - V_T)/\Delta_T} + I.
+$$
+
+$\Delta_T$, the **slope factor**, sets how sharply spikes start; $V_T$ is where the exponential term's slope equals the leak's. When $V$ runs away, the model is reset after it passes a cut-off (say 0 mV). As $\Delta_T \to 0$, the exponential becomes a wall at $V_T$ and the EIF becomes the LIF neuron.
+
+<PyCell id="sodium" title="The exponential foot of the sodium current" tests={String.raw`
+  import numpy as np
+  def test_current():
+      "INa is the HH sodium current with m at its steady state and h fixed at its resting value"
+      assert np.allclose(INa, 120 * minf(V) ** 3 * h0 * (V - 50))
+
+  def test_slope():
+      "Delta_T from the fit of ln(-INa) on V between -75 and -60 mV is between 2 and 6 mV"
+      assert 2 < Delta_T < 6
+`} prompt="Compute the HH sodium current `INa` for V from -75 to -60 mV with m = m∞(V) and h fixed at h∞(-65) = 0.596, fit a straight line to ln(-INa) against V, and convert its slope into a slope factor `Delta_T` = 1 / slope."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def minf(V):
+      V = V + 1e-7
+      am = 0.1 * (V + 40) / (1 - np.exp(-(V + 40) / 10)); bm = 4.0 * np.exp(-(V + 65) / 18)
+      return am / (am + bm)
+
+  h0 = 0.596
+  V = np.arange(-75, -59.9, 0.5)
+  INa = ...
+  slope = np.polyfit(V, np.log(-INa), 1)[0]
+  Delta_T = ...
+  print(f"sodium current grows e-fold every {Delta_T:.2f} mV below threshold")
+  plt.semilogy(V, -INa, "o"); plt.xlabel("V (mV)"); plt.ylabel("-I_Na (uA/cm^2)"); plt.show()
+`}
+hint="INa = 120 * minf(V) ** 3 * h0 * (V - 50); Delta_T = 1 / slope."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def minf(V):
+      V = V + 1e-7
+      am = 0.1 * (V + 40) / (1 - np.exp(-(V + 40) / 10)); bm = 4.0 * np.exp(-(V + 65) / 18)
+      return am / (am + bm)
+
+  h0 = 0.596
+  V = np.arange(-75, -59.9, 0.5)
+  INa = 120 * minf(V) ** 3 * h0 * (V - 50)
+  slope = np.polyfit(V, np.log(-INa), 1)[0]
+  Delta_T = 1 / slope
+  print(f"sodium current grows e-fold every {Delta_T:.2f} mV below threshold")
+  plt.semilogy(V, -INa, "o"); plt.xlabel("V (mV)"); plt.ylabel("-I_Na (uA/cm^2)"); plt.show()
+`} />
+
+Below threshold the HH sodium current grows e-fold every 2.8 mV, so the squid model has a slope factor $\Delta_T$ of about 2.8 mV, a third of the roughly 8.5 mV over which its $m$ gate activates at the foot of its curve. Fits to cortical pyramidal neurons give values of the order of one to a few millivolts: their spikes start more sharply.
+
+<Video id="79SrvG2QdD4" title="Nonlinear integrate-and-fire model (Neuronal Dynamics 4.5)" by="Wulfram Gerstner (EPFL)" note="Wulfram Gerstner shows how a one-variable model with a nonlinear, exponential spike-initiation term captures the onset of Hodgkin-Huxley spikes, and how its parameters can be read from data." />
+
+<Step n={2} title="The EIF model and its rheobase" minutes={25} />
+
+Write the right-hand side as $C\,dV/dt = I - G(V)$, with $G(V) = g_L(V - E_L) - g_L\Delta_T e^{(V - V_T)/\Delta_T}$. A resting state is a voltage where $G(V) = I$ and $G$ is increasing. $G$ rises with the leak at low voltages and then turns down as the exponential takes over, so it has a maximum; once the input exceeds that maximum there is no resting state, and the neuron fires. Setting $G'(V) = 0$ gives $e^{(V - V_T)/\Delta_T} = 1$, so the maximum is at $V = V_T$, and the **rheobase**, the smallest steady current that fires, is
+
+$$
+I_{rh} = G(V_T) = g_L(V_T - E_L - \Delta_T).
+$$
+
+That answers the prediction. There is no voltage above which the neuron always fires: a brief excursion above $V_T$ can fall back if the input stops. And the rheobase depends on $\Delta_T$ as well as $V_T$: the softer the spike onset, the less current is needed.
+
+<Figure caption="The EIF neuron's dV/dt as a function of V, for a set input current: rest and the unstable threshold are where the curve crosses zero. Set the slope factor and the input." credit="Interactive figure by Engram, after Fourcaud-Trocmé and colleagues (2003).">
+  <EIFFlow />
+</Figure>
+
+<PyCell id="rheobase" title="Checking the rheobase" tests={String.raw`
+  import numpy as np
+  def test_formula():
+      "I_rh_formula is gL (VT - EL - DeltaT)"
+      assert abs(I_rh_formula - 10 * (-52 + 65 - 1.5)) < 1e-9
+
+  def test_bisection():
+      "the simulated rheobase agrees with the formula within 2 pA"
+      assert abs(I_rh_sim - I_rh_formula) < 2
+`} prompt="For an EIF neuron with C = 200 pF, gL = 10 nS, EL = -65 mV, VT = -52 mV and ΔT = 1.5 mV, compute the rheobase from the formula, then find it by bisection with `fires(I)`, which simulates 500 ms of constant current and reports whether the voltage ran away."
+code={String.raw`
+  import math
+  C, gL, EL, VT, DT = 200.0, 10.0, -65.0, -52.0, 1.5
+
+  def fires(I, T=500.0, dt=0.05):
+      V = EL
+      for k in range(int(T / dt)):
+          V += dt * (-gL * (V - EL) + gL * DT * math.exp(min((V - VT) / DT, 30)) + I) / C
+          if V > 0:
+              return True
+      return False
+
+  I_rh_formula = ...
+  lo, hi = 0.0, 300.0
+  for _ in range(20):
+      mid = (lo + hi) / 2
+      ...
+  I_rh_sim = hi
+  print(f"rheobase: formula {I_rh_formula:.1f} pA, simulation {I_rh_sim:.1f} pA;  an LIF with threshold VT would need {gL * (VT - EL):.0f} pA")
+`}
+hint="I_rh_formula = gL * (VT - EL - DT); inside the loop: if fires(mid): hi = mid, else: lo = mid."
+solution={String.raw`
+  import math
+  C, gL, EL, VT, DT = 200.0, 10.0, -65.0, -52.0, 1.5
+
+  def fires(I, T=500.0, dt=0.05):
+      V = EL
+      for k in range(int(T / dt)):
+          V += dt * (-gL * (V - EL) + gL * DT * math.exp(min((V - VT) / DT, 30)) + I) / C
+          if V > 0:
+              return True
+      return False
+
+  I_rh_formula = gL * (VT - EL - DT)
+  lo, hi = 0.0, 300.0
+  for _ in range(20):
+      mid = (lo + hi) / 2
+      if fires(mid):
+          hi = mid
+      else:
+          lo = mid
+  I_rh_sim = hi
+  print(f"rheobase: formula {I_rh_formula:.1f} pA, simulation {I_rh_sim:.1f} pA;  an LIF with threshold VT would need {gL * (VT - EL):.0f} pA")
+`} />
+
+The formula gives 115 pA and bisection finds 115.5 pA, the difference being the bisection's last step. An LIF neuron with its threshold at $V_T$ would need 130 pA: the exponential term supplies the missing $g_L\Delta_T$ = 15 pA by helping the voltage up. That answers the second half of the prediction.
+
+<Step n={3} title="The dynamic I-V curve" minutes={40} />
+
+How would you measure $\Delta_T$ and $V_T$ in a real neuron? Badel and colleagues (2008) gave a direct method. Inject a fluctuating current $I(t)$, record $V(t)$, and rearrange the membrane equation: the ionic current is $I_{ion} = I - C\,dV/dt$. Averaging $I_{ion}$ over all moments when the voltage was near some value $V$ gives the **dynamic I-V curve**, $\langle I_{ion}\rangle(V)$; for an EIF neuron it is exactly $G(V)$. Two details matter. Times near spikes are excluded, since the reset and refractoriness are not part of $G$. And $C$ must be known; it can be found by choosing the value that makes $I_{ion}$ least variable within a narrow voltage bin, because only the right $C$ removes the input's fluctuations completely.
+
+<PyCell id="dynamic" title="Reading the model from a recording" tests={String.raw`
+  import numpy as np
+  def test_capacitance():
+      "C_est minimises the variance of I - C dV/dt between -66 and -64 mV, and is within 5% of 200 pF"
+      assert abs(C_est - Cs[np.argmin([var_for(c) for c in Cs])]) < 1e-9 and abs(C_est - 200) < 10
+
+  def test_params():
+      "the fitted EL is within 1 mV, VT within 1.5 mV and DeltaT within 0.6 mV of the truth"
+      assert abs(EL_fit + 65) < 1 and abs(VT_fit + 52) < 1.5 and abs(DT_fit - 1.5) < 0.6
+`} prompt="A noise-driven EIF 'recording' (5 s) is simulated with known parameters. Complete `var_for(C)`, the variance of I - C dV/dt for samples between -66 and -64 mV; choose `C_est` on the grid `Cs`; then compute the binned F(V) = (C dV/dt - I)/C and fit it with the EIF form by grid search over ΔT and VT, solving for 1/τ and EL/τ by least squares."
+code={String.raw`
+  import numpy as np
+  r = np.random.default_rng(1)
+  dt, T = 0.05, 5000.0
+  n = int(T / dt)
+  I = np.empty(n); x = 0.0; a = np.exp(-dt / 5.0); xi = r.normal(size=n)
+  for k in range(n):                               # an Ornstein-Uhlenbeck current, as in Week 24
+      x = a * x + np.sqrt(1 - a * a) * xi[k]; I[k] = 150 + 120 * x
+
+  V = np.empty(n); v, last, spikes = -65.0, -1e9, []
+  for k in range(n):                               # the ground-truth EIF neuron
+      if k * dt - last < 2.0:
+          v = -60.0; V[k] = v; continue
+      v += dt * (-10 * (v + 65) + 10 * 1.5 * np.exp(min((v + 52) / 1.5, 20)) + I[k]) / 200.0
+      if v > -30:
+          spikes.append(k); last = k * dt; V[k] = 20.0; v = -60.0; continue
+      V[k] = v
+
+  dVdt = np.append((V[1:] - V[:-1]) / dt, 0.0)
+  ok = np.ones(n, bool)
+  for s in spikes:
+      ok[max(0, s - 20):s + 100] = False           # drop 1 ms before to 5 ms after each spike
+  ok &= V < -42
+
+  def var_for(C):
+      ...
+
+  Cs = np.arange(100, 300, 2.0)
+  C_est = Cs[int(np.argmin([var_for(c) for c in Cs]))]
+  F = ((C_est * dVdt - I) / C_est)[ok]; Vm = V[ok]
+  edges = np.arange(-72, -43.9, 1.0); centres = (edges[1:] + edges[:-1]) / 2
+  counts = np.array([np.sum((Vm >= a_) & (Vm < b_)) for a_, b_ in zip(edges[:-1], edges[1:])])
+  keep = counts > 30                               # drop bins with too few samples
+  centres = centres[keep]
+  Fm = np.array([F[(Vm >= a_) & (Vm < b_)].mean() for a_, b_ in zip(edges[:-1][keep], edges[1:][keep])])
+  best = (np.inf, None, None, None)
+  for DT in np.arange(0.5, 4.0, 0.05):
+      for VT in np.arange(-58, -44, 0.1):
+          X = np.column_stack([-centres + DT * np.exp((centres - VT) / DT), np.ones(centres.size)])
+          coef = np.linalg.lstsq(X, Fm, rcond=None)[0]
+          err = np.sum((X @ coef - Fm) ** 2)
+          if err < best[0]:
+              best = (err, DT, VT, coef)
+  _, DT_fit, VT_fit, coef = best
+  tau_fit = 1 / coef[0]; EL_fit = coef[1] * tau_fit
+  print(f"{len(spikes) / 5:.1f} Hz;  C = {C_est:.0f} pF, tau = {tau_fit:.1f} ms, EL = {EL_fit:.1f} mV, VT = {VT_fit:.1f} mV, DeltaT = {DT_fit:.2f} mV")
+  print("truth: C = 200 pF, tau = 20 ms, EL = -65 mV, VT = -52 mV, DeltaT = 1.5 mV")
+`}
+hint="def var_for(C): keep = ok & (V > -66) & (V < -64); return (I - C * dVdt)[keep].var()."
+solution={String.raw`
+  import numpy as np
+  r = np.random.default_rng(1)
+  dt, T = 0.05, 5000.0
+  n = int(T / dt)
+  I = np.empty(n); x = 0.0; a = np.exp(-dt / 5.0); xi = r.normal(size=n)
+  for k in range(n):                               # an Ornstein-Uhlenbeck current, as in Week 24
+      x = a * x + np.sqrt(1 - a * a) * xi[k]; I[k] = 150 + 120 * x
+
+  V = np.empty(n); v, last, spikes = -65.0, -1e9, []
+  for k in range(n):                               # the ground-truth EIF neuron
+      if k * dt - last < 2.0:
+          v = -60.0; V[k] = v; continue
+      v += dt * (-10 * (v + 65) + 10 * 1.5 * np.exp(min((v + 52) / 1.5, 20)) + I[k]) / 200.0
+      if v > -30:
+          spikes.append(k); last = k * dt; V[k] = 20.0; v = -60.0; continue
+      V[k] = v
+
+  dVdt = np.append((V[1:] - V[:-1]) / dt, 0.0)
+  ok = np.ones(n, bool)
+  for s in spikes:
+      ok[max(0, s - 20):s + 100] = False           # drop 1 ms before to 5 ms after each spike
+  ok &= V < -42
+
+  def var_for(C):
+      keep = ok & (V > -66) & (V < -64)
+      return (I - C * dVdt)[keep].var()
+
+  Cs = np.arange(100, 300, 2.0)
+  C_est = Cs[int(np.argmin([var_for(c) for c in Cs]))]
+  F = ((C_est * dVdt - I) / C_est)[ok]; Vm = V[ok]
+  edges = np.arange(-72, -43.9, 1.0); centres = (edges[1:] + edges[:-1]) / 2
+  counts = np.array([np.sum((Vm >= a_) & (Vm < b_)) for a_, b_ in zip(edges[:-1], edges[1:])])
+  keep = counts > 30                               # drop bins with too few samples
+  centres = centres[keep]
+  Fm = np.array([F[(Vm >= a_) & (Vm < b_)].mean() for a_, b_ in zip(edges[:-1][keep], edges[1:][keep])])
+  best = (np.inf, None, None, None)
+  for DT in np.arange(0.5, 4.0, 0.05):
+      for VT in np.arange(-58, -44, 0.1):
+          X = np.column_stack([-centres + DT * np.exp((centres - VT) / DT), np.ones(centres.size)])
+          coef = np.linalg.lstsq(X, Fm, rcond=None)[0]
+          err = np.sum((X @ coef - Fm) ** 2)
+          if err < best[0]:
+              best = (err, DT, VT, coef)
+  _, DT_fit, VT_fit, coef = best
+  tau_fit = 1 / coef[0]; EL_fit = coef[1] * tau_fit
+  print(f"{len(spikes) / 5:.1f} Hz;  C = {C_est:.0f} pF, tau = {tau_fit:.1f} ms, EL = {EL_fit:.1f} mV, VT = {VT_fit:.1f} mV, DeltaT = {DT_fit:.2f} mV")
+  print("truth: C = 200 pF, tau = 20 ms, EL = -65 mV, VT = -52 mV, DeltaT = 1.5 mV")
+`} />
+
+The method recovers the capacitance as 196 pF, the time constant as 18.5 ms, the resting potential as -64.8 mV, the threshold parameter as -52.2 mV and the slope factor as 1.75 mV, against true values of 200 pF, 20 ms, -65, -52 and 1.5 mV. Most parameters come back within a few per cent; the slope factor is the hardest, because few samples reach the voltages just below spike onset where the exponential dominates. Badel and colleagues applied this procedure to pyramidal neurons in slices and found that the EIF form fitted their dynamic I-V curves well.
+
+<Step n={4} title="Sharp or soft spike onset" minutes={15} />
+
+Fourcaud-Trocmé and colleagues, today's paper, showed why $\Delta_T$ matters beyond the shape of the upstroke. A neuron must turn fast fluctuations of its input into spikes; how fast it can follow them depends on how quickly the spike can start once threshold is approached. With a sharp onset (small $\Delta_T$) the neuron can follow inputs varying at hundreds of hertz; with a soft one, its response falls off above a cut-off frequency proportional to $1/\Delta_T$. The LIF neuron, with its infinitely sharp threshold, follows unrealistically fast inputs, and the quadratic integrate-and-fire neuron of Week 9, whose onset is too soft, too slow ones. The EIF, with $\Delta_T$ measured from real neurons, sits in between.
+
+How sharp is a real neuron's onset? Recordings from cortical pyramidal cells show spikes rising more abruptly than the sodium channels' own voltage sensitivity would suggest, which led to a debate between explanations based on cooperative sodium channels and on spikes that begin in the axon and invade the soma. Week 32's cable theory is needed to follow it.
+
+<Bridge title="A smooth threshold"
+  neuro="The EIF replaces the integrate-and-fire neuron's arbitrary threshold with the physics of spike initiation: a sodium current growing exponentially with voltage. Its two extra parameters can be measured from a recording, and they set both the rheobase and how fast a neuron can respond."
+  ai="Spiking networks trained by gradient descent face the hard threshold's lack of a derivative, and replace it during training with a smooth surrogate, often a fast sigmoid or exponential, whose steepness is a hyperparameter much like the slope factor. Biology already uses a smooth, finite-sharpness threshold; the surrogate-gradient trick borrows the idea.">
+
+Where a spike begins is a continuous property of the membrane, not a line drawn on it.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The exponential term in the EIF model comes from...", options: ["The leak", "The sodium current with fast activation near threshold", "The pump", "Potassium inactivation"], answer: 1, explain: "m∞(V)³ is close to exponential at its foot." },
+  { q: "As the slope factor ΔT tends to zero, the EIF becomes...", options: ["The Hodgkin-Huxley model", "The leaky integrate-and-fire neuron", "A linear model with no spikes", "The quadratic model"], answer: 1, explain: "The exponential becomes a wall at V_T." },
+  { q: "The EIF rheobase is...", options: ["g_L(V_T - E_L)", "g_L(V_T - E_L - Δ_T)", "C Δ_T", "Zero"], answer: 1, explain: "The maximum of G(V) is at V_T." },
+  { q: "In the EIF model V_T is...", options: ["A voltage above which the neuron always fires", "Where the exponential term's slope equals the leak's", "The reset voltage", "The resting potential"], answer: 1, explain: "G'(V_T) = 0." },
+  { q: "The dynamic I-V curve is...", options: ["The average of I - C dV/dt as a function of V", "The peak current in voltage clamp", "The f-I curve", "The spike shape"], answer: 0, explain: "Badel and colleagues (2008)." },
+  { q: "The capacitance can be estimated by...", options: ["Minimising the variance of I - C dV/dt at fixed voltage", "Counting spikes", "Measuring the reset", "Fourier analysis only"], answer: 0, explain: "Only the right C removes the input fluctuations." },
+  { q: "Samples near spikes are excluded from the dynamic I-V curve because...", options: ["They are too noisy", "Reset and refractoriness are not part of G(V)", "They are too rare", "They are faster"], answer: 1, explain: "The curve describes subthreshold dynamics." },
+  { q: "A smaller ΔT lets a neuron...", options: ["Follow faster input fluctuations", "Fire with less current", "Have a longer time constant", "Ignore inputs"], answer: 0, explain: "Fourcaud-Trocmé and colleagues." },
+]} />
+
+<Flashcards cards={[
+  { front: "EIF model?", back: "$C\\dot V = -g_L(V - E_L) + g_L\\Delta_Te^{(V - V_T)/\\Delta_T} + I$, reset after a cut-off." },
+  { front: "Slope factor $\\Delta_T$?", back: "How sharply the spike starts; set by the voltage sensitivity of sodium activation (about a third of its slope factor)." },
+  { front: "EIF rheobase?", back: "$I_{rh} = g_L(V_T - E_L - \\Delta_T)$." },
+  { front: "Dynamic I-V method?", back: "Inject noise, compute $I - C\\,dV/dt$, average it by voltage away from spikes, fit $G(V)$; choose C by minimising variance at fixed V." },
+  { front: "Why does $\\Delta_T$ matter for coding?", back: "It sets how fast a neuron can track input fluctuations: cut-off frequency roughly proportional to $1/\\Delta_T$." },
+]} />
+
+<Predict revisit question="Is there a voltage above which an exponential integrate-and-fire neuron always fires, and what sets its rheobase?" />
+
+<Key title="Before you go">
+<ul>
+<li>The exponential term of the EIF is the foot of the sodium current, with ΔT about a third of the activation slope.</li>
+<li>The rheobase is g_L(V_T - E_L - Δ_T); there is no fixed voltage threshold.</li>
+<li>The dynamic I-V method reads C and the EIF parameters from a noisy-input recording.</li>
+<li>ΔT controls how fast a neuron can follow its input, between the extremes of LIF and quadratic models.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Fourcaud-Trocmé, Hansel, van Vreeswijk and Brunel (2003), <em>How spike generation mechanisms determine the neuronal response to fluctuating inputs</em>.</li>
+<li>Badel, Lefort, Brette, Petersen, Gerstner and Richardson (2008), <em>Dynamic I-V curves are reliable predictors of naturalistic pyramidal-neuron voltage traces</em>, Journal of Neurophysiology 99(2), 656 to 666.</li>
+<li>Gerstner, Kistler, Naud and Paninski (2014), <em>Neuronal Dynamics</em>, chapter 5 on nonlinear integrate-and-fire models (free online).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Explain in your own words why the dynamic I-V method needs a fluctuating input rather than a set of steady currents. Then say what would go wrong if a neuron had a slow adaptation current that the EIF model leaves out, and how you might notice it in the dynamic I-V curve." />

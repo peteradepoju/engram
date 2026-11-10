@@ -1,0 +1,341 @@
+export const meta = {
+  title: "Reducing Hodgkin-Huxley: two variables and the Morris-Lecar model",
+  intro: "The Hodgkin-Huxley model has four variables, which makes it accurate but hard to picture. Week 22 met FitzHugh's two-variable caricature of it. Today you derive a two-variable model from Hodgkin-Huxley itself, the way John Rinzel did in 1985, by noticing two facts about its gates: m is far faster than everything else, and h and n move almost in lockstep. You will test both facts, build the reduced model and measure what it gets right and wrong. Then you meet the Morris-Lecar model, a two-variable conductance model built from the start for a barnacle muscle, whose two standard parameter sets show the two classes of excitability side by side.",
+  goals: [
+    "Compare the time constants of m, h and n and justify replacing m by its steady state",
+    "Find the linear relation between h and n during firing and use it to eliminate a variable",
+    "Simulate the reduced model and compare its firing with the full model",
+    "Simulate the Morris-Lecar model and show class 1 and class 2 excitability",
+  ],
+  plan: [
+    { label: "Predict and separating time scales", minutes: 20 },
+    { label: "h and n in lockstep", minutes: 25 },
+    { label: "The reduced model", minutes: 30 },
+    { label: "The Morris-Lecar model", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "morris-lecar-1981",
+};
+
+<Predict question="Replace m in the Hodgkin-Huxley model by its instantaneous steady value m∞(V), and h by a linear function of n. With only V and n left, will the model still fire spikes; and if so, at about the same rate as the full model, or noticeably faster or slower?" />
+
+<Step n={1} title="Separating time scales" minutes={20} />
+
+A model can lose a variable without losing its behaviour if that variable is either much faster than the others, so that it is always at its steady state, or tied to another variable, so that one predicts the other. Both apply to Hodgkin-Huxley. The activation gate $m$ has a time constant of 0.1 to 0.5 ms; $h$ and $n$ have time constants of 1 to 9 ms. On the time scale of $h$ and $n$, $m$ is effectively instantaneous: $m \approx m_\infty(V)$.
+
+<PyCell id="timescales" title="How much faster is m?" tests={String.raw`
+  import numpy as np
+  def test_taus():
+      "tau holds the three time constants at each voltage"
+      assert all(np.allclose(tau[g], inf_tau(V, g)[1]) for g in "mhn")
+
+  def test_ratio():
+      "m is at least three times faster than both h and n everywhere between -80 and +20 mV"
+      assert np.all(tau["h"] / tau["m"] > 3) and np.all(tau["n"] / tau["m"] > 3)
+`} prompt="Compute the time constants of m, h and n for voltages from -80 to +20 mV, store them in the dictionary `tau`, and print the smallest ratio of the h and n time constants to that of m."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def rates(V):
+      V = V + 1e-7
+      an = 0.01 * (V + 55) / (1 - np.exp(-(V + 55) / 10)); bn = 0.125 * np.exp(-(V + 65) / 80)
+      am = 0.1 * (V + 40) / (1 - np.exp(-(V + 40) / 10)); bm = 4.0 * np.exp(-(V + 65) / 18)
+      ah = 0.07 * np.exp(-(V + 65) / 20); bh = 1 / (1 + np.exp(-(V + 35) / 10))
+      return am, bm, ah, bh, an, bn
+
+  def inf_tau(V, g):
+      am, bm, ah, bh, an, bn = rates(V)
+      a, b = {"m": (am, bm), "h": (ah, bh), "n": (an, bn)}[g]
+      return a / (a + b), 1 / (a + b)
+
+  V = np.arange(-80, 21, 1.0)
+  tau = {g: ... for g in "mhn"}
+  print(f"tau_m from {tau['m'].min():.2f} to {tau['m'].max():.2f} ms; smallest ratio tau_h/tau_m {np.min(tau['h'] / tau['m']):.1f}, tau_n/tau_m {np.min(tau['n'] / tau['m']):.1f}")
+  for g in "mhn":
+      plt.plot(V, tau[g], label=f"tau_{g}")
+  plt.xlabel("V (mV)"); plt.ylabel("ms"); plt.legend(); plt.show()
+`}
+hint="tau = {g: inf_tau(V, g)[1] for g in 'mhn'}."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def rates(V):
+      V = V + 1e-7
+      an = 0.01 * (V + 55) / (1 - np.exp(-(V + 55) / 10)); bn = 0.125 * np.exp(-(V + 65) / 80)
+      am = 0.1 * (V + 40) / (1 - np.exp(-(V + 40) / 10)); bm = 4.0 * np.exp(-(V + 65) / 18)
+      ah = 0.07 * np.exp(-(V + 65) / 20); bh = 1 / (1 + np.exp(-(V + 35) / 10))
+      return am, bm, ah, bh, an, bn
+
+  def inf_tau(V, g):
+      am, bm, ah, bh, an, bn = rates(V)
+      a, b = {"m": (am, bm), "h": (ah, bh), "n": (an, bn)}[g]
+      return a / (a + b), 1 / (a + b)
+
+  V = np.arange(-80, 21, 1.0)
+  tau = {g: inf_tau(V, g)[1] for g in "mhn"}
+  print(f"tau_m from {tau['m'].min():.2f} to {tau['m'].max():.2f} ms; smallest ratio tau_h/tau_m {np.min(tau['h'] / tau['m']):.1f}, tau_n/tau_m {np.min(tau['n'] / tau['m']):.1f}")
+  for g in "mhn":
+      plt.plot(V, tau[g], label=f"tau_{g}")
+  plt.xlabel("V (mV)"); plt.ylabel("ms"); plt.legend(); plt.show()
+`} />
+
+Across the range, $\tau_m$ stays between 0.11 and 0.5 ms, while $\tau_n$ is always at least 6 times longer and $\tau_h$ at least 3.2 times, its closest approach coming near -30 mV. That is less separation than the phrase "m is instantaneous" suggests, and it is the first hint of where the reduction will go wrong.
+
+<Video id="R8iSyZya7UI" title="From Hodgkin-Huxley to 2D (Neuronal Dynamics 4.1)" by="Wulfram Gerstner (EPFL)" note="Wulfram Gerstner shows how the four Hodgkin-Huxley equations reduce to two, by separating time scales and exploiting the similarity of h and n, the reduction you carry out today." />
+
+<Step n={2} title="h and n in lockstep" minutes={25} />
+
+The second fact is less obvious. Plot $h$ against $n$ during repetitive firing and the points fall close to a straight line: as potassium channels open, sodium channels inactivate, at similar rates. Rinzel (1985) used $h + n \approx 0.8$; you can fit the relation directly.
+
+<PyCell id="lockstep" title="Fitting h as a function of n" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "a and b are the intercept and slope of the least-squares line of h on n"
+      p = np.polyfit(nn, hh, 1)
+      assert abs(b - p[0]) < 1e-9 and abs(a - p[1]) < 1e-9
+
+  def test_tight():
+      "the relation is tight: correlation below -0.98, with slope near -1"
+      assert np.corrcoef(nn, hh)[0, 1] < -0.98 and -1.3 < b < -0.8
+`} prompt="`full(I)` simulates the full model and returns arrays of V, n and h. Run it at 10 μA/cm² for 200 ms, take n and h after the first 50 ms (`nn`, `hh`), and fit h = a + b n by least squares."
+code={String.raw`
+  def full(I, T=200.0, dt=0.01):
+      V, n, m, h = -65.0, 0.3177, 0.0529, 0.5961
+      out = np.empty((int(T / dt), 3))
+      for k in range(len(out)):
+          am, bm, ah, bh, an, bn = rates(V)
+          dV = I - 120 * m**3 * h * (V - 50) - 36 * n**4 * (V + 77) - 0.3 * (V + 54.387)
+          n += dt * (an * (1 - n) - bn * n); m += dt * (am * (1 - m) - bm * m); h += dt * (ah * (1 - h) - bh * h)
+          V += dt * dV
+          out[k] = V, n, h
+      return out
+
+  o = full(10.0)
+  nn, hh = o[5000:, 1], o[5000:, 2]
+  b, a = ...
+  print(f"h = {a:.3f} + ({b:.3f}) n;  correlation {np.corrcoef(nn, hh)[0, 1]:.4f}")
+  plt.plot(nn, hh, ".", ms=1); plt.plot(nn, a + b * nn); plt.xlabel("n"); plt.ylabel("h"); plt.show()
+`}
+hint="b, a = np.polyfit(nn, hh, 1)."
+solution={String.raw`
+  def full(I, T=200.0, dt=0.01):
+      V, n, m, h = -65.0, 0.3177, 0.0529, 0.5961
+      out = np.empty((int(T / dt), 3))
+      for k in range(len(out)):
+          am, bm, ah, bh, an, bn = rates(V)
+          dV = I - 120 * m**3 * h * (V - 50) - 36 * n**4 * (V + 77) - 0.3 * (V + 54.387)
+          n += dt * (an * (1 - n) - bn * n); m += dt * (am * (1 - m) - bm * m); h += dt * (ah * (1 - h) - bh * h)
+          V += dt * dV
+          out[k] = V, n, h
+      return out
+
+  o = full(10.0)
+  nn, hh = o[5000:, 1], o[5000:, 2]
+  b, a = np.polyfit(nn, hh, 1)
+  print(f"h = {a:.3f} + ({b:.3f}) n;  correlation {np.corrcoef(nn, hh)[0, 1]:.4f}")
+  plt.plot(nn, hh, ".", ms=1); plt.plot(nn, a + b * nn); plt.xlabel("n"); plt.ylabel("h"); plt.show()
+`} />
+
+During firing, $h = 0.871 - 1.075n$, with a correlation of -0.995: knowing $n$ tells you $h$ almost exactly. Rinzel's rounder version, $h \approx 0.8 - n$, lies close to this line over the range of $n$ that firing visits. Why the two gates move together is not deep: both have similar time constants and opposite voltage dependence, so a depolarisation that opens one closes the other at a similar rate.
+
+<Step n={3} title="The reduced model" minutes={30} />
+
+With $m = m_\infty(V)$ and $h = a + bn$, two equations remain:
+
+$$
+C\frac{dV}{dt} = I - \bar g_{Na}m_\infty(V)^3(a + bn)(V - E_{Na}) - \bar g_Kn^4(V - E_K) - g_L(V - E_L), \qquad \frac{dn}{dt} = \alpha_n(1 - n) - \beta_n n.
+$$
+
+This is a planar system, so everything Week 22 taught applies: nullclines, fixed points and their stability, and limit cycles you can see.
+
+<Figure caption="The reduced model's phase plane: the V-nullcline, the n-nullcline and a trajectory from rest. Set the input current." credit="Interactive figure by Engram, after Rinzel's reduction of the Hodgkin-Huxley model.">
+  <ReducedPhasePlane />
+</Figure>
+
+<PyCell id="reduced" title="How good is the reduction?" tests={String.raw`
+  import numpy as np
+  def test_rate():
+      "rate counts upward crossings of 0 mV after 50 ms and converts the mean interval to Hz"
+      v = np.zeros(20001); v[[6000, 8000, 10000]] = 10
+      assert abs(rate(v) - 50) < 1e-6
+
+  def test_compare():
+      "both models fire at 10 uA/cm2, and the reduced model fires faster than the full one at every current that makes both fire"
+      assert f_full[10] > 0 and f_red[10] > 0
+      assert all(f_red[I] > f_full[I] for I in currents if f_full[I] > 0)
+`} prompt="Complete `reduced(I)` using m∞(V) and h = a + b n, write `rate(v)` (mean rate from upward crossings of 0 mV after 50 ms, with steps of 0.01 ms), and compare the firing rates of the full and reduced models at 5, 7, 10, 20 and 40 μA/cm²."
+code={String.raw`
+  def reduced(I, T=200.0, dt=0.01):
+      V, n = -65.0, 0.3177
+      out = np.empty(int(T / dt))
+      for k in range(len(out)):
+          am, bm, ah, bh, an, bn = rates(V)
+          m, h = ..., ...
+          dV = I - 120 * m**3 * h * (V - 50) - 36 * n**4 * (V + 77) - 0.3 * (V + 54.387)
+          n += dt * (an * (1 - n) - bn * n)
+          V += dt * dV
+          out[k] = V
+      return out
+
+  def rate(v, dt=0.01, t0=50.0):
+      s = np.where((v[1:] > 0) & (v[:-1] <= 0))[0] * dt
+      s = s[s > t0]
+      return ...
+
+  currents = (5, 7, 10, 20, 40)
+  f_full = {I: rate(full(I)[:, 0]) for I in currents}
+  f_red = {I: rate(reduced(I)) for I in currents}
+  for I in currents:
+      print(f"I = {I:2d}: full {f_full[I]:6.1f} Hz, reduced {f_red[I]:6.1f} Hz")
+`}
+hint="m, h = am / (am + bm), a + b * n; return 1000 * (len(s) - 1) / (s[-1] - s[0]) if len(s) > 1 else 0.0."
+solution={String.raw`
+  def reduced(I, T=200.0, dt=0.01):
+      V, n = -65.0, 0.3177
+      out = np.empty(int(T / dt))
+      for k in range(len(out)):
+          am, bm, ah, bh, an, bn = rates(V)
+          m, h = am / (am + bm), a + b * n
+          dV = I - 120 * m**3 * h * (V - 50) - 36 * n**4 * (V + 77) - 0.3 * (V + 54.387)
+          n += dt * (an * (1 - n) - bn * n)
+          V += dt * dV
+          out[k] = V
+      return out
+
+  def rate(v, dt=0.01, t0=50.0):
+      s = np.where((v[1:] > 0) & (v[:-1] <= 0))[0] * dt
+      s = s[s > t0]
+      return 1000 * (len(s) - 1) / (s[-1] - s[0]) if len(s) > 1 else 0.0
+
+  currents = (5, 7, 10, 20, 40)
+  f_full = {I: rate(full(I)[:, 0]) for I in currents}
+  f_red = {I: rate(reduced(I)) for I in currents}
+  for I in currents:
+      print(f"I = {I:2d}: full {f_full[I]:6.1f} Hz, reduced {f_red[I]:6.1f} Hz")
+`} />
+
+The reduced model fires at every current tested, including 5 μA/cm², where the full model is silent, and always faster: 87 against 68 Hz at 10 μA/cm², 150 against 109 Hz at 40. That answers the prediction: the reduction keeps the spikes but not the numbers. The cause is the instantaneous $m$. In the full model sodium activation lags the voltage by a fraction of a millisecond, which gives the potassium current and inactivation time to resist; removing the lag makes the model more excitable. The phase-plane geometry, which is what you need to understand why the neuron fires, survives; quantitative predictions need the full model, or a reduced one refitted to its behaviour.
+
+<Step n={4} title="The Morris-Lecar model" minutes={30} />
+
+Catherine Morris and Harold Lecar (1981), today's paper, built a two-variable model directly from data, for the voltage oscillations of barnacle giant muscle fibres. It has a fast, non-inactivating calcium current that plays the part of sodium (so its activation is instantaneous, as in the reduction above) and a slower potassium current with a single gate $w$:
+
+$$
+C\frac{dV}{dt} = I - \bar g_{Ca}m_\infty(V)(V - E_{Ca}) - \bar g_Kw(V - E_K) - g_L(V - E_L), \qquad \frac{dw}{dt} = \phi\frac{w_\infty(V) - w}{\tau_w(V)},
+$$
+
+with $m_\infty$ and $w_\infty$ given by $\frac{1}{2}(1 + \tanh((V - V_1)/V_2))$ and $\tau_w = 1/\cosh((V - V_3)/(2V_4))$. Because it is so simple and so physiological, it became a standard teaching model, and Rinzel and Ermentrout (1989) gave two parameter sets that differ only in the potassium gate and show the two classes of excitability from Week 23.
+
+<PyCell id="morrislecar" title="Two classes in one model" tests={String.raw`
+  import numpy as np
+  def test_class2():
+      "with the first set, the model is silent at 85 uA/cm2 and jumps to a rate above 8 Hz at 90"
+      assert ml_rate(85, 2) == 0 and ml_rate(90, 2) > 8
+
+  def test_class1():
+      "with the second set, the model can fire below 3 Hz near its threshold"
+      assert 0 < ml_rate(40.2, 1, T=3000) < 3
+`} prompt="Complete the Morris-Lecar right-hand side in `ml_rate(I, cls)`, which returns the firing rate after 300 ms. Then find, for each parameter set, the lowest rate you can get by turning up the current from below threshold."
+code={String.raw`
+  import math
+
+  def ml_rate(I, cls, T=1000.0, dt=0.05):
+      C, gCa, gK, gL, VCa, VK, VL, V1, V2 = 20.0, 4.4, 8.0, 2.0, 120.0, -84.0, -60.0, -1.2, 18.0
+      if cls == 2:
+          V3, V4, phi = 2.0, 30.0, 0.04
+      else:
+          V3, V4, phi, gCa = 12.0, 17.4, 1 / 15, 4.0
+      V, w, spikes = -60.0, 0.0, []
+      for k in range(int(T / dt)):
+          minf = 0.5 * (1 + math.tanh((V - V1) / V2))
+          winf = 0.5 * (1 + math.tanh((V - V3) / V4))
+          tw = 1 / math.cosh((V - V3) / (2 * V4))
+          dV = ...
+          w += dt * phi * (winf - w) / tw
+          Vnew = V + dt * dV
+          if Vnew > 0 >= V and k * dt > 300:
+              spikes.append(k * dt)
+          V = Vnew
+      return 1000 * (len(spikes) - 1) / (spikes[-1] - spikes[0]) if len(spikes) > 1 else 0.0
+
+  for cls, Is in ((2, (80, 85, 88, 89, 90, 100)), (1, (39.8, 40, 40.5, 42, 50, 80))):
+      print(f"set {cls}:", ", ".join(f"I={I}: {ml_rate(I, cls, T=3000 if cls == 1 else 1000):.1f} Hz" for I in Is))
+`}
+hint="dV = (I - gCa * minf * (V - VCa) - gK * w * (V - VK) - gL * (V - VL)) / C."
+solution={String.raw`
+  import math
+
+  def ml_rate(I, cls, T=1000.0, dt=0.05):
+      C, gCa, gK, gL, VCa, VK, VL, V1, V2 = 20.0, 4.4, 8.0, 2.0, 120.0, -84.0, -60.0, -1.2, 18.0
+      if cls == 2:
+          V3, V4, phi = 2.0, 30.0, 0.04
+      else:
+          V3, V4, phi, gCa = 12.0, 17.4, 1 / 15, 4.0
+      V, w, spikes = -60.0, 0.0, []
+      for k in range(int(T / dt)):
+          minf = 0.5 * (1 + math.tanh((V - V1) / V2))
+          winf = 0.5 * (1 + math.tanh((V - V3) / V4))
+          tw = 1 / math.cosh((V - V3) / (2 * V4))
+          dV = (I - gCa * minf * (V - VCa) - gK * w * (V - VK) - gL * (V - VL)) / C
+          w += dt * phi * (winf - w) / tw
+          Vnew = V + dt * dV
+          if Vnew > 0 >= V and k * dt > 300:
+              spikes.append(k * dt)
+          V = Vnew
+      return 1000 * (len(spikes) - 1) / (spikes[-1] - spikes[0]) if len(spikes) > 1 else 0.0
+
+  for cls, Is in ((2, (80, 85, 88, 89, 90, 100)), (1, (39.8, 40, 40.5, 42, 50, 80))):
+      print(f"set {cls}:", ", ".join(f"I={I}: {ml_rate(I, cls, T=3000 if cls == 1 else 1000):.1f} Hz" for I in Is))
+`} />
+
+With the first set, the model is silent up to 88 μA/cm² and jumps to 9.3 Hz at 89: class 2, starting through a Hopf bifurcation. With the second, it fires at 1.1 Hz at 40 μA/cm² and 3.8 Hz at 40.5, its rate rising continuously from zero: class 1, starting through a saddle-node on the limit cycle. The two sets differ only in the voltage dependence and speed of the potassium gate. Whether a neuron can fire arbitrarily slowly depends not on which currents it has but on their kinetics, a point Week 30 made with the A-type current.
+
+<Bridge title="Reduction as understanding"
+  neuro="Reducing a model is not only a way to make it cheaper. By finding which variables are fast, which are tied together and which carry the slow dynamics, you learn what the system really depends on. The two-variable models showed that excitability is a property of a plane: two nullclines and how they meet."
+  ai="Model distillation and pruning in machine learning reduce networks to smaller ones that behave alike, and mechanistic interpretability looks for low-dimensional variables that capture what a large network computes. The same tests apply: which variables are fast enough to treat as instantaneous, which are redundant, and does the reduced model reproduce behaviour it was not fitted to?">
+
+A good reduction keeps the geometry of the dynamics, even when it loses some of the numbers.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In the Hodgkin-Huxley model, the fastest gating variable is...", options: ["n", "h", "m", "They are equal"], answer: 2, explain: "τ_m is under 0.5 ms." },
+  { q: "Replacing m by m∞(V) is justified because...", options: ["m is constant", "m relaxes much faster than h, n and V", "m does not matter", "m equals h"], answer: 1, explain: "Separation of time scales." },
+  { q: "During firing, h and n are related approximately by...", options: ["h = n", "A decreasing straight line", "No relation", "h = n⁴"], answer: 1, explain: "Rinzel used h + n ≈ 0.8." },
+  { q: "The reduced two-variable model...", options: ["Cannot spike", "Spikes, but faster than the full model at the same current", "Is identical to the full model", "Only oscillates subthreshold"], answer: 1, explain: "Instantaneous m makes it more excitable." },
+  { q: "Morris and Lecar modelled...", options: ["Squid axon", "Barnacle muscle fibres", "Cortical pyramidal cells", "Cardiac cells"], answer: 1, explain: "With a calcium and a potassium current." },
+  { q: "In the Morris-Lecar model the inward current is carried by...", options: ["Sodium", "Calcium", "Chloride", "Potassium"], answer: 1, explain: "A fast, non-inactivating calcium current." },
+  { q: "A model that can fire at arbitrarily low rates near threshold shows...", options: ["Class 1 excitability", "Class 2 excitability", "No excitability", "Bursting"], answer: 0, explain: "A saddle-node on invariant circle (Week 23)." },
+  { q: "A planar model's behaviour can be read from...", options: ["Its nullclines and fixed points", "Its parameter count", "Its time step", "Its noise"], answer: 0, explain: "Week 22's phase plane." },
+]} />
+
+<Flashcards cards={[
+  { front: "Rinzel's reduction?", back: "Set $m = m_\\infty(V)$ and $h \\approx a + bn$ (about $0.87 - 1.08n$), leaving a two-variable model in V and n." },
+  { front: "Why can m be eliminated?", back: "Its time constant (0.1 to 0.5 ms) is many times shorter than those of h and n." },
+  { front: "What the reduction loses?", back: "Exact rates and thresholds: with instantaneous m it fires more readily and faster than the full model." },
+  { front: "Morris-Lecar model?", back: "Two variables: V and a potassium gate w, with an instantaneous calcium current; built for barnacle muscle (1981)." },
+  { front: "Class 1 versus class 2 in Morris-Lecar?", back: "One parameter set starts firing at arbitrarily low rates (class 1); the other jumps to a finite rate (class 2)." },
+]} />
+
+<Predict revisit question="After reducing HH to V and n, does the model still fire, and how does its rate compare with the full model?" />
+
+<Key title="Before you go">
+<ul>
+<li>Fast variables can be replaced by their steady states; tied variables can be replaced by one another.</li>
+<li>In Hodgkin-Huxley, m is fast and h and n move together, leaving a planar model.</li>
+<li>The reduced model keeps spiking and its phase-plane geometry but fires more readily.</li>
+<li>The Morris-Lecar model shows class 1 and class 2 excitability with two parameter sets.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Morris and Lecar (1981), <em>Voltage oscillations in the barnacle giant muscle fiber</em>.</li>
+<li>Rinzel and Ermentrout (1989), <em>Analysis of neural excitability and oscillations</em>, in Koch and Segev (eds), Methods in Neuronal Modeling, MIT Press: the source of the two parameter sets.</li>
+<li>Gerstner, Kistler, Naud and Paninski (2014), <em>Neuronal Dynamics</em>, chapter 4, on reduction to two dimensions (free online).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="The reduced model fires faster than the full one. Using what you know about m's speed, explain why making m instantaneous makes a neuron more excitable. Then say whether you would trust the reduced model to predict the threshold current of the full model, and why." />

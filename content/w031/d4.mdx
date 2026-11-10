@@ -1,0 +1,237 @@
+export const meta = {
+  title: "Irregular firing: integrate-and-fire neurons with noisy, balanced input",
+  intro: "In Week 15 you met the observation that cortical neurons fire irregularly, with interspike intervals almost as variable as a Poisson process, and read Shadlen and Newsome's account of why. Today you rebuild the argument that started that debate. Softky and Koch (1993), this week's deep read, showed that an integrate-and-fire neuron summing many small, independent excitatory inputs should fire almost like a clock. You will reproduce their result, then add inhibition and find that a neuron whose excitation and inhibition nearly cancel fires irregularly at the same rate. Along the way you will compute the mean and variance of the membrane potential from the input rates, the diffusion picture that links today to Week 24.",
+  goals: [
+    "Simulate a leaky integrate-and-fire neuron driven by Poisson synaptic inputs",
+    "Show that purely excitatory, mean-driven input produces regular firing",
+    "Show that balanced excitation and inhibition produce irregular firing at the same rate",
+    "Compute the mean and variance of the free membrane potential from the input statistics",
+  ],
+  plan: [
+    { label: "Predict and the puzzle", minutes: 20 },
+    { label: "Many small excitatory inputs", minutes: 25 },
+    { label: "Balance", minutes: 35 },
+    { label: "Mean and fluctuations", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "softky-koch-1993",
+};
+
+<Predict question="A neuron needs 30 coincident excitatory inputs of 0.5 mV to reach threshold from rest. It receives thousands of independent Poisson inputs and fires at 20 Hz. Will its spikes be about as irregular as a Poisson process (CV near 1), or much more regular (CV well below 0.5)?" />
+
+<Step n={1} title="The puzzle" minutes={20} />
+
+The coefficient of variation of the interspike intervals, CV = sd/mean, is 1 for a Poisson process and 0 for a clock. Recordings from cortical neurons in behaving animals give CVs near 1. Softky and Koch asked whether that is compatible with neurons integrating their inputs. Their argument was simple: if a neuron must sum many small inputs to reach threshold, then by the law of large numbers the sum rises almost deterministically, and the neuron should fire at nearly regular intervals. They simulated integrate-and-fire neurons and a detailed pyramidal-cell model and found CVs far below those observed, and concluded that cortical neurons must instead detect rare coincidences of inputs on fast time scales, perhaps through active dendrites.
+
+The argument was right about the model they tested and wrong about what follows from it, as you will see.
+
+<Video id="VOkgb7AVPac" title="Membrane potential fluctuations (Neuronal Dynamics 5.4b)" by="Wulfram Gerstner (EPFL)" note="Wulfram Gerstner derives the mean and fluctuations of the membrane potential under random synaptic bombardment, and how they determine whether a neuron fires regularly or irregularly." />
+
+<Step n={2} title="Many small excitatory inputs" minutes={25} />
+
+Model the inputs as one Poisson stream of excitatory events at total rate $r_e$, each raising the voltage by $w_e$ = 0.5 mV, and one of inhibitory events at rate $r_i$, each lowering it by $w_i$ = 0.5 mV. Between events the voltage decays with $\tau$ = 20 ms; at 15 mV above rest the neuron fires, resets to rest and is refractory for 2 ms.
+
+<PyCell id="excite" title="Softky and Koch's neuron" tests={String.raw`
+  import numpy as np
+  def test_cv():
+      "cv computes the standard deviation over the mean of the intervals"
+      assert abs(cv(np.array([0.0, 10, 20, 30])) - 0) < 1e-12 and abs(cv(np.array([0.0, 10, 30])) - np.std([10, 20]) / 15) < 1e-12
+
+  def test_regular():
+      "with excitation only, the neuron fires near 20 Hz with a CV below 0.45"
+      assert 15 < rate0 < 25 and cv0 < 0.45
+`} prompt="`lif(re, ri)` simulates 20 s and returns spike times (ms). Write `cv(spikes)`, then run the neuron with excitation only at r_e = 1591 Hz, which gives about 20 Hz, and report its rate `rate0` and CV `cv0`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def lif(re, ri, we=0.5, wi=0.5, tau=20.0, Vth=15.0, T=20000.0, dt=0.1, seed=1, tref=2.0):
+      r = np.random.default_rng(seed); n = int(T / dt)
+      drive = we * r.poisson(re * dt / 1000, n) - wi * r.poisson(ri * dt / 1000, n)
+      V, spikes, last, decay = 0.0, [], -1e9, np.exp(-dt / tau)
+      for k in range(n):
+          if k * dt - last < tref:
+              continue
+          V = V * decay + drive[k]
+          if V >= Vth:
+              spikes.append(k * dt); V = 0.0; last = k * dt
+      return np.array(spikes)
+
+  def cv(spikes):
+      return ...
+
+  s0 = lif(1591, 0)
+  rate0, cv0 = len(s0) / 20, cv(s0)
+  print(f"excitation only: {rate0:.1f} Hz, CV {cv0:.2f}")
+  plt.hist(np.diff(s0), 50); plt.xlabel("interspike interval (ms)"); plt.show()
+`}
+hint="isi = np.diff(spikes); return isi.std() / isi.mean()."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def lif(re, ri, we=0.5, wi=0.5, tau=20.0, Vth=15.0, T=20000.0, dt=0.1, seed=1, tref=2.0):
+      r = np.random.default_rng(seed); n = int(T / dt)
+      drive = we * r.poisson(re * dt / 1000, n) - wi * r.poisson(ri * dt / 1000, n)
+      V, spikes, last, decay = 0.0, [], -1e9, np.exp(-dt / tau)
+      for k in range(n):
+          if k * dt - last < tref:
+              continue
+          V = V * decay + drive[k]
+          if V >= Vth:
+              spikes.append(k * dt); V = 0.0; last = k * dt
+      return np.array(spikes)
+
+  def cv(spikes):
+      isi = np.diff(spikes)
+      return isi.std() / isi.mean()
+
+  s0 = lif(1591, 0)
+  rate0, cv0 = len(s0) / 20, cv(s0)
+  print(f"excitation only: {rate0:.1f} Hz, CV {cv0:.2f}")
+  plt.hist(np.diff(s0), 50); plt.xlabel("interspike interval (ms)"); plt.show()
+`} />
+
+The neuron fires at 21 Hz with a CV of 0.34, far more regular than a Poisson process. That answers the prediction and reproduces Softky and Koch's finding: with only excitation, 30 coincident inputs needed and about 1,600 arriving every second, the voltage climbs to threshold almost deterministically after each reset, and the interval histogram is a narrow peak.
+
+<Step n={3} title="Balance" minutes={35} />
+
+Now add inhibition, and raise excitation just enough to keep the output rate at about 20 Hz. The pairs of rates below were found by bisection. The mean input barely changes, since the extra excitation cancels the inhibition, but the fluctuations grow with the total number of events, excitatory plus inhibitory.
+
+<Figure caption="An integrate-and-fire neuron driven by excitatory and inhibitory Poisson inputs, with excitation adjusted to keep the output near 20 Hz. Set the inhibitory input rate." credit="Interactive figure by Engram, after Softky and Koch (1993) and Shadlen and Newsome (1998).">
+  <BalancedInput />
+</Figure>
+
+<PyCell id="balance" title="Irregularity from balance" tests={String.raw`
+  import numpy as np
+  def test_rates():
+      "all four conditions fire between 15 and 26 Hz"
+      assert all(15 < results[ri][0] < 26 for ri in results)
+
+  def test_cv():
+      "the CV rises with inhibition, from below 0.45 to above 0.6"
+      cvs = [results[ri][1] for ri in sorted(results)]
+      assert cvs[0] < 0.45 and cvs[-1] > 0.6 and all(a < b + 0.03 for a, b in zip(cvs, cvs[1:]))
+`} prompt="For the pairs (r_i, r_e) in `pairs`, simulate the neuron, and store its rate and CV in `results[r_i]`."
+code={String.raw`
+  pairs = [(0, 1591), (3000, 4373), (6000, 7247), (10000, 11107)]
+  results = {}
+  for ri, re in pairs:
+      s = lif(re, ri)
+      results[ri] = ...
+      print(f"inhibition {ri:5d} Hz, excitation {re:5d} Hz: {results[ri][0]:.1f} Hz, CV {results[ri][1]:.2f}")
+`}
+hint="results[ri] = (len(s) / 20, cv(s))."
+solution={String.raw`
+  pairs = [(0, 1591), (3000, 4373), (6000, 7247), (10000, 11107)]
+  results = {}
+  for ri, re in pairs:
+      s = lif(re, ri)
+      results[ri] = (len(s) / 20, cv(s))
+      print(f"inhibition {ri:5d} Hz, excitation {re:5d} Hz: {results[ri][0]:.1f} Hz, CV {results[ri][1]:.2f}")
+`} />
+
+At the same output of about 21 Hz, the CV rises from 0.34 with no inhibition to 0.57, 0.67 and 0.72 as inhibition grows to 10,000 events per second. Nothing about the neuron changed, only its input, which now consists of large excitatory and inhibitory streams that nearly cancel. Real cortical neurons receive thousands of excitatory and inhibitory inputs, and recordings in vivo show large synaptic conductances of both signs (Week 29, Day 4).
+
+<Step n={4} title="Mean and fluctuations" minutes={25} />
+
+Why does balance work? Think of the voltage without a threshold, the **free membrane potential**. Each input is a jump that decays with time constant $\tau$; with Poisson arrivals (Week 24's shot noise), the free voltage has
+
+$$
+\mu = \tau\,(w_er_e - w_ir_i), \qquad \sigma^2 = \frac{\tau}{2}\left(w_e^2r_e + w_i^2r_i\right).
+$$
+
+The mean depends on the difference of the input rates, the variance on their sum. With excitation alone, $\mu$ sits above threshold and the neuron is **mean-driven**: the voltage climbs steadily after every reset, like a clock. In the balanced regime, $\mu$ sits below threshold and spikes are triggered by fluctuations, at random moments: the neuron is **fluctuation-driven**, and fires irregularly.
+
+<PyCell id="moments" title="Mean-driven or fluctuation-driven?" tests={String.raw`
+  import numpy as np
+  def test_formulas():
+      "mu and sigma follow the shot-noise formulas, with rates converted to per ms"
+      ri, re = pairs[2]
+      assert abs(mu[ri] - 20 * (0.5 * re - 0.5 * ri) / 1000) < 1e-9 and abs(sigma[ri] - np.sqrt(10 * (0.25 * re + 0.25 * ri) / 1000)) < 1e-9
+
+  def test_regimes():
+      "with no inhibition the mean is above threshold (15 mV); with the most inhibition it is below"
+      assert mu[0] > 15 and mu[10000] < 15
+`} prompt="For each pair, compute the free membrane potential's mean `mu[r_i]` and standard deviation `sigma[r_i]` (mV), with τ = 20 ms and rates converted from Hz to per ms. Check them against a simulation of the free voltage for the most balanced pair."
+code={String.raw`
+  mu, sigma = {}, {}
+  for ri, re in pairs:
+      mu[ri] = ...
+      sigma[ri] = ...
+      print(f"inhibition {ri:5d} Hz: mean {mu[ri]:5.2f} mV, sd {sigma[ri]:.2f} mV, threshold 15 mV")
+
+  r = np.random.default_rng(2); dt = 0.1; n = 200000
+  ri, re = pairs[-1]
+  drive = 0.5 * r.poisson(re * dt / 1000, n) - 0.5 * r.poisson(ri * dt / 1000, n)
+  V = np.empty(n); v = 0.0; decay = np.exp(-dt / 20)
+  for k in range(n):
+      v = v * decay + drive[k]; V[k] = v
+  print(f"simulated free voltage: mean {V[5000:].mean():.2f} mV, sd {V[5000:].std():.2f} mV")
+`}
+hint="mu[ri] = 20 * (0.5 * re - 0.5 * ri) / 1000; sigma[ri] = np.sqrt(20 / 2 * (0.25 * re + 0.25 * ri) / 1000)."
+solution={String.raw`
+  mu, sigma = {}, {}
+  for ri, re in pairs:
+      mu[ri] = 20 * (0.5 * re - 0.5 * ri) / 1000
+      sigma[ri] = np.sqrt(20 / 2 * (0.25 * re + 0.25 * ri) / 1000)
+      print(f"inhibition {ri:5d} Hz: mean {mu[ri]:5.2f} mV, sd {sigma[ri]:.2f} mV, threshold 15 mV")
+
+  r = np.random.default_rng(2); dt = 0.1; n = 200000
+  ri, re = pairs[-1]
+  drive = 0.5 * r.poisson(re * dt / 1000, n) - 0.5 * r.poisson(ri * dt / 1000, n)
+  V = np.empty(n); v = 0.0; decay = np.exp(-dt / 20)
+  for k in range(n):
+      v = v * decay + drive[k]; V[k] = v
+  print(f"simulated free voltage: mean {V[5000:].mean():.2f} mV, sd {V[5000:].std():.2f} mV")
+`} />
+
+With excitation alone the free voltage would average 15.9 mV, above the 15 mV threshold, with an sd of only 2 mV: mean-driven. With the most inhibition the mean is 11.1 mV, below threshold, and the sd 7.3 mV: fluctuation-driven. The simulated free voltage agrees with the formulas (11.2 and 7.2 mV). These two numbers are all that the diffusion approximation of Week 24 needs to predict an integrate-and-fire neuron's rate and irregularity, and they are the basis of the theory of balanced networks.
+
+<Bridge title="Balanced networks and noise as a resource"
+  neuro="Cortex is thought to operate in a balanced state: each neuron receives large excitatory and inhibitory currents that nearly cancel, leaving the voltage near threshold and spikes driven by fluctuations. Van Vreeswijk and Sompolinsky (1996) showed that networks settle into this state on their own when connections are strong, which explains irregular firing without exotic single-neuron mechanisms."
+  ai="Balanced input keeps neurons in a regime where they respond quickly and in proportion to small changes in input, much like the careful scaling of initial weights that keeps activations in a responsive range in deep networks. Fluctuation-driven firing also turns a deterministic neuron into a stochastic one, the kind of randomness that sampling-based models of inference (Week 19) can put to use.">
+
+Irregular firing does not need irregular neurons: balanced inputs make regular machinery behave like a random process.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The CV of interspike intervals is about 1 for...", options: ["A clock", "A Poisson process", "A bursting neuron only", "A silent neuron"], answer: 1, explain: "Exponential intervals have CV 1." },
+  { q: "Softky and Koch found that integrate-and-fire neurons summing many small excitatory inputs fire...", options: ["Irregularly, CV near 1", "Regularly, CV well below 1", "Not at all", "In bursts"], answer: 1, explain: "The law of large numbers smooths the input." },
+  { q: "The mean of the free membrane potential depends on...", options: ["The sum of excitatory and inhibitory rates", "The difference between excitatory and inhibitory drive", "Only inhibition", "Only the threshold"], answer: 1, explain: "μ = τ(w_e r_e - w_i r_i)." },
+  { q: "The variance of the free membrane potential depends on...", options: ["The difference of the rates", "The sum of the rates, weighted by squared amplitudes", "Only the threshold", "Nothing"], answer: 1, explain: "σ² = (τ/2)(w_e² r_e + w_i² r_i)." },
+  { q: "A mean-driven neuron has...", options: ["Mean voltage above threshold and regular firing", "Mean voltage below threshold and irregular firing", "No input", "Only inhibition"], answer: 0, explain: "It climbs steadily to threshold." },
+  { q: "A fluctuation-driven neuron...", options: ["Fires when fluctuations push it over threshold, irregularly", "Fires like a clock", "Never fires", "Has no noise"], answer: 0, explain: "Balanced regime." },
+  { q: "Adding balanced inhibition while keeping the rate fixed...", options: ["Lowers the CV", "Raises the CV", "Does not change the CV", "Stops firing"], answer: 1, explain: "Fluctuations grow, the mean falls below threshold." },
+  { q: "Van Vreeswijk and Sompolinsky showed that balance...", options: ["Requires fine tuning", "Emerges in networks with strong connections", "Is impossible", "Needs dendrites"], answer: 1, explain: "Balanced networks (1996)." },
+]} />
+
+<Flashcards cards={[
+  { front: "Softky and Koch's argument?", back: "Summing many small independent inputs should make firing regular; observed CVs near 1 seemed to contradict integration." },
+  { front: "Free membrane potential moments?", back: "$\\mu = \\tau(w_er_e - w_ir_i)$, $\\sigma^2 = \\frac{\\tau}{2}(w_e^2r_e + w_i^2r_i)$." },
+  { front: "Mean-driven versus fluctuation-driven?", back: "Mean above threshold: regular firing. Mean below threshold, spikes triggered by fluctuations: irregular firing." },
+  { front: "How does balance give irregularity?", back: "Excitation and inhibition cancel in the mean but add in the variance, so the voltage hovers below threshold with large fluctuations." },
+  { front: "Balanced networks?", back: "Strongly connected excitatory-inhibitory networks settle into balance on their own (van Vreeswijk and Sompolinsky, 1996)." },
+]} />
+
+<Predict revisit question="Does a neuron summing thousands of small independent excitatory inputs fire like a Poisson process or like a clock?" />
+
+<Key title="Before you go">
+<ul>
+<li>A neuron summing many small excitatory inputs is mean-driven and fires regularly.</li>
+<li>Balanced excitation and inhibition keep the rate but raise the fluctuations, making firing irregular.</li>
+<li>The free voltage's mean depends on the difference of drives, its variance on their sum.</li>
+<li>Irregular cortical firing is consistent with integration, in a fluctuation-driven regime.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Softky and Koch (1993), <em>The highly irregular firing of cortical cells is inconsistent with temporal integration of random EPSPs</em>.</li>
+<li>Shadlen and Newsome (1998), <em>The variable discharge of cortical neurons</em> (Week 15's deep read): the reply that balance resolves the puzzle.</li>
+<li>van Vreeswijk and Sompolinsky (1996), <em>Chaos in neuronal networks with balanced excitatory and inhibitory activity</em>, Science 274(5293), 1724 to 1726.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Softky and Koch's simulations were correct, yet their conclusion is now thought to be wrong. Write a paragraph on what assumption in their argument failed, and on one lesson this holds for drawing conclusions about real systems from models." />

@@ -1,0 +1,237 @@
+export const meta = {
+  title: "Adaptation and firing patterns: the AdEx model",
+  intro: "Inject the same step of current into neurons from different parts of the cortex and they answer differently: some fire at a steady rate, some slow down, some fire a burst and fall silent, some fire in repeated bursts. Week 21 added one adaptation variable to the integrate-and-fire neuron. Today you add it to the exponential model of yesterday, giving the adaptive exponential integrate-and-fire (AdEx) neuron of Brette and Gerstner, and find, as Naud and colleagues did in 2008, that its four extra parameters reproduce most of the firing patterns seen in real neurons. You will classify patterns automatically and explain the most striking one, bursting, from where the reset lands in the phase plane.",
+  goals: [
+    "Write the AdEx model and explain its subthreshold and spike-triggered adaptation",
+    "Simulate tonic, adapting, bursting and phasic firing with different parameter sets",
+    "Classify firing patterns automatically from interspike intervals",
+    "Explain bursting from the position of the reset relative to the threshold",
+  ],
+  plan: [
+    { label: "Predict and adding adaptation", minutes: 20 },
+    { label: "A zoo of firing patterns", minutes: 35 },
+    { label: "Why the reset decides bursting", minutes: 30 },
+    { label: "Simple models for many cell types", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "naud-2008",
+};
+
+<Predict question="In the AdEx model, each spike resets the voltage to V_r and adds b to an adaptation current. If V_r is raised from -58 mV to -45 mV, just above where spikes start, while everything else stays the same, what happens to a neuron that was firing regularly: it fires faster and regularly, it fires in bursts, or it stops firing?" />
+
+<Step n={1} title="Adding adaptation" minutes={20} />
+
+The **adaptive exponential integrate-and-fire** model adds one slow current $w$ to yesterday's EIF:
+
+$$
+C\frac{dV}{dt} = -g_L(V - E_L) + g_L\Delta_Te^{(V - V_T)/\Delta_T} - w + I, \qquad \tau_w\frac{dw}{dt} = a(V - E_L) - w,
+$$
+
+and at each spike, $V \to V_r$ and $w \to w + b$. The adaptation current $w$ has two sources. **Subthreshold adaptation**, $a$, makes $w$ follow the voltage, like a slow potassium conductance (the M-current of Week 30's channel zoo). **Spike-triggered adaptation**, $b$, adds a fixed amount after each spike, like a calcium-activated potassium current. Together with $\tau_w$ and the reset $V_r$, these four parameters control the pattern of firing. Brette and Gerstner (2005, Week 21's paper) showed that with them, the model predicts the spike times of a detailed pyramidal-cell model well.
+
+<Video id="u8qwboY-zA4" title="AdEx: adaptive exponential integrate-and-fire (Neuronal Dynamics)" by="Wulfram Gerstner (EPFL)" note="Wulfram Gerstner introduces the AdEx model and its adaptation variable, the starting point for the firing patterns explored today." />
+
+<Step n={2} title="A zoo of firing patterns" minutes={35} />
+
+Electrophysiologists classify neurons by their responses to current steps: **tonic** (regular firing), **adapting** (intervals lengthen), **bursting** (groups of spikes separated by pauses), **phasic** (a few spikes at the start, then silence), and others. Naud and colleagues (2008), today's paper, mapped which AdEx parameters give which pattern. A useful measure is the adaptation index, the average normalised change between successive intervals,
+
+$$
+A = \frac{1}{N - 1}\sum_k\frac{\text{ISI}_{k+1} - \text{ISI}_k}{\text{ISI}_{k+1} + \text{ISI}_k},
+$$
+
+near 0 for tonic firing and positive for adaptation.
+
+<Figure caption="AdEx responses to a current step. Choose a preset pattern, or set the spike-triggered adaptation, the reset voltage and the adaptation time constant yourself." credit="Interactive figure by Engram, after Naud, Marcille, Clopath and Gerstner (2008).">
+  <AdExPatterns />
+</Figure>
+
+<PyCell id="patterns" title="Classifying patterns automatically" tests={String.raw`
+  import numpy as np
+  def test_index():
+      "adaptation_index averages (ISI[k+1] - ISI[k]) / (ISI[k+1] + ISI[k])"
+      assert abs(adaptation_index(np.array([10.0, 20.0, 20.0])) - (1 / 3 + 0) / 2) < 1e-12
+
+  def test_classes():
+      "the four parameter sets are classified as tonic, adapting, bursting and phasic"
+      assert labels == {"tonic": "tonic", "adapting": "adapting", "bursting": "bursting", "phasic": "phasic"}
+`} prompt="`adex(I, a, b, tw, Vr)` returns spike times for a 600 ms simulation with the current switched on at 50 ms. Write `adaptation_index(isi)` and `classify(spikes)`: phasic if fewer than 2 spikes or the last spike comes more than 200 ms before the end; bursting if the longest interval is more than 8 times the shortest; adapting if the adaptation index exceeds 0.02; tonic otherwise."
+code={String.raw`
+  import numpy as np
+  import math
+  import matplotlib.pyplot as plt
+
+  def adex(I, a, b, tw, Vr, T=600.0, dt=0.05, C=200.0, gL=10.0, EL=-70.0, VT=-50.0, DT=2.0, trace=False):
+      V, w, spikes, Vs = EL, 0.0, [], []
+      for k in range(int(T / dt)):
+          t = k * dt
+          Iext = I if t >= 50 else 0.0
+          dV = (-gL * (V - EL) + gL * DT * math.exp((V - VT) / DT) - w + Iext) / C
+          dw = (a * (V - EL) - w) / tw
+          V += dt * dV; w += dt * dw
+          if V > 0:
+              V = Vr; w += b; spikes.append(t)
+          if trace:
+              Vs.append(min(V, 0.0))
+      return (np.array(spikes), np.array(Vs)) if trace else np.array(spikes)
+
+  def adaptation_index(isi):
+      return ...
+
+  def classify(spikes, T=600.0):
+      ...
+
+  sets = {"tonic": (0, 5, 30, -58, 500), "adapting": (0, 60, 200, -58, 500),
+          "bursting": (0, 60, 100, -45, 300), "phasic": (30, 10, 200, -58, 350)}   # a (nS), b (pA), tau_w (ms), V_r (mV), I (pA)
+  labels = {}
+  fig, axes = plt.subplots(4, 1, sharex=True, figsize=(6, 6))
+  for ax, (name, (a, b, tw, Vr, I)) in zip(axes, sets.items()):
+      s, v = adex(I, a, b, tw, Vr, trace=True)
+      labels[name] = classify(s)
+      ax.plot(np.arange(len(v)) * 0.05, v); ax.set_ylabel(name)
+      print(f"{name:9s}: {len(s):2d} spikes, first intervals {np.round(np.diff(s)[:6], 1)}, classified as {labels[name]}")
+  axes[-1].set_xlabel("ms"); plt.show()
+`}
+hint="return np.mean((isi[1:] - isi[:-1]) / (isi[1:] + isi[:-1])). In classify: isi = np.diff(spikes); if len(spikes) < 2 or T - spikes[-1] > 200: return 'phasic'; if isi.max() / isi.min() > 8: return 'bursting'; return 'adapting' if adaptation_index(isi) > 0.02 else 'tonic'."
+solution={String.raw`
+  import numpy as np
+  import math
+  import matplotlib.pyplot as plt
+
+  def adex(I, a, b, tw, Vr, T=600.0, dt=0.05, C=200.0, gL=10.0, EL=-70.0, VT=-50.0, DT=2.0, trace=False):
+      V, w, spikes, Vs = EL, 0.0, [], []
+      for k in range(int(T / dt)):
+          t = k * dt
+          Iext = I if t >= 50 else 0.0
+          dV = (-gL * (V - EL) + gL * DT * math.exp((V - VT) / DT) - w + Iext) / C
+          dw = (a * (V - EL) - w) / tw
+          V += dt * dV; w += dt * dw
+          if V > 0:
+              V = Vr; w += b; spikes.append(t)
+          if trace:
+              Vs.append(min(V, 0.0))
+      return (np.array(spikes), np.array(Vs)) if trace else np.array(spikes)
+
+  def adaptation_index(isi):
+      return np.mean((isi[1:] - isi[:-1]) / (isi[1:] + isi[:-1]))
+
+  def classify(spikes, T=600.0):
+      if len(spikes) < 2 or T - spikes[-1] > 200:
+          return "phasic"
+      isi = np.diff(spikes)
+      if isi.max() / isi.min() > 8:
+          return "bursting"
+      return "adapting" if adaptation_index(isi) > 0.02 else "tonic"
+
+  sets = {"tonic": (0, 5, 30, -58, 500), "adapting": (0, 60, 200, -58, 500),
+          "bursting": (0, 60, 100, -45, 300), "phasic": (30, 10, 200, -58, 350)}   # a (nS), b (pA), tau_w (ms), V_r (mV), I (pA)
+  labels = {}
+  fig, axes = plt.subplots(4, 1, sharex=True, figsize=(6, 6))
+  for ax, (name, (a, b, tw, Vr, I)) in zip(axes, sets.items()):
+      s, v = adex(I, a, b, tw, Vr, trace=True)
+      labels[name] = classify(s)
+      ax.plot(np.arange(len(v)) * 0.05, v); ax.set_ylabel(name)
+      print(f"{name:9s}: {len(s):2d} spikes, first intervals {np.round(np.diff(s)[:6], 1)}, classified as {labels[name]}")
+  axes[-1].set_xlabel("ms"); plt.show()
+`} />
+
+The tonic set fires 59 spikes at a steady 9 ms interval; the adapting set's intervals stretch from 10 to over 40 ms; the bursting set fires groups of spikes 2 to 6 ms apart, separated by pauses of about 150 ms; and the phasic set fires twice and stops. The classifier labels all four correctly from the intervals alone. Real classification is messier: the same neuron can change pattern with the size of the step, or under neuromodulators.
+
+<Step n={3} title="Why the reset decides bursting" minutes={30} />
+
+The difference between the adapting and bursting sets is mostly the reset. Picture the $(V, w)$ phase plane. The $V$-nullcline, where $dV/dt = 0$, is $w = -g_L(V - E_L) + g_L\Delta_Te^{(V - V_T)/\Delta_T} + I$: a curve with a minimum near $V_T$. Trajectories to the right of its rising branch run away into a spike. After a spike the state jumps to $(V_r, w + b)$. If $V_r$ is low, well to the left of the minimum, the voltage must climb back slowly: one spike per climb, regular or adapting firing. If $V_r$ is high, near or past the minimum, the state lands where the voltage can run away again at once, unless $w$ has grown large enough to lift the nullcline above it. So the neuron fires spike after spike, each adding $b$, until $w$ is high enough to stop it; then $w$ decays during a pause, and the cycle repeats: bursting.
+
+<PyCell id="reset" title="Sweeping the reset" tests={String.raw`
+  import numpy as np
+  def test_sweep():
+      "spikes_per_burst has an entry for each reset voltage"
+      assert set(spikes_per_burst) == set(resets)
+
+  def test_trend():
+      "a low reset gives one spike per group and a high reset several"
+      assert spikes_per_burst[-60] == 1 and spikes_per_burst[-45] >= 3
+`} prompt="Using the bursting set's a, b and τ_w at 300 pA, vary the reset from -60 to -44 mV. Group spikes into bursts (a new burst starts after an interval longer than 20 ms) and store the median number of spikes per burst for each reset in `spikes_per_burst`."
+code={String.raw`
+  resets = [-60, -55, -50, -48, -46, -45, -44]
+  spikes_per_burst = {}
+  for Vr in resets:
+      s = adex(300, 0, 60, 100, Vr, T=1200)
+      isi = np.diff(s)
+      starts = ...                                # indices where a new burst begins
+      sizes = np.diff(np.append(starts, len(s)))
+      spikes_per_burst[Vr] = int(np.median(sizes))
+      print(f"V_r = {Vr} mV: {len(s)} spikes, median {spikes_per_burst[Vr]} per burst")
+`}
+hint="starts = np.concatenate([[0], np.where(isi > 20)[0] + 1])."
+solution={String.raw`
+  resets = [-60, -55, -50, -48, -46, -45, -44]
+  spikes_per_burst = {}
+  for Vr in resets:
+      s = adex(300, 0, 60, 100, Vr, T=1200)
+      isi = np.diff(s)
+      starts = np.concatenate([[0], np.where(isi > 20)[0] + 1])
+      sizes = np.diff(np.append(starts, len(s)))
+      spikes_per_burst[Vr] = int(np.median(sizes))
+      print(f"V_r = {Vr} mV: {len(s)} spikes, median {spikes_per_burst[Vr]} per burst")
+`} />
+
+With the reset between -60 and -48 mV the neuron fires single spikes; at -46 mV it fires bursts of 3, and at -45 and -44 mV bursts of 5 and 7. That answers the prediction: raising the reset towards the region where spikes start turns regular firing into bursting. Real bursting neurons achieve a high effective reset with currents that depolarise the membrane after each spike, such as the calcium currents behind a depolarising afterpotential.
+
+<Step n={4} title="Simple models for many cell types" minutes={20} />
+
+The AdEx neuron is one of a family of simple models designed to be fitted to real neurons: the Izhikevich model of Week 9, with a quadratic rather than exponential term and the same reset-and-adapt logic, reproduces a similar zoo with four parameters. At scale, the Allen Institute has fitted generalised leaky integrate-and-fire models, with adaptation and spike-dependent threshold changes, to thousands of recordings from mouse and human cortex (Teeter and colleagues, 2018). Those fits served two purposes at once: cheap, accurate neuron models for large simulations, and a way to group neurons into types by their fitted parameters, a complement to the transcriptomic cell types of Week 28.
+
+| Model | Variables | Spike onset | Adaptation | Good for |
+|---|---|---|---|---|
+| LIF | 1 | hard threshold | none | analysis, large networks |
+| EIF | 1 | exponential, from sodium | none | realistic onset, fitting |
+| AdEx | 2 | exponential | subthreshold and spike-triggered | firing patterns, fitting |
+| Izhikevich | 2 | quadratic | reset and recovery variable | cheap firing patterns |
+| Hodgkin-Huxley | 4 or more | from channels | through channels | biophysics |
+
+<Bridge title="Diversity from a few parameters"
+  neuro="A handful of parameters in a two-variable model reproduces most of the firing patterns that distinguish cortical cell types. Much of what makes a neuron a type, electrically, is the strength and speed of its adaptation and where its reset lands."
+  ai="Most artificial networks use one neuron type everywhere. Work on spiking networks with heterogeneous or learnable adaptation, such as recurrent networks of adaptive LIF neurons, finds that diverse time constants improve performance on tasks with structure over many time scales, much as the mixture of cell types might in cortex.">
+
+Cell types differ less in their parts than in a few numbers that set their dynamics.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In the AdEx model, the parameter b represents...", options: ["Subthreshold adaptation", "Spike-triggered adaptation", "The reset voltage", "The slope factor"], answer: 1, explain: "w jumps by b at each spike." },
+  { q: "The parameter a makes the adaptation current...", options: ["Follow the voltage below threshold", "Jump at spikes", "Constant", "Negative"], answer: 0, explain: "τ_w dw/dt = a(V - E_L) - w." },
+  { q: "An adapting neuron's interspike intervals...", options: ["Stay constant", "Lengthen during a step", "Alternate between short and long", "Shorten"], answer: 1, explain: "Adaptation index above zero." },
+  { q: "Bursting in the AdEx model is favoured by...", options: ["A low reset", "A high reset near the V-nullcline's minimum", "No adaptation", "A large ΔT"], answer: 1, explain: "The state lands where it can run away again." },
+  { q: "A phasic neuron...", options: ["Fires regularly throughout", "Fires a few spikes at onset and then stops", "Never fires", "Bursts repeatedly"], answer: 1, explain: "Strong subthreshold adaptation." },
+  { q: "The adaptation index is near zero for...", options: ["Tonic firing", "Strong adaptation", "Bursting", "Phasic firing"], answer: 0, explain: "Equal intervals." },
+  { q: "The Allen Institute fitted generalised LIF models to...", options: ["A few squid axons", "Thousands of recordings from mouse and human cortex", "Only simulations", "Cardiac cells"], answer: 1, explain: "Teeter and colleagues (2018)." },
+  { q: "Compared with AdEx, the Izhikevich model uses...", options: ["An exponential term", "A quadratic term", "No reset", "Four channels"], answer: 1, explain: "Week 9." },
+]} />
+
+<Flashcards cards={[
+  { front: "AdEx model?", back: "EIF plus $\\tau_w\\dot w = a(V - E_L) - w$; at a spike $V \\to V_r$, $w \\to w + b$." },
+  { front: "Two kinds of adaptation?", back: "Subthreshold ($a$, like an M-current) and spike-triggered ($b$, like a calcium-activated potassium current)." },
+  { front: "Adaptation index?", back: "Average of $(\\text{ISI}_{k+1} - \\text{ISI}_k)/(\\text{ISI}_{k+1} + \\text{ISI}_k)$: about 0 for tonic, positive for adapting firing." },
+  { front: "Why a high reset gives bursts?", back: "The state lands near the V-nullcline's minimum and can run away again at once, until enough b has accumulated in w." },
+  { front: "Firing patterns from AdEx?", back: "Tonic, adapting, initial bursting, regular bursting, phasic, delayed and irregular, depending on a, b, τ_w and V_r (Naud and colleagues, 2008)." },
+]} />
+
+<Predict revisit question="What happens to a regularly firing AdEx neuron when its reset is raised from -58 to -45 mV?" />
+
+<Key title="Before you go">
+<ul>
+<li>AdEx adds a slow adaptation current with subthreshold (a) and spike-triggered (b) components.</li>
+<li>Four parameters (a, b, τ_w, V_r) produce tonic, adapting, bursting and phasic firing.</li>
+<li>Patterns can be classified automatically from interspike intervals.</li>
+<li>Bursting arises when the reset lands near the minimum of the V-nullcline.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Naud, Marcille, Clopath and Gerstner (2008), <em>Firing patterns in the adaptive exponential integrate-and-fire model</em>.</li>
+<li>Brette and Gerstner (2005), <em>Adaptive exponential integrate-and-fire model as an effective description of neuronal activity</em> (Week 21's paper).</li>
+<li>Teeter and colleagues (2018), <em>Generalized leaky integrate-and-fire models classify multiple neuron types</em>, Nature Communications 9, 709.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Pick two firing patterns from today and suggest what each might be good for in a circuit: for example, what information a phasic neuron sends that a tonic neuron does not. Then say which AdEx parameter you would expect neuromodulators to change to switch a neuron between the two." />
