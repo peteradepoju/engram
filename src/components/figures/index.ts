@@ -129,3 +129,8 @@ export { CortexLayers } from "./cortex-layers";
 export { SpikeWidth } from "./spike-width";
 export { ElectrodeArray } from "./electrode-array";
 export { MethodsMap } from "./methods-map";
+export { NernstBalance } from "./nernst-balance";
+export { GHKResting } from "./ghk-resting";
+export { CellSize } from "./cell-size";
+export { ShuntingInhibition } from "./shunting-inhibition";
+export { ChannelNoise } from "./channel-noise";

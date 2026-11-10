@@ -1,0 +1,212 @@
+export const meta = {
+  title: "Forge: Week 29 challenge, quiz and deep read",
+  intro: "This week built the neuron's electrical foundations: Nernst potentials from the Boltzmann distribution, the GHK equation for a membrane with several ions, the membrane as a capacitor and how it is recorded, conductances and shunting, and the channels and pumps that make it all. Today's challenge asks when the batteries can be treated as fixed. You will switch off the pump in a model cell and watch its gradients run down, find how the time this takes depends on size, and work out how many spikes a thin axon can fire before its sodium concentration shifts. Then the quiz, and a critique of Hodgkin and Katz's 1949 paper.",
+  goals: [
+    "Simulate ion concentrations and the resting potential of a cell whose pump has stopped",
+    "Show that run-down time scales with the cell's volume-to-area ratio",
+    "Estimate sodium loading per spike in axons of different diameters",
+    "Critique the evidence for the sodium hypothesis",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "hodgkin-katz-1949",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. What is the Nernst potential of potassium if [K]out rises from 5 to 50 mM, with 140 mM inside?
+2. A 30 μm sphere has $r_m$ = 50 kΩ·cm². What is its time constant?
+3. A patch has 1,000 channels, each open with probability 0.5 and passing 2 pA. What is the standard deviation of its current?
+
+<PyCell code={String.raw`
+  import numpy as np
+  print("1.", round(26.725 * np.log(50 / 140), 1), "mV")
+  print("2.", 50e3 * 1e-6 * 1e3, "ms, whatever the size")
+  print("3.", round(2 * np.sqrt(1000 * 0.5 * 0.5), 1), "pA")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: when the pump stops.** Ouabain blocks the Na⁺/K⁺ pump. The cell's channels keep leaking: sodium in, potassium out, at the rates the GHK current equation gives. Model a spherical cell with $P_K$ = 10⁻⁶ cm/s and $P_{Na}$ = 0.05 $P_K$, the concentrations of Day 1, and no pump. At each step, compute the voltage from the GHK equation (the currents balance at every instant, because the membrane charges in milliseconds while concentrations change over seconds), then update the internal concentrations from the currents. How long until rest has depolarised by 10 mV?
+
+<PyCell id="partA" title="Part A: running down" tests={String.raw`
+  import numpy as np
+  def test_current():
+      "current gives the GHK current density in A/cm^2 for concentrations in mM"
+      u = -65 / VT
+      assert abs(current(1e-6, -65, 140, 5) - 1e-6 * F * u * (140 - 5 * np.exp(-u)) / (1 - np.exp(-u)) * 1e-6) < 1e-15
+
+  def test_times():
+      "the 20 um cell takes 10 to 20 minutes to depolarise by 10 mV, and the time scales with diameter"
+      assert 600 < t10[20] < 1200 and abs(t10[20] / t10[1] - 20) < 1
+`} prompt="Complete `run_down(d_um)`: at each step compute the GHK currents of sodium and potassium through the membrane of a sphere of diameter d_um (A, positive outward), then change the internal concentrations by -I dt / (F vol), converted from mol/cm³ to mM (times 10⁶). Return the time at which the voltage has risen 10 mV above its starting value. Use time steps of 0.025 d_um seconds."
+code={String.raw`
+  import numpy as np
+  F, VT = 96485.0, 26.725
+  PK = 1e-6; PNa = 0.05 * PK                 # cm/s
+  Ko, Nao = 5.0, 145.0                       # mM
+
+  def voltage(Ki, Nai):
+      return VT * np.log((PK * Ko + PNa * Nao) / (PK * Ki + PNa * Nai))
+
+  def current(P, V, ci, co):                 # A/cm^2, concentrations in mM
+      u = V / VT
+      return P * F * u * (ci - co * np.exp(-u)) / (1 - np.exp(-u)) * 1e-6
+
+  def run_down(d_um):
+      d = d_um * 1e-4; area = np.pi * d ** 2; vol = np.pi * d ** 3 / 6
+      Ki, Nai, t, dt = 140.0, 12.0, 0.0, 0.025 * d_um
+      v0 = voltage(Ki, Nai)
+      while voltage(Ki, Nai) - v0 < 10:
+          v = voltage(Ki, Nai)
+          I_Na = current(PNa, v, Nai, Nao) * area
+          I_K = ...
+          Nai += ...
+          Ki += ...
+          t += dt
+      return t
+
+  t10 = {d: run_down(d) for d in (20, 1)}
+  for d, t in t10.items():
+      print(f"d = {d:2d} um: 10 mV of depolarisation after {t:6.0f} s ({t / 60:.1f} min)")
+`}
+hint="I_K = current(PK, v, Ki, Ko) * area; Nai += -I_Na * dt / (F * vol) * 1e6; Ki += -I_K * dt / (F * vol) * 1e6."
+solution={String.raw`
+  import numpy as np
+  F, VT = 96485.0, 26.725
+  PK = 1e-6; PNa = 0.05 * PK                 # cm/s
+  Ko, Nao = 5.0, 145.0                       # mM
+
+  def voltage(Ki, Nai):
+      return VT * np.log((PK * Ko + PNa * Nao) / (PK * Ki + PNa * Nai))
+
+  def current(P, V, ci, co):                 # A/cm^2, concentrations in mM
+      u = V / VT
+      return P * F * u * (ci - co * np.exp(-u)) / (1 - np.exp(-u)) * 1e-6
+
+  def run_down(d_um):
+      d = d_um * 1e-4; area = np.pi * d ** 2; vol = np.pi * d ** 3 / 6
+      Ki, Nai, t, dt = 140.0, 12.0, 0.0, 0.025 * d_um
+      v0 = voltage(Ki, Nai)
+      while voltage(Ki, Nai) - v0 < 10:
+          v = voltage(Ki, Nai)
+          I_Na = current(PNa, v, Nai, Nao) * area
+          I_K = current(PK, v, Ki, Ko) * area
+          Nai += -I_Na * dt / (F * vol) * 1e6
+          Ki += -I_K * dt / (F * vol) * 1e6
+          t += dt
+      return t
+
+  t10 = {d: run_down(d) for d in (20, 1)}
+  for d, t in t10.items():
+      print(f"d = {d:2d} um: 10 mV of depolarisation after {t:6.0f} s ({t / 60:.1f} min)")
+`} />
+
+The 20 μm cell keeps its resting potential within 10 mV for 864 s, about a quarter of an hour; the 1 μm compartment for only 43 s. The leak currents are set by the membrane area, but the stores of ions are set by the volume, so the time scales with volume over area, $d/6$ for a sphere: twenty times smaller, twenty times faster. This is why ouabain takes minutes to affect a cell body but much less to affect fine processes, and why pumps matter most where membranes are thin.
+
+**Part B: sodium loading by spikes.** Each spike must move enough charge to depolarise the membrane by about 100 mV: $Q = c_m \Delta V$ per unit area. Sodium entry is larger than this minimum by a factor $f$, because some sodium current is cancelled by potassium current flowing at the same time (Week 30 measures $f$; take 1.3, a value typical of mammalian axons). In a cylindrical axon of diameter $d$, the volume per unit area of membrane is $d/4$.
+
+<PyCell id="partB" title="Part B: how fast does sodium build up?" tests={String.raw`
+  import numpy as np
+  def test_load():
+      "dNa is c_m dV f / (F d / 4) in mM, for diameters in cm"
+      assert np.allclose(dNa, 1e-6 * 0.1 * 1.3 / (96485 * d / 4) * 1e6)
+
+  def test_spikes():
+      "n_spikes is the number of spikes to raise internal sodium by 10% of 12 mM, and is below 10 for the 0.2 um axon"
+      assert np.allclose(n_spikes, 1.2 / dNa) and n_spikes[0] < 10
+`} prompt="For axons of diameter 0.2 μm, 1 μm and 500 μm (the squid), compute the rise in internal sodium per spike `dNa` (mM), and the number of spikes `n_spikes` that would raise it by 10% of its 12 mM resting value if the pump did nothing in between."
+code={String.raw`
+  import numpy as np
+  c_m, dV, f, F = 1e-6, 0.1, 1.3, 96485.0
+  d = np.array([0.2e-4, 1e-4, 500e-4])          # cm
+  dNa = ...
+  n_spikes = ...
+  for di, x, n in zip(d * 1e4, dNa, n_spikes):
+      print(f"d = {di:6.1f} um: {x:.2e} mM per spike, {n:9.0f} spikes for a 10% rise")
+`}
+hint="dNa = c_m * dV * f / (F * d / 4) * 1e6 (mol/cm^3 to mM); n_spikes = 0.1 * 12 / dNa."
+solution={String.raw`
+  import numpy as np
+  c_m, dV, f, F = 1e-6, 0.1, 1.3, 96485.0
+  d = np.array([0.2e-4, 1e-4, 500e-4])          # cm
+  dNa = c_m * dV * f / (F * d / 4) * 1e6
+  n_spikes = 0.1 * 12 / dNa
+  for di, x, n in zip(d * 1e4, dNa, n_spikes):
+      print(f"d = {di:6.1f} um: {x:.2e} mM per spike, {n:9.0f} spikes for a 10% rise")
+`} />
+
+In a 0.2 μm axon, typical of the unmyelinated fibres that make up much of the cortex's wiring, each spike adds 0.27 mM of sodium, and four or five spikes raise it by 10%. In a squid giant axon each spike adds about $10^{-4}$ mM, and it would take more than 10,000 spikes. Hodgkin and Huxley could treat their concentrations as constant; a model of a thin cortical axon firing in a burst should not. Activity-dependent changes in concentration, and the pump currents that follow them, are one source of slow adaptation in real neurons.
+
+**Part C (written).** Answer in your journal: from Parts A and B, when is it safe to model reversal potentials as constants, and when not? Name one kind of neuron or compartment where you would add concentration dynamics, and say what you would expect to change in its firing during a long burst.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The Nernst equation from zero flux" task="The Nernst-Planck flux is $J = -D\left(\frac{dc}{dx} + \frac{zc}{V_T}\frac{dV}{dx}\right)$. Show that $J = 0$ everywhere implies $V_{in} - V_{out} = \frac{V_T}{z}\ln\frac{c_{out}}{c_{in}}$.">
+
+With $J = 0$, $\frac{1}{c}\frac{dc}{dx} = -\frac{z}{V_T}\frac{dV}{dx}$, that is, $\frac{d}{dx}\ln c = -\frac{z}{V_T}\frac{dV}{dx}$.
+
+Integrate from the inside to the outside: $\ln c_{out} - \ln c_{in} = -\frac{z}{V_T}(V_{out} - V_{in})$.
+
+Rearranging, $V_{in} - V_{out} = \frac{V_T}{z}\ln\frac{c_{out}}{c_{in}}$, the Nernst equation, whatever the shape of the potential in between. Equivalently $c \propto e^{-zV/V_T}$: the Boltzmann distribution.
+
+</Prove>
+
+<Prove title="2. Where channel noise peaks" task="With $N$ independent channels each open with probability $p$ and unitary current $i$, show that the variance of the current is largest at $p = 1/2$, and that the maximum variance is $Ni^2/4$, reached when the mean current is half its maximum.">
+
+The variance is $i^2Np(1 - p)$. Its derivative with respect to $p$ is $i^2N(1 - 2p)$, zero at $p = 1/2$, and the second derivative $-2i^2N$ is negative, so this is a maximum.
+
+At $p = 1/2$ the variance is $i^2N/4$, and the mean current is $iN/2$, half the maximum $iN$.
+
+In terms of the mean, $\text{Var} = iI - I^2/N$, a parabola with its vertex at $I = iN/2$: the same result, which is why recordings that reach half activation give the best estimates of $N$.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 29 quiz (15 questions)" questions={[
+  { q: "The Nernst potential of potassium in a typical mammalian neuron is about...", options: ["+67 mV", "0 mV", "-89 mV", "-150 mV"], answer: 2, explain: "Day 1." },
+  { q: "The Nernst equation follows from...", options: ["Ohm's law", "The Boltzmann distribution, or zero Nernst-Planck flux", "Kirchhoff's laws", "The cable equation"], answer: 1, explain: "Day 1." },
+  { q: "Charging a 20 μm cell body to -70 mV moves about what fraction of its potassium?", options: ["10%", "1%", "0.002%", "None"], answer: 2, explain: "Day 1." },
+  { q: "The GHK voltage equation weights each ion's concentrations by...", options: ["Its valence only", "Its permeability", "Its mass", "Its Nernst potential"], answer: 1, explain: "Day 2." },
+  { q: "The resting membrane of the squid axon has P_Na/P_K of about...", options: ["0.04", "1", "20", "0"], answer: 0, explain: "Hodgkin and Katz." },
+  { q: "The overshoot of the action potential above 0 mV is explained by...", options: ["A general rise in permeability", "A selective rise in sodium permeability", "The pump", "Capacitance"], answer: 1, explain: "The sodium hypothesis." },
+  { q: "Specific membrane capacitance is about...", options: ["1 μF/cm²", "1 pF/cm²", "1 F/cm²", "100 μF/cm²"], answer: 0, explain: "Day 3." },
+  { q: "The membrane time constant depends on...", options: ["Cell size", "Only the specific resistance and capacitance", "The pipette", "The number of dendrites"], answer: 1, explain: "τ = r_m c_m." },
+  { q: "In voltage clamp, series resistance causes...", options: ["No error", "A voltage error IR_s and a slower clamp", "Higher capacitance", "Channel opening"], answer: 1, explain: "Day 3." },
+  { q: "Conductances in parallel set the voltage to...", options: ["The sum of reversal potentials", "A conductance-weighted mean of reversal potentials", "Zero", "The highest reversal"], answer: 1, explain: "Day 4." },
+  { q: "Shunting inhibition in an integrate-and-fire neuron acts on the f-I curve...", options: ["Divisively", "Subtractively", "Not at all", "By raising the slope only"], answer: 1, explain: "Holt and Koch." },
+  { q: "Adding conductance makes the membrane...", options: ["Slower", "Faster, with a shorter effective time constant", "Unchanged", "Unstable"], answer: 1, explain: "τ_eff = C/g." },
+  { q: "The variance-mean relation of a current from N channels is...", options: ["Linear", "Parabolic", "Exponential", "Flat"], answer: 1, explain: "Day 5." },
+  { q: "The Na⁺/K⁺ pump is electrogenic because it...", options: ["Uses ATP", "Moves one net positive charge out per cycle", "Opens channels", "Is voltage-gated"], answer: 1, explain: "3 out, 2 in." },
+  { q: "Without pumps, a small cell runs down faster than a large one because...", options: ["Its channels are faster", "Its volume per unit membrane area is smaller", "It is warmer", "It has no capacitance"], answer: 1, explain: "Part A." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Hodgkin and Katz (1949) its third pass and write your critique under the five headings. Focus on one question: **how strong is the evidence that the action potential is carried by sodium?** Consider what changing the external sodium concentration did to the resting potential, the spike's rate of rise and its peak, and how closely the peak followed the Nernst slope; why an internal electrode in a giant axon made the experiment possible; that the GHK equation, derived for steady states, is being applied to the peak of a transient; what alternative explanations the authors had to rule out (for example, effects of the substitute solutions themselves); and what was still missing until the voltage clamp of Week 30. End with the one further experiment you would have done in 1949.
+
+<Callout kind="research">
+
+The GHK equation assumes ions cross the membrane independently. In a real channel, ions move in single file and interact, which predicts measurable departures: the ratio of influx to efflux of an ion should differ from the value independence predicts (the Ussing flux ratio). Look up Hodgkin and Keynes's 1955 work on the potassium flux ratio in squid and cuttlefish axons, explain what an exponent above 1 means about how many ions occupy a channel at once, and connect it to the structure in Doyle and colleagues (1998).
+
+</Callout>
+
+<Key title="Week 29 review checklist">
+<ul>
+<li>I can compute Nernst potentials, derive them from Boltzmann, and count the ions needed to charge a membrane.</li>
+<li>I can derive and use the GHK equations, and fit a permeability ratio to data.</li>
+<li>I can relate specific membrane properties to a cell's capacitance, resistance and time constant, and read them from a voltage-clamp step.</li>
+<li>I can compute voltages and time constants with several conductances, and explain shunting inhibition.</li>
+<li>I can relate conductances to channels, count channels from noise, and estimate the cost of pumping.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C: when can reversal potentials be treated as constant, and when not? Then name the assumption from this week's models (Nernst, GHK, linear conductances, independent channels) that you now trust least, and why." />

@@ -255,6 +255,14 @@ export const DAY_TITLES: Record<number, string[]> = {
     "Measuring activity II: imaging, fMRI and EEG",
     "Forge: Week 28 challenge, quiz and deep read",
   ],
+  29: [
+    "Ions, gradients and the Nernst potential",
+    "The resting potential: the Goldman-Hodgkin-Katz equation",
+    "The membrane as a capacitor: size, input resistance and recording",
+    "Conductances, driving force and shunting inhibition",
+    "Ion channels and pumps: counting channels and paying for gradients",
+    "Forge: Week 29 challenge, quiz and deep read",
+  ],
 };
 
 export const DAYS_PER_WEEK = 6;
@@ -283,7 +291,7 @@ export function dayTitle(w: number, d: number): string {
 }
 
 /** Weeks whose lesson files exist. Kept in sync by hand as content is written. */
-export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 28];
+export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 28, 29];
 export const isWritten = (w: number) => WRITTEN_WEEKS.includes(w);
 
 /** Every lesson that is published, in order. */

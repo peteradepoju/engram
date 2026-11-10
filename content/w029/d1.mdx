@@ -1,0 +1,261 @@
+export const meta = {
+  title: "Ions, gradients and the Nernst potential",
+  intro: "In Week 21 you treated a patch of membrane as a resistor, a capacitor and a battery, and took the battery for granted. Today you find out where it comes from. Neurons keep potassium inside and sodium outside, at concentrations that differ by a factor of ten or more, and a membrane that lets only one kind of ion through charges up until the electrical pull on that ion balances its tendency to diffuse. You will derive the voltage at which that happens, the Nernst potential, from the Boltzmann distribution, check it with a simulation of drifting, diffusing particles, and count how few ions it takes to charge a neuron.",
+  goals: [
+    "State typical ion concentrations inside and outside neurons and the Nernst potential of each ion",
+    "Derive the Nernst equation from the Boltzmann distribution and from zero net flux",
+    "Simulate particles that drift and diffuse and recover the Boltzmann distribution",
+    "Estimate how many ions must cross the membrane to charge it, and why concentrations barely change",
+  ],
+  plan: [
+    { label: "Predict and the ionic setting", minutes: 20 },
+    { label: "Deriving the Nernst potential", minutes: 30 },
+    { label: "Drift and diffusion in simulation", minutes: 30 },
+    { label: "How many ions?", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "doyle-1998",
+};
+
+<Predict question="A neuron sits at about -70 mV. To charge its membrane to that voltage, potassium ions must leave the cell. Roughly what fraction of the cell's potassium has to leave: about 10%, about 0.1%, or about 0.001%?" />
+
+<Step n={1} title="The ionic setting" minutes={20} />
+
+A neuron is a bag of salty water in a bath of differently salty water. The membrane between them is a lipid bilayer about 4 nm thick that ions cannot cross on their own; they cross through **ion channels**, proteins that open a pore selective for particular ions, and are moved against their gradients by **pumps**, which spend energy (Day 5). The pumps keep the concentrations roughly as follows in a mammalian neuron (values vary between cells and authors by tens of per cent):
+
+| Ion | Inside (mM) | Outside (mM) | Ratio out/in |
+|---|---|---|---|
+| K⁺ | 140 | 5 | 0.036 |
+| Na⁺ | 12 | 145 | 12 |
+| Cl⁻ | 7 | 110 | 16 |
+| Ca²⁺ | 0.0001 | 2 | 20,000 |
+
+Hodgkin, Huxley and Katz worked on the squid giant axon, whose concentrations are higher (about 400 mM potassium inside and 440 mM sodium outside, as the squid lives in seawater) but in the same pattern. Potassium is concentrated inside; sodium, chloride and calcium outside.
+
+Each gradient is a store of energy. If the membrane lets potassium through, potassium diffuses out, down its gradient, carrying positive charge. The inside becomes negative, and the negative inside pulls potassium back. The voltage at which the two effects balance, so that there is no net flow, is potassium's **equilibrium** or **reversal potential**, $E_K$.
+
+<Video id="mqhlMOWl7NM" title="Reversal potential and Nernst equation (Neuronal Dynamics 2.2)" by="Wulfram Gerstner (EPFL)" note="From Wulfram Gerstner's Neuronal Dynamics lectures: why a concentration difference across a selective membrane produces a voltage, and the Nernst equation that gives its size." />
+
+<Step n={2} title="Deriving the Nernst potential" minutes={30} />
+
+At equilibrium, the Boltzmann distribution from statistical physics gives the probability of finding a particle in a state of energy $U$ as proportional to $e^{-U/k_BT}$. An ion of valence $z$ at electrical potential $V$ has energy $U = zeV$, where $e$ is the elementary charge. That is enough to find the balance point.
+
+<Derivation title="The Nernst equation">
+<div>
+
+Let the inside be at potential $V_{in}$ and the outside at $V_{out}$, and define the membrane potential as $V = V_{in} - V_{out}$. At equilibrium the ratio of concentrations equals the ratio of Boltzmann factors:
+
+$$
+\frac{c_{in}}{c_{out}} = \frac{e^{-zeV_{in}/k_BT}}{e^{-zeV_{out}/k_BT}} = e^{-zeV/k_BT}.
+$$
+
+</div>
+<div>
+
+Take logarithms and solve for the voltage at which this holds:
+
+$$
+E = \frac{k_BT}{ze}\ln\frac{c_{out}}{c_{in}} = \frac{RT}{zF}\ln\frac{c_{out}}{c_{in}}.
+$$
+
+The second form multiplies top and bottom by Avogadro's number: $R$ is the gas constant and $F$ the Faraday constant, the charge of a mole of electrons.
+
+</div>
+<div>
+
+The factor $V_T = RT/F$ is the **thermal voltage**, 26.7 mV at body temperature (310 K). In base-10 logarithms, $E = 61.5\,\text{mV}\times\frac{1}{z}\log_{10}(c_{out}/c_{in})$ at 37 °C: each tenfold gradient of a monovalent ion is worth about 60 mV.
+
+</div>
+</Derivation>
+
+The same result follows from asking when the flux is zero. The Nernst-Planck equation writes the flux of an ion as diffusion down its gradient plus drift in the electric field, $J = -D\left(\frac{dc}{dx} + \frac{z c}{V_T}\frac{dV}{dx}\right)$. Setting $J = 0$ and integrating across the membrane gives the Nernst equation again: the derivation is the first exercise of the Forge.
+
+<Figure caption="The Nernst potential balances diffusion against drift. Choose an ion and set the concentrations." credit="Interactive figure by Engram.">
+  <NernstBalance />
+</Figure>
+
+<PyCell id="nernst" title="The four Nernst potentials" tests={String.raw`
+  import numpy as np
+  def test_function():
+      "nernst gives (RT/zF) ln(out/in) in millivolts"
+      assert abs(nernst(5, 140, 1) - 1000 * 8.314 * 310.15 / 96485 * np.log(5 / 140)) < 1e-9
+      assert abs(nernst(110, 7, -1) + 1000 * 8.314 * 310.15 / 96485 * np.log(110 / 7)) < 1e-9
+
+  def test_values():
+      "E holds the four potentials: potassium near -89 mV, sodium near +67, chloride near -74, calcium near +132"
+      assert abs(E["K"] + 89.1) < 0.5 and abs(E["Na"] - 66.6) < 0.5 and abs(E["Cl"] + 73.6) < 0.5 and abs(E["Ca"] - 132.3) < 0.5
+`} prompt="Write `nernst(c_out, c_in, z, T=310.15)` returning the Nernst potential in millivolts, then fill the dictionary `E` with the potentials of potassium, sodium, chloride and calcium at the concentrations in the table."
+code={String.raw`
+  import numpy as np
+  R, F = 8.314, 96485.0            # J/(mol K), C/mol
+
+  def nernst(c_out, c_in, z, T=310.15):
+      return ...
+
+  conc = {"K": (5, 140, 1), "Na": (145, 12, 1), "Cl": (110, 7, -1), "Ca": (2, 1e-4, 2)}
+  E = {ion: ... for ion, (c_out, c_in, z) in conc.items()}
+  for ion, v in E.items():
+      print(f"E_{ion:2s} = {v:+7.1f} mV")
+  print(f"squid axon at 6.3 C: E_K = {nernst(20, 400, 1, 279.45):.1f} mV")
+`}
+hint="return 1000 * R * T / (z * F) * np.log(c_out / c_in); E = {ion: nernst(c_out, c_in, z) ...}."
+solution={String.raw`
+  import numpy as np
+  R, F = 8.314, 96485.0            # J/(mol K), C/mol
+
+  def nernst(c_out, c_in, z, T=310.15):
+      return 1000 * R * T / (z * F) * np.log(c_out / c_in)
+
+  conc = {"K": (5, 140, 1), "Na": (145, 12, 1), "Cl": (110, 7, -1), "Ca": (2, 1e-4, 2)}
+  E = {ion: nernst(c_out, c_in, z) for ion, (c_out, c_in, z) in conc.items()}
+  for ion, v in E.items():
+      print(f"E_{ion:2s} = {v:+7.1f} mV")
+  print(f"squid axon at 6.3 C: E_K = {nernst(20, 400, 1, 279.45):.1f} mV")
+`} />
+
+Potassium's reversal potential is about -89 mV, sodium's +67 mV, chloride's -74 mV and calcium's +132 mV. A neuron at rest, at about -70 mV, sits much closer to $E_K$ than to $E_{Na}$, which already suggests that the resting membrane is mostly permeable to potassium. Note the sign for chloride: its gradient points the same way as sodium's, but its negative charge flips the potential. For the squid axon at Hodgkin and Huxley's 6.3 °C, $E_K$ is about -72 mV.
+
+<Callout kind="note">
+
+The Nernst potential is a property of one ion's gradient, not of the membrane. It tells you where that ion's current reverses: below $E_K$ potassium flows in, above it potassium flows out. Whether the membrane actually sits near $E_K$ depends on which channels are open, which is tomorrow's subject.
+
+</Callout>
+
+<Step n={3} title="Drift and diffusion in simulation" minutes={30} />
+
+The Boltzmann distribution is not an extra assumption: it is where any collection of particles ends up when they diffuse randomly and drift in a force field. You can see it with the random walks of Week 24. Put 10,000 positive ions in a box of unit width, with a potential that rises linearly across it by $\Delta V = 2V_T$, so each ion feels a constant push towards the left. Each step, an ion drifts by $-\Delta V\,\Delta t$ (in units where $D = 1$ and voltages are measured in $V_T$) and diffuses by a Gaussian kick of variance $2\Delta t$; ions bounce off the walls.
+
+<PyCell id="boltzmann" title="Diffusion plus drift gives Boltzmann" tests={String.raw`
+  import numpy as np
+  def test_reflect():
+      "all particles stay inside the box"
+      assert x.min() >= 0 and x.max() <= 1
+
+  def test_slope():
+      "the log density falls linearly with slope close to -dV (within 0.2)"
+      assert abs(slope + dV) < 0.2
+`} prompt="Write the update inside the loop: drift by -dV * dt plus a Gaussian kick with standard deviation sqrt(2 dt), then reflect at 0 (take the absolute value) and at 1 (replace x by 2 - x where x exceeds 1). Then fit a straight line to the log of the histogram and store its slope in `slope`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(29)
+  dV, dt = 2.0, 2e-4                         # potential step in units of V_T; time step with D = 1
+  x = r.uniform(0, 1, 10000)
+  for step in range(3000):
+      x = x                                  # replace with drift, diffusion and reflection
+  counts, edges = np.histogram(x, 20, (0, 1))
+  centres = (edges[1:] + edges[:-1]) / 2
+  slope = ...
+  print(f"fitted slope {slope:.2f}; Boltzmann predicts {-dV:.2f}")
+  print(f"density ratio left/right {counts[0] / counts[-1]:.1f}; exp(dV) = {np.exp(dV):.1f}")
+  plt.semilogy(centres, counts, "o"); plt.xlabel("position across the box"); plt.ylabel("ions per bin"); plt.show()
+`}
+hint="x = x - dV * dt + np.sqrt(2 * dt) * r.normal(size=x.size); x = np.abs(x); x = np.where(x > 1, 2 - x, x). slope = np.polyfit(centres, np.log(counts), 1)[0]."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(29)
+  dV, dt = 2.0, 2e-4                         # potential step in units of V_T; time step with D = 1
+  x = r.uniform(0, 1, 10000)
+  for step in range(3000):
+      x = x - dV * dt + np.sqrt(2 * dt) * r.normal(size=x.size)
+      x = np.abs(x)
+      x = np.where(x > 1, 2 - x, x)
+  counts, edges = np.histogram(x, 20, (0, 1))
+  centres = (edges[1:] + edges[:-1]) / 2
+  slope = np.polyfit(centres, np.log(counts), 1)[0]
+  print(f"fitted slope {slope:.2f}; Boltzmann predicts {-dV:.2f}")
+  print(f"density ratio left/right {counts[0] / counts[-1]:.1f}; exp(dV) = {np.exp(dV):.1f}")
+  plt.semilogy(centres, counts, "o"); plt.xlabel("position across the box"); plt.ylabel("ions per bin"); plt.show()
+`} />
+
+The logarithm of the density falls in a straight line with slope -1.97, against -2 predicted: the ions pile up at the low-energy wall with an exponential profile, the Boltzmann distribution, and the ratio of densities in the end bins is 7.0, close to the $e^{1.9} = 6.7$ expected for bins whose centres are 0.95 apart. Nothing in the simulation mentioned Boltzmann: balance between random spreading and a steady push is enough. Replace the box by a membrane and the push by the membrane potential, and the concentration ratio across it is $e^{-zV/V_T}$, which is Nernst's equation again.
+
+<Step n={4} title="How many ions?" minutes={25} />
+
+A membrane is a capacitor with about 1 μF of capacitance per square centimetre (Day 3). Holding a voltage $V$ across it takes a charge $Q = CV$, which has to be carried by ions crossing the membrane. How many is that, compared with the ions in the cell?
+
+<PyCell id="ions" title="Counting the charge" tests={String.raw`
+  import numpy as np
+  def test_counts():
+      "n_moved is C V / e and n_inside is the potassium in the sphere"
+      d = 20e-4
+      assert abs(n_moved[0] - 1e-6 * np.pi * d**2 * 0.07 / 1.602e-19) / n_moved[0] < 1e-6
+      assert abs(n_inside[0] - 0.14 * np.pi / 6 * d**3 / 1000 * 6.022e23) / n_inside[0] < 1e-6
+
+  def test_scaling():
+      "the fraction moved grows as the cell shrinks, inversely with diameter"
+      f = n_moved / n_inside
+      assert f[0] < 1e-4 and abs(f[2] / f[0] - 100) < 1e-6
+`} prompt="For spheres of diameter 20 μm, 1 μm and 0.2 μm (the last two like a thin dendrite or axon), compute the number of monovalent ions needed to charge the membrane to 70 mV, `n_moved`, and the number of potassium ions inside at 140 mM, `n_inside`. Work in centimetres: area πd², volume πd³/6 cm³, which is πd³/6000 litres."
+code={String.raw`
+  import numpy as np
+  e, NA, c_m = 1.602e-19, 6.022e23, 1e-6       # C, per mol, F per cm^2
+  d = np.array([20e-4, 1e-4, 0.2e-4])          # diameters in cm
+  n_moved = ...
+  n_inside = ...
+  for di, m, k in zip(d * 1e4, n_moved, n_inside):
+      print(f"d = {di:5.1f} um: {m:9.3g} ions to charge, {k:9.3g} K+ inside, fraction {m / k:.1e}")
+`}
+hint="n_moved = c_m * np.pi * d**2 * 0.07 / e; n_inside = 0.14 * np.pi * d**3 / 6000 * NA."
+solution={String.raw`
+  import numpy as np
+  e, NA, c_m = 1.602e-19, 6.022e23, 1e-6       # C, per mol, F per cm^2
+  d = np.array([20e-4, 1e-4, 0.2e-4])          # diameters in cm
+  n_moved = c_m * np.pi * d**2 * 0.07 / e
+  n_inside = 0.14 * np.pi * d**3 / 6000 * NA
+  for di, m, k in zip(d * 1e4, n_moved, n_inside):
+      print(f"d = {di:5.1f} um: {m:9.3g} ions to charge, {k:9.3g} K+ inside, fraction {m / k:.1e}")
+`} />
+
+A 20 μm cell body needs about 5.5 million ions to charge to 70 mV, out of 350 billion potassium ions inside: a fraction of $1.6 \times 10^{-5}$, about 0.002%. That answers the prediction. The membrane potential is set by a thin layer of charge at the membrane, while the bulk solutions on either side stay neutral and their concentrations barely move, which is why the Nernst potentials can be treated as constants. The fraction scales as one over the diameter, because area grows as $d^2$ and volume as $d^3$. In a 0.2 μm process it reaches 0.16% per charging, so in thin axons and dendrites that fire repeatedly, concentrations do shift, and the pumps must work harder: a point Day 5 and the Forge return to.
+
+How can a membrane let potassium through but not sodium, an ion that is smaller? Today's paper answered that with the first atomic structure of a potassium channel. Its selectivity filter is a narrow ring of carbonyl oxygens spaced to fit a potassium ion stripped of its water, so that potassium loses its water shell at almost no energy cost. A sodium ion is too small to touch all the oxygens at once, so shedding its water costs more than the filter gives back. The channel passes about $10^8$ potassium ions per second while letting through about one sodium ion for every thousand potassium ions.
+
+<Bridge title="The Boltzmann distribution, in membranes and in machines"
+  neuro="The Nernst potential is the Boltzmann distribution applied to ions on two sides of a membrane: the concentration ratio equals the exponential of the energy difference divided by the thermal energy. The same law sets how voltage opens channels, as you will see when gating variables follow sigmoid functions of voltage in Week 30."
+  ai="The softmax at the output of every classifier and inside every attention head is the Boltzmann distribution, with negative logits as energies and a temperature that sharpens or flattens the choice. Boltzmann machines and energy-based models take the analogy literally. When you set the sampling temperature of a language model, you are choosing the thermal energy.">
+
+One exponential law, probability falling as energy over temperature, sets both the battery of a neuron and the choices of a network.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Potassium is concentrated...", options: ["Outside the cell", "Inside the cell", "Equally on both sides", "Only in the axon"], answer: 1, explain: "About 140 mM inside against 5 mM outside." },
+  { q: "The Nernst potential of an ion is the voltage at which...", options: ["The ion's concentration is equal on both sides", "Its diffusion and electrical drift balance, so there is no net flux", "The membrane breaks down", "The pump stops"], answer: 1, explain: "Equilibrium for that ion." },
+  { q: "At 37 °C, a tenfold gradient of a monovalent ion corresponds to about...", options: ["6 mV", "26 mV", "61 mV", "120 mV"], answer: 2, explain: "61.5 mV per decade." },
+  { q: "Chloride is concentrated outside, like sodium, but its Nernst potential is negative because...", options: ["Its gradient is reversed", "Its valence is -1", "It does not cross membranes", "It is heavier"], answer: 1, explain: "The 1/z factor flips the sign." },
+  { q: "The thermal voltage RT/F at body temperature is about...", options: ["2.7 mV", "26.7 mV", "61.5 mV", "100 mV"], answer: 1, explain: "k_B T / e." },
+  { q: "Charging a 20 μm cell to -70 mV changes its potassium concentration by about...", options: ["10%", "1%", "0.002%", "Exactly zero"], answer: 2, explain: "Only a thin layer of charge is needed." },
+  { q: "The fraction of ions moved per charging is larger in thin processes because...", options: ["Their membranes are thicker", "Surface area falls more slowly than volume as diameter shrinks", "They have no pumps", "They are colder"], answer: 1, explain: "Area over volume scales as 1/d." },
+  { q: "The potassium channel excludes the smaller sodium ion because...", options: ["The pore is too narrow for sodium", "Sodium cannot shed its water at low cost in the selectivity filter", "Sodium is negatively charged", "Sodium is pumped away first"], answer: 1, explain: "Doyle and colleagues (1998)." },
+]} />
+
+<Flashcards cards={[
+  { front: "The Nernst equation?", back: "$E = \\frac{RT}{zF}\\ln\\frac{c_{out}}{c_{in}}$, about $61.5\\,\\text{mV} \\times \\frac{1}{z}\\log_{10}(c_{out}/c_{in})$ at 37 °C." },
+  { front: "Typical reversal potentials?", back: "K⁺ about -89 mV, Na⁺ about +67 mV, Cl⁻ about -74 mV, Ca²⁺ about +130 mV." },
+  { front: "Where does the Nernst equation come from?", back: "The Boltzmann distribution, or equivalently zero net flux in the Nernst-Planck equation (diffusion balancing drift)." },
+  { front: "Thermal voltage?", back: "$V_T = k_BT/e = RT/F$, about 26.7 mV at 37 °C." },
+  { front: "Why do concentrations barely change when a neuron charges?", back: "Only a thin layer of charge, about $10^{-5}$ of the ions in a cell body, is needed; the bulk stays neutral." },
+]} />
+
+<Predict revisit question="What fraction of the cell's potassium must leave to charge the membrane to -70 mV?" />
+
+<Key title="Before you go">
+<ul>
+<li>Pumps keep potassium inside and sodium, chloride and calcium outside, each gradient a store of energy.</li>
+<li>For each ion, the Nernst potential is the voltage at which diffusion and electrical drift balance.</li>
+<li>It follows from the Boltzmann distribution: a tenfold gradient is worth about 60 mV per unit charge.</li>
+<li>Charging a membrane moves a tiny fraction of the ions, except in very thin processes.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Doyle and colleagues (1998), <em>The structure of the potassium channel: molecular basis of K⁺ conduction and selectivity</em>.</li>
+<li>Hille (2001), <em>Ion Channels of Excitable Membranes</em>, 3rd edition, Sinauer, chapters 1 and 14: the standard reference on channels and selectivity.</li>
+<li>Dayan and Abbott (2001), <em>Theoretical Neuroscience</em>, MIT Press, section 5.2 on reversal potentials.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Explain to a friend who knows no physics why a membrane that lets only potassium through becomes negative inside, using the words diffusion, charge and balance, and no equations. Then say what would happen to the resting potential if the potassium concentration outside the cell rose from 5 to 50 mM." />

@@ -1,0 +1,301 @@
+export const meta = {
+  title: "Conductances, driving force and shunting inhibition",
+  intro: "The GHK equation describes a membrane with fixed permeabilities. A working neuron changes them all the time: every synapse that opens adds a conductance with its own reversal potential. Today you rewrite the membrane in the language most models use, as conductances in parallel, each pushing the voltage towards its own battery with a force proportional to its distance from it. That simple picture has surprising consequences. Inhibition can cancel excitation without changing the voltage at all, opening conductances speeds a neuron up, and whether inhibition divides or subtracts a neuron's output depends on what you measure.",
+  goals: [
+    "Write ionic currents as conductance times driving force, and say when that linear form fails",
+    "Compute the steady voltage and effective time constant of a membrane with several conductances",
+    "Explain shunting inhibition and compute its effect on a synaptic potential",
+    "Show that shunting inhibition shifts rather than scales the f-I curve of an integrate-and-fire neuron",
+    "Describe the high-conductance state of neurons in active cortex",
+  ],
+  plan: [
+    { label: "Predict and Ohm's law for ions", minutes: 20 },
+    { label: "Conductances in parallel", minutes: 25 },
+    { label: "Shunting inhibition and firing", minutes: 35 },
+    { label: "The high-conductance state", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "holt-koch-1997",
+};
+
+<Predict question="An inhibitory synapse opens a chloride conductance whose reversal potential equals the resting potential, so on its own it does not change the voltage at all. Can it still reduce the response to an excitatory input arriving at the same time: no, a little, or by half or more if it is strong enough?" />
+
+<Step n={1} title="Ohm's law for ions" minutes={20} />
+
+The models from here on describe each kind of channel by a **conductance** $g_i$ and a reversal potential $E_i$, and write its current as
+
+$$
+I_i = g_i(V - E_i).
+$$
+
+The term $V - E_i$ is the **driving force**: the current is zero at the reversal potential and grows linearly with distance from it, outward above and inward below. This is a linearisation of the GHK current. It is exact when the concentrations on both sides are equal, and otherwise the GHK current **rectifies**: for potassium, with much more inside than outside, outward current flows more easily than inward current. Rectification is modest over the voltages neurons visit, so the linear form is standard, but it is worth knowing how large the error is.
+
+<PyCell id="rectify" title="How linear is a potassium current?" tests={String.raw`
+  import numpy as np
+  def test_slope():
+      "g_rev is the slope of the GHK current at E_K, by central differences"
+      assert abs(g_rev - (ghk_K(E_K + 1e-3) - ghk_K(E_K - 1e-3)) / 2e-3) < 1e-6
+
+  def test_ratio():
+      "the GHK current 50 mV above E_K is more than twice the size of the current 50 mV below"
+      assert abs(ratio - (-ghk_K(E_K + 50) / ghk_K(E_K - 50))) < 1e-9 and ratio > 2
+`} prompt="`ghk_K(V)` is the GHK potassium current for 140 mM inside and 5 mM outside. Find its slope at the reversal potential, `g_rev`, by a central difference, and compare it with the linear current g_rev (V - E_K) at 50 mV either side of E_K. Store the ratio of the outward current at E_K + 50 to the size of the inward current at E_K - 50 in `ratio`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  VT = 26.725
+  E_K = VT * np.log(5 / 140)
+
+  def ghk_K(V):
+      u = V / VT
+      return u * (140 - 5 * np.exp(-u)) / (1 - np.exp(-u))
+
+  g_rev = ...
+  ratio = ...
+  for V in (E_K - 50, E_K + 50):
+      print(f"V = {V:6.1f} mV: GHK {ghk_K(V):+6.1f}, linear {g_rev * (V - E_K):+6.1f}")
+  print(f"outward / inward at equal driving force: {ratio:.2f}")
+  V = np.linspace(-140, 40, 200); V = V[np.abs(V) > 0.01]
+  plt.plot(V, ghk_K(V), label="GHK"); plt.plot(V, g_rev * (V - E_K), "--", label="linear")
+  plt.axhline(0, color="gray", lw=0.5); plt.xlabel("V (mV)"); plt.ylabel("current (arbitrary units)"); plt.legend(); plt.show()
+`}
+hint="g_rev = (ghk_K(E_K + 1e-3) - ghk_K(E_K - 1e-3)) / 2e-3; ratio = -ghk_K(E_K + 50) / ghk_K(E_K - 50)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  VT = 26.725
+  E_K = VT * np.log(5 / 140)
+
+  def ghk_K(V):
+      u = V / VT
+      return u * (140 - 5 * np.exp(-u)) / (1 - np.exp(-u))
+
+  g_rev = (ghk_K(E_K + 1e-3) - ghk_K(E_K - 1e-3)) / 2e-3
+  ratio = -ghk_K(E_K + 50) / ghk_K(E_K - 50)
+  for V in (E_K - 50, E_K + 50):
+      print(f"V = {V:6.1f} mV: GHK {ghk_K(V):+6.1f}, linear {g_rev * (V - E_K):+6.1f}")
+  print(f"outward / inward at equal driving force: {ratio:.2f}")
+  V = np.linspace(-140, 40, 200); V = V[np.abs(V) > 0.01]
+  plt.plot(V, ghk_K(V), label="GHK"); plt.plot(V, g_rev * (V - E_K), "--", label="linear")
+  plt.axhline(0, color="gray", lw=0.5); plt.xlabel("V (mV)"); plt.ylabel("current (arbitrary units)"); plt.legend(); plt.show()
+`} />
+
+Fifty millivolts above $E_K$ the GHK current is 52 units, against 32 for the linear approximation; fifty below it is 22 units inward, against 32. The same driving force pushes 2.4 times more current out than in. Some channels rectify far more strongly than this, because of how they are built rather than because of the gradients: the inward-rectifier potassium channels are blocked by internal magnesium and polyamines at depolarised voltages, and NMDA receptors are blocked by external magnesium near rest, a property that makes them detectors of coincident input (Weeks 32 and 33).
+
+<Video id="bHI92afcwzc" title="Synapses (Neuronal Dynamics 3.1)" by="Wulfram Gerstner (EPFL)" note="Wulfram Gerstner introduces conductance-based synapses, each with its own reversal potential, and the difference between excitation, inhibition and shunting." />
+
+<Step n={2} title="Conductances in parallel" minutes={25} />
+
+Put a leak conductance $g_L$ with reversal $E_L$ in parallel with an excitatory synaptic conductance $g_e$ (reversal $E_e \approx 0$ mV, for the mixed cation channels of glutamate receptors) and an inhibitory one $g_i$ (reversal $E_i \approx -70$ mV for the chloride channels of GABA-A receptors). The membrane equation becomes
+
+$$
+C\frac{dV}{dt} = -g_L(V - E_L) - g_e(V - E_e) - g_i(V - E_i) + I.
+$$
+
+Collecting terms shows two things at once. The voltage relaxes towards a conductance-weighted average of the reversal potentials, and it does so with an **effective time constant** that shrinks as conductance is added:
+
+$$
+V_\infty = \frac{g_LE_L + g_eE_e + g_iE_i + I}{g_L + g_e + g_i}, \qquad \tau_{eff} = \frac{C}{g_L + g_e + g_i}.
+$$
+
+The weighted average is the conductance version of the GHK equation's weighted compromise from Day 2.
+
+<PyCell id="parallel" title="An EPSP with and without a shunt" tests={String.raw`
+  import numpy as np
+  def test_vinf():
+      "v_inf gives the conductance-weighted mean of the reversal potentials"
+      assert abs(v_inf(10, 1, 0) - (10 * -70 + 1 * 0) / 11) < 1e-12
+      assert abs(v_inf(10, 1, 10) - (10 * -70 + 1 * 0 + 10 * -70) / 21) < 1e-12
+
+  def test_shunt():
+      "the shunt cuts the depolarisation roughly in half and halves the effective time constant"
+      assert 0.45 < epsp[10] / epsp[0] < 0.6 and abs(tau_eff[10] - 200 / 21) < 1e-9
+`} prompt="With g_L = 10 nS, E_L = -70 mV and C = 200 pF, write `v_inf(gL, ge, gi)` with E_e = 0 and E_i = -70 mV. For an excitatory conductance of 1 nS, compute the steady depolarisation `epsp[gi]` and effective time constant `tau_eff[gi]` (ms) for inhibitory conductances of 0, 5 and 10 nS."
+code={String.raw`
+  import numpy as np
+  E_L, E_e, E_i, C = -70.0, 0.0, -70.0, 200.0         # mV, mV, mV, pF
+
+  def v_inf(gL, ge, gi):
+      return ...
+
+  epsp, tau_eff = {}, {}
+  for gi in (0, 5, 10):
+      epsp[gi] = ...
+      tau_eff[gi] = ...
+      print(f"g_i = {gi:2d} nS: depolarisation {epsp[gi]:.2f} mV, effective time constant {tau_eff[gi]:.1f} ms;  alone it moves V by {v_inf(10, 0, gi) - E_L:.1f} mV")
+`}
+hint="return (gL * E_L + ge * E_e + gi * E_i) / (gL + ge + gi); epsp[gi] = v_inf(10, 1, gi) - v_inf(10, 0, gi); tau_eff[gi] = C / (10 + 1 + gi), since pF / nS = ms."
+solution={String.raw`
+  import numpy as np
+  E_L, E_e, E_i, C = -70.0, 0.0, -70.0, 200.0         # mV, mV, mV, pF
+
+  def v_inf(gL, ge, gi):
+      return (gL * E_L + ge * E_e + gi * E_i) / (gL + ge + gi)
+
+  epsp, tau_eff = {}, {}
+  for gi in (0, 5, 10):
+      epsp[gi] = v_inf(10, 1, gi) - v_inf(10, 0, gi)
+      tau_eff[gi] = C / (10 + 1 + gi)
+      print(f"g_i = {gi:2d} nS: depolarisation {epsp[gi]:.2f} mV, effective time constant {tau_eff[gi]:.1f} ms;  alone it moves V by {v_inf(10, 0, gi) - E_L:.1f} mV")
+`} />
+
+On its own the inhibitory conductance moves the voltage by exactly 0 mV, yet it cuts the excitatory response from 6.4 mV to 3.3 mV and halves the time constant, from 18 to 9.5 ms. That answers the prediction. This is **shunting inhibition**: by adding conductance, it short-circuits the current that excitation injects. It is invisible in a recording of the voltage alone and shows up only as a change in input resistance. Because the conductance appears in the denominator, it acts on small inputs roughly by division.
+
+<Figure caption="An excitatory synaptic conductance with and without a simultaneous inhibitory one. Set the inhibitory conductance and its reversal potential." credit="Interactive figure by Engram.">
+  <ShuntingInhibition />
+</Figure>
+
+<Step n={3} title="Shunting inhibition and firing" minutes={35} />
+
+If shunting divides voltage responses, does it divide firing rates too? That would make it a way to control a neuron's gain, a multiplication the brain seems to need, for example when attention scales visual responses. Holt and Koch (1997), today's paper, showed that in an integrate-and-fire neuron it does not: shunting inhibition subtracts. You can check their argument numerically. Use the conductance-based leaky integrate-and-fire neuron of Week 21, with the shunt included in the leak.
+
+<PyCell id="fI" title="Divide or subtract?" tests={String.raw`
+  import numpy as np
+  def test_rate():
+      "rate gives the exact LIF firing rate with total leak g_L + g_i and a 2 ms refractory period"
+      g = 10e-9 + 10e-9; vinf = -70e-3 + 1e-9 / g
+      assert abs(rate(np.array([1e-9]), 10e-9)[0] - 1 / (2e-3 + 200e-12 / g * np.log((vinf + 65e-3) / (vinf + 50e-3)))) < 1e-9
+
+  def test_shift():
+      "the shunt raises the rheobase by g_i times 20 mV, but the slope at high current falls by less than 20%"
+      assert abs(rheobase[10e-9] - rheobase[0] - 10e-9 * 0.02) < 1e-11
+      assert slope[10e-9] > 0.8 * slope[0] and slope[20e-9] > 0.8 * slope[0]
+`} prompt="Write `rate(I, gi)`: the firing rate of a LIF neuron (C = 200 pF, g_L = 10 nS, E_L = E_i = -70 mV, threshold -50 mV, reset -65 mV, refractory period 2 ms) with total leak g = g_L + g_i, using the exact formula 1 / (t_ref + τ ln((V∞ - V_reset) / (V∞ - V_th))) where V∞ exceeds threshold, else 0. Then find each curve's rheobase (smallest current that fires) and its slope (Hz per nA) from a straight-line fit between 1 and 1.5 nA."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  C, gL, EL, Vth, Vr, tref = 200e-12, 10e-9, -70e-3, -50e-3, -65e-3, 2e-3
+  I = np.linspace(0, 1.5e-9, 301)
+
+  def rate(I, gi):
+      g = gL + gi
+      vinf, tau = EL + I / g, C / g
+      out = np.zeros_like(I)
+      fires = vinf > Vth
+      out[fires] = ...
+      return out
+
+  rheobase, slope = {}, {}
+  high = I >= 1e-9
+  for gi in (0, 10e-9, 20e-9):
+      f = rate(I, gi)
+      rheobase[gi] = I[np.argmax(f > 0)]
+      slope[gi] = ...
+      print(f"g_i = {gi * 1e9:2.0f} nS: rheobase {rheobase[gi] * 1e12:4.0f} pA, slope {slope[gi]:5.1f} Hz/nA, rate at 1 nA {f[200]:5.1f} Hz")
+      plt.plot(I * 1e9, f, label=f"g_i = {gi * 1e9:.0f} nS")
+  plt.xlabel("current (nA)"); plt.ylabel("rate (Hz)"); plt.legend(); plt.show()
+`}
+hint="out[fires] = 1 / (tref + tau * np.log((vinf[fires] - Vr) / (vinf[fires] - Vth))); slope[gi] = np.polyfit(I[high] * 1e9, f[high], 1)[0]."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  C, gL, EL, Vth, Vr, tref = 200e-12, 10e-9, -70e-3, -50e-3, -65e-3, 2e-3
+  I = np.linspace(0, 1.5e-9, 301)
+
+  def rate(I, gi):
+      g = gL + gi
+      vinf, tau = EL + I / g, C / g
+      out = np.zeros_like(I)
+      fires = vinf > Vth
+      out[fires] = 1 / (tref + tau * np.log((vinf[fires] - Vr) / (vinf[fires] - Vth)))
+      return out
+
+  rheobase, slope = {}, {}
+  high = I >= 1e-9
+  for gi in (0, 10e-9, 20e-9):
+      f = rate(I, gi)
+      rheobase[gi] = I[np.argmax(f > 0)]
+      slope[gi] = np.polyfit(I[high] * 1e9, f[high], 1)[0]
+      print(f"g_i = {gi * 1e9:2.0f} nS: rheobase {rheobase[gi] * 1e12:4.0f} pA, slope {slope[gi]:5.1f} Hz/nA, rate at 1 nA {f[200]:5.1f} Hz")
+      plt.plot(I * 1e9, f, label=f"g_i = {gi * 1e9:.0f} nS")
+  plt.xlabel("current (nA)"); plt.ylabel("rate (Hz)"); plt.legend(); plt.show()
+`} />
+
+Each 10 nS of shunt raises the rheobase by 200 pA, the extra current needed to hold the voltage at threshold against it, but the slope at high currents does not fall: it is 110, 122 and 139 Hz per nA. A divisive effect would have cut the slope to a half and a third. The reason is that once the neuron fires, its voltage spends its time between reset and threshold, a fixed range, so the shunt draws a roughly fixed current, $g_i(\bar V - E_i)$, where $\bar V$ is the average voltage between spikes. A fixed current subtracts.
+
+Shunting can divide under other conditions. Chance, Abbott and Reyes (2002) showed in real neurons that when the shunt comes with a matching increase in synaptic noise, as background synaptic input does, the f-I curve's gain falls: noise and conductance together divide. Whether inhibition subtracts or divides depends on the neuron's regime, which is why the question was argued over for years.
+
+<Step n={4} title="The high-conductance state" minutes={25} />
+
+In a slice, a cortical neuron's input resistance is set by its leak. In an awake brain, thousands of synapses are active at any moment, and the total synaptic conductance can be three to five times the leak (Destexhe, Rudolph and Paré, 2003). That **high-conductance state** changes the neuron: by the second formula above, its effective time constant shrinks by the same factor, so it integrates over a few milliseconds rather than twenty, and responds faster and to more precisely timed input.
+
+<PyCell id="highcond" title="A faster neuron in an active network" tests={String.raw`
+  import numpy as np
+  def test_tau():
+      "tau_eff divides C by the leak plus the synaptic conductance"
+      assert np.allclose(tau_eff, 200 / (10 * (1 + np.array(factor))))
+
+  def test_window():
+      "decay_to_10pct is tau_eff times ln 10, and falls below 15 ms at four times the leak"
+      assert np.allclose(decay_to_10pct, tau_eff * np.log(10)) and decay_to_10pct[-1] < 15
+`} prompt="With C = 200 pF and g_L = 10 nS, background synaptic conductances of 0, 1, 2 and 4 times the leak (`factor`) are added. Compute the effective time constant `tau_eff` (ms) and the time for a synaptic potential to decay to 10% of its peak, `decay_to_10pct` (ms), as τ_eff ln 10."
+code={String.raw`
+  import numpy as np
+  C, gL = 200.0, 10.0                         # pF, nS
+  factor = [0, 1, 2, 4]
+  tau_eff = ...
+  decay_to_10pct = ...
+  for f, t, w in zip(factor, tau_eff, decay_to_10pct):
+      print(f"synaptic conductance {f} x leak: tau_eff = {t:4.1f} ms, a PSP decays to 10% in {w:4.1f} ms")
+`}
+hint="tau_eff = C / (gL * (1 + np.array(factor))); decay_to_10pct = tau_eff * np.log(10)."
+solution={String.raw`
+  import numpy as np
+  C, gL = 200.0, 10.0                         # pF, nS
+  factor = [0, 1, 2, 4]
+  tau_eff = C / (gL * (1 + np.array(factor)))
+  decay_to_10pct = tau_eff * np.log(10)
+  for f, t, w in zip(factor, tau_eff, decay_to_10pct):
+      print(f"synaptic conductance {f} x leak: tau_eff = {t:4.1f} ms, a PSP decays to 10% in {w:4.1f} ms")
+`} />
+
+At rest in a slice, a synaptic potential takes 46 ms to decay to a tenth of its peak; with four times the leak in background conductance it takes 9 ms. The same cell, with the same channels, becomes a different computing device depending on the activity of the network around it: closer to an integrator in quiet conditions, closer to a coincidence detector in active ones.
+
+<Bridge title="Inputs that change the dynamics"
+  neuro="Conductance inputs do two things at once: they push the voltage towards a reversal potential and they change how quickly it moves. Inhibition can cancel without hyperpolarising, and background activity reshapes how a neuron integrates."
+  ai="Most artificial neurons add their inputs, with fixed dynamics. Gated recurrent units and LSTMs, and recent state-space models such as Mamba, let the input set the time constant: a gate decides how much of the old state to keep. Liquid time-constant networks were explicitly inspired by conductance-based synapses. The multiplicative interaction of input and state is what conductances gave neurons first.">
+
+A conductance is an input that changes the neuron's time constant as well as its voltage.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The driving force on an ion is...", options: ["Its concentration", "V minus its reversal potential", "Its conductance", "The pump rate"], answer: 1, explain: "I = g(V - E)." },
+  { q: "The GHK potassium current rectifies outwardly because...", options: ["There is more potassium inside than outside", "Potassium is negative", "The pump is electrogenic", "Capacitance"], answer: 0, explain: "More ions are available to carry outward current." },
+  { q: "Steady voltage with several conductances is...", options: ["The largest reversal potential", "A conductance-weighted mean of the reversal potentials", "Always the resting potential", "Zero"], answer: 1, explain: "V∞ = Σg_iE_i / Σg_i (with no injected current)." },
+  { q: "Adding conductance to a membrane makes its effective time constant...", options: ["Longer", "Shorter", "Unchanged", "Negative"], answer: 1, explain: "τ_eff = C / g_total." },
+  { q: "Shunting inhibition, with E_i at rest, on its own...", options: ["Hyperpolarises strongly", "Changes the voltage little but reduces responses to excitation", "Excites the cell", "Has no effect at all"], answer: 1, explain: "It short-circuits excitatory current." },
+  { q: "In an integrate-and-fire neuron, Holt and Koch showed that shunting inhibition acts on the f-I curve...", options: ["Divisively", "Subtractively", "Not at all", "Multiplicatively upwards"], answer: 1, explain: "The voltage between spikes is confined to a fixed range." },
+  { q: "Divisive gain control by shunting appears in real neurons when it is combined with...", options: ["Lower temperature", "Increased synaptic noise", "More sodium channels", "No input"], answer: 1, explain: "Chance, Abbott and Reyes (2002)." },
+  { q: "In the high-conductance state, neurons...", options: ["Integrate over longer windows", "Integrate over shorter windows and respond faster", "Cannot fire", "Have higher input resistance"], answer: 1, explain: "Background conductance shortens τ." },
+]} />
+
+<Flashcards cards={[
+  { front: "Ionic current in conductance form?", back: "$I_i = g_i(V - E_i)$: conductance times driving force." },
+  { front: "Steady voltage and time constant with many conductances?", back: "$V_\\infty = \\frac{\\sum g_iE_i + I}{\\sum g_i}$, $\\tau_{eff} = C/\\sum g_i$." },
+  { front: "Shunting inhibition?", back: "Inhibition with reversal near rest: little voltage change on its own, but it divides subthreshold responses by adding conductance." },
+  { front: "Shunting and firing rate?", back: "In integrate-and-fire neurons it subtracts (shifts the f-I curve); with matched noise it can divide (gain control)." },
+  { front: "High-conductance state?", back: "In vivo synaptic conductance several times the leak: shorter time constant, faster, more coincidence-sensitive neurons." },
+]} />
+
+<Predict revisit question="Can an inhibitory conductance with its reversal at rest reduce the response to excitation?" />
+
+<Key title="Before you go">
+<ul>
+<li>Each conductance pushes the voltage towards its reversal potential, with current proportional to the driving force.</li>
+<li>The GHK current rectifies when concentrations differ; the linear form is a good approximation near rest.</li>
+<li>Conductances in parallel set a weighted-mean voltage and a shorter effective time constant.</li>
+<li>Shunting inhibition divides subthreshold responses but subtracts from firing rates in an integrate-and-fire neuron.</li>
+<li>Background activity puts neurons in a high-conductance state that makes them faster.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Holt and Koch (1997), <em>Shunting inhibition does not have a divisive effect on firing rates</em>.</li>
+<li>Chance, Abbott and Reyes (2002), <em>Gain modulation from background synaptic input</em>, Neuron 35(4), 773 to 782.</li>
+<li>Destexhe, Rudolph and Paré (2003), <em>The high-conductance state of neocortical neurons in vivo</em>, Nature Reviews Neuroscience 4, 739 to 751.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Shunting inhibition subtracts from an integrate-and-fire neuron's rate but divides its subthreshold voltage responses. Explain in your own words why the two differ, and suggest one experiment, in a slice with a patch pipette, that would tell you which regime a real neuron is in." />

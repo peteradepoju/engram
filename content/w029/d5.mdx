@@ -1,0 +1,275 @@
+export const meta = {
+  title: "Ion channels and pumps: counting channels and paying for gradients",
+  intro: "The conductances of the last two days are made of molecules: ion channels, each a single protein that opens and closes at random and passes a current of about a picoampere when open. In Week 24 you modelled one channel as a Markov chain. Today you take the experimenter's side. You will compute how many channels a membrane needs to produce the conductances Hodgkin and Huxley measured, count channels in a simulated recording from nothing but the noise they make, work out what the sodium-potassium pump costs to keep the gradients of Day 2 from running down, and see why channel noise sets a limit on how thin an axon can be.",
+  goals: [
+    "Relate macroscopic conductance to channel number, open probability and single-channel conductance",
+    "Estimate channel number and unitary current from the variance-mean relation of a current",
+    "Compute the pump rate, pump current and energy cost needed to balance resting leaks",
+    "Explain how channel noise grows as compartments shrink",
+  ],
+  plan: [
+    { label: "Predict and single channels", minutes: 20 },
+    { label: "Counting channels from noise", minutes: 35 },
+    { label: "The pump's bill", minutes: 25 },
+    { label: "How small can an axon be?", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "neher-sakmann-1976",
+};
+
+<Predict question="You record the average current through a patch over hundreds of identical trials, and also its trial-to-trial variance. Could you work out from those two curves how many channels are in the patch, without ever seeing a single channel open?" />
+
+<Step n={1} title="Single channels" minutes={20} />
+
+In 1976 Erwin Neher and Bert Sakmann, today's paper, pressed a fire-polished glass pipette against a frog muscle fibre and recorded, for the first time, the current through single ion channels: rectangular pulses of a few picoamperes, opening and closing at random. Each open channel behaves like a fixed conductance $\gamma$, the **single-channel** or **unitary conductance**, typically 5 to 50 pS, so it passes a current $i = \gamma(V - E)$.
+
+A membrane with $N$ channels, each open with probability $p$, then has a mean conductance
+
+$$
+G = N p \gamma.
+$$
+
+Every smooth conductance in a model is this product. Hodgkin and Huxley's maximal sodium conductance of 120 mS/cm² in squid, divided by the squid sodium channel's unitary conductance of about 4 pS, implies about 300 channels per square micrometre, close to what was later found by counting toxin binding sites.
+
+<PyCell id="density" title="Channels per square micrometre" tests={String.raw`
+  import numpy as np
+  def test_density():
+      "density converts mS/cm^2 to S/um^2 and divides by the unitary conductance"
+      assert abs(density(120, 4) - 120e-3 / 1e8 / 4e-12) < 1e-9 and abs(density(120, 4) - 300) < 1e-9
+
+  def test_values():
+      "dens holds the sodium and potassium densities, about 300 and 18 to 36 per um^2"
+      assert abs(dens["Na"] - 300) < 1e-9 and 15 < dens["K"] < 40
+`} prompt="Write `density(g_max, gamma)` giving channels per μm² from a maximal conductance in mS/cm² and a unitary conductance in pS (1 cm² is 10⁸ μm²). Use it for Hodgkin and Huxley's sodium (120 mS/cm², 4 pS) and potassium (36 mS/cm², take 15 pS) conductances."
+code={String.raw`
+  import numpy as np
+
+  def density(g_max, gamma):
+      return ...
+
+  dens = {"Na": density(120, 4), "K": density(36, 15)}
+  for ion, n in dens.items():
+      print(f"{ion}: {n:.0f} channels per um^2")
+  area_soma = np.pi * 20 ** 2                    # um^2, a 20 um sphere
+  print(f"a 20 um soma at the squid sodium density would hold {dens['Na'] * area_soma:.2g} sodium channels")
+`}
+hint="Convert g_max to S per μm²: g_max * 1e-3 / 1e8, then divide by gamma * 1e-12."
+solution={String.raw`
+  import numpy as np
+
+  def density(g_max, gamma):
+      return g_max * 1e-3 / 1e8 / (gamma * 1e-12)
+
+  dens = {"Na": density(120, 4), "K": density(36, 15)}
+  for ion, n in dens.items():
+      print(f"{ion}: {n:.0f} channels per um^2")
+  area_soma = np.pi * 20 ** 2                    # um^2, a 20 um sphere
+  print(f"a 20 um soma at the squid sodium density would hold {dens['Na'] * area_soma:.2g} sodium channels")
+`} />
+
+About 300 sodium and 24 potassium channels per μm². Mammalian cell bodies have far fewer sodium channels, a few to tens per μm², with high densities concentrated at the axon initial segment and the nodes of Ranvier, where spikes start and are regenerated (Week 32).
+
+<Video id="PnJEj6TokDA" title="1. Course Overview and Ionic Currents" by="Michale Fee (MIT 9.40 Introduction to Neural Computation, MIT OpenCourseWare)" note="The first lecture of Michale Fee's MIT course sets out the ionic currents, channels and pumps that this week has covered, and how they combine into a neuron's electrical behaviour." />
+
+<Step n={2} title="Counting channels from noise" minutes={35} />
+
+Single channels can only be seen in small patches. In a whole cell, thousands of channels overlap into a smooth current. But the current is not perfectly smooth: because each channel opens at random, the number open fluctuates from trial to trial, and the size of the fluctuations carries information. If $n$ of $N$ channels are open, $n$ is binomial, so the current $I = in$ has
+
+$$
+\mathbb E[I] = iNp, \qquad \text{Var}[I] = i^2Np(1 - p) = iI - \frac{I^2}{N}.
+$$
+
+The variance is a parabola in the mean current: zero when no channels are open, zero again when all are, largest at half activation. Its initial slope is the unitary current $i$, and its curvature gives $N$. This is **non-stationary fluctuation analysis** (Sigworth, 1980): repeat a stimulus many times, compute the mean and variance across trials at each instant, and fit the parabola.
+
+<Figure caption="Currents from a patch of N stochastic channels opened by a repeated stimulus, and the variance-mean parabola across trials. Change N." credit="Interactive figure by Engram.">
+  <ChannelNoise />
+</Figure>
+
+<PyCell id="nsfa" title="Non-stationary noise analysis" tests={String.raw`
+  import numpy as np
+  def test_moments():
+      "m and v are the across-sweep mean and the variance corrected for 0.5 pA of background noise"
+      assert np.allclose(m, I.mean(0)) and np.allclose(v, I.var(0, ddof=1) - 0.25)
+
+  def test_fit():
+      "the fit recovers the unitary current within 10% and the channel number within 15%"
+      assert abs(i_est - 1.0) < 0.1 and abs(N_est - 500) / 500 < 0.15
+`} prompt="Two hundred sweeps of a current through 500 channels of 1 pA each are simulated, with 0.5 pA of background noise. Compute the mean `m` and variance `v` across sweeps at each time (subtract the background variance 0.25), then fit v = i m - m²/N by linear least squares on the two columns m and -m², and recover `i_est` and `N_est`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(5)
+  N, i, sweeps = 500, 1.0, 200
+  t = np.arange(0, 10, 0.05)                                  # ms
+  p = np.exp(-t / 3) - np.exp(-t / 0.5); p = 0.6 * p / p.max()  # open probability: rises, then inactivates
+  I = i * r.binomial(N, p, size=(sweeps, t.size)) + r.normal(0, 0.5, (sweeps, t.size))
+
+  m = ...
+  v = ...
+  X = np.column_stack([m, -m ** 2])
+  coef = ...
+  i_est, N_est = coef[0], 1 / coef[1]
+  print(f"unitary current {i_est:.2f} pA, channels {N_est:.0f}")
+  mm = np.linspace(0, m.max(), 100)
+  plt.plot(m, v, ".", label="data"); plt.plot(mm, i_est * mm - mm ** 2 / N_est, label="fit")
+  plt.xlabel("mean current (pA)"); plt.ylabel("variance (pA^2)"); plt.legend(); plt.show()
+`}
+hint="m = I.mean(0); v = I.var(0, ddof=1) - 0.25; coef = np.linalg.lstsq(X, v, rcond=None)[0]."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(5)
+  N, i, sweeps = 500, 1.0, 200
+  t = np.arange(0, 10, 0.05)                                  # ms
+  p = np.exp(-t / 3) - np.exp(-t / 0.5); p = 0.6 * p / p.max()  # open probability: rises, then inactivates
+  I = i * r.binomial(N, p, size=(sweeps, t.size)) + r.normal(0, 0.5, (sweeps, t.size))
+
+  m = I.mean(0)
+  v = I.var(0, ddof=1) - 0.25
+  X = np.column_stack([m, -m ** 2])
+  coef = np.linalg.lstsq(X, v, rcond=None)[0]
+  i_est, N_est = coef[0], 1 / coef[1]
+  print(f"unitary current {i_est:.2f} pA, channels {N_est:.0f}")
+  mm = np.linspace(0, m.max(), 100)
+  plt.plot(m, v, ".", label="data"); plt.plot(mm, i_est * mm - mm ** 2 / N_est, label="fit")
+  plt.xlabel("mean current (pA)"); plt.ylabel("variance (pA^2)"); plt.legend(); plt.show()
+`} />
+
+From nothing but means and variances the fit gives a unitary current of 1.02 pA and 482 channels, against the true 1 pA and 500. That answers the prediction. Here the peak open probability is 0.6, so the parabola is traced past its maximum and the channel number is well constrained; when channels never open with high probability, only the initial rising part is seen and $N$ becomes uncertain, a limitation real experiments face. The same logic applies to synapses: the variance-mean relation of synaptic currents across conditions of different release probability gives the number of release sites and the size of a single vesicle's effect, a method you will meet in Week 33.
+
+<Callout kind="note">
+
+The method assumes the channels are independent and identical, and that $N$ stays constant across sweeps. Channels that cluster and open together, or run-down of channels during a long recording, bias the estimates. Checking the assumptions is part of the analysis, as with any model fit (Week 17).
+
+</Callout>
+
+<Step n={3} title="The pump's bill" minutes={25} />
+
+Day 2 found that sodium leaks in and potassium leaks out at rest. The **Na⁺/K⁺-ATPase** reverses this, using one ATP molecule to move three sodium ions out and two potassium ions in. Because it moves one net positive charge out per cycle, it is **electrogenic**: it carries an outward current of its own. In steady state the pump must remove sodium as fast as it leaks in.
+
+<PyCell id="pump" title="Paying for the resting leak" tests={String.raw`
+  import numpy as np
+  def test_rates():
+      "na_per_s is the sodium current divided by e, and cycles is a third of that"
+      assert abs(na_per_s - 20e-12 / 1.602e-19) < 1 and abs(cycles - na_per_s / 3) < 1
+
+  def test_costs():
+      "the pump current is one charge per cycle, its voltage effect is I_pump R_in, and the power is cycles times 8e-20 J"
+      assert abs(I_pump - cycles * 1.602e-19) < 1e-20 and abs(dV_pump - I_pump * 200e6 * 1e3) < 1e-9 and abs(power - cycles * 8e-20) < 1e-24
+`} prompt="A neuron with input resistance 200 MΩ has a resting sodium leak of 20 pA. Compute the sodium ions entering per second `na_per_s`, the pump cycles per second needed to remove them `cycles`, the pump current `I_pump` (A), the hyperpolarisation it causes `dV_pump` (mV), and the power `power` (W) at 8e-20 J per ATP. Then scale the power to 86 billion neurons."
+code={String.raw`
+  import numpy as np
+  e, I_Na, R_in, e_atp = 1.602e-19, 20e-12, 200e6, 8e-20
+  na_per_s = ...
+  cycles = ...
+  I_pump = ...
+  dV_pump = ...
+  power = ...
+  print(f"{na_per_s:.2e} Na+ per second, {cycles:.2e} pump cycles and ATP per second")
+  print(f"pump current {I_pump * 1e12:.1f} pA, hyperpolarising by {dV_pump:.1f} mV")
+  print(f"power {power:.2e} W per neuron, {power * 86e9:.2f} W for 86 billion")
+`}
+hint="na_per_s = I_Na / e; cycles = na_per_s / 3; I_pump = cycles * e; dV_pump = I_pump * R_in * 1e3; power = cycles * e_atp."
+solution={String.raw`
+  import numpy as np
+  e, I_Na, R_in, e_atp = 1.602e-19, 20e-12, 200e6, 8e-20
+  na_per_s = I_Na / e
+  cycles = na_per_s / 3
+  I_pump = cycles * e
+  dV_pump = I_pump * R_in * 1e3
+  power = cycles * e_atp
+  print(f"{na_per_s:.2e} Na+ per second, {cycles:.2e} pump cycles and ATP per second")
+  print(f"pump current {I_pump * 1e12:.1f} pA, hyperpolarising by {dV_pump:.1f} mV")
+  print(f"power {power:.2e} W per neuron, {power * 86e9:.2f} W for 86 billion")
+`} />
+
+A 20 pA sodium leak brings in $1.2 \times 10^8$ sodium ions a second, which takes $4.2 \times 10^7$ pump cycles and as many ATP molecules. The pump's own current, 6.7 pA, makes rest 1.3 mV more negative. Scaled to 86 billion such neurons, keeping them at rest costs about 0.29 W, a modest share of the brain's 20 W from Week 28: most of the budget goes on spikes and synaptic transmission, which let far more sodium in. The figures are rough, but the logic is that of Attwell and Laughlin's energy budget.
+
+<Step n={4} title="How small can an axon be?" minutes={25} />
+
+Noise from random channel gating matters little in a cell body with millions of channels, but the number of channels scales with membrane area. In a thin axon there may be only tens or hundreds of sodium channels within the length that must reach threshold together, and with a binomial count the relative fluctuation is
+
+$$
+\frac{\text{sd}(n)}{\mathbb E[n]} = \sqrt{\frac{1 - p}{Np}}.
+$$
+
+<PyCell id="thin" title="Channel noise in thin axons" tests={String.raw`
+  import numpy as np
+  def test_counts():
+      "n_chan is pi d L times the density, for a 10 um length"
+      assert np.allclose(n_chan, np.pi * d * 10 * 60)
+
+  def test_cv():
+      "cv is sqrt((1 - p) / (N p)) and exceeds 0.4 for the 0.1 um axon"
+      assert np.allclose(cv, np.sqrt((1 - p_open) / (n_chan * p_open))) and cv[0] > 0.4
+`} prompt="For axons of diameter 0.1, 0.2, 0.5 and 1 μm, count the sodium channels `n_chan` in a 10 μm length at 60 per μm², and compute the relative fluctuation `cv` of the number open when each channel is open with probability p_open = 0.02, as it might be near rest."
+code={String.raw`
+  import numpy as np
+  d = np.array([0.1, 0.2, 0.5, 1.0])        # um
+  p_open = 0.02
+  n_chan = ...
+  cv = ...
+  for di, n, c in zip(d, n_chan, cv):
+      print(f"d = {di:.1f} um: {n:5.0f} channels, {n * p_open:5.1f} open on average, relative fluctuation {c:.2f}")
+`}
+hint="n_chan = np.pi * d * 10 * 60; cv = np.sqrt((1 - p_open) / (n_chan * p_open))."
+solution={String.raw`
+  import numpy as np
+  d = np.array([0.1, 0.2, 0.5, 1.0])        # um
+  p_open = 0.02
+  n_chan = np.pi * d * 10 * 60
+  cv = np.sqrt((1 - p_open) / (n_chan * p_open))
+  for di, n, c in zip(d, n_chan, cv):
+      print(f"d = {di:.1f} um: {n:5.0f} channels, {n * p_open:5.1f} open on average, relative fluctuation {c:.2f}")
+`} />
+
+In a 1 μm axon the number of open channels fluctuates by 16%; at 0.1 μm, with only 190 channels and about 4 open, by 51%. Simulations of thin axons by Faisal, White and Laughlin (2005) found that below about 0.1 μm in diameter, the opening of a few sodium channels by chance becomes enough to fire spontaneous spikes. The thinnest axons found in the brain sit near that limit. Noise, not only wiring space or energy, constrains how small neural hardware can be.
+
+<Bridge title="Stochastic hardware"
+  neuro="Every conductance is an average over randomly gating molecules. With many channels the average is smooth; with few, the noise is a fact of life, and evolution has had to build neurons that compute reliably with unreliable parts."
+  ai="Low-precision and analogue AI hardware face the same trade-off: smaller, cheaper, lower-energy components are noisier. Training with noise, for example by dropout or by injecting noise into weights and activations, makes networks robust to it, and stochastic rounding exploits it. Counting channels from noise is also a template for inferring hidden structure from variability, the idea behind many latent-variable models.">
+
+The variance of a signal is not a nuisance to average away: it tells you about the parts that make it.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Neher and Sakmann (1976) first recorded...", options: ["Action potentials from inside a squid axon", "Currents through single ion channels", "The structure of a channel", "Calcium imaging"], answer: 1, explain: "With a pipette sealed against muscle membrane." },
+  { q: "A membrane's mean conductance from N channels, each open with probability p and of unitary conductance γ, is...", options: ["N + p + γ", "Npγ", "γ / Np", "N γ / p"], answer: 1, explain: "G = Npγ." },
+  { q: "For binomial channel gating, the current variance as a function of the mean current is...", options: ["A straight line", "A parabola, iI - I²/N", "Constant", "Exponential"], answer: 1, explain: "Var = i²Np(1 - p)." },
+  { q: "The initial slope of the variance-mean parabola gives...", options: ["The number of channels", "The unitary current", "The reversal potential", "The capacitance"], answer: 1, explain: "Var ≈ iI when few channels are open." },
+  { q: "The Na⁺/K⁺ pump moves per ATP...", options: ["1 Na⁺ out, 1 K⁺ in", "3 Na⁺ out, 2 K⁺ in", "2 Na⁺ out, 3 K⁺ in", "3 Na⁺ in, 2 K⁺ out"], answer: 1, explain: "One net charge out per cycle." },
+  { q: "The pump is electrogenic, meaning...", options: ["It needs electricity", "It carries a net current, making rest slightly more negative", "It generates spikes", "It is blocked by voltage"], answer: 1, explain: "Net outward current." },
+  { q: "Relative channel noise grows as an axon gets thinner because...", options: ["Channels get noisier", "Fewer channels share the job", "Temperature rises", "The pump stops"], answer: 1, explain: "sd/mean scales as 1/√N." },
+  { q: "Faisal, White and Laughlin argued that channel noise limits axons to diameters above about...", options: ["0.1 μm", "1 μm", "10 μm", "1 mm"], answer: 0, explain: "Below this, spontaneous spikes appear." },
+]} />
+
+<Flashcards cards={[
+  { front: "Macroscopic conductance from channels?", back: "$G = Np\\gamma$: number of channels, open probability, unitary conductance." },
+  { front: "Non-stationary fluctuation analysis?", back: "Across repeated trials, $\\text{Var}(I) = iI - I^2/N$; fit the parabola to get the unitary current and channel number." },
+  { front: "Na⁺/K⁺ pump stoichiometry?", back: "3 Na⁺ out, 2 K⁺ in per ATP; electrogenic, one net charge out per cycle." },
+  { front: "Squid sodium channel density?", back: "About 300 per μm², from 120 mS/cm² and about 4 pS per channel." },
+  { front: "Channel noise limit?", back: "Relative fluctuation $\\sqrt{(1-p)/(Np)}$; axons thinner than about 0.1 μm would fire spontaneously." },
+]} />
+
+<Predict revisit question="Could you count the channels in a patch from the mean and variance of its current?" />
+
+<Key title="Before you go">
+<ul>
+<li>A conductance is N channels times their open probability times the unitary conductance.</li>
+<li>The variance of a current across trials is a parabola in its mean, revealing unitary current and channel number.</li>
+<li>The electrogenic Na⁺/K⁺ pump pays for resting leaks in ATP and slightly hyperpolarises the cell.</li>
+<li>Channel noise grows as compartments shrink and limits how thin axons can be.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Neher and Sakmann (1976), <em>Single-channel currents recorded from membrane of denervated frog muscle fibres</em>.</li>
+<li>Sigworth (1980), <em>The variance of sodium current fluctuations at the node of Ranvier</em>, Journal of Physiology 307, 97 to 129.</li>
+<li>Faisal, White and Laughlin (2005), <em>Ion-channel noise places limits on the miniaturization of the brain's wiring</em>, Current Biology 15(12), 1143 to 1149.</li>
+<li>Attwell and Laughlin (2001), <em>An energy budget for signaling in the grey matter of the brain</em>, Journal of Cerebral Blood Flow and Metabolism 21(10), 1133 to 1145.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="This week went from ions to channels to pumps. Draw, in words or a sketch, the full chain from the ATP a neuron burns to the resting potential it maintains, naming each step and the one number from this week that you found most surprising." />
