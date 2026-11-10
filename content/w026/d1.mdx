@@ -1,0 +1,261 @@
+export const meta = {
+  title: "Review I: arrays, vectors, matrices and least squares",
+  intro: "Part 1 ends with a week of review and an exam. Each review day gathers several weeks into one sheet of key ideas, then asks you to use them together on problems that cross topic boundaries, the way real research does. Today covers Weeks 2 to 5: vectorised NumPy, vectors and dot products as neural tuning, matrices as maps and least squares. Work the problems before looking at hints; where you get stuck is where to revisit.",
+  goals: [
+    "Recall the key ideas and formulas of Weeks 2 to 5",
+    "Decode a movement direction from a population with vectorised code",
+    "Fit, regularise and evaluate a linear encoding model",
+    "Prove the normal equations from the geometry of projection",
+  ],
+  plan: [
+    { label: "The map of Part 1", minutes: 15 },
+    { label: "Recap sheet", minutes: 20 },
+    { label: "Mixed problems", minutes: 60 },
+    { label: "Proof practice", minutes: 10 },
+    { label: "Mock quiz and plan", minutes: 15 },
+  ],
+  paper: "gallego-2017",
+};
+
+<Predict question="Before you start: rate your confidence from 1 to 5 in each of NumPy broadcasting, dot products, matrix multiplication as composition, and least squares. Which do you expect to struggle with today?" />
+
+<Step n={1} title="The map of Part 1" minutes={15} />
+
+Twenty-four weeks of mathematics fit on one page. Before reviewing any one topic, look at how they connect: almost everything in Part 1 is linear algebra applied to something, calculus and probability supply the other two strands, and the project used all three.
+
+<Figure caption="A map of Part 1. Tap a topic for its key ideas, its connections and a link back to its week." credit="Interactive figure by Engram.">
+  <PartOneMap />
+</Figure>
+
+<Video id="kjBOesZCoqc" title="Essence of linear algebra preview" by="3Blue1Brown" note="Grant Sanderson's short preview of why linear algebra is worth understanding geometrically, a good frame for today's review of Weeks 4 and 5." />
+
+<Step n={2} title="Recap sheet" minutes={20} />
+
+**Arrays (Weeks 2 and 3).** Think in whole arrays: an operation on an array applies to every element, and broadcasting stretches dimensions of size 1 to match. Shapes are the first thing to check. Reproducible work means scripts that run from the raw data, version control and recorded random seeds.
+
+**Vectors (Week 4).** A population's activity is a vector; a neuron's response to an input $\mathbf x$ through weights $\mathbf w$ is the dot product $\mathbf w \cdot \mathbf x = \lVert\mathbf w\rVert\lVert\mathbf x\rVert\cos\theta$. Cosine tuning is a dot product with a preferred direction; the population vector sums preferred directions weighted by rates. Projection of $\mathbf x$ onto a unit vector $\mathbf u$ is $(\mathbf u \cdot \mathbf x)\mathbf u$.
+
+**Matrices (Week 5).** A matrix is a linear map; its columns are where the basis vectors go; multiplication is composition. $A\mathbf x = \mathbf b$ has a unique solution when $A$ is square with non-zero determinant. Least squares minimises $\lVert A\mathbf w - \mathbf b\rVert^2$, giving $\hat{\mathbf w} = (A^\top A)^{-1}A^\top\mathbf b$; ridge adds $\lambda\lVert\mathbf w\rVert^2$, giving $(A^\top A + \lambda I)^{-1}A^\top\mathbf b$. Judge models on held-out data.
+
+<Step n={3} title="Mixed problems" minutes={60} />
+
+<PyCell id="popvec" title="Problem 1: decoding direction from a population" tests={String.raw`
+  import numpy as np
+  def test_rates():
+      "rates has one row per trial and one column per neuron, all non-negative"
+      assert rates.shape == (200, 100) and np.all(rates >= 0)
+
+  def test_decode():
+      "decoded holds an angle per trial, and the median absolute error is below 0.25 rad"
+      err = np.angle(np.exp(1j * (decoded - theta)))
+      assert decoded.shape == (200,) and np.median(np.abs(err)) < 0.25
+
+  def test_no_loop():
+      "the decoder uses no Python loop"
+      import dis
+      ops = {i.opname for i in dis.get_instructions(population_vector)}
+      assert "FOR_ITER" not in ops
+`} prompt="100 neurons have cosine tuning, rate = 10 + 8 cos(θ − θ_pref), with Poisson noise. Simulate 200 trials at random directions (local rng seed 4) into `rates`. Write `population_vector(rates)` without loops: subtract each neuron's baseline of 10, weight each neuron's preferred unit vector by the result, sum, and return the angle of the sum. Store the decoded angles in `decoded`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r4 = np.random.default_rng(4)
+  pref = r4.uniform(0, 2 * np.pi, 100)                 # preferred directions
+  theta = r4.uniform(0, 2 * np.pi, 200)                # true direction on each trial
+  mean = 10 + 8 * np.cos(theta[:, None] - pref[None, :])   # broadcasting: trials x neurons
+  rates = r4.poisson(mean).astype(float)
+
+  def population_vector(rates):
+      w = rates - 10                                    # trials x neurons
+      x = ...                                           # sum over neurons of w cos(pref)
+      y = ...
+      return np.arctan2(y, x)
+
+  decoded = population_vector(rates)
+  err = np.angle(np.exp(1j * (decoded - theta)))
+  print(f"median absolute error {np.degrees(np.median(np.abs(err))):.1f} degrees")
+`}
+hint="x = w @ np.cos(pref); y = w @ np.sin(pref)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r4 = np.random.default_rng(4)
+  pref = r4.uniform(0, 2 * np.pi, 100)                 # preferred directions
+  theta = r4.uniform(0, 2 * np.pi, 200)                # true direction on each trial
+  mean = 10 + 8 * np.cos(theta[:, None] - pref[None, :])   # broadcasting: trials x neurons
+  rates = r4.poisson(mean).astype(float)
+
+  def population_vector(rates):
+      w = rates - 10                                    # trials x neurons
+      x = w @ np.cos(pref)                                           # sum over neurons of w cos(pref)
+      y = w @ np.sin(pref)
+      return np.arctan2(y, x)
+
+  decoded = population_vector(rates)
+  err = np.angle(np.exp(1j * (decoded - theta)))
+  print(f"median absolute error {np.degrees(np.median(np.abs(err))):.1f} degrees")
+`} />
+
+With 100 noisy neurons the population vector recovers the direction to within about 6 degrees on a typical trial. The broadcasting in `mean` and the two matrix products in the decoder replace three nested loops; if you wrote loops, rewrite them, because the exam's coding section expects vectorised answers.
+
+<PyCell id="encoding" title="Problem 2: a regularised encoding model" tests={String.raw`
+  import numpy as np
+  def test_ols():
+      "w_ols solves the normal equations on the training data"
+      assert np.allclose(Xtr.T @ Xtr @ w_ols, Xtr.T @ ytr)
+
+  def test_ridge():
+      "ridge_fit(lam) solves (X^T X + lam I) w = X^T y"
+      w = ridge_fit(10.0)
+      assert np.allclose((Xtr.T @ Xtr + 10.0 * np.eye(Xtr.shape[1])) @ w, Xtr.T @ ytr)
+
+  def test_better():
+      "the best ridge model beats least squares on held-out data"
+      assert best_r2 > r2_test(w_ols) + 0.05
+`} prompt="A neuron's response is a weighted sum of 60 stimulus features plus noise, with only 80 training trials. Fit ordinary least squares `w_ols` by solving the normal equations, write `ridge_fit(lam)`, and find the held-out R² of ridge over the given lambdas; store the best in `best_r2`."
+code={String.raw`
+  r5 = np.random.default_rng(5)
+  p = 60
+  w_true = r5.normal(size=p) * (r5.random(p) < 0.3)   # a few features matter
+  Xtr, Xte = r5.normal(size=(80, p)), r5.normal(size=(400, p))
+  ytr = Xtr @ w_true + 2.0 * r5.normal(size=80)
+  yte = Xte @ w_true + 2.0 * r5.normal(size=400)
+
+  def r2_test(w):
+      return 1 - np.sum((yte - Xte @ w) ** 2) / np.sum((yte - yte.mean()) ** 2)
+
+  w_ols = ...
+  def ridge_fit(lam):
+      return ...
+
+  lams = [0.1, 1, 3, 10, 30, 100, 300]
+  scores = [r2_test(ridge_fit(l)) for l in lams]
+  best_r2 = max(scores)
+  print(f"least squares held-out R2 {r2_test(w_ols):.3f};  ridge:", {l: round(float(v), 3) for l, v in zip(lams, scores)})
+`}
+hint="w_ols = np.linalg.solve(Xtr.T @ Xtr, Xtr.T @ ytr); ridge_fit returns np.linalg.solve(Xtr.T @ Xtr + lam * np.eye(p), Xtr.T @ ytr)."
+solution={String.raw`
+  r5 = np.random.default_rng(5)
+  p = 60
+  w_true = r5.normal(size=p) * (r5.random(p) < 0.3)   # a few features matter
+  Xtr, Xte = r5.normal(size=(80, p)), r5.normal(size=(400, p))
+  ytr = Xtr @ w_true + 2.0 * r5.normal(size=80)
+  yte = Xte @ w_true + 2.0 * r5.normal(size=400)
+
+  def r2_test(w):
+      return 1 - np.sum((yte - Xte @ w) ** 2) / np.sum((yte - yte.mean()) ** 2)
+
+  w_ols = np.linalg.solve(Xtr.T @ Xtr, Xtr.T @ ytr)
+  def ridge_fit(lam):
+      return np.linalg.solve(Xtr.T @ Xtr + lam * np.eye(p), Xtr.T @ ytr)
+
+  lams = [0.1, 1, 3, 10, 30, 100, 300]
+  scores = [r2_test(ridge_fit(l)) for l in lams]
+  best_r2 = max(scores)
+  print(f"least squares held-out R2 {r2_test(w_ols):.3f};  ridge:", {l: round(float(v), 3) for l, v in zip(lams, scores)})
+`} />
+
+With 60 features and only 80 trials, least squares reaches a held-out R² of 0.46. Ridge improves it to about 0.61 at λ = 10, and too much regularisation (λ = 300) drops it to 0.19 by shrinking the real weights too. This curve, with a best value in the middle, is the bias-variance trade-off of Week 17 seen through Week 5's algebra.
+
+<PyCell id="gram" title="Problem 3: an orthonormal basis for a population subspace" tests={String.raw`
+  import numpy as np
+  def test_ortho():
+      "Q has orthonormal columns"
+      assert np.allclose(Q.T @ Q, np.eye(3))
+
+  def test_span():
+      "Q spans the same subspace as the columns of A"
+      assert np.allclose(Q @ (Q.T @ A), A)
+
+  def test_proj():
+      "proj is the projection of x onto the subspace, and the residual is orthogonal to it"
+      assert np.allclose(proj, Q @ (Q.T @ x)) and np.allclose(Q.T @ (x - proj), 0)
+`} prompt="Three patterns of activity over 20 neurons are the columns of A. Write `gram_schmidt(A)` (subtract from each column its projections onto the previous orthonormal vectors, then normalise) to get Q, then project the population state x onto their span to get `proj`, and report how much of x's squared length lies in the subspace."
+code={String.raw`
+  r6 = np.random.default_rng(6)
+  A = r6.normal(size=(20, 3)); x = r6.normal(size=20)
+
+  def gram_schmidt(A):
+      Q = np.zeros_like(A)
+      for j in range(A.shape[1]):
+          v = A[:, j].copy()
+          for i in range(j):
+              v = ...                                   # remove the component along Q[:, i]
+          Q[:, j] = v / np.linalg.norm(v)
+      return Q
+
+  Q = gram_schmidt(A)
+  proj = ...
+  print(f"{100 * np.sum(proj ** 2) / np.sum(x ** 2):.0f}% of x's squared length lies in the 3-dimensional subspace (3/20 = 15% expected at random)")
+`}
+hint="v = v - (Q[:, i] @ A[:, j]) * Q[:, i]; proj = Q @ (Q.T @ x)."
+solution={String.raw`
+  r6 = np.random.default_rng(6)
+  A = r6.normal(size=(20, 3)); x = r6.normal(size=20)
+
+  def gram_schmidt(A):
+      Q = np.zeros_like(A)
+      for j in range(A.shape[1]):
+          v = A[:, j].copy()
+          for i in range(j):
+              v = v - (Q[:, i] @ A[:, j]) * Q[:, i]                                   # remove the component along Q[:, i]
+          Q[:, j] = v / np.linalg.norm(v)
+      return Q
+
+  Q = gram_schmidt(A)
+  proj = Q @ (Q.T @ x)
+  print(f"{100 * np.sum(proj ** 2) / np.sum(x ** 2):.0f}% of x's squared length lies in the 3-dimensional subspace (3/20 = 15% expected at random)")
+`} />
+
+<Step n={4} title="Proof practice" minutes={10} />
+
+<Prove title="The normal equations from geometry" task="Show that $\hat{\mathbf w}$ minimises $\lVert A\mathbf w - \mathbf b\rVert^2$ exactly when the residual $\mathbf b - A\hat{\mathbf w}$ is orthogonal to every column of $A$, and deduce $A^\top A\hat{\mathbf w} = A^\top\mathbf b$.">
+
+For any $\mathbf w$, write $A\mathbf w - \mathbf b = A(\mathbf w - \hat{\mathbf w}) - (\mathbf b - A\hat{\mathbf w})$. If the residual $\mathbf r = \mathbf b - A\hat{\mathbf w}$ is orthogonal to the columns of $A$, it is orthogonal to $A(\mathbf w - \hat{\mathbf w})$, so by Pythagoras $\lVert A\mathbf w - \mathbf b\rVert^2 = \lVert A(\mathbf w - \hat{\mathbf w})\rVert^2 + \lVert\mathbf r\rVert^2 \ge \lVert\mathbf r\rVert^2$: no $\mathbf w$ does better than $\hat{\mathbf w}$.
+
+Conversely, if some column $\mathbf a$ had $\mathbf a \cdot \mathbf r \ne 0$, moving $\hat{\mathbf w}$ a little in that coordinate would reduce the error, so a minimiser must have an orthogonal residual.
+
+Orthogonality to every column is $A^\top\mathbf r = \mathbf 0$, that is $A^\top(\mathbf b - A\hat{\mathbf w}) = \mathbf 0$, or $A^\top A\hat{\mathbf w} = A^\top\mathbf b$: the normal equations. The fitted values $A\hat{\mathbf w}$ are the projection of $\mathbf b$ onto the column space, as in Problem 3.
+
+</Prove>
+
+<Step n={5} title="Mock quiz and plan" minutes={15} />
+
+<Quiz id="quiz" questions={[
+  { q: "An array of shape (200, 1) minus one of shape (1, 100) gives shape...", options: ["(200, 1)", "(200, 100)", "(1, 100)", "An error"], answer: 1, explain: "Broadcasting stretches size-1 dimensions." },
+  { q: "The dot product w · x is largest, for fixed lengths, when...", options: ["They are orthogonal", "They point the same way", "They are opposite", "Either is zero"], answer: 1, explain: "cos θ = 1." },
+  { q: "Cosine tuning means a neuron's rate is...", options: ["Random", "A baseline plus a dot product with a preferred direction", "Exponential in θ", "Constant"], answer: 1, explain: "Georgopoulos (Week 4)." },
+  { q: "The columns of a matrix are...", options: ["Its eigenvalues", "The images of the basis vectors", "Its rows reversed", "Always orthogonal"], answer: 1, explain: "Week 5." },
+  { q: "AB applied to x means...", options: ["Apply A then B", "Apply B then A", "Add them", "Neither"], answer: 1, explain: "Composition reads right to left." },
+  { q: "The least-squares residual is orthogonal to...", options: ["The data b", "The columns of A", "The weights", "Nothing"], answer: 1, explain: "Today's proof." },
+  { q: "Ridge regression helps most when...", options: ["There are many more trials than features", "Features are many relative to trials, or correlated", "There is no noise", "Never"], answer: 1, explain: "It trades bias for variance." },
+  { q: "A model should be judged on...", options: ["Training data", "Held-out data", "Its number of parameters", "Its speed"], answer: 1, explain: "Generalisation." },
+]} />
+
+<Flashcards cards={[
+  { front: "Projection onto unit vector u?", back: "$(\\mathbf u \\cdot \\mathbf x)\\mathbf u$." },
+  { front: "Normal equations?", back: "$A^\\top A\\hat{\\mathbf w} = A^\\top\\mathbf b$." },
+  { front: "Ridge solution?", back: "$(A^\\top A + \\lambda I)^{-1}A^\\top\\mathbf b$." },
+  { front: "Population vector?", back: "Sum of preferred directions weighted by baseline-subtracted rates." },
+  { front: "Broadcasting rule?", back: "Dimensions match if equal or one of them is 1; size-1 dimensions stretch." },
+]} />
+
+<Predict revisit question="Which of broadcasting, dot products, matrix composition and least squares gave you most trouble? Plan one session this week to revisit it." />
+
+<Key title="Before you go">
+<ul>
+<li>Vectorise: the population vector is two matrix products.</li>
+<li>Least squares is projection; ridge trades a little bias for much less variance.</li>
+<li>Gram-Schmidt builds an orthonormal basis; projection onto it is QQᵀx.</li>
+<li>Note what you got wrong today and revisit those weeks before Day 6.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Gallego, Perich, Miller and Solla (2017), <em>Neural manifolds for the control of movement</em>.</li>
+<li>Strang, <em>Introduction to Linear Algebra</em>, chapters 1 to 4, for any gaps.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Write a one-page summary of Weeks 2 to 5 from memory, without notes, then check it against the recap sheet. Mark every gap or error in a different colour: that list is your revision plan." />

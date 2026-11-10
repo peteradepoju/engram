@@ -1,0 +1,244 @@
+export const meta = {
+  title: "Review IV: probability, statistics and Bayesian inference",
+  intro: "Today reviews Weeks 15 to 19, the statistics you will use in every analysis for the rest of the course: distributions and spike counts, Bayes' rule, estimation and its uncertainty, hypothesis tests that hold up, and Bayesian inference with sampling. The problems follow one neuron and then fifty through the full cycle: estimate a firing rate with its uncertainty three ways, test which neurons respond while controlling false discoveries, and compute a posterior exactly and by sampling.",
+  goals: [
+    "Recall the key results of Weeks 15 to 19",
+    "Estimate a Poisson rate with a standard error from Fisher information and from the bootstrap",
+    "Test 50 neurons with permutation tests and control the false discovery rate",
+    "Compute a conjugate posterior exactly and check it with a Metropolis sampler",
+  ],
+  plan: [
+    { label: "Do intervals keep their promise?", minutes: 15 },
+    { label: "Recap sheet", minutes: 20 },
+    { label: "Mixed problems", minutes: 60 },
+    { label: "Proof practice", minutes: 10 },
+    { label: "Mock quiz and plan", minutes: 15 },
+  ],
+  paper: "pouget-2013",
+};
+
+<Predict question="You test 50 neurons for a response to a stimulus, 10 of which truly respond. With an uncorrected threshold of p below 0.05, about how many false positives do you expect among the 40 that do not respond?" />
+
+<Step n={1} title="Do intervals keep their promise?" minutes={15} />
+
+<Figure caption="Forty simulated 95% intervals for a Poisson firing rate, by the normal approximation (blue) and a Bayesian posterior (pink), and how often each contains the true rate. Change the rate and the number of trials." credit="Interactive figure by Engram.">
+  <IntervalCoverage />
+</Figure>
+
+<Video id="IaSGqQa5O-M" title="Convolutions | Why X+Y in probability is a beautiful mess" by="3Blue1Brown" note="Grant Sanderson on the distribution of a sum of random variables, the idea behind summing spike counts and behind the central limit theorem of Week 15." />
+
+<Step n={2} title="Recap sheet" minutes={20} />
+
+**Probability (Weeks 15 and 16).** Spike counts are often near Poisson: mean = variance = λ, Fano factor 1. Sums of many independent variables approach a Gaussian. Bayes' rule: $p(s \mid r) \propto p(r \mid s)p(s)$; combining independent Gaussian cues weights each by its reliability $1/\sigma^2$. A multivariate Gaussian is fixed by its mean and covariance, and its conditionals are Gaussian.
+
+**Estimation (Week 17).** The maximum likelihood estimate maximises $\sum_i\log p(x_i \mid \theta)$; its variance is about $1/(nI(\theta))$, where $I$ is the Fisher information, the Cramér-Rao bound. MAP adds a log prior, a regulariser. Error = bias² + variance.
+
+**Testing (Week 18).** A p-value is the probability, under the null, of a result at least as extreme. Permutation tests build the null by shuffling labels; the bootstrap estimates uncertainty by resampling. With many tests, control the false discovery rate (Benjamini-Hochberg). Low power inflates published effects.
+
+**Bayesian inference (Week 19).** Conjugate priors give closed-form posteriors (Beta-Bernoulli, Gamma-Poisson). Otherwise sample: Metropolis accepts a proposal with probability $\min(1, p(\theta')/p(\theta))$. Variational inference fits an approximation by maximising the ELBO.
+
+<Step n={3} title="Mixed problems" minutes={60} />
+
+<PyCell id="rate" title="Problem 1: a firing rate and its uncertainty" tests={String.raw`
+  import numpy as np
+  def test_mle():
+      "lam_hat is the mean count and se_fisher is sqrt(lam_hat / n)"
+      assert abs(lam_hat - counts.mean()) < 1e-12 and abs(se_fisher - np.sqrt(lam_hat / len(counts))) < 1e-12
+
+  def test_boot():
+      "the bootstrap standard error agrees with the Fisher one within 15%"
+      assert abs(se_boot - se_fisher) / se_fisher < 0.15
+`} prompt="A neuron gives Poisson spike counts on 40 trials. Compute the maximum likelihood rate `lam_hat`, its standard error from the Fisher information, `se_fisher` = √(λ̂/n), and a bootstrap standard error `se_boot` from 2,000 resamples of the trials (local rng seed 13)."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  counts = np.random.default_rng(15).poisson(6.0, 40)
+  lam_hat = ...
+  se_fisher = ...
+  rb = np.random.default_rng(13)
+  boot = [rb.choice(counts, size=len(counts), replace=True).mean() for _ in range(2000)]
+  se_boot = ...
+  print(f"rate {lam_hat:.2f} spikes per trial;  SE from Fisher information {se_fisher:.3f}, from the bootstrap {se_boot:.3f};  Fano factor {counts.var(ddof=1) / counts.mean():.2f}")
+`}
+hint="lam_hat = counts.mean(); se_fisher = np.sqrt(lam_hat / len(counts)); se_boot = np.std(boot, ddof=1)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  counts = np.random.default_rng(15).poisson(6.0, 40)
+  lam_hat = counts.mean()
+  se_fisher = np.sqrt(lam_hat / len(counts))
+  rb = np.random.default_rng(13)
+  boot = [rb.choice(counts, size=len(counts), replace=True).mean() for _ in range(2000)]
+  se_boot = np.std(boot, ddof=1)
+  print(f"rate {lam_hat:.2f} spikes per trial;  SE from Fisher information {se_fisher:.3f}, from the bootstrap {se_boot:.3f};  Fano factor {counts.var(ddof=1) / counts.mean():.2f}")
+`} />
+
+The estimated rate is 6.90 spikes per trial. The Fisher information gives a standard error of 0.415 and the bootstrap 0.385, close agreement from two very different routes, one assuming a Poisson model and one assuming nothing but independent trials. The Fano factor of 0.95 says the Poisson model is reasonable here; with over-dispersed counts the Fisher error would be too small and the bootstrap would catch it.
+
+<PyCell id="fdr" title="Problem 2: fifty neurons, honest discoveries" tests={String.raw`
+  import numpy as np
+  def test_p():
+      "pvals holds one permutation p-value per neuron, between 1/1001 and 1"
+      assert len(pvals) == 50 and np.all(pvals >= 1 / 1001) and np.all(pvals <= 1)
+
+  def test_bh():
+      "bh_reject follows the Benjamini-Hochberg step-up rule at q = 0.05"
+      order = np.argsort(pvals); m = len(pvals)
+      ok = np.where(np.sort(pvals) <= 0.05 * np.arange(1, m + 1) / m)[0]
+      ref = np.zeros(m, bool)
+      if len(ok): ref[order[:ok.max() + 1]] = True
+      assert np.array_equal(bh_reject, ref)
+
+  def test_fewer():
+      "BH makes at most as many discoveries as the uncorrected threshold, with no more false ones"
+      assert bh_reject.sum() <= naive.sum() and (bh_reject & ~truly).sum() <= (naive & ~truly).sum()
+`} prompt="Fifty neurons are recorded on 30 stimulus and 30 blank trials; the first 10 truly respond. For each neuron, compute a permutation p-value for the difference in mean count (1,000 shuffles, local rng seed 18, one-sided, (1 + count) / 1001). Compare the uncorrected decisions `naive` (p below 0.05) with Benjamini-Hochberg at q = 0.05, `bh_reject`."
+code={String.raw`
+  rd = np.random.default_rng(16)
+  truly = np.arange(50) < 10
+  stim = rd.poisson(np.where(truly, 6.5, 4.0)[:, None], (50, 30))
+  blank = rd.poisson(4.0, (50, 30))
+  rp = np.random.default_rng(18)
+  pvals = np.empty(50)
+  for n in range(50):
+      both = np.concatenate([stim[n], blank[n]]); obs = stim[n].mean() - blank[n].mean()
+      null = np.empty(1000)
+      for k in range(1000):
+          sh = rp.permutation(both); null[k] = sh[:30].mean() - sh[30:].mean()
+      pvals[n] = ...
+  naive = pvals < 0.05
+  order = np.argsort(pvals); m = 50
+  passed = np.where(np.sort(pvals) <= 0.05 * np.arange(1, m + 1) / m)[0]
+  bh_reject = np.zeros(m, bool)
+  if len(passed):
+      bh_reject[...] = True
+  print(f"uncorrected: {naive.sum()} discoveries, {(naive & ~truly).sum()} false;  BH: {bh_reject.sum()} discoveries, {(bh_reject & ~truly).sum()} false")
+`}
+hint="pvals[n] = (1 + np.sum(null >= obs)) / 1001; bh_reject[order[:passed.max() + 1]] = True."
+solution={String.raw`
+  rd = np.random.default_rng(16)
+  truly = np.arange(50) < 10
+  stim = rd.poisson(np.where(truly, 6.5, 4.0)[:, None], (50, 30))
+  blank = rd.poisson(4.0, (50, 30))
+  rp = np.random.default_rng(18)
+  pvals = np.empty(50)
+  for n in range(50):
+      both = np.concatenate([stim[n], blank[n]]); obs = stim[n].mean() - blank[n].mean()
+      null = np.empty(1000)
+      for k in range(1000):
+          sh = rp.permutation(both); null[k] = sh[:30].mean() - sh[30:].mean()
+      pvals[n] = (1 + np.sum(null >= obs)) / 1001
+  naive = pvals < 0.05
+  order = np.argsort(pvals); m = 50
+  passed = np.where(np.sort(pvals) <= 0.05 * np.arange(1, m + 1) / m)[0]
+  bh_reject = np.zeros(m, bool)
+  if len(passed):
+      bh_reject[order[:passed.max() + 1]] = True
+  print(f"uncorrected: {naive.sum()} discoveries, {(naive & ~truly).sum()} false;  BH: {bh_reject.sum()} discoveries, {(bh_reject & ~truly).sum()} false")
+`} />
+
+Without correction, 12 neurons pass p below 0.05, of which 2 are false discoveries (about the 40 × 0.05 = 2 expected). Benjamini-Hochberg keeps 11 discoveries and only 1 false. That answers the prediction: about two, and false discovery control removes some of them at the cost of little power. With weaker effects or more neurons, the difference grows quickly.
+
+<PyCell id="posterior" title="Problem 3: a posterior exactly and by sampling" tests={String.raw`
+  import numpy as np
+  def test_conj():
+      "the conjugate posterior is Gamma(a0 + sum counts, b0 + n) with this mean"
+      assert abs(post_mean - (a0 + counts.sum()) / (b0 + len(counts))) < 1e-12
+
+  def test_mcmc():
+      "the Metropolis samples' mean and sd agree with the exact posterior within 3%"
+      a, b = a0 + counts.sum(), b0 + len(counts)
+      assert abs(samples.mean() - a / b) / (a / b) < 0.03 and abs(samples.std() - np.sqrt(a) / b) / (np.sqrt(a) / b) < 0.03
+`} prompt="With a Gamma(a0 = 2, b0 = 0.5) prior on the rate and Problem 1's counts, the posterior is Gamma(a0 + Σk, b0 + n). Store its mean in `post_mean`. Then sample the same posterior with Metropolis (random-walk proposals of sd 0.3, 20,000 steps from λ = 1, local rng seed 19, discarding the first 2,000), using only the unnormalised log posterior, and store the samples in `samples`."
+code={String.raw`
+  a0, b0 = 2.0, 0.5
+  post_mean = ...
+
+  def log_post(lam):
+      if lam <= 0: return -np.inf
+      return (a0 - 1) * np.log(lam) - b0 * lam + counts.sum() * np.log(lam) - len(counts) * lam
+
+  rm = np.random.default_rng(19)
+  lam, lp, chain = 1.0, log_post(1.0), []
+  for _ in range(20000):
+      prop = lam + 0.3 * rm.normal()
+      lp_prop = log_post(prop)
+      if ...:                                      # accept with probability min(1, exp(lp_prop - lp))
+          lam, lp = prop, lp_prop
+      chain.append(lam)
+  samples = np.array(chain[2000:])
+  print(f"exact posterior mean {post_mean:.3f};  Metropolis {samples.mean():.3f} (sd {samples.std():.3f});  95% interval {np.percentile(samples, [2.5, 97.5]).round(2)}")
+`}
+hint="post_mean = (a0 + counts.sum()) / (b0 + len(counts)); the test is np.log(rm.random()) < lp_prop - lp."
+solution={String.raw`
+  a0, b0 = 2.0, 0.5
+  post_mean = (a0 + counts.sum()) / (b0 + len(counts))
+
+  def log_post(lam):
+      if lam <= 0: return -np.inf
+      return (a0 - 1) * np.log(lam) - b0 * lam + counts.sum() * np.log(lam) - len(counts) * lam
+
+  rm = np.random.default_rng(19)
+  lam, lp, chain = 1.0, log_post(1.0), []
+  for _ in range(20000):
+      prop = lam + 0.3 * rm.normal()
+      lp_prop = log_post(prop)
+      if np.log(rm.random()) < lp_prop - lp:                                      # accept with probability min(1, exp(lp_prop - lp))
+          lam, lp = prop, lp_prop
+      chain.append(lam)
+  samples = np.array(chain[2000:])
+  print(f"exact posterior mean {post_mean:.3f};  Metropolis {samples.mean():.3f} (sd {samples.std():.3f});  95% interval {np.percentile(samples, [2.5, 97.5]).round(2)}")
+`} />
+
+<Step n={4} title="Proof practice" minutes={10} />
+
+<Prove title="The Poisson rate attains the Cramér-Rao bound" task="For $n$ independent Poisson counts with rate $\lambda$, show that the maximum likelihood estimate is the sample mean, that the Fisher information per trial is $1/\lambda$, and that the variance of the estimate equals the Cramér-Rao bound $\lambda/n$.">
+
+The log likelihood is $\ell(\lambda) = \sum_i(k_i\log\lambda - \lambda - \log k_i!)$. Setting $\ell'(\lambda) = \sum_ik_i/\lambda - n = 0$ gives $\hat\lambda = \bar k$.
+
+The Fisher information per trial is $I(\lambda) = \mathbb E[-\partial^2_\lambda\log p(k \mid \lambda)] = \mathbb E[k/\lambda^2] = 1/\lambda$, so the bound for $n$ trials is $1/(nI) = \lambda/n$.
+
+The estimate's variance is $\mathrm{Var}(\bar k) = \mathrm{Var}(k)/n = \lambda/n$, since a Poisson variance equals its mean. The bound is attained exactly: no unbiased estimator does better, and the standard error is $\sqrt{\lambda/n}$, the formula used in Problem 1.
+
+</Prove>
+
+<Step n={5} title="Mock quiz and plan" minutes={15} />
+
+<Quiz id="quiz" questions={[
+  { q: "For Poisson counts, the Fano factor is...", options: ["0", "1", "λ", "√λ"], answer: 1, explain: "Variance equals mean." },
+  { q: "Combining two Gaussian cues, the optimal estimate weights each by...", options: ["Its mean", "Its reliability 1/σ²", "Equally", "Its variance"], answer: 1, explain: "Week 16." },
+  { q: "The Cramér-Rao bound says an unbiased estimator's variance is at least...", options: ["The Fisher information", "1/(n I(θ))", "θ", "Zero"], answer: 1, explain: "Week 17." },
+  { q: "A permutation test builds its null distribution by...", options: ["Assuming normality", "Shuffling labels", "Bootstrapping means", "Bayes' rule"], answer: 1, explain: "Week 18." },
+  { q: "Benjamini-Hochberg controls...", options: ["The family-wise error rate", "The expected proportion of false discoveries among discoveries", "Power", "Bias"], answer: 1, explain: "The false discovery rate." },
+  { q: "The Gamma prior is conjugate to...", options: ["The Bernoulli", "The Poisson", "The Gaussian variance only", "Nothing"], answer: 1, explain: "Gamma-Poisson." },
+  { q: "Metropolis needs the posterior...", options: ["Normalised", "Only up to a constant", "In closed form", "As samples already"], answer: 1, explain: "Ratios cancel the normaliser." },
+  { q: "With 40 true nulls tested at p below 0.05, expected false positives are about...", options: ["0", "2", "20", "40"], answer: 1, explain: "40 × 0.05." },
+]} />
+
+<Flashcards cards={[
+  { front: "Poisson MLE and SE?", back: "$\\hat\\lambda = \\bar k$, SE $= \\sqrt{\\hat\\lambda/n}$." },
+  { front: "Bootstrap SE?", back: "SD of the statistic over resamples drawn with replacement." },
+  { front: "Benjamini-Hochberg?", back: "Sort p-values; reject all up to the largest i with $p_{(i)} \\le qi/m$." },
+  { front: "Gamma-Poisson posterior?", back: "Gamma$(a_0 + \\sum k, b_0 + n)$." },
+  { front: "Metropolis acceptance?", back: "$\\min(1, p(\\theta')/p(\\theta))$ for a symmetric proposal." },
+]} />
+
+<Predict revisit question="With 40 non-responsive neurons tested at p below 0.05, how many false positives do you expect, and what did Benjamini-Hochberg do about them?" />
+
+<Key title="Before you go">
+<ul>
+<li>Fisher information and the bootstrap give the same uncertainty for a well-behaved estimate.</li>
+<li>Many tests need false discovery control; permutation p-values make no distributional assumptions.</li>
+<li>Conjugate posteriors are exact; Metropolis reproduces them using only the unnormalised density.</li>
+<li>Check coverage: an interval is only as good as how often it contains the truth.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Pouget, Beck, Ma and Latham (2013), <em>Probabilistic brains: knowns and unknowns</em>.</li>
+<li>Wasserman, <em>All of Statistics</em> (Springer, 2004), chapters 9, 10 and 11, for estimation and testing.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Pick one neuroscience paper you have read in this course and identify every statistical decision in its main result: the estimate, the test, the correction for multiple comparisons, the uncertainty reported. Which would you change, and why?" />

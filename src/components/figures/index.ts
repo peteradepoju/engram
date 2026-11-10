@@ -119,3 +119,8 @@ export { ReachScree } from "./reach-scree";
 export { ReachTrajectories } from "./reach-trajectories";
 export { JPCAPlane } from "./jpca-plane";
 export { SequenceRotation } from "./sequence-rotation";
+export { PartOneMap } from "./part-one-map";
+export { MatrixFourWays } from "./matrix-four-ways";
+export { TwoOverLambda } from "./two-over-lambda";
+export { IntervalCoverage } from "./interval-coverage";
+export { AutocorrZoo } from "./autocorr-zoo";

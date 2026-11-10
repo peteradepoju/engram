@@ -1,0 +1,260 @@
+export const meta = {
+  title: "Review III: Fourier analysis and optimisation",
+  intro: "Today reviews Weeks 11 to 13: spectra and filters, and the optimisers that train every model in this course. The two topics share more than it seems. A filter acts separately on each frequency, and gradient descent on a quadratic acts separately on each eigen-direction; in both, understanding comes from changing to the right basis. The problems ask you to find rhythms in a noisy signal, race three optimisers on a hard problem, and solve a constrained optimisation two ways.",
+  goals: [
+    "Recall the key results of Weeks 11 to 13",
+    "Find and filter rhythms in a signal with the FFT",
+    "Compare gradient descent, momentum and Adam on an ill-conditioned problem",
+    "Solve a constrained maximisation with Lagrange multipliers and with projected gradient ascent",
+  ],
+  plan: [
+    { label: "One inequality, three times", minutes: 15 },
+    { label: "Recap sheet", minutes: 20 },
+    { label: "Mixed problems", minutes: 60 },
+    { label: "Proof practice", minutes: 10 },
+    { label: "Mock quiz and plan", minutes: 15 },
+  ],
+  paper: "ruder-2016",
+};
+
+<Predict question="Gradient descent minimises a quadratic bowl that is 50 times steeper in one direction than another. With the best fixed learning rate, roughly how many steps does it need to shrink the error a millionfold: about 10, about 300, or about 30,000?" />
+
+<Step n={1} title="One inequality, three times" minutes={15} />
+
+<Figure caption="Gradient descent on a two-dimensional quadratic: the error along each eigen-direction shrinks by |1 − ηλ| per step. Change the learning rate and the condition number." credit="Interactive figure by Engram.">
+  <TwoOverLambda />
+</Figure>
+
+<Video id="g8RkArhtCc4" title="What is a Discrete Fourier Transform?" by="3Blue1Brown" note="A video on the DFT from the 3Blue1Brown channel, building the transform as a change of basis to sinusoids, the view used in today's first problem." />
+
+<Step n={2} title="Recap sheet" minutes={20} />
+
+**Fourier (Week 11).** Any signal sampled at rate $f_s$ is a sum of sinusoids up to the Nyquist frequency $f_s/2$; faster components alias. The DFT, computed by the FFT, gives amplitude and phase at frequencies $k f_s/N$. Power spectra are noisy, so average over segments (Welch). A filter multiplies the spectrum; convolution in time is multiplication in frequency.
+
+**Gradient descent (Week 12).** $\mathbf w \leftarrow \mathbf w - \eta\nabla L$. On a quadratic with Hessian eigenvalues $\lambda_i$, each direction shrinks by $|1 - \eta\lambda_i|$; stability needs $\eta \lt 2/\lambda_\text{max}$ and speed is limited by the condition number $\kappa = \lambda_\text{max}/\lambda_\text{min}$. Convex problems have no spurious minima; stochastic gradients trade accuracy per step for cheap steps.
+
+**Better optimisers (Week 13).** Momentum accumulates a velocity, damping zigzags in ravines. Adam scales each parameter's step by a running estimate of its gradient's size. Constraints enter through Lagrange multipliers: at a constrained optimum, $\nabla f = \mu\nabla g$. Sparsity comes from L1 penalties.
+
+<Step n={3} title="Mixed problems" minutes={60} />
+
+<PyCell id="rhythms" title="Problem 1: rhythms in a noisy field potential" tests={String.raw`
+  import numpy as np
+  def test_peaks():
+      "peaks holds the two strongest spectral peaks, at 8 and 40 Hz"
+      assert sorted(np.round(peaks).astype(int).tolist()) == [8, 40]
+
+  def test_filter():
+      "after the low-pass filter, gamma power is cut by over 99% and theta power kept within 5%"
+      assert gamma_left < 0.01 and abs(theta_left - 1) < 0.05
+`} prompt="A 4 s field potential sampled at 1,000 Hz contains an 8 Hz theta rhythm, a weaker 40 Hz gamma rhythm and noise. Compute its power spectrum with np.fft.rfft, find the frequencies of the two largest peaks (`peaks`), then low-pass filter by zeroing all components above 20 Hz and transforming back. Report the fraction of theta and gamma power left (`theta_left`, `gamma_left`)."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  fs, T = 1000, 4.0
+  t = np.arange(0, T, 1 / fs)
+  r1 = np.random.default_rng(11)
+  x = 2.0 * np.sin(2 * np.pi * 8 * t) + 0.8 * np.sin(2 * np.pi * 40 * t + 1.0) + 1.5 * r1.normal(size=t.size)
+  X = np.fft.rfft(x); f = np.fft.rfftfreq(t.size, 1 / fs)
+  power = np.abs(X) ** 2
+  peaks = ...                                      # frequencies of the two largest values of power
+  Xf = X.copy(); Xf[f > 20] = 0
+  xf = np.fft.irfft(Xf, n=t.size)
+  band = lambda sig, f0: np.abs(np.fft.rfft(sig))[np.argmin(np.abs(f - f0))] ** 2
+  theta_left = ...
+  gamma_left = ...
+  print(f"peaks at {np.sort(peaks)} Hz;  after filtering: theta {theta_left:.3f}, gamma {gamma_left:.2e} of the original power")
+  plt.semilogy(f[:100 * 4], power[:100 * 4]); plt.xlabel("Hz"); plt.show()
+`}
+hint="peaks = f[np.argsort(power)[-2:]]; theta_left = band(xf, 8) / band(x, 8); gamma_left = band(xf, 40) / band(x, 40)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  fs, T = 1000, 4.0
+  t = np.arange(0, T, 1 / fs)
+  r1 = np.random.default_rng(11)
+  x = 2.0 * np.sin(2 * np.pi * 8 * t) + 0.8 * np.sin(2 * np.pi * 40 * t + 1.0) + 1.5 * r1.normal(size=t.size)
+  X = np.fft.rfft(x); f = np.fft.rfftfreq(t.size, 1 / fs)
+  power = np.abs(X) ** 2
+  peaks = f[np.argsort(power)[-2:]]                                      # frequencies of the two largest values of power
+  Xf = X.copy(); Xf[f > 20] = 0
+  xf = np.fft.irfft(Xf, n=t.size)
+  band = lambda sig, f0: np.abs(np.fft.rfft(sig))[np.argmin(np.abs(f - f0))] ** 2
+  theta_left = band(xf, 8) / band(x, 8)
+  gamma_left = band(xf, 40) / band(x, 40)
+  print(f"peaks at {np.sort(peaks)} Hz;  after filtering: theta {theta_left:.3f}, gamma {gamma_left:.2e} of the original power")
+  plt.semilogy(f[:100 * 4], power[:100 * 4]); plt.xlabel("Hz"); plt.show()
+`} />
+
+The two largest peaks are at exactly 8 and 40 Hz, standing well above the noise even though the gamma rhythm is smaller than the noise in the raw trace. Zeroing everything above 20 Hz keeps all of the theta power and removes the gamma entirely. This brick-wall filter is fine for a stationary test signal; on real recordings its sharp edge causes ringing, which is why Week 11 used smoother filters.
+
+<PyCell id="race" title="Problem 2: three optimisers on a ravine" tests={String.raw`
+  import numpy as np
+  def test_counts():
+      "steps holds the number of steps each method needs to bring the loss below 1e-12"
+      assert set(steps) == {"gd", "momentum", "adam"} and all(isinstance(v, int) for v in steps.values())
+
+  def test_order():
+      "momentum needs far fewer steps than gradient descent with the best fixed rate"
+      assert steps["momentum"] < steps["gd"] / 3
+`} prompt="Minimise f(w) = ½ wᵀ H w with H = diag(1, 50), starting from (1, 1). Run gradient descent with η = 2/(λmin + λmax), heavy-ball momentum with η = 4/(√λmin + √λmax)² and β = ((√κ − 1)/(√κ + 1))², and Adam (lr 0.05, β₁ 0.9, β₂ 0.999). Store in `steps` how many steps each needs to get f below 1e-12 (cap at 20,000)."
+code={String.raw`
+  H = np.diag([1.0, 50.0]); lmin, lmax = 1.0, 50.0; kappa = lmax / lmin
+  f = lambda w: 0.5 * w @ H @ w
+  g = lambda w: H @ w
+
+  def run(update, cap=20000):
+      w, state = np.array([1.0, 1.0]), {}
+      for k in range(1, cap + 1):
+          w = update(w, state, k)
+          if f(w) < 1e-12: return k
+      return cap
+
+  def gd(w, s, k):
+      return w - 2 / (lmin + lmax) * g(w)
+
+  def momentum(w, s, k):
+      eta = 4 / (np.sqrt(lmin) + np.sqrt(lmax)) ** 2
+      beta = ((np.sqrt(kappa) - 1) / (np.sqrt(kappa) + 1)) ** 2
+      v = s.get("v", np.zeros(2))
+      v = ...                                       # heavy ball: v = beta v - eta g(w)
+      s["v"] = v
+      return w + v
+
+  def adam(w, s, k, lr=0.05, b1=0.9, b2=0.999):
+      m, u = s.get("m", np.zeros(2)), s.get("u", np.zeros(2))
+      gr = g(w); m = b1 * m + (1 - b1) * gr; u = b2 * u + (1 - b2) * gr ** 2
+      s["m"], s["u"] = m, u
+      mh, uh = m / (1 - b1 ** k), u / (1 - b2 ** k)
+      return ...
+
+  steps = {"gd": run(gd), "momentum": run(momentum), "adam": run(adam)}
+  print(steps)
+`}
+hint="v = beta * v - eta * g(w); adam returns w - lr * mh / (np.sqrt(uh) + 1e-8)."
+solution={String.raw`
+  H = np.diag([1.0, 50.0]); lmin, lmax = 1.0, 50.0; kappa = lmax / lmin
+  f = lambda w: 0.5 * w @ H @ w
+  g = lambda w: H @ w
+
+  def run(update, cap=20000):
+      w, state = np.array([1.0, 1.0]), {}
+      for k in range(1, cap + 1):
+          w = update(w, state, k)
+          if f(w) < 1e-12: return k
+      return cap
+
+  def gd(w, s, k):
+      return w - 2 / (lmin + lmax) * g(w)
+
+  def momentum(w, s, k):
+      eta = 4 / (np.sqrt(lmin) + np.sqrt(lmax)) ** 2
+      beta = ((np.sqrt(kappa) - 1) / (np.sqrt(kappa) + 1)) ** 2
+      v = s.get("v", np.zeros(2))
+      v = beta * v - eta * g(w)                                       # heavy ball: v = beta v - eta g(w)
+      s["v"] = v
+      return w + v
+
+  def adam(w, s, k, lr=0.05, b1=0.9, b2=0.999):
+      m, u = s.get("m", np.zeros(2)), s.get("u", np.zeros(2))
+      gr = g(w); m = b1 * m + (1 - b1) * gr; u = b2 * u + (1 - b2) * gr ** 2
+      s["m"], s["u"] = m, u
+      mh, uh = m / (1 - b1 ** k), u / (1 - b2 ** k)
+      return w - lr * mh / (np.sqrt(uh) + 1e-8)
+
+  steps = {"gd": run(gd), "momentum": run(momentum), "adam": run(adam)}
+  print(steps)
+`} />
+
+Gradient descent with the best fixed rate needs 386 steps to bring the loss below $10^{-12}$, matching the proof below (the loss shrinks by the square of the error's factor). Heavy-ball momentum, tuned to the problem, needs 72. Adam needs 212 here: its per-parameter scaling cannot fully undo a quadratic's coupling of step size to curvature, and its strengths lie elsewhere, in noisy gradients and badly scaled parameters. That answers the prediction: about 300 steps (the error, not the loss, shrinks a millionfold in about 345).
+
+<PyCell id="lagrange" title="Problem 3: the most variable direction, two ways" tests={String.raw`
+  import numpy as np
+  def test_eig():
+      "w_eig is the unit eigenvector of C with the largest eigenvalue (the Lagrange solution)"
+      lam, V = np.linalg.eigh(C)
+      assert abs(abs(w_eig @ V[:, -1]) - 1) < 1e-9
+
+  def test_pga():
+      "projected gradient ascent reaches the same direction (|cos| above 0.999) and the same variance"
+      assert abs(w_pga @ w_eig) > 0.999 and abs(w_pga @ C @ w_pga - w_eig @ C @ w_eig) < 1e-6
+`} prompt="Maximise the variance wᵀCw of a population's projection subject to ‖w‖ = 1. Lagrange multipliers give Cw = μw, so the answer is the top eigenvector: store it in `w_eig`. Then solve it again by projected gradient ascent: from a random start (local rng seed 3), repeatedly step w ← w + 0.1·2Cw and renormalise, 500 times, storing the result in `w_pga`."
+code={String.raw`
+  r3 = np.random.default_rng(12)
+  B = r3.normal(size=(8, 8)); C = B @ B.T / 8      # a covariance matrix
+  lam, V = np.linalg.eigh(C)
+  w_eig = ...
+  w = np.random.default_rng(3).normal(size=8); w /= np.linalg.norm(w)
+  for _ in range(500):
+      w = ...                                       # gradient step on w^T C w, then renormalise
+      w /= np.linalg.norm(w)
+  w_pga = w
+  print(f"top eigenvalue {lam[-1]:.4f};  variance found by ascent {w_pga @ C @ w_pga:.4f};  |cos| {abs(w_pga @ w_eig):.6f}")
+`}
+hint="w_eig = V[:, -1]; w = w + 0.1 * 2 * C @ w."
+solution={String.raw`
+  r3 = np.random.default_rng(12)
+  B = r3.normal(size=(8, 8)); C = B @ B.T / 8      # a covariance matrix
+  lam, V = np.linalg.eigh(C)
+  w_eig = V[:, -1]
+  w = np.random.default_rng(3).normal(size=8); w /= np.linalg.norm(w)
+  for _ in range(500):
+      w = w + 0.1 * 2 * C @ w                                       # gradient step on w^T C w, then renormalise
+      w /= np.linalg.norm(w)
+  w_pga = w
+  print(f"top eigenvalue {lam[-1]:.4f};  variance found by ascent {w_pga @ C @ w_pga:.4f};  |cos| {abs(w_pga @ w_eig):.6f}")
+`} />
+
+The Lagrange condition $C\mathbf w = \mu\mathbf w$ says the optimum is an eigenvector, and the variance there is $\mu$ itself, so the best is the largest eigenvalue: this is PCA as an optimisation problem. Projected gradient ascent is the power method in disguise, and with a Hebbian learning rule and normalisation it is Oja's neuron from Week 9.
+
+<Step n={4} title="Proof practice" minutes={10} />
+
+<Prove title="When gradient descent converges on a quadratic" task="For $f(\mathbf w) = \tfrac12\mathbf w^\top H\mathbf w$ with $H$ symmetric positive definite, eigenvalues $\lambda_i$, show that gradient descent with step $\eta$ converges from every start if and only if $0 \lt \eta \lt 2/\lambda_\text{max}$, and that $\eta = 2/(\lambda_\text{min} + \lambda_\text{max})$ makes the slowest direction shrink by $(\kappa - 1)/(\kappa + 1)$ per step.">
+
+The update is $\mathbf w \leftarrow (I - \eta H)\mathbf w$. In the eigenbasis of $H$ each coordinate is multiplied by $1 - \eta\lambda_i$ per step, so all coordinates shrink from every start exactly when $|1 - \eta\lambda_i| \lt 1$ for every $i$, that is $0 \lt \eta\lambda_i \lt 2$. The binding constraint is the largest eigenvalue: $\eta \lt 2/\lambda_\text{max}$.
+
+The slowest factor is $\max(|1 - \eta\lambda_\text{min}|, |1 - \eta\lambda_\text{max}|)$. The first falls and the second rises with $\eta$, so the maximum is smallest where they are equal: $1 - \eta\lambda_\text{min} = \eta\lambda_\text{max} - 1$, giving $\eta = 2/(\lambda_\text{min} + \lambda_\text{max})$. The common factor is then $1 - 2\lambda_\text{min}/(\lambda_\text{min} + \lambda_\text{max}) = (\kappa - 1)/(\kappa + 1)$.
+
+For $\kappa = 50$ this is $49/51 \approx 0.961$, so a millionfold reduction takes $\ln 10^6/\ln(51/49) \approx 345$ steps. Momentum improves the factor to about $(\sqrt\kappa - 1)/(\sqrt\kappa + 1)$.
+
+</Prove>
+
+<Step n={5} title="Mock quiz and plan" minutes={15} />
+
+<Quiz id="quiz" questions={[
+  { q: "Sampled at 1,000 Hz, the highest frequency that can be represented without aliasing is...", options: ["1,000 Hz", "500 Hz", "250 Hz", "Any"], answer: 1, explain: "Nyquist: fs/2." },
+  { q: "Convolution in time corresponds in frequency to...", options: ["Addition", "Multiplication", "Differentiation", "Nothing"], answer: 1, explain: "The convolution theorem." },
+  { q: "Welch's method reduces the variance of a spectrum by...", options: ["Longer signals only", "Averaging spectra of segments", "Filtering", "Zero padding"], answer: 1, explain: "Week 11." },
+  { q: "Gradient descent on a quadratic is stable when η is below...", options: ["1/λmin", "2/λmax", "λmax", "Any value"], answer: 1, explain: "Today's proof." },
+  { q: "The condition number κ controls...", options: ["Whether a minimum exists", "How slowly the flattest direction converges", "The number of parameters", "Noise"], answer: 1, explain: "Factor (κ − 1)/(κ + 1)." },
+  { q: "Momentum helps in a ravine because...", options: ["It uses second derivatives", "Velocity builds along the floor while zigzags cancel", "It reduces the learning rate", "It adds noise"], answer: 1, explain: "Week 13." },
+  { q: "At a constrained optimum, ∇f is...", options: ["Zero", "Parallel to the constraint's gradient", "Perpendicular to it", "Undefined"], answer: 1, explain: "Lagrange multipliers." },
+  { q: "Maximising wᵀCw with ‖w‖ = 1 gives...", options: ["The smallest eigenvector", "The top eigenvector of C", "Any unit vector", "The mean"], answer: 1, explain: "PCA as optimisation." },
+]} />
+
+<Flashcards cards={[
+  { front: "Nyquist frequency?", back: "Half the sampling rate; faster components alias." },
+  { front: "GD factor per eigen-direction?", back: "$|1 - \\eta\\lambda_i|$; stable for $\\eta \\lt 2/\\lambda_{max}$." },
+  { front: "Best fixed GD rate on a quadratic?", back: "$\\eta = 2/(\\lambda_{min} + \\lambda_{max})$, factor $(\\kappa - 1)/(\\kappa + 1)$." },
+  { front: "Adam update?", back: "Step by bias-corrected mean gradient over root of bias-corrected mean squared gradient." },
+  { front: "Lagrange condition?", back: "$\\nabla f = \\mu\\nabla g$ at a constrained optimum." },
+]} />
+
+<Predict revisit question="How many steps does gradient descent with the best fixed rate need to shrink the error a millionfold when κ = 50?" />
+
+<Key title="Before you go">
+<ul>
+<li>The FFT turns a signal into frequencies; filters act on each one separately.</li>
+<li>Gradient descent acts on each Hessian eigen-direction separately; the condition number sets its speed.</li>
+<li>Momentum and Adam help on ill-conditioned problems, in different ways.</li>
+<li>PCA is a constrained optimisation whose Lagrange condition is the eigenvalue equation.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Ruder (2016), <em>An overview of gradient descent optimization algorithms</em>.</li>
+<li>Cohen, <em>Analyzing Neural Time Series Data</em> (MIT Press, 2014), chapters 11 to 14, for Fourier analysis of neural signals.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Fourier analysis changes basis to sinusoids; PCA changes basis to principal directions; gradient descent behaves simply in the Hessian's eigenbasis. Write a paragraph on why choosing the right basis is such a powerful idea, with one example from each." />

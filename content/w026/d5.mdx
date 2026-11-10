@@ -1,0 +1,232 @@
+export const meta = {
+  title: "Review V: information, dynamics and stochastic processes",
+  intro: "The last review day covers Weeks 20 to 24: information theory, differential equations, dynamical systems and stochastic processes. These are the tools for asking how much a neuron tells you and how activity unfolds in time, deterministically or with noise. The problems measure the information in spike counts with a bias correction, predict an E-I circuit's rhythm from its Jacobian, and recover a noisy membrane's time constant and noise level from a single recording.",
+  goals: [
+    "Recall the key results of Weeks 20 to 24",
+    "Estimate mutual information from limited data with a shuffle correction",
+    "Linearise a two-population circuit, classify its fixed point and predict its rhythm",
+    "Fit an Ornstein-Uhlenbeck process to a time series as an autoregressive model",
+  ],
+  plan: [
+    { label: "How processes remember", minutes: 15 },
+    { label: "Recap sheet", minutes: 20 },
+    { label: "Mixed problems", minutes: 60 },
+    { label: "Proof practice", minutes: 10 },
+    { label: "Mock quiz and plan", minutes: 15 },
+  ],
+  paper: "vyas-2020",
+};
+
+<Predict question="You record 100 seconds of a neuron's membrane voltage at 10 kHz and fit a time constant from it. Roughly how precisely can you expect to recover a true time constant of 10 ms: to within 50%, 10%, or 1%?" />
+
+<Step n={1} title="How processes remember" minutes={15} />
+
+<Figure caption="Sample paths and autocorrelation functions of six processes from Weeks 21 to 24. Choose a process." credit="Interactive figure by Engram.">
+  <AutocorrZoo />
+</Figure>
+
+<Video id="Kas0tIxDvrg" title="Exponential growth and epidemics" by="3Blue1Brown" note="Grant Sanderson on exponential and logistic growth, a short refresher on the simplest dynamical systems behind Weeks 21 and 23." />
+
+<Step n={2} title="Recap sheet" minutes={20} />
+
+**Information (Week 20).** Entropy $H = -\sum p\log_2p$ measures uncertainty in bits; mutual information $I(S; R) = H(R) - H(R \mid S)$ measures how much a response tells about a stimulus. Plug-in estimates are biased upwards with limited data; correct by shuffling. KL divergence is non-negative and asymmetric; cross-entropy training minimises it.
+
+**Differential equations (Week 21).** $\tau\dot V = -V + RI$ relaxes exponentially with time constant $\tau$. Linear systems $\dot{\mathbf x} = A\mathbf x$ are solved by $e^{At}$, a sum of eigenmodes. Euler is first order and needs $\Delta t \lt 2\tau$; RK4 is fourth order.
+
+**Dynamical systems (Weeks 22 and 23).** Fixed points are where the flow vanishes; linearise with the Jacobian and classify with its trace and determinant. Saddle-node bifurcations create and destroy fixed points (hysteresis, class 1 firing); Hopf bifurcations create oscillations (class 2). Chaos means a positive Lyapunov exponent.
+
+**Stochastic processes (Week 24).** Random walks spread like $\sqrt t$; first-passage times model spikes and decisions. Markov chains have stationary distributions; dwell times are exponential. Drift diffusion explains speed and accuracy. The OU process $\mathrm dx = -x/\tau\,\mathrm dt + \sigma\,\mathrm dW$ has variance $\sigma^2\tau/2$ and autocorrelation $e^{-|s|/\tau}$.
+
+<Step n={3} title="Mixed problems" minutes={60} />
+
+<PyCell id="info" title="Problem 1: how many bits does the count carry?" tests={String.raw`
+  import numpy as np
+  def test_plugin():
+      "I_plugin is the plug-in mutual information in bits"
+      J = np.zeros((4, counts.max() + 1)); np.add.at(J, (stim, counts), 1); J /= J.sum()
+      ps, pr = J.sum(1), J.sum(0)
+      nz = J > 0
+      assert abs(I_plugin - np.sum(J[nz] * np.log2(J[nz] / np.outer(ps, pr)[nz]))) < 1e-9
+
+  def test_corrected():
+      "the shuffle-corrected value is below the plug-in value and between 0 and 2 bits"
+      assert 0 < I_corrected < I_plugin < 2
+`} prompt="Four stimuli each evoke Poisson counts with means 2, 4, 6 and 8 over 50 trials each. Write `mutual_info(s, r)`, the plug-in mutual information in bits from the joint histogram. Compute `I_plugin`, then subtract the mean over 200 shuffles of the stimulus labels (local rng seed 21) to get `I_corrected`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  ri = np.random.default_rng(20)
+  stim = np.repeat(np.arange(4), 50)
+  counts = ri.poisson(np.array([2, 4, 6, 8])[stim])
+
+  def mutual_info(s, r):
+      J = np.zeros((s.max() + 1, r.max() + 1)); np.add.at(J, (s, r), 1); J /= J.sum()
+      ps, pr = J.sum(1), J.sum(0)
+      nz = J > 0
+      return ...
+
+  I_plugin = mutual_info(stim, counts)
+  rs = np.random.default_rng(21)
+  bias = np.mean([mutual_info(rs.permutation(stim), counts) for _ in range(200)])
+  I_corrected = ...
+  print(f"plug-in {I_plugin:.3f} bits, shuffle bias {bias:.3f}, corrected {I_corrected:.3f} bits (maximum 2)")
+`}
+hint="return np.sum(J[nz] * np.log2(J[nz] / np.outer(ps, pr)[nz])); I_corrected = I_plugin - bias."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  ri = np.random.default_rng(20)
+  stim = np.repeat(np.arange(4), 50)
+  counts = ri.poisson(np.array([2, 4, 6, 8])[stim])
+
+  def mutual_info(s, r):
+      J = np.zeros((s.max() + 1, r.max() + 1)); np.add.at(J, (s, r), 1); J /= J.sum()
+      ps, pr = J.sum(1), J.sum(0)
+      nz = J > 0
+      return np.sum(J[nz] * np.log2(J[nz] / np.outer(ps, pr)[nz]))
+
+  I_plugin = mutual_info(stim, counts)
+  rs = np.random.default_rng(21)
+  bias = np.mean([mutual_info(rs.permutation(stim), counts) for _ in range(200)])
+  I_corrected = I_plugin - bias
+  print(f"plug-in {I_plugin:.3f} bits, shuffle bias {bias:.3f}, corrected {I_corrected:.3f} bits (maximum 2)")
+`} />
+
+The plug-in estimate is 0.61 bits, but shuffled labels alone give 0.17 bits of apparent information, so the corrected value is 0.44 bits out of a possible 2. Overlapping Poisson counts confuse neighbouring stimuli; a quarter of the naive estimate was bias. With 200 trials this matters; with 20 it would dominate.
+
+<PyCell id="rhythm" title="Problem 2: the rhythm of an E-I circuit" tests={String.raw`
+  import numpy as np
+  def test_kind():
+      "the fixed point is a stable spiral: trace below 0 and trace squared below 4 det"
+      assert tr < 0 and tr ** 2 < 4 * det
+
+  def test_freq():
+      "the frequency measured from the simulation is within 3% of the eigenvalue prediction"
+      assert abs(f_meas - f_pred) / f_pred < 0.03
+`} prompt="Linearised excitatory and inhibitory populations obey ẋ = Ax with A = [[(wEE − 1)/τE, −wEI/τE], [wIE/τI, −(1 + wII)/τI]] (τE = 10 ms, τI = 5 ms, wEE = 1.5, wEI = 2.5, wIE = 3, wII = 0.5). Compute the trace `tr` and determinant `det`, the predicted frequency `f_pred` in Hz, then simulate a kick (RK4, dt = 0.05 ms, 200 ms) and measure `f_meas` from the mean spacing of upward zero crossings of x_E."
+code={String.raw`
+  tE, tI, wEE, wEI, wIE, wII = 10.0, 5.0, 1.5, 2.5, 3.0, 0.5
+  A = np.array([[(wEE - 1) / tE, -wEI / tE], [wIE / tI, -(1 + wII) / tI]])
+  tr, det = np.trace(A), np.linalg.det(A)
+  f_pred = ...                                      # Hz, from the imaginary part sqrt(det - tr^2/4) per ms
+  x, dt, xs = np.array([1.0, 0.0]), 0.05, []
+  for _ in range(4000):
+      k1 = A @ x; k2 = A @ (x + dt / 2 * k1); k3 = A @ (x + dt / 2 * k2); k4 = A @ (x + dt * k3)
+      x = x + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4); xs.append(x[0])
+  xs = np.array(xs)
+  up = np.where((xs[:-1] < 0) & (xs[1:] >= 0))[0]
+  f_meas = ...                                      # 1000 / (mean spacing of upward crossings in ms)
+  print(f"trace {tr:.3f}, det {det:.3f}: stable spiral;  predicted {f_pred:.1f} Hz, measured {f_meas:.1f} Hz")
+`}
+hint="f_pred = np.sqrt(det - tr ** 2 / 4) / (2 * np.pi) * 1000; f_meas = 1000 / (np.mean(np.diff(up)) * dt)."
+solution={String.raw`
+  tE, tI, wEE, wEI, wIE, wII = 10.0, 5.0, 1.5, 2.5, 3.0, 0.5
+  A = np.array([[(wEE - 1) / tE, -wEI / tE], [wIE / tI, -(1 + wII) / tI]])
+  tr, det = np.trace(A), np.linalg.det(A)
+  f_pred = np.sqrt(det - tr ** 2 / 4) / (2 * np.pi) * 1000                                      # Hz, from the imaginary part sqrt(det - tr^2/4) per ms
+  x, dt, xs = np.array([1.0, 0.0]), 0.05, []
+  for _ in range(4000):
+      k1 = A @ x; k2 = A @ (x + dt / 2 * k1); k3 = A @ (x + dt / 2 * k2); k4 = A @ (x + dt * k3)
+      x = x + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4); xs.append(x[0])
+  xs = np.array(xs)
+  up = np.where((xs[:-1] < 0) & (xs[1:] >= 0))[0]
+  f_meas = 1000 / (np.mean(np.diff(up)) * dt)                                      # 1000 / (mean spacing of upward crossings in ms)
+  print(f"trace {tr:.3f}, det {det:.3f}: stable spiral;  predicted {f_pred:.1f} Hz, measured {f_meas:.1f} Hz")
+`} />
+
+<PyCell id="oufit" title="Problem 3: a membrane's time constant from its noise" tests={String.raw`
+  import numpy as np
+  def test_a():
+      "a_hat is the least-squares slope of x[k+1] on x[k]"
+      assert abs(a_hat - np.sum(v[:-1] * v[1:]) / np.sum(v[:-1] ** 2)) < 1e-12
+
+  def test_tau():
+      "tau_hat is within 5% of 10 ms and sigma_hat within 5% of 1"
+      assert abs(tau_hat - 10) / 10 < 0.05 and abs(sigma_hat - 1) < 0.05
+`} prompt="A membrane's voltage fluctuations follow an OU process with τ = 10 ms and σ = 1, sampled every 0.1 ms for 100 s (generated exactly below). Fit x[k+1] = a x[k] + noise by least squares (`a_hat`), recover τ from a = e^(−Δt/τ) (`tau_hat`), and σ from the residual variance, which equals σ²τ(1 − a²)/2 (`sigma_hat`)."
+code={String.raw`
+  ro = np.random.default_rng(24)
+  tau_true, sig_true, dt = 10.0, 1.0, 0.1
+  a_true = np.exp(-dt / tau_true); sd_step = sig_true * np.sqrt(tau_true / 2 * (1 - a_true ** 2))
+  n = 1_000_000
+  noise = ro.normal(size=n) * sd_step
+  v = np.empty(n); v[0] = ro.normal() * sig_true * np.sqrt(tau_true / 2)
+  for k in range(1, n):
+      v[k] = a_true * v[k - 1] + noise[k]
+  a_hat = ...
+  tau_hat = ...
+  resid = v[1:] - a_hat * v[:-1]
+  sigma_hat = ...
+  print(f"a = {a_hat:.5f};  tau = {tau_hat:.2f} ms;  sigma = {sigma_hat:.3f}")
+`}
+hint="a_hat = np.sum(v[:-1] * v[1:]) / np.sum(v[:-1] ** 2); tau_hat = -dt / np.log(a_hat); sigma_hat = np.sqrt(resid.var() / (tau_hat / 2 * (1 - a_hat ** 2)))."
+solution={String.raw`
+  ro = np.random.default_rng(24)
+  tau_true, sig_true, dt = 10.0, 1.0, 0.1
+  a_true = np.exp(-dt / tau_true); sd_step = sig_true * np.sqrt(tau_true / 2 * (1 - a_true ** 2))
+  n = 1_000_000
+  noise = ro.normal(size=n) * sd_step
+  v = np.empty(n); v[0] = ro.normal() * sig_true * np.sqrt(tau_true / 2)
+  for k in range(1, n):
+      v[k] = a_true * v[k - 1] + noise[k]
+  a_hat = np.sum(v[:-1] * v[1:]) / np.sum(v[:-1] ** 2)
+  tau_hat = -dt / np.log(a_hat)
+  resid = v[1:] - a_hat * v[:-1]
+  sigma_hat = np.sqrt(resid.var() / (tau_hat / 2 * (1 - a_hat ** 2)))
+  print(f"a = {a_hat:.5f};  tau = {tau_hat:.2f} ms;  sigma = {sigma_hat:.3f}")
+`} />
+
+The regression gives a = 0.98997, so τ = 9.92 ms, within 1% of the truth, and σ = 1.000. That answers the prediction: about 1%. The precision comes from the number of independent time constants in the recording, here 10,000 of them in 100 s; with a 1 s recording it would be about ten times worse. This is how membrane and network time constants are estimated from spontaneous activity.
+
+<Step n={4} title="Proof practice" minutes={10} />
+
+<Prove title="The OU process sampled is an autoregression" task="Over a step $\Delta t$, the OU solution is $x(t + \Delta t) = e^{-\Delta t/\tau}x(t) + \varepsilon$ with $\varepsilon$ Gaussian, independent of $x(t)$. Using the stationary variance $v = \sigma^2\tau/2$, show that $\mathrm{Var}(\varepsilon) = v(1 - a^2)$ with $a = e^{-\Delta t/\tau}$, and that for small $\Delta t$ this is about $\sigma^2\Delta t$.">
+
+In the stationary state, $x(t + \Delta t)$ and $x(t)$ both have variance $v$. Taking variances of both sides, with $\varepsilon$ independent of $x(t)$: $v = a^2v + \mathrm{Var}(\varepsilon)$, so $\mathrm{Var}(\varepsilon) = v(1 - a^2) = \frac{\sigma^2\tau}{2}(1 - e^{-2\Delta t/\tau})$.
+
+For small $\Delta t$, $1 - e^{-2\Delta t/\tau} \approx 2\Delta t/\tau$, giving $\mathrm{Var}(\varepsilon) \approx \sigma^2\Delta t$: the Euler-Maruyama noise of Week 24.
+
+So a sampled OU process is a first-order autoregression, and fitting $a$ by regression recovers the time constant as $\tau = -\Delta t/\ln a$. The same logic fits AR models to any recorded signal.
+
+</Prove>
+
+<Step n={5} title="Mock quiz and plan" minutes={15} />
+
+<Quiz id="quiz" questions={[
+  { q: "Plug-in mutual information from few trials is...", options: ["Unbiased", "Biased upwards", "Biased downwards", "Always zero"], answer: 1, explain: "Chance structure looks like information." },
+  { q: "KL(p ‖ q) is zero exactly when...", options: ["p and q are independent", "p = q", "q is uniform", "Never"], answer: 1, explain: "Gibbs' inequality." },
+  { q: "Euler's method for τẋ = −x is stable when...", options: ["Δt is below 2τ", "Δt is above τ", "Always", "Never"], answer: 0, explain: "Week 21." },
+  { q: "A 2D fixed point with negative determinant is...", options: ["A spiral", "A saddle", "A centre", "A node"], answer: 1, explain: "Eigenvalues of opposite sign." },
+  { q: "A Hopf bifurcation creates...", options: ["Two fixed points", "A limit cycle", "Chaos", "A saddle"], answer: 1, explain: "Week 23." },
+  { q: "The variance of a random walk after t steps grows like...", options: ["√t", "t", "t²", "Constant"], answer: 1, explain: "Its standard deviation grows like √t." },
+  { q: "The OU stationary variance is...", options: ["σ²", "σ²τ/2", "τ", "Infinite"], answer: 1, explain: "Leak balances noise." },
+  { q: "A sampled OU process is an AR(1) with coefficient...", options: ["Δt/τ", "e^(−Δt/τ)", "τ", "1"], answer: 1, explain: "Today's proof." },
+]} />
+
+<Flashcards cards={[
+  { front: "Mutual information?", back: "$I(S; R) = H(R) - H(R \\mid S)$; correct plug-in estimates by shuffling." },
+  { front: "Trace-determinant classification?", back: "det below 0: saddle; det above 0: stable if trace below 0; spiral if trace² below 4 det." },
+  { front: "Frequency of a stable spiral?", back: "$\\sqrt{\\det - \\mathrm{tr}^2/4}/2\\pi$." },
+  { front: "Sampled OU?", back: "$x_{k+1} = e^{-\\Delta t/\\tau}x_k + \\varepsilon$, Var ε $= \\tfrac{\\sigma^2\\tau}{2}(1 - a^2)$." },
+  { front: "Lyapunov exponent?", back: "Average exponential rate at which nearby trajectories separate; positive means chaos." },
+]} />
+
+<Predict revisit question="From 100 s of voltage at 10 kHz, how precisely did you recover a 10 ms time constant?" />
+
+<Key title="Before you go">
+<ul>
+<li>Information estimates need bias correction; shuffles provide it.</li>
+<li>Linearisation turns a circuit's rhythm into eigenvalue arithmetic.</li>
+<li>A noisy membrane's time constant and noise level can be read from one recording by autoregression.</li>
+<li>Tomorrow is the exam: revisit the weeks you marked this week.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper (deep read): Vyas, Golub, Sussillo and Shenoy (2020), <em>Computation through neural population dynamics</em>.</li>
+<li>Dayan and Abbott, <em>Theoretical Neuroscience</em> (MIT Press, 2001), chapters 4 and 7, as a reference for Part 2 onwards.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Write your exam plan: which three topics from Part 1 you feel weakest in, what you will do about each before tomorrow, and how you will use the exam's results to decide what to revisit during the rest week." />

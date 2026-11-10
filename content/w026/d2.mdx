@@ -1,0 +1,242 @@
+export const meta = {
+  title: "Review II: eigenvalues, the SVD and calculus",
+  intro: "Today's review covers Weeks 6 to 10: eigenvalues and diagonalisation, the SVD and PCA, derivatives and the chain rule, Jacobians, Hessians and Taylor series, and integrals and convolution. These are the tools you used most in the project, so the problems ask you to combine them: read a network's memory from its eigenvalues, find the true rank of a noisy matrix, and derive and check a gradient.",
+  goals: [
+    "Recall the key results of Weeks 6 to 10",
+    "Predict a linear network's slowest pattern from its eigenvalues and confirm it by simulation",
+    "Recover a low-rank signal from noise with the SVD",
+    "Derive a gradient with the chain rule, check it numerically and verify convexity from the Hessian",
+  ],
+  plan: [
+    { label: "One matrix, four views", minutes: 15 },
+    { label: "Recap sheet", minutes: 20 },
+    { label: "Mixed problems", minutes: 60 },
+    { label: "Proof practice", minutes: 10 },
+    { label: "Mock quiz and plan", minutes: 15 },
+  ],
+  paper: "saxe-2021",
+};
+
+<Predict question="A symmetric 50 × 50 matrix and a non-symmetric one both have the same eigenvalues. Are their singular values the same too?" />
+
+<Step n={1} title="One matrix, four views" minutes={15} />
+
+<Figure caption="One 2 × 2 matrix as a map of the unit circle, by its largest stretch, by its eigenvectors and as the dynamics ẋ = Ax. Move the entries." credit="Interactive figure by Engram.">
+  <MatrixFourWays />
+</Figure>
+
+<Video id="WUvTyaaNkzM" title="The Essence of Calculus" by="3Blue1Brown" note="Grant Sanderson's opening video of his calculus series, a reminder of the ideas behind derivatives and integrals before today's problems." />
+
+<Step n={2} title="Recap sheet" minutes={20} />
+
+**Eigenvalues (Week 6).** $A\mathbf v = \lambda\mathbf v$; the eigenvalues solve $\det(A - \lambda I) = 0$. With a full set of eigenvectors, $A = V\Lambda V^{-1}$ and $A^k = V\Lambda^kV^{-1}$. Symmetric matrices have real eigenvalues and orthogonal eigenvectors. Non-normal matrices can amplify transiently.
+
+**SVD and PCA (Week 7).** Every matrix is $USV^\top$: rotate, stretch along axes by the singular values, rotate. The best rank-$k$ approximation keeps the top $k$ singular values (Eckart and Young). PCA is the SVD of centred data; squared singular values give variances.
+
+**Derivatives (Weeks 8 and 9).** The gradient points uphill; the chain rule multiplies derivatives along a path, which is backpropagation. The Jacobian is the matrix of first derivatives, the Hessian of second derivatives; Taylor's expansion $f(\mathbf x + \boldsymbol\delta) \approx f + \nabla f \cdot \boldsymbol\delta + \tfrac12\boldsymbol\delta^\top H\boldsymbol\delta$ links them. A function is convex where its Hessian is positive semidefinite.
+
+**Integrals (Week 10).** Integration accumulates; convolution with a kernel filters a signal; a leaky integrator's response is the input convolved with an exponential.
+
+<Step n={3} title="Mixed problems" minutes={60} />
+
+<PyCell id="memory" title="Problem 1: which pattern does the network remember?" tests={String.raw`
+  import numpy as np
+  def test_slow():
+      "v_slow is the unit eigenvector of W with the largest eigenvalue, and tau_slow its time constant"
+      lam, V = np.linalg.eigh(W)
+      assert abs(abs(v_slow @ V[:, -1]) - 1) < 1e-9 and abs(tau_slow - tau / (1 - lam[-1])) < 1e-9
+
+  def test_sim():
+      "after 200 ms the simulated state started along v_slow keeps over 100 times more of its size than one started along the fastest eigenvector"
+      assert keep_slow > 100 * keep_fast
+`} prompt="A network of 50 rate neurons obeys τ dx/dt = −x + Wx with a symmetric W (τ = 10 ms). Find the eigenvector of W with the largest eigenvalue, `v_slow`, and its predicted time constant `tau_slow` = τ / (1 − λmax). Then simulate 200 ms (Euler, dt = 0.1 ms) from x = v_slow and from x = the eigenvector with the smallest eigenvalue, and store the fraction of the starting norm left in `keep_slow` and `keep_fast`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r1 = np.random.default_rng(10)
+  M = r1.normal(size=(50, 50)) / np.sqrt(50)
+  W = 0.3 * (M + M.T)                            # symmetric connectivity
+  tau = 10.0
+  lam, V = np.linalg.eigh(W)                       # eigenvalues in ascending order
+  v_slow = ...
+  tau_slow = ...
+
+  def simulate(x0, T=200.0, dt=0.1):
+      x = x0.copy()
+      for _ in range(int(T / dt)):
+          x = x + dt / tau * (-x + W @ x)
+      return np.linalg.norm(x) / np.linalg.norm(x0)
+
+  keep_slow, keep_fast = simulate(v_slow), simulate(V[:, 0])
+  print(f"largest eigenvalue {lam[-1]:.3f}: predicted time constant {tau_slow:.1f} ms;  left after 200 ms: slow {keep_slow:.3f}, fast {keep_fast:.2e}")
+`}
+hint="v_slow = V[:, -1]; tau_slow = tau / (1 - lam[-1])."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r1 = np.random.default_rng(10)
+  M = r1.normal(size=(50, 50)) / np.sqrt(50)
+  W = 0.3 * (M + M.T)                            # symmetric connectivity
+  tau = 10.0
+  lam, V = np.linalg.eigh(W)                       # eigenvalues in ascending order
+  v_slow = V[:, -1]
+  tau_slow = tau / (1 - lam[-1])
+
+  def simulate(x0, T=200.0, dt=0.1):
+      x = x0.copy()
+      for _ in range(int(T / dt)):
+          x = x + dt / tau * (-x + W @ x)
+      return np.linalg.norm(x) / np.linalg.norm(x0)
+
+  keep_slow, keep_fast = simulate(v_slow), simulate(V[:, 0])
+  print(f"largest eigenvalue {lam[-1]:.3f}: predicted time constant {tau_slow:.1f} ms;  left after 200 ms: slow {keep_slow:.3f}, fast {keep_fast:.2e}")
+`} />
+
+The largest eigenvalue is 0.81, so the slowest pattern decays with a time constant of $10/(1 - 0.81) = 53$ ms, five times the single-neuron τ, and keeps 2.3% of its size after 200 ms, close to $e^{-200/53}$. The fastest pattern is gone, below $10^{-15}$. One eigendecomposition tells you which patterns a network can hold and for how long, the idea behind Week 22's line attractor.
+
+<PyCell id="lowrank" title="Problem 2: the true rank under noise" tests={String.raw`
+  import numpy as np
+  def test_errors():
+      "errs[k-1] is the error of the rank-k truncated SVD of Y against the clean signal L"
+      U, S, Vt = np.linalg.svd(Y, full_matrices=False)
+      for k in (1, 3, 6):
+          Lk = U[:, :k] * S[:k] @ Vt[:k]
+          assert abs(errs[k - 1] - np.linalg.norm(Lk - L) / np.linalg.norm(L)) < 1e-9
+
+  def test_best():
+      "the error against the truth is smallest at rank 3, the true rank"
+      assert int(np.argmin(errs)) + 1 == 3
+`} prompt="A 100 × 40 matrix L of rank 3 (say, 100 time points of 40 neurons driven by 3 latent signals) is observed with noise as Y. For k = 1 to 10, compute the relative error ‖L_k − L‖/‖L‖ of the rank-k truncated SVD of Y and store it in `errs`. Look at the singular values for a gap."
+code={String.raw`
+  r2 = np.random.default_rng(7)
+  L = r2.normal(size=(100, 3)) @ (r2.normal(size=(3, 40)) * np.array([[5.0], [3.0], [2.0]]))
+  Y = L + 1.0 * r2.normal(size=L.shape)
+  U, S, Vt = np.linalg.svd(Y, full_matrices=False)
+  errs = []
+  for k in range(1, 11):
+      Lk = ...
+      errs.append(np.linalg.norm(Lk - L) / np.linalg.norm(L))
+  print("singular values:", S[:8].round(1))
+  print("error against the truth by rank:", np.round(errs, 3))
+`}
+hint="Lk = U[:, :k] * S[:k] @ Vt[:k]."
+solution={String.raw`
+  r2 = np.random.default_rng(7)
+  L = r2.normal(size=(100, 3)) @ (r2.normal(size=(3, 40)) * np.array([[5.0], [3.0], [2.0]]))
+  Y = L + 1.0 * r2.normal(size=L.shape)
+  U, S, Vt = np.linalg.svd(Y, full_matrices=False)
+  errs = []
+  for k in range(1, 11):
+      Lk = U[:, :k] * S[:k] @ Vt[:k]
+      errs.append(np.linalg.norm(Lk - L) / np.linalg.norm(L))
+  print("singular values:", S[:8].round(1))
+  print("error against the truth by rank:", np.round(errs, 3))
+`} />
+
+The singular values fall from 265, 188 and 98 to about 15 and then level off: three large values above a floor set by the noise. Keeping three components gets within 6% of the clean signal; keeping more adds noise back in and the error rises (7.5% at rank 4, 12% at rank 10). In real data the gap is rarely this clean, which is why the project used bi-cross-validation.
+
+<PyCell id="gradient" title="Problem 3: a gradient by hand, checked" tests={String.raw`
+  import numpy as np
+  def test_grad():
+      "grad matches central finite differences to 1e-6"
+      w = np.random.default_rng(1).normal(size=5)
+      num = np.array([(loss(w + 1e-6 * e) - loss(w - 1e-6 * e)) / 2e-6 for e in np.eye(5)])
+      assert np.allclose(grad(w), num, atol=1e-6)
+
+  def test_hess():
+      "hess is symmetric with non-negative eigenvalues (the loss is convex)"
+      H = hess(np.random.default_rng(2).normal(size=5))
+      assert np.allclose(H, H.T) and np.linalg.eigvalsh(H).min() > -1e-10
+`} prompt="For logistic regression, the loss is L(w) = −Σ [y log p + (1 − y) log(1 − p)] with p = σ(Xw). Use the chain rule to show that its gradient is Xᵀ(p − y) and its Hessian is Xᵀ diag(p(1 − p)) X, implement `grad` and `hess`, and check them."
+code={String.raw`
+  r3 = np.random.default_rng(8)
+  X = r3.normal(size=(60, 5)); y = (r3.random(60) < 0.5).astype(float)
+  sig = lambda z: 1 / (1 + np.exp(-z))
+
+  def loss(w):
+      p = sig(X @ w)
+      return -np.sum(y * np.log(p) + (1 - y) * np.log(1 - p))
+
+  def grad(w):
+      return ...
+
+  def hess(w):
+      p = sig(X @ w)
+      return ...
+
+  w0 = np.zeros(5)
+  print("gradient at 0:", grad(w0).round(3), " smallest Hessian eigenvalue:", np.linalg.eigvalsh(hess(w0)).min().round(3))
+`}
+hint="grad returns X.T @ (sig(X @ w) - y); hess returns X.T @ (X * (p * (1 - p))[:, None])."
+solution={String.raw`
+  r3 = np.random.default_rng(8)
+  X = r3.normal(size=(60, 5)); y = (r3.random(60) < 0.5).astype(float)
+  sig = lambda z: 1 / (1 + np.exp(-z))
+
+  def loss(w):
+      p = sig(X @ w)
+      return -np.sum(y * np.log(p) + (1 - y) * np.log(1 - p))
+
+  def grad(w):
+      return X.T @ (sig(X @ w) - y)
+
+  def hess(w):
+      p = sig(X @ w)
+      return X.T @ (X * (p * (1 - p))[:, None])
+
+  w0 = np.zeros(5)
+  print("gradient at 0:", grad(w0).round(3), " smallest Hessian eigenvalue:", np.linalg.eigvalsh(hess(w0)).min().round(3))
+`} />
+
+<Step n={4} title="Proof practice" minutes={10} />
+
+<Prove title="The gradient of the squared error" task="Using $\nabla_{\mathbf w}(\mathbf a^\top\mathbf w) = \mathbf a$ and $\nabla_{\mathbf w}(\mathbf w^\top B\mathbf w) = (B + B^\top)\mathbf w$, show that $f(\mathbf w) = \tfrac12\lVert X\mathbf w - \mathbf y\rVert^2$ has gradient $X^\top(X\mathbf w - \mathbf y)$ and Hessian $X^\top X$, and conclude that $f$ is convex.">
+
+Expand: $f = \tfrac12(\mathbf w^\top X^\top X\mathbf w - 2\mathbf y^\top X\mathbf w + \mathbf y^\top\mathbf y)$.
+
+The first term has $B = X^\top X$, which is symmetric, so its gradient is $\tfrac12 \cdot 2X^\top X\mathbf w = X^\top X\mathbf w$. The second is linear with $\mathbf a = X^\top\mathbf y$, contributing $-X^\top\mathbf y$. The last does not depend on $\mathbf w$. So $\nabla f = X^\top X\mathbf w - X^\top\mathbf y = X^\top(X\mathbf w - \mathbf y)$.
+
+Differentiating again gives $H = X^\top X$. For any $\mathbf v$, $\mathbf v^\top X^\top X\mathbf v = \lVert X\mathbf v\rVert^2 \ge 0$, so $H$ is positive semidefinite and $f$ is convex. Setting the gradient to zero gives the normal equations of Day 1.
+
+</Prove>
+
+<Step n={5} title="Mock quiz and plan" minutes={15} />
+
+<Quiz id="quiz" questions={[
+  { q: "If A = VΛV⁻¹, then A¹⁰ equals...", options: ["10A", "VΛ¹⁰V⁻¹", "V¹⁰ΛV⁻¹⁰", "Λ¹⁰"], answer: 1, explain: "Diagonalisation turns powers into powers of eigenvalues." },
+  { q: "A symmetric matrix has...", options: ["Complex eigenvalues", "Real eigenvalues and orthogonal eigenvectors", "No eigenvectors", "Zero determinant"], answer: 1, explain: "The spectral theorem." },
+  { q: "For a symmetric positive semidefinite matrix, singular values equal...", options: ["Eigenvalues", "Square roots of eigenvalues", "Zero", "The trace"], answer: 0, explain: "For a general symmetric matrix, their absolute values." },
+  { q: "The best rank-k approximation keeps...", options: ["The first k rows", "The top k singular values and vectors", "Random columns", "The diagonal"], answer: 1, explain: "Eckart and Young." },
+  { q: "The chain rule for f(g(x)) gives...", options: ["f′(x)g′(x)", "f′(g(x))g′(x)", "f(g′(x))", "f′(x) + g′(x)"], answer: 1, explain: "Backpropagation applies it repeatedly." },
+  { q: "A function is convex where its Hessian is...", options: ["Negative definite", "Positive semidefinite", "Zero", "Symmetric only"], answer: 1, explain: "Curving upwards in every direction." },
+  { q: "A leaky integrator's output is its input convolved with...", options: ["A step", "A decaying exponential", "A sine", "A Gaussian"], answer: 1, explain: "Week 10." },
+  { q: "In τ dx/dt = −x + Wx, the slowest pattern is the eigenvector with...", options: ["The smallest eigenvalue of W", "The largest eigenvalue of W", "Zero eigenvalue always", "Any eigenvalue"], answer: 1, explain: "Time constant τ/(1 − λ)." },
+]} />
+
+<Flashcards cards={[
+  { front: "SVD?", back: "$A = USV^\\top$: rotate, stretch by singular values, rotate." },
+  { front: "Eckart-Young?", back: "Truncating the SVD to k terms gives the best rank-k approximation." },
+  { front: "Logistic regression gradient?", back: "$X^\\top(\\sigma(X\\mathbf w) - \\mathbf y)$." },
+  { front: "Second-order Taylor?", back: "$f(x + \\delta) \\approx f + \\nabla f \\cdot \\delta + \\tfrac12\\delta^\\top H\\delta$." },
+  { front: "Time constant of an eigenmode of τẋ = −x + Wx?", back: "$\\tau/(1 - \\lambda)$." },
+]} />
+
+<Predict revisit question="Do a symmetric and a non-symmetric matrix with the same eigenvalues have the same singular values?" />
+
+<Key title="Before you go">
+<ul>
+<li>Eigenvalues predict which patterns a linear network keeps and for how long.</li>
+<li>The SVD separates a low-rank signal from noise; the gap in singular values hints at the rank.</li>
+<li>Derive gradients with the chain rule and always check them with finite differences.</li>
+<li>Positive semidefinite Hessians mean convex losses and a single minimum.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Saxe, Nelli and Summerfield (2021), <em>If deep learning is the answer, what is the question?</em></li>
+<li>Petersen and Pedersen, <em>The Matrix Cookbook</em>, the matrix calculus identities, as a reference.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Explain to a friend, in plain words, why the eigenvalues of a connectivity matrix tell you how long a network remembers, and why singular values instead tell you how much it can stretch an input. Where does the difference matter?" />
