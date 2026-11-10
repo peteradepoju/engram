@@ -1,0 +1,288 @@
+export const meta = {
+  title: "Forge: Week 32 challenge, quiz and deep read",
+  intro: "This week turned the point neuron into a shape: cables that attenuate and filter, branching trees that collapse into equivalent cylinders, compartmental models that simulate any morphology, active dendrites that compute, and axons that carry spikes at speeds set by diameter and myelin. Today's challenge repeats, in miniature, the central experiment of this week's deep read. A neuron with eight NMDA-rich branches is driven by hundreds of random patterns of synaptic input; you will fit it with a point neuron and with a two-layer model, compare how well each predicts held-out patterns, and then test the prediction that distinguishes them most sharply, whether the neuron cares where its inputs land. Then the quiz, and a critique of Poirazi, Brannon and Mel.",
+  goals: [
+    "Generate input patterns and responses from a neuron with nonlinear dendritic branches",
+    "Fit point-neuron and two-layer models and compare their held-out accuracy",
+    "Test both models on clustered and dispersed inputs with the same number of synapses",
+    "Critique the claim that a pyramidal neuron is a two-layer network",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "poirazi-2003",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. A 1 μm dendrite has $r_m$ = 20 kΩ·cm² and $r_i$ = 150 Ω·cm. What is its length constant?
+2. A 6 μm dendrite splits into three equal daughters. What diameter satisfies Rall's rule?
+3. An unmyelinated axon conducts at 1 m/s. How fast would one nine times thicker conduct?
+
+<PyCell code={String.raw`
+  import numpy as np
+  print("1.", round(np.sqrt(20000 * 1e-4 / (4 * 150)) * 1e4), "um")
+  print("2.", round((6 ** 1.5 / 3) ** (2 / 3), 2), "um")
+  print("3.", np.sqrt(9) * 1, "m/s")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: point neuron or two-layer network?** The "neuron" below has 8 branches with 10 synapses each. Each branch's depolarisation is the NMDA-driven response of Day 4 to its number of active synapses; the soma adds the branch responses, attenuated by 0.3, and fires at a rate that is a sigmoid function of the sum, with noise of 3 Hz. Each input pattern activates 15 to 25 synapses, spread over a random number of branches. Fit two models on 600 patterns and test them on 300 new ones: a **point neuron**, a linear function of the 80 inputs, and a **two-layer model**, in which each branch applies a sigmoid $1/(1 + e^{-(n_b - \theta)/s})$ to its count $n_b$ and the output is a linear function of the sum of branch outputs.
+
+<PyCell id="partA" title="Part A: which model explains the neuron?" tests={String.raw`
+  import numpy as np
+  def test_r2():
+      "r2 gives 1 minus residual over total sum of squares"
+      y = np.array([1.0, 2, 3]); assert abs(r2(y, y) - 1) < 1e-12 and abs(r2(y, np.full(3, 2.0))) < 1e-12
+
+  def test_models():
+      "the two-layer model explains over 90% of held-out variance and beats the point neuron by more than 0.2"
+      assert r2_two > 0.9 and r2_two > r2_point + 0.2
+`} prompt="Write `r2(y, pred)`. Fit the point neuron by least squares on the inputs plus a constant and compute its held-out R², `r2_point`. Then fit the two-layer model: for each θ (2 to 12) and s (0.5 to 4) on the grids, compute the summed branch outputs h, fit rate = a h + c by least squares, and keep the best; report its held-out R², `r2_two`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def B(V):
+      return 1 / (1 + 1 / 3.57 * np.exp(-0.062 * V))
+
+  def branch(n, T=300.0, dt=0.05):
+      V = -70.0
+      for _ in range(int(T / dt)):
+          V += dt * (-10 * (V + 70) - n * 0.2 * V - n * 3 * B(V) * V) / 30
+      return V + 70
+
+  table = np.array([branch(n) for n in range(11)])          # response of a branch to 0 to 10 synapses
+  nb, ns = 8, 10
+  r = np.random.default_rng(32)
+
+  def patterns(P):
+      X = np.zeros((P, nb * ns))
+      for p in range(P):
+          total, m = r.integers(15, 26), r.integers(1, nb + 1)
+          slots = np.concatenate([np.arange(b * ns, (b + 1) * ns) for b in r.choice(nb, m, replace=False)])
+          X[p, r.choice(slots, min(total, len(slots)), replace=False)] = 1
+      return X
+
+  def neuron(X):
+      counts = X.reshape(len(X), nb, ns).sum(2)
+      soma = 0.3 * np.interp(counts, np.arange(11), table).sum(1)
+      return 100 / (1 + np.exp(-(soma - 20) / 4))
+
+  Xtr, Xte = patterns(600), patterns(300)
+  ytr, yte = neuron(Xtr) + r.normal(0, 3, 600), neuron(Xte) + r.normal(0, 3, 300)
+
+  def r2(y, pred):
+      return ...
+
+  w = np.linalg.lstsq(np.column_stack([Xtr, np.ones(600)]), ytr, rcond=None)[0]
+  r2_point = ...
+
+  ctr, cte = Xtr.reshape(600, nb, ns).sum(2), Xte.reshape(300, nb, ns).sum(2)
+  best = (np.inf, None, None, None)
+  for th in np.arange(2, 12, 0.25):
+      for s in np.arange(0.5, 4, 0.25):
+          h = (1 / (1 + np.exp(-(ctr - th) / s))).sum(1)
+          coef = np.polyfit(h, ytr, 1)
+          err = ...
+          if err < best[0]:
+              best = (err, th, s, coef)
+  _, th, s, coef = best
+  r2_two = r2(yte, np.polyval(coef, (1 / (1 + np.exp(-(cte - th) / s))).sum(1)))
+  print(f"held-out R^2: point neuron {r2_point:.2f}, two-layer {r2_two:.2f} (branch threshold {th:.2f} synapses, slope {s:.2f})")
+`}
+hint="return 1 - np.sum((y - pred) ** 2) / np.sum((y - y.mean()) ** 2); r2_point = r2(yte, np.column_stack([Xte, np.ones(300)]) @ w); err = np.sum((np.polyval(coef, h) - ytr) ** 2)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def B(V):
+      return 1 / (1 + 1 / 3.57 * np.exp(-0.062 * V))
+
+  def branch(n, T=300.0, dt=0.05):
+      V = -70.0
+      for _ in range(int(T / dt)):
+          V += dt * (-10 * (V + 70) - n * 0.2 * V - n * 3 * B(V) * V) / 30
+      return V + 70
+
+  table = np.array([branch(n) for n in range(11)])          # response of a branch to 0 to 10 synapses
+  nb, ns = 8, 10
+  r = np.random.default_rng(32)
+
+  def patterns(P):
+      X = np.zeros((P, nb * ns))
+      for p in range(P):
+          total, m = r.integers(15, 26), r.integers(1, nb + 1)
+          slots = np.concatenate([np.arange(b * ns, (b + 1) * ns) for b in r.choice(nb, m, replace=False)])
+          X[p, r.choice(slots, min(total, len(slots)), replace=False)] = 1
+      return X
+
+  def neuron(X):
+      counts = X.reshape(len(X), nb, ns).sum(2)
+      soma = 0.3 * np.interp(counts, np.arange(11), table).sum(1)
+      return 100 / (1 + np.exp(-(soma - 20) / 4))
+
+  Xtr, Xte = patterns(600), patterns(300)
+  ytr, yte = neuron(Xtr) + r.normal(0, 3, 600), neuron(Xte) + r.normal(0, 3, 300)
+
+  def r2(y, pred):
+      return 1 - np.sum((y - pred) ** 2) / np.sum((y - y.mean()) ** 2)
+
+  w = np.linalg.lstsq(np.column_stack([Xtr, np.ones(600)]), ytr, rcond=None)[0]
+  r2_point = r2(yte, np.column_stack([Xte, np.ones(300)]) @ w)
+
+  ctr, cte = Xtr.reshape(600, nb, ns).sum(2), Xte.reshape(300, nb, ns).sum(2)
+  best = (np.inf, None, None, None)
+  for th in np.arange(2, 12, 0.25):
+      for s in np.arange(0.5, 4, 0.25):
+          h = (1 / (1 + np.exp(-(ctr - th) / s))).sum(1)
+          coef = np.polyfit(h, ytr, 1)
+          err = np.sum((np.polyval(coef, h) - ytr) ** 2)
+          if err < best[0]:
+              best = (err, th, s, coef)
+  _, th, s, coef = best
+  r2_two = r2(yte, np.polyval(coef, (1 / (1 + np.exp(-(cte - th) / s))).sum(1)))
+  print(f"held-out R^2: point neuron {r2_point:.2f}, two-layer {r2_two:.2f} (branch threshold {th:.2f} synapses, slope {s:.2f})")
+`} />
+
+The point neuron explains only 52% of the variance of held-out responses; the two-layer model explains 95%, close to the limit set by the 3 Hz of noise. Its fitted branch sigmoid is centred at 8.75 synapses, on the steep part of the true branch response from Day 4. Poirazi and colleagues found the same kind of gap for their detailed model neuron: a point neuron, however well fitted, cannot represent the effect of where inputs land.
+
+**Part B: does placement matter?** The sharpest difference between the models is a prediction about patterns with the same number of active synapses placed differently. Activate 20 synapses, either 10 on each of 2 branches (clustered) or 2 or 3 on each of all 8 (dispersed), and compare the neuron's rates with each model's predictions, averaged over 50 random patterns of each kind.
+
+<PyCell id="partB" title="Part B: clustered against dispersed" tests={String.raw`
+  import numpy as np
+  def test_neuron():
+      "the neuron fires much more for clustered than dispersed input"
+      assert rates["neuron"][0] > rates["neuron"][1] + 20
+
+  def test_models():
+      "the two-layer model reproduces the difference within 25% and the point neuron's predicted difference is less than half the true one"
+      true_gap = rates["neuron"][0] - rates["neuron"][1]
+      assert abs((rates["two-layer"][0] - rates["two-layer"][1]) - true_gap) < 0.25 * true_gap
+      assert abs(rates["point"][0] - rates["point"][1]) < 0.5 * true_gap
+`} prompt="Write `make(kind)`, returning 50 patterns of 20 active synapses: 'clustered' puts 10 on each of 2 random branches, 'dispersed' spreads them over all 8 branches (2 or 3 each). Then fill `rates` with the mean rate for (clustered, dispersed) from the neuron, the point neuron and the two-layer model."
+code={String.raw`
+  def make(kind, P=50):
+      X = np.zeros((P, nb * ns))
+      for p in range(P):
+          if kind == "clustered":
+              per_branch = {b: 10 for b in r.choice(nb, 2, replace=False)}
+          else:
+              ...
+          for b, k in per_branch.items():
+              X[p, b * ns + r.choice(ns, k, replace=False)] = 1
+      return X
+
+  def point_model(X):
+      return np.column_stack([X, np.ones(len(X))]) @ w
+
+  def two_layer(X):
+      return np.polyval(coef, (1 / (1 + np.exp(-(X.reshape(len(X), nb, ns).sum(2) - th) / s))).sum(1))
+
+  rates = {}
+  Xc, Xd = make("clustered"), make("dispersed")
+  for name, model in (("neuron", neuron), ("point", point_model), ("two-layer", two_layer)):
+      rates[name] = ...
+      print(f"{name:9s}: clustered {rates[name][0]:5.1f} Hz, dispersed {rates[name][1]:5.1f} Hz")
+`}
+hint="Dispersed: extra = r.choice(nb, 4, replace=False); per_branch = {b: 2 + (b in extra) for b in range(nb)}. rates[name] = (model(Xc).mean(), model(Xd).mean())."
+solution={String.raw`
+  def make(kind, P=50):
+      X = np.zeros((P, nb * ns))
+      for p in range(P):
+          if kind == "clustered":
+              per_branch = {b: 10 for b in r.choice(nb, 2, replace=False)}
+          else:
+              extra = r.choice(nb, 4, replace=False)
+              per_branch = {b: 2 + int(b in extra) for b in range(nb)}
+          for b, k in per_branch.items():
+              X[p, b * ns + r.choice(ns, k, replace=False)] = 1
+      return X
+
+  def point_model(X):
+      return np.column_stack([X, np.ones(len(X))]) @ w
+
+  def two_layer(X):
+      return np.polyval(coef, (1 / (1 + np.exp(-(X.reshape(len(X), nb, ns).sum(2) - th) / s))).sum(1))
+
+  rates = {}
+  Xc, Xd = make("clustered"), make("dispersed")
+  for name, model in (("neuron", neuron), ("point", point_model), ("two-layer", two_layer)):
+      rates[name] = (model(Xc).mean(), model(Xd).mean())
+      print(f"{name:9s}: clustered {rates[name][0]:5.1f} Hz, dispersed {rates[name][1]:5.1f} Hz")
+`} />
+
+The neuron fires at 67 Hz for clustered input and 23 Hz for dispersed input with the same 20 synapses. The two-layer model predicts 65 and 19 Hz. The point neuron predicts 40 Hz for both: having learned roughly equal weights for all synapses, it sees only their number. This is the decisive test. Two models that both fit average responses can be told apart by the inputs on which they disagree, and here the disagreement is about placement.
+
+**Part C (written).** Answer in your journal: in this toy, the two-layer model was built with the right branch structure, because we knew which synapses shared a branch. Poirazi and colleagues knew it too, from the morphology. How would you test for two-layer behaviour in a real neuron whose synapse locations you do not know, and what result would make you reject it?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The sealed-end cable" task="For the steady cable equation $\lambda^2V'' = V$ on $0 \le x \le L$ with $V(0) = V_0$ and a sealed end, $V'(L) = 0$, show that $V(x) = V_0\cosh((L - x)/\lambda)/\cosh(L/\lambda)$, and that the input conductance is $G_\infty\tanh(L/\lambda)$, where $G_\infty$ is that of a semi-infinite cable.">
+
+The general solution is $V = Ae^{x/\lambda} + Be^{-x/\lambda}$, or equivalently $V = C\cosh((L - x)/\lambda) + D\sinh((L - x)/\lambda)$.
+
+The sealed end requires $V'(L) = 0$; the derivative of the sinh term at $x = L$ is $-D/\lambda$, so $D = 0$. Then $V(0) = C\cosh(L/\lambda) = V_0$ gives the stated solution.
+
+The input current is the axial current at $x = 0$: $I = -\frac{1}{r_a}V'(0) = \frac{V_0}{r_a\lambda}\tanh(L/\lambda)$, with $r_a$ the axial resistance per unit length. For a semi-infinite cable the same calculation gives $V_0/(r_a\lambda)$, so $G_{in} = G_\infty\tanh(L/\lambda)$: a short sealed cable draws less current, and has a higher input resistance, than a long one.
+
+</Prove>
+
+<Prove title="2. Rall's three-halves rule" task="Show that at a branch point, two semi-infinite daughters of diameters $d_1, d_2$ present the parent with the same input conductance as a semi-infinite continuation of the parent if and only if $d_1^{3/2} + d_2^{3/2} = d_p^{3/2}$.">
+
+A semi-infinite cable of diameter $d$ has input conductance $G_\infty = 1/R_\infty = \frac{\pi}{2\sqrt{r_mr_i}}d^{3/2}$, from Day 2.
+
+The daughters are in parallel, so their combined conductance is $\frac{\pi}{2\sqrt{r_mr_i}}(d_1^{3/2} + d_2^{3/2})$.
+
+This equals the continuation's $\frac{\pi}{2\sqrt{r_mr_i}}d_p^{3/2}$ exactly when $d_1^{3/2} + d_2^{3/2} = d_p^{3/2}$, since the constant is common: the branch point is then invisible to the parent.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 32 quiz (15 questions)" questions={[
+  { q: "The length constant grows with diameter as...", options: ["d", "√d", "d²", "1/d"], answer: 1, explain: "Day 1." },
+  { q: "A brief synaptic potential recorded far along a dendrite is...", options: ["Larger and sharper", "Smaller, later and broader", "Unchanged", "Faster"], answer: 1, explain: "Day 1." },
+  { q: "Dendrites act as...", options: ["High-pass filters", "Low-pass filters", "Amplifiers only", "Delay-free wires"], answer: 1, explain: "Capacitance shunts fast signals." },
+  { q: "A cable's input resistance scales with diameter as...", options: ["d^(-3/2)", "d^(-1)", "d^(1/2)", "d²"], answer: 0, explain: "Day 2." },
+  { q: "Rall's rule at a branch point is...", options: ["Σ d = d_p", "Σ d^(3/2) = d_p^(3/2)", "Σ d² = d_p²", "d constant"], answer: 1, explain: "Day 2." },
+  { q: "Explicit Euler on finely divided cables...", options: ["Is always stable", "Needs very small time steps because the system is stiff", "Is exact", "Cannot be used at all"], answer: 1, explain: "Day 3." },
+  { q: "The Hines algorithm solves a tree's equations in time proportional to...", options: ["N", "N²", "N³", "e^N"], answer: 0, explain: "Day 3." },
+  { q: "Current injected at a dendrite's tip, compared with at the soma, must be... to fire the cell", options: ["Smaller", "Larger", "The same", "Negative"], answer: 1, explain: "Day 3." },
+  { q: "The NMDA receptor's magnesium block makes branch responses...", options: ["Linear", "Supralinear then saturating", "Always sublinear", "Zero"], answer: 1, explain: "Day 4." },
+  { q: "A two-layer neuron can compute a feature-binding function that a point neuron cannot because...", options: ["It has more synapses", "Its branch nonlinearities act before summation", "It is faster", "It has myelin"], answer: 1, explain: "Day 4." },
+  { q: "Unmyelinated conduction velocity scales with diameter as...", options: ["d", "√d", "d²", "Not at all"], answer: 1, explain: "Day 5." },
+  { q: "In saltatory conduction, spikes are regenerated...", options: ["Everywhere", "Only at nodes of Ranvier", "Only at the soma", "In the myelin"], answer: 1, explain: "Day 5." },
+  { q: "With myelin, velocity scales with diameter as...", options: ["√d", "d", "1/d", "d³"], answer: 1, explain: "Rushton (1951)." },
+  { q: "In the Forge, the point neuron failed mainly because...", options: ["It had too few weights", "It cannot distinguish clustered from dispersed inputs with the same count", "It was fitted badly", "Noise was too high"], answer: 1, explain: "Part B." },
+  { q: "Poirazi, Brannon and Mel's two-layer model has...", options: ["One sigmoid at the soma", "A sigmoid per branch, then a somatic nonlinearity", "No nonlinearity", "A recurrent loop"], answer: 1, explain: "This week's deep read." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Poirazi, Brannon and Mel (2003) its third pass and write your critique under the five headings. Focus on one question: **in what sense is a pyramidal neuron a two-layer network?** Consider what the detailed model they simulated included, and what evidence supported its dendritic nonlinearities; how the input patterns were chosen and whether they resemble inputs in vivo; what "predicts the firing rate" means, given that their measure was the mean rate over a period, not spike timing; how the two-layer model's branches were defined; what Part B of today's challenge showed about the decisive test; and how later work, from Beniaguev and colleagues' deep networks to recordings of clustered synaptic activity on dendrites, has extended or questioned the picture. End with whether you would now count a pyramidal neuron as one unit or many in a comparison between brains and artificial networks.
+
+<Callout kind="research">
+
+The two-layer model treats each branch as independent. Real branches interact: a large dendritic spike in one branch depolarises its neighbours, and branches nearer the soma are weighted more. Extend the Forge neuron so that each branch's output also depends weakly on its neighbours' (for example, add 10% of the mean of the other branches' responses before the branch sigmoid), refit the independent two-layer model, and measure how much accuracy it loses. At what level of interaction would you need a third layer?
+
+</Callout>
+
+<Key title="Week 32 review checklist">
+<ul>
+<li>I can derive the cable equation and compute length constants, attenuation and filtering.</li>
+<li>I can compute cable input resistance and apply Rall's three-halves rule and equivalent cylinder.</li>
+<li>I can build and solve compartmental models with implicit Euler and a linear-time solver.</li>
+<li>I can explain NMDA-driven dendritic nonlinearities and why a neuron can act as a two-layer network.</li>
+<li>I can simulate propagating spikes and explain how diameter and myelin set conduction velocity.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then, looking back over Weeks 29 to 32, write a paragraph on which single idea about neurons has most changed how you would build an artificial neuron, and what you would add to the standard unit first." />

@@ -144,3 +144,8 @@ export { EIFFlow } from "./eif-flow";
 export { AdExPatterns } from "./adex-patterns";
 export { BalancedInput } from "./balanced-input";
 export { Reliability } from "./reliability";
+export { CableEPSP } from "./cable-epsp";
+export { BranchRule } from "./branch-rule";
+export { BallAndStick } from "./ball-and-stick";
+export { DendriticNonlinearity } from "./dendritic-nonlinearity";
+export { AxonPropagation } from "./axon-propagation";

@@ -1,0 +1,334 @@
+export const meta = {
+  title: "Compartmental models: discretising and simulating a neuron",
+  intro: "Cable theory gives exact answers for idealised geometries. For a real neuron, reconstructed from a microscope image with thousands of segments and channels that vary along its length, you cut it into compartments and simulate. That is what the NEURON simulator, introduced by Hines and Carnevale, does for thousands of laboratories. Today you learn the three ideas that make it work: why simple time-stepping explodes on a fine cable and how implicit integration fixes it, how a tree's matrix can be solved in time proportional to its size, and how to join an active soma to passive dendrites. Then you use a ball-and-stick neuron to ask how much more current a distant synapse needs to fire the cell.",
+  goals: [
+    "Write a neuron as compartments coupled by axial conductances",
+    "Explain why explicit Euler is unstable on fine cables and compute its stability limit",
+    "Solve the implicit equations with the tridiagonal (Hines) algorithm and compare its cost",
+    "Simulate a ball-and-stick neuron with an active soma and a passive dendrite",
+  ],
+  plan: [
+    { label: "Predict and compartments", minutes: 15 },
+    { label: "Stiffness and implicit Euler", minutes: 30 },
+    { label: "Solving in linear time", minutes: 25 },
+    { label: "A ball-and-stick neuron", minutes: 35 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "hines-carnevale-1997",
+};
+
+<Predict question="You simulate a passive dendrite cut into 8 μm compartments with forward Euler and a time step of 25 μs, a step that works perfectly for a single compartment. Will the simulation be accurate, slightly inaccurate, or blow up?" />
+
+<Step n={1} title="Compartments" minutes={15} />
+
+A compartmental model cuts a neuron into short, isopotential pieces. Compartment $j$ has capacitance $C_j$, membrane currents $I_{ion,j}$, and is joined to each neighbour $k$ by an axial conductance $g_{jk}$:
+
+$$
+C_j\frac{dV_j}{dt} = -I_{ion,j} + \sum_{k}g_{jk}(V_k - V_j) + I_{inj,j}.
+$$
+
+For an unbranched cable the coupling links each compartment only to its two neighbours, so the matrix of the linear part is **tridiagonal**. For a tree, each compartment is linked to its parent and children; numbered from the tips towards the root, as Michael Hines showed in 1984, the matrix can still be solved as quickly as a tridiagonal one. Compartments must be short compared with the length constant at the frequencies of interest: NEURON's default rule makes them at most a tenth of the length constant at 100 Hz, which for a thin dendrite means tens of micrometres or less.
+
+<Video id="v1f1RShatNM" title="Compartmental models (Neuronal Dynamics 3.5)" by="Wulfram Gerstner (EPFL)" note="Wulfram Gerstner explains how a neuron's morphology is split into compartments, each a small patch of membrane coupled to its neighbours, the approach used by NEURON and similar simulators." />
+
+<Step n={2} title="Stiffness and implicit Euler" minutes={30} />
+
+The coupling between short compartments is strong: charge moves between neighbours much faster than it leaks out. A system with such widely separated time scales is **stiff**, and forward Euler (Week 21) is stable only if the time step is shorter than the fastest of them. For a compartment of length $\Delta x$ coupled to two neighbours, that limit is roughly $\Delta t_{max} = C_j/(g_m + 2g_a)$, which shrinks as $\Delta x^2$.
+
+**Backward (implicit) Euler** evaluates the coupling at the end of the step instead of the start: $(C/\Delta t)(V^{n+1} - V^n) = -GV^{n+1} + I$. Each step then needs a linear solve, $(C/\Delta t + G)V^{n+1} = (C/\Delta t)V^n + I$, but it is stable for any time step: the price of stability is solving a matrix equation, which tomorrow's step makes cheap.
+
+<PyCell id="stability" title="Explicit and implicit Euler on a fine cable" tests={String.raw`
+  import numpy as np
+  def test_limit():
+      "dt_max is the compartment capacitance over the membrane plus twice the axial conductance, and is under 2 microseconds"
+      assert abs(dt_max - cmp / (gm + 2 * ga)) < 1e-15 and dt_max < 2e-6
+
+  def test_outcome():
+      "explicit Euler at 25 us blows up while implicit Euler stays bounded and close to the fine explicit run"
+      assert not np.isfinite(V_explicit).all() or np.abs(V_explicit).max() > 1e3
+      assert np.abs(V_implicit).max() < 0.1 and abs(V_implicit[0] - V_fine[0]) / V_fine[0] < 0.05
+`} prompt="For a 2 μm dendrite of 100 compartments of 8 μm, compute the explicit stability limit `dt_max`. Run 2 ms of a 0.1 nA step injected into the first compartment with explicit Euler at dt = 25 μs (`V_explicit`), explicit Euler at dt = dt_max / 2 (`V_fine`), and implicit Euler at 25 μs (`V_implicit`, using np.linalg.solve each step)."
+code={String.raw`
+  import numpy as np
+  import math
+  import time
+  rm, ri, cm = 20000.0, 150.0, 1e-6
+  d, dx, N = 2e-4, 8e-4, 100
+  ga = np.pi * d**2 / (4 * ri * dx); gm = np.pi * d * dx / rm; cmp = np.pi * d * dx * cm
+  G = np.diag(np.full(N, gm + 2 * ga)) - ga * np.eye(N, k=1) - ga * np.eye(N, k=-1)
+  G[0, 0] -= ga; G[-1, -1] -= ga
+  I = np.zeros(N); I[0] = 1e-10
+  dt_max = ...
+  print(f"explicit Euler is stable only for dt below {dt_max * 1e6:.2f} us")
+
+  def explicit(dt, T=2e-3):
+      V = np.zeros(N)
+      with np.errstate(all="ignore"):
+          for _ in range(int(round(T / dt))):
+              V = V + dt / cmp * (I - G @ V)
+      return V
+
+  def implicit(dt, T=2e-3):
+      V = np.zeros(N); M = cmp / dt * np.eye(N) + G
+      for _ in range(int(round(T / dt))):
+          V = ...
+      return V
+
+  V_explicit = explicit(25e-6)
+  V_fine = explicit(dt_max / 2)
+  V_implicit = implicit(25e-6)
+  print(f"V at the injection site after 2 ms: explicit at 25 us {V_explicit[0]:.3g} V, explicit at dt_max/2 {V_fine[0] * 1e3:.3f} mV, implicit at 25 us {V_implicit[0] * 1e3:.3f} mV")
+`}
+hint="dt_max = cmp / (gm + 2 * ga); in implicit: V = np.linalg.solve(M, cmp / dt * V + I)."
+solution={String.raw`
+  import numpy as np
+  import math
+  import time
+  rm, ri, cm = 20000.0, 150.0, 1e-6
+  d, dx, N = 2e-4, 8e-4, 100
+  ga = np.pi * d**2 / (4 * ri * dx); gm = np.pi * d * dx / rm; cmp = np.pi * d * dx * cm
+  G = np.diag(np.full(N, gm + 2 * ga)) - ga * np.eye(N, k=1) - ga * np.eye(N, k=-1)
+  G[0, 0] -= ga; G[-1, -1] -= ga
+  I = np.zeros(N); I[0] = 1e-10
+  dt_max = cmp / (gm + 2 * ga)
+  print(f"explicit Euler is stable only for dt below {dt_max * 1e6:.2f} us")
+
+  def explicit(dt, T=2e-3):
+      V = np.zeros(N)
+      with np.errstate(all="ignore"):
+          for _ in range(int(round(T / dt))):
+              V = V + dt / cmp * (I - G @ V)
+      return V
+
+  def implicit(dt, T=2e-3):
+      V = np.zeros(N); M = cmp / dt * np.eye(N) + G
+      for _ in range(int(round(T / dt))):
+          V = np.linalg.solve(M, cmp / dt * V + I)
+      return V
+
+  V_explicit = explicit(25e-6)
+  V_fine = explicit(dt_max / 2)
+  V_implicit = implicit(25e-6)
+  print(f"V at the injection site after 2 ms: explicit at 25 us {V_explicit[0]:.3g} V, explicit at dt_max/2 {V_fine[0] * 1e3:.3f} mV, implicit at 25 us {V_implicit[0] * 1e3:.3f} mV")
+`} />
+
+The explicit limit is under 1 μs. At 25 μs, explicit Euler explodes to $10^{129}$ V within 2 ms, while at half the limit it gives 13.27 mV; implicit Euler at 25 μs gives 13.25 mV, within 0.2% of the fine explicit run with fifty times fewer steps. That answers the prediction. The instability comes not from the membrane, whose 20 ms time constant is harmless, but from the fast exchange of charge between neighbouring compartments, which explicit Euler overshoots and amplifies at every step.
+
+<Step n={3} title="Solving in linear time" minutes={25} />
+
+A general linear solve costs time proportional to $N^3$, which for a neuron of 10,000 compartments, solved every time step, would be hopeless. A tridiagonal matrix needs only one sweep down, eliminating each lower entry using the row above, and one sweep back up: time proportional to $N$. This is the Thomas algorithm, which you wrote on Day 1; Hines's ordering extends it to trees.
+
+<PyCell id="thomas" title="How much faster?" tests={String.raw`
+  import numpy as np
+  def test_agree():
+      "the tridiagonal solution agrees with the dense one"
+      assert np.allclose(x_tri, x_dense, rtol=1e-8)
+
+  def test_speed():
+      "the tridiagonal solver is faster than the dense one for 1,500 compartments"
+      assert t_tri < t_dense
+`} prompt="Solve the implicit-Euler system for a cable of 1,500 compartments with the dense solver and with `solve_tri`, time both, and check they agree."
+code={String.raw`
+  def solve_tri(lower, diag, upper, rhs):
+      n = len(diag); c = np.empty(n); dd = np.empty(n)
+      c[0], dd[0] = upper[0] / diag[0], rhs[0] / diag[0]
+      for i in range(1, n):
+          m = diag[i] - lower[i - 1] * c[i - 1]
+          c[i] = upper[i] / m if i < n - 1 else 0.0
+          dd[i] = (rhs[i] - lower[i - 1] * dd[i - 1]) / m
+      x = np.empty(n); x[-1] = dd[-1]
+      for i in range(n - 2, -1, -1):
+          x[i] = dd[i] - c[i] * x[i + 1]
+      return x
+
+  n = 1500; dt = 25e-6
+  diag = np.full(n, cmp / dt + gm + 2 * ga); diag[0] -= ga; diag[-1] -= ga
+  off = np.full(n - 1, -ga)
+  rhs = np.random.default_rng(0).normal(size=n) * 1e-12
+  M = np.diag(diag) + np.diag(off, 1) + np.diag(off, -1)
+  t0 = time.perf_counter(); x_dense = np.linalg.solve(M, rhs); t_dense = time.perf_counter() - t0
+  t0 = time.perf_counter(); x_tri = ...; t_tri = time.perf_counter() - t0
+  print(f"dense solve {t_dense * 1e3:.1f} ms, tridiagonal {t_tri * 1e3:.1f} ms")
+`}
+hint="x_tri = solve_tri(off, diag, off, rhs)."
+solution={String.raw`
+  def solve_tri(lower, diag, upper, rhs):
+      n = len(diag); c = np.empty(n); dd = np.empty(n)
+      c[0], dd[0] = upper[0] / diag[0], rhs[0] / diag[0]
+      for i in range(1, n):
+          m = diag[i] - lower[i - 1] * c[i - 1]
+          c[i] = upper[i] / m if i < n - 1 else 0.0
+          dd[i] = (rhs[i] - lower[i - 1] * dd[i - 1]) / m
+      x = np.empty(n); x[-1] = dd[-1]
+      for i in range(n - 2, -1, -1):
+          x[i] = dd[i] - c[i] * x[i + 1]
+      return x
+
+  n = 1500; dt = 25e-6
+  diag = np.full(n, cmp / dt + gm + 2 * ga); diag[0] -= ga; diag[-1] -= ga
+  off = np.full(n - 1, -ga)
+  rhs = np.random.default_rng(0).normal(size=n) * 1e-12
+  M = np.diag(diag) + np.diag(off, 1) + np.diag(off, -1)
+  t0 = time.perf_counter(); x_dense = np.linalg.solve(M, rhs); t_dense = time.perf_counter() - t0
+  t0 = time.perf_counter(); x_tri = solve_tri(off, diag, off, rhs); t_tri = time.perf_counter() - t0
+  print(f"dense solve {t_dense * 1e3:.1f} ms, tridiagonal {t_tri * 1e3:.1f} ms")
+`} />
+
+Even written as a Python loop, the linear-time solver beats the dense one at this size, and the gap grows as the cube of the size; compiled, as in NEURON, it costs microseconds. The exact times depend on your machine. NEURON's default method is the backward Euler you used today; an option staggers the update of the gating variables by half a step relative to the voltage, which makes the scheme second-order accurate (Crank-Nicolson style) while each step remains a single tridiagonal solve.
+
+<Step n={4} title="A ball-and-stick neuron" minutes={35} />
+
+Now join an active soma to a passive dendrite: a 20 μm sphere with Hodgkin-Huxley channels, and a 2 μm, 500 μm dendrite in 50 compartments. Each step, the gates are updated explicitly from the current soma voltage, and the voltages of all compartments implicitly with the tridiagonal solver. Inject a 1 ms current pulse either into the soma or into the dendrite's tip, and find the smallest pulse that fires a spike.
+
+<Figure caption="A ball-and-stick neuron with a Hodgkin-Huxley soma and a passive dendrite. Set the injection site and the size of a 1 ms current pulse, and watch the voltage at the soma and the dendrite's tip." credit="Interactive figure by Engram.">
+  <BallAndStick />
+</Figure>
+
+<PyCell id="ballstick" title="Distance raises the threshold" tests={String.raw`
+  import numpy as np
+  def test_thresholds():
+      "the tip needs more than 1.5 times the current that the soma needs"
+      assert th["tip"] > 1.5 * th["soma"]
+
+  def test_bap():
+      "when the soma fires, the spike reaches the passive tip smaller than at the soma"
+      assert tip_peak < soma_peak and tip_peak > -65
+`} prompt="`run(site, amp)` simulates 12 ms and returns the voltage at the soma and the tip. Find by bisection (10 steps between 0 and 5 nA) the smallest 1 ms pulse that makes the soma cross 0 mV, injected at the soma (site 0) and at the tip (site N), and store them in `th`. Then record the peak voltage at the soma and at the tip during a spike triggered from the soma."
+code={String.raw`
+  Rm = 20000.0; As = math.pi * (20e-4) ** 2; Nd = 50; ddx = 500e-4 / Nd; Ad = math.pi * 2e-4 * ddx
+  Cc = np.r_[1.0 * As * 1e3, np.full(Nd, 1.0 * Ad * 1e3)]                 # nF
+  gL = np.r_[0.3e-3 * As * 1e6, np.full(Nd, Ad / Rm * 1e6)]              # uS
+  EL = np.r_[-54.387, np.full(Nd, -65.0)]
+  gax = math.pi * (2e-4) ** 2 / (4 * 150 * ddx) * 1e6                     # uS between dendritic compartments
+  g0 = 1 / (4 * 150 * (ddx / 2) / (math.pi * (2e-4) ** 2)) * 1e6         # soma to first dendritic compartment
+
+  def rates(V):
+      V = V + 1e-7
+      return (0.01 * (V + 55) / (1 - math.exp(-(V + 55) / 10)), 0.125 * math.exp(-(V + 65) / 80),
+              0.1 * (V + 40) / (1 - math.exp(-(V + 40) / 10)), 4.0 * math.exp(-(V + 65) / 18),
+              0.07 * math.exp(-(V + 65) / 20), 1 / (1 + math.exp(-(V + 35) / 10)))
+
+  def run(site, amp, T=12.0, dt=0.01):
+      n = Nd + 1; V = np.full(n, -65.0); gn, gmm, gh = 0.3177, 0.0529, 0.5961
+      g = np.r_[g0, np.full(Nd - 1, gax)]
+      off = -g * dt; diag = Cc + gL * dt; diag[:-1] += g * dt; diag[1:] += g * dt
+      out = np.empty((int(T / dt), 2))
+      for s in range(len(out)):
+          an, bn, am, bm, ah, bh = rates(V[0])
+          Iion = np.zeros(n); Iion[0] = (120 * gmm**3 * gh * (V[0] - 50) + 36 * gn**4 * (V[0] + 77)) * As * 1e3   # nA
+          gn += dt * (an * (1 - gn) - bn * gn); gmm += dt * (am * (1 - gmm) - bm * gmm); gh += dt * (ah * (1 - gh) - bh * gh)
+          Iext = np.zeros(n)
+          if 1 <= s * dt < 2:
+              Iext[site] = amp
+          V = solve_tri(off, diag, off, Cc * V + dt * (Iext - Iion + gL * EL))
+          out[s] = V[0], V[-1]
+      return out
+
+  th = {}
+  for name, site in (("soma", 0), ("tip", Nd)):
+      lo, hi = 0.0, 5.0
+      for _ in range(10):
+          mid = (lo + hi) / 2
+          ...
+      th[name] = hi
+  out = run(0, 1.5 * th["soma"])
+  soma_peak, tip_peak = out[:, 0].max(), out[:, 1].max()
+  print(f"threshold for a 1 ms pulse: soma {th['soma']:.3f} nA, tip {th['tip']:.3f} nA ({th['tip'] / th['soma']:.1f} times more)")
+  print(f"spike from the soma: peak {soma_peak:.1f} mV at the soma, {tip_peak:.1f} mV at the tip")
+`}
+hint="Inside the loop: if run(site, mid)[:, 0].max() > 0: hi = mid, else: lo = mid."
+solution={String.raw`
+  Rm = 20000.0; As = math.pi * (20e-4) ** 2; Nd = 50; ddx = 500e-4 / Nd; Ad = math.pi * 2e-4 * ddx
+  Cc = np.r_[1.0 * As * 1e3, np.full(Nd, 1.0 * Ad * 1e3)]                 # nF
+  gL = np.r_[0.3e-3 * As * 1e6, np.full(Nd, Ad / Rm * 1e6)]              # uS
+  EL = np.r_[-54.387, np.full(Nd, -65.0)]
+  gax = math.pi * (2e-4) ** 2 / (4 * 150 * ddx) * 1e6                     # uS between dendritic compartments
+  g0 = 1 / (4 * 150 * (ddx / 2) / (math.pi * (2e-4) ** 2)) * 1e6         # soma to first dendritic compartment
+
+  def rates(V):
+      V = V + 1e-7
+      return (0.01 * (V + 55) / (1 - math.exp(-(V + 55) / 10)), 0.125 * math.exp(-(V + 65) / 80),
+              0.1 * (V + 40) / (1 - math.exp(-(V + 40) / 10)), 4.0 * math.exp(-(V + 65) / 18),
+              0.07 * math.exp(-(V + 65) / 20), 1 / (1 + math.exp(-(V + 35) / 10)))
+
+  def run(site, amp, T=12.0, dt=0.01):
+      n = Nd + 1; V = np.full(n, -65.0); gn, gmm, gh = 0.3177, 0.0529, 0.5961
+      g = np.r_[g0, np.full(Nd - 1, gax)]
+      off = -g * dt; diag = Cc + gL * dt; diag[:-1] += g * dt; diag[1:] += g * dt
+      out = np.empty((int(T / dt), 2))
+      for s in range(len(out)):
+          an, bn, am, bm, ah, bh = rates(V[0])
+          Iion = np.zeros(n); Iion[0] = (120 * gmm**3 * gh * (V[0] - 50) + 36 * gn**4 * (V[0] + 77)) * As * 1e3   # nA
+          gn += dt * (an * (1 - gn) - bn * gn); gmm += dt * (am * (1 - gmm) - bm * gmm); gh += dt * (ah * (1 - gh) - bh * gh)
+          Iext = np.zeros(n)
+          if 1 <= s * dt < 2:
+              Iext[site] = amp
+          V = solve_tri(off, diag, off, Cc * V + dt * (Iext - Iion + gL * EL))
+          out[s] = V[0], V[-1]
+      return out
+
+  th = {}
+  for name, site in (("soma", 0), ("tip", Nd)):
+      lo, hi = 0.0, 5.0
+      for _ in range(10):
+          mid = (lo + hi) / 2
+          if run(site, mid)[:, 0].max() > 0:
+              hi = mid
+          else:
+              lo = mid
+      th[name] = hi
+  out = run(0, 1.5 * th["soma"])
+  soma_peak, tip_peak = out[:, 0].max(), out[:, 1].max()
+  print(f"threshold for a 1 ms pulse: soma {th['soma']:.3f} nA, tip {th['tip']:.3f} nA ({th['tip'] / th['soma']:.1f} times more)")
+  print(f"spike from the soma: peak {soma_peak:.1f} mV at the soma, {tip_peak:.1f} mV at the tip")
+`} />
+
+A 1 ms pulse fires the neuron with 0.20 nA at the soma but needs 0.44 nA, 2.2 times more, at the tip of the 500 μm dendrite. And the somatic spike, peaking at 36 mV, reaches the tip at only -34 mV, a 31 mV bump above rest: in a passive dendrite, the soma's spike fades long before it reaches distant synapses. Real pyramidal neurons have sodium channels in their dendrites that help carry the spike back out, one of tomorrow's subjects.
+
+<Bridge title="Simulators as instruments"
+  neuro="NEURON turned compartmental modelling from a specialist craft into a standard tool, used for everything from single dendrites to the Blue Brain Project's reconstructions of cortical tissue. Its core is what you built today: compartments, an implicit step, and a linear-time solver for trees."
+  ai="Deep-learning frameworks did the same for networks, by making differentiation and parallel linear algebra automatic. The two worlds are meeting: differentiable simulators of compartmental neurons now let biophysical parameters be fitted by gradient descent, the methods of Week 12 applied to the models of this week.">
+
+A good simulator hides the numerics, but only if you know what it is hiding.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In a compartmental model, neighbouring compartments are coupled by...", options: ["Synapses", "Axial conductances", "Capacitors", "Nothing"], answer: 1, explain: "The core resistance between them." },
+  { q: "Forward Euler on a finely divided cable is unstable because...", options: ["The system is stiff: coupling between short compartments is very fast", "Channels are noisy", "The leak is too small", "Capacitance is zero"], answer: 0, explain: "The stability limit shrinks as Δx²." },
+  { q: "Backward (implicit) Euler is...", options: ["Unstable for large steps", "Stable for any step, at the cost of a linear solve", "The same as forward Euler", "Only for single compartments"], answer: 1, explain: "Coupling evaluated at the end of the step." },
+  { q: "The matrix of an unbranched cable is...", options: ["Dense", "Tridiagonal", "Diagonal", "Random"], answer: 1, explain: "Each compartment couples to two neighbours." },
+  { q: "The Thomas (Hines) algorithm solves the cable system in time proportional to...", options: ["N", "N²", "N³", "log N"], answer: 0, explain: "One sweep down, one up." },
+  { q: "NEURON's default compartment length is at most...", options: ["One length constant", "A tenth of the length constant at 100 Hz", "1 mm", "Exactly 1 μm"], answer: 1, explain: "The d_lambda rule." },
+  { q: "A current pulse injected at the tip of a dendrite needs to be...", options: ["Smaller than at the soma", "Larger than at the soma to fire the cell", "The same", "Negative"], answer: 1, explain: "Much of it leaks out along the way." },
+  { q: "A spike generated at the soma, in a passive dendrite...", options: ["Grows as it spreads", "Shrinks with distance", "Does not enter the dendrite", "Reverses sign"], answer: 1, explain: "Passive spread attenuates it." },
+]} />
+
+<Flashcards cards={[
+  { front: "Compartmental equation?", back: "$C_j\\dot V_j = -I_{ion,j} + \\sum_kg_{jk}(V_k - V_j) + I_{inj,j}$." },
+  { front: "Explicit Euler stability on a cable?", back: "Roughly $\\Delta t \\lt C_j/(g_m + 2g_a)$, which shrinks as $\\Delta x^2$: microseconds for fine compartments." },
+  { front: "Implicit Euler for cables?", back: "Solve $(C/\\Delta t + G)V^{n+1} = (C/\\Delta t)V^n + I$ each step; stable for any step." },
+  { front: "Hines algorithm?", back: "Number tree compartments from tips to root so the system can be solved like a tridiagonal one, in time proportional to N." },
+  { front: "Ball-and-stick neuron?", back: "An active soma joined to a passive cable: the simplest model that shows distance-dependent thresholds and spike attenuation in dendrites." },
+]} />
+
+<Predict revisit question="Does forward Euler with 25 μs steps work on a dendrite cut into 8 μm compartments?" />
+
+<Key title="Before you go">
+<ul>
+<li>A neuron becomes a set of compartments coupled by axial conductances.</li>
+<li>Fine compartments make the equations stiff; forward Euler needs microsecond steps.</li>
+<li>Implicit Euler is stable at any step, and the tridiagonal (Hines) solver makes each step cost time proportional to N.</li>
+<li>A ball-and-stick neuron shows that distant inputs need more current and that passive dendrites attenuate the soma's spike.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Hines and Carnevale (1997), <em>The NEURON simulation environment</em>.</li>
+<li>Carnevale and Hines (2006), <em>The NEURON Book</em>, Cambridge University Press.</li>
+<li>Dayan and Abbott (2001), <em>Theoretical Neuroscience</em>, section 6.6 and appendix on numerical methods for multi-compartment models.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="You are given a reconstructed neuron with 5,000 compartments and asked to simulate one second of activity. Explain, in a few sentences, what time step and integration method you would choose, why, and how you would check that your compartments were short enough." />

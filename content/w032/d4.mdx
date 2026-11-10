@@ -1,0 +1,241 @@
+export const meta = {
+  title: "Active dendrites and dendritic computation",
+  intro: "So far this week, dendrites have been passive cables that shrink and blur their inputs on the way to the soma. Real dendrites are studded with voltage-gated channels and receptors with voltage-dependent conductances, and they fight back. Spikes propagate back into them from the soma, and local dendritic spikes, of sodium, calcium or NMDA, can fire in a single branch. Today you build the simplest of these nonlinearities, the NMDA receptor's magnesium block, show that it makes a branch respond more to clustered than to scattered inputs, and follow Poirazi, Brannon and Mel's argument that a pyramidal neuron then behaves like a two-layer neural network. You will also prove that such a neuron can compute a function no single point neuron can.",
+  goals: [
+    "Describe back-propagating action potentials and dendritic sodium, calcium and NMDA spikes",
+    "Model the voltage dependence of the NMDA conductance and its effect on a branch's response",
+    "Show that clustered inputs drive a nonlinear branch more than dispersed ones",
+    "Explain the two-layer model of a pyramidal neuron and prove it computes a function a point neuron cannot",
+  ],
+  plan: [
+    { label: "Predict and dendrites that fight back", minutes: 15 },
+    { label: "The NMDA nonlinearity", minutes: 30 },
+    { label: "Clustered against dispersed", minutes: 25 },
+    { label: "A neuron as a two-layer network", minutes: 35 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "poirazi-2003",
+};
+
+<Predict question="Twelve identical excitatory synapses are activated together on a neuron with four similar dendritic branches. Will the soma depolarise more if all twelve are on one branch, if three are on each branch, or the same either way?" />
+
+<Step n={1} title="Dendrites that fight back" minutes={15} />
+
+Three discoveries changed how dendrites are viewed.
+
+- **Back-propagating action potentials.** Stuart and Sakmann (1994) patched the soma and the apical dendrite of the same layer 5 pyramidal neuron and showed that a spike starting near the soma travels back into the dendrite, actively, through dendritic sodium channels. It carries news of the output to every synapse, a signal that synaptic plasticity can use (Week 42).
+- **Local dendritic spikes.** Thin dendrites can generate their own spikes: brief sodium spikes, longer calcium spikes in the apical tuft, and **NMDA spikes**, plateaus lasting tens of milliseconds when enough nearby glutamate synapses are active together.
+- **Coincidence of inputs from different layers.** Larkum and colleagues found that a back-propagating spike arriving in the apical tuft at the same time as tuft input triggers a calcium spike and a burst of output spikes: the neuron detects the coincidence of input to its two ends. In human layer 2/3 neurons, Gidon and colleagues (2020) found dendritic calcium spikes whose amplitude is largest for intermediate inputs, enough for a single neuron to compute an XOR.
+
+<Video id="T3s-R4vXtZs" title="Why dendrites matter for biological and artificial circuits" by="Panayiota Poirazi (SNUFA workshop, 2022)" note="Panayiota Poirazi, an author of today's paper, explains how active dendrites let single neurons compute like small networks, and what that suggests for artificial neural networks." />
+
+<Step n={2} title="The NMDA nonlinearity" minutes={30} />
+
+The NMDA receptor's channel is blocked by magnesium ions from outside the cell at negative voltages; depolarisation expels the magnesium. Jahr and Stevens (1990) described the unblocked fraction as
+
+$$
+B(V) = \frac{1}{1 + \frac{[\text{Mg}^{2+}]}{3.57\,\text{mM}}e^{-0.062V}},
+$$
+
+with $V$ in millivolts. The NMDA current, $g_{NMDA}B(V)(V - 0)$, therefore grows as the voltage rises, until the driving force shrinks: a region of negative slope, like the sodium current's. A branch with many active NMDA synapses can be pushed into a regenerative plateau.
+
+<PyCell id="nmda" title="A branch's response to its synapses" tests={String.raw`
+  import numpy as np
+  def test_block():
+      "B gives the unblocked fraction: about 0.06 at -70 mV and above 0.9 at 0 mV with 1 mM magnesium"
+      assert 0.03 < B(-70.0) < 0.1 and B(0.0) > 0.7 and abs(B(-70.0, 0.0) - 1) < 1e-12
+
+  def test_shape():
+      "with magnesium the response is supralinear at first (the step from 6 to 8 synapses exceeds the step from 0 to 2) and without it is sublinear"
+      with_mg, no_mg = resp[1.0], resp[0.0]
+      assert with_mg[4] - with_mg[3] > with_mg[1] - with_mg[0] and no_mg[4] - no_mg[3] < no_mg[1] - no_mg[0]
+`} prompt="Write `B(V, Mg=1.0)`. Then, for a branch compartment with leak 10 nS and synapses each adding 0.2 nS of AMPA and 3 nS of NMDA conductance (all reversing at 0 mV, held open for the simulation), compute the steady depolarisation for 0 to 20 active synapses, with 1 mM and 0 mM magnesium."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def B(V, Mg=1.0):
+      return ...
+
+  def steady(n, Mg=1.0, gL=10.0, gA=0.2, gN=3.0, C=30.0, T=300.0, dt=0.02):
+      V = -70.0
+      for _ in range(int(T / dt)):
+          V += dt * (-gL * (V + 70) - n * gA * V - n * gN * B(V, Mg) * V) / C
+      return V + 70                                   # depolarisation from rest (mV)
+
+  ns = list(range(0, 21, 2))
+  resp = {Mg: [steady(n, Mg) for n in ns] for Mg in (1.0, 0.0)}
+  for n, a, b in zip(ns, resp[1.0], resp[0.0]):
+      print(f"{n:2d} synapses: {a:5.1f} mV with magnesium, {b:5.1f} mV without")
+  plt.plot(ns, resp[1.0], "o-", label="1 mM Mg"); plt.plot(ns, resp[0.0], "s-", label="no Mg")
+  plt.xlabel("active synapses on the branch"); plt.ylabel("depolarisation (mV)"); plt.legend(); plt.show()
+`}
+hint="return 1 / (1 + Mg / 3.57 * np.exp(-0.062 * V))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def B(V, Mg=1.0):
+      return 1 / (1 + Mg / 3.57 * np.exp(-0.062 * V))
+
+  def steady(n, Mg=1.0, gL=10.0, gA=0.2, gN=3.0, C=30.0, T=300.0, dt=0.02):
+      V = -70.0
+      for _ in range(int(T / dt)):
+          V += dt * (-gL * (V + 70) - n * gA * V - n * gN * B(V, Mg) * V) / C
+      return V + 70                                   # depolarisation from rest (mV)
+
+  ns = list(range(0, 21, 2))
+  resp = {Mg: [steady(n, Mg) for n in ns] for Mg in (1.0, 0.0)}
+  for n, a, b in zip(ns, resp[1.0], resp[0.0]):
+      print(f"{n:2d} synapses: {a:5.1f} mV with magnesium, {b:5.1f} mV without")
+  plt.plot(ns, resp[1.0], "o-", label="1 mM Mg"); plt.plot(ns, resp[0.0], "s-", label="no Mg")
+  plt.xlabel("active synapses on the branch"); plt.ylabel("depolarisation (mV)"); plt.legend(); plt.show()
+`} />
+
+With magnesium, the first two synapses depolarise the branch by 4.9 mV, but going from 6 to 8 synapses adds 9.8 mV and from 8 to 10 another 10.4: each synapse helps more once others have partly relieved the block. Beyond about 12 synapses the response saturates as the voltage approaches the synapses' reversal potential. Without magnesium the curve bends the other way from the start: two synapses already give 27 mV, and each further one adds less. The S-shape is the signature of a regenerative response, and in real neurons it produces plateaus lasting tens of milliseconds, the NMDA spikes.
+
+<Step n={3} title="Clustered against dispersed" minutes={25} />
+
+If each branch responds with an S-shaped function of its own inputs, then where synapses sit matters. Take the branch response $f(n)$ you just computed, assume each branch's depolarisation reaches the soma attenuated by the same factor, and add the branches.
+
+<Figure caption="Synapses distributed over four dendritic branches, each with an NMDA-like sigmoid response, and the summed effect at the soma. Set how many synapses are active and how they are distributed." credit="Interactive figure by Engram, after Poirazi, Brannon and Mel (2003).">
+  <DendriticNonlinearity />
+</Figure>
+
+<PyCell id="cluster" title="Where the synapses are" tests={String.raw`
+  import numpy as np
+  def test_f():
+      "f interpolates the branch response computed above"
+      assert abs(f(4) - resp[1.0][2]) < 1e-9 and abs(f(0)) < 1e-9
+
+  def test_cluster():
+      "twelve synapses clustered on one branch drive the soma more than three on each of four branches"
+      assert soma["clustered"] > 1.2 * soma["dispersed"]
+`} prompt="Define `f(n)` by linear interpolation of the with-magnesium responses in `resp[1.0]` over `ns`. With an attenuation of 0.3 from each branch to the soma, compute the somatic depolarisation for twelve synapses all on one branch and for three on each of four branches, and store them in `soma`."
+code={String.raw`
+  def f(n):
+      return ...
+
+  atten = 0.3
+  soma = {"clustered": atten * (f(12) + 3 * f(0)), "dispersed": ...}
+  print(f"clustered: {soma['clustered']:.1f} mV at the soma; dispersed: {soma['dispersed']:.1f} mV")
+  for k in (4, 8, 12, 16):
+      print(f"{k:2d} synapses: clustered {atten * f(k):5.1f} mV, spread over 4 branches {atten * 4 * f(k / 4):5.1f} mV")
+`}
+hint="return np.interp(n, ns, resp[1.0]); dispersed is atten * 4 * f(3)."
+solution={String.raw`
+  def f(n):
+      return np.interp(n, ns, resp[1.0])
+
+  atten = 0.3
+  soma = {"clustered": atten * (f(12) + 3 * f(0)), "dispersed": atten * 4 * f(3)}
+  print(f"clustered: {soma['clustered']:.1f} mV at the soma; dispersed: {soma['dispersed']:.1f} mV")
+  for k in (4, 8, 12, 16):
+      print(f"{k:2d} synapses: clustered {atten * f(k):5.1f} mV, spread over 4 branches {atten * 4 * f(k / 4):5.1f} mV")
+`} />
+
+Twelve synapses clustered on one branch depolarise the soma by 13.5 mV; the same twelve spread three to a branch, by only 9.3 mV. That answers the prediction. The advantage of clustering is largest in the middle range, where a clustered branch sits on the steep part of its S-curve while dispersed branches stay in its flat foot; with very few synapses, or very many, it shrinks.
+
+<Step n={4} title="A neuron as a two-layer network" minutes={35} />
+
+Poirazi, Brannon and Mel (2003), today's deep read, simulated a detailed model of a hippocampal pyramidal neuron with active dendrites, presented thousands of patterns of synaptic input, and asked what simple model best predicted its firing rate. A point neuron, a weighted sum through one nonlinearity, did poorly. A **two-layer model** did well: each thin branch sums its own inputs and passes them through a sigmoid, and the soma sums the branch outputs and applies a second nonlinearity. In the language of Week 1, a single pyramidal neuron behaves like a small neural network with a hidden layer.
+
+That matters because a hidden layer can compute things a single layer cannot. Suppose inputs $a, b$ arrive on branch 1 and $c, d$ on branch 2, and the neuron should fire when $a$ and $b$ are both active, or $c$ and $d$, but not for the mixed pairs $a, c$ or $b, d$: a feature-binding task, firing only for features that belong together.
+
+<PyCell id="binding" title="A function no point neuron can compute" tests={String.raw`
+  import numpy as np
+  def test_point():
+      "no random linear threshold unit solves the task"
+      assert best_point < 4
+
+  def test_two_layer():
+      "the two-layer model with branch thresholds solves all four cases"
+      assert all(two_layer(x) == y for x, y in zip(X, Y))
+`} prompt="X holds the four patterns (a, b, c, d) and Y the desired outputs. Try 20,000 random weight vectors and thresholds for a point neuron (fire if w · x exceeds θ) and record the most cases any of them gets right in `best_point`. Then write `two_layer(x)`: each branch fires if its two inputs sum to 2, and the soma fires if any branch fires."
+code={String.raw`
+  X = np.array([[1, 1, 0, 0], [0, 0, 1, 1], [1, 0, 1, 0], [0, 1, 0, 1]])
+  Y = np.array([1, 1, 0, 0])
+  r = np.random.default_rng(32)
+  best_point = 0
+  for _ in range(20000):
+      w, theta = r.normal(size=4), r.normal()
+      correct = ...
+      best_point = max(best_point, correct)
+
+  def two_layer(x):
+      branch1 = ...
+      branch2 = ...
+      return int(branch1 or branch2)
+
+  print(f"best point neuron: {best_point} of 4 correct;  two-layer: {[two_layer(x) for x in X]} against {Y.tolist()}")
+`}
+hint="correct = int(np.sum((X @ w > theta).astype(int) == Y)); branch1 = x[0] + x[1] >= 2; branch2 = x[2] + x[3] >= 2."
+solution={String.raw`
+  X = np.array([[1, 1, 0, 0], [0, 0, 1, 1], [1, 0, 1, 0], [0, 1, 0, 1]])
+  Y = np.array([1, 1, 0, 0])
+  r = np.random.default_rng(32)
+  best_point = 0
+  for _ in range(20000):
+      w, theta = r.normal(size=4), r.normal()
+      correct = int(np.sum((X @ w > theta).astype(int) == Y))
+      best_point = max(best_point, correct)
+
+  def two_layer(x):
+      branch1 = x[0] + x[1] >= 2
+      branch2 = x[2] + x[3] >= 2
+      return int(branch1 or branch2)
+
+  print(f"best point neuron: {best_point} of 4 correct;  two-layer: {[two_layer(x) for x in X]} against {Y.tolist()}")
+`} />
+
+No random weights do better than three of the four cases, and the reason is not bad luck. For a point neuron to fire for $(a, b)$ and $(c, d)$ it needs $w_a + w_b \gt \theta$ and $w_c + w_d \gt \theta$; adding them, $w_a + w_b + w_c + w_d \gt 2\theta$. To stay silent for $(a, c)$ and $(b, d)$ it needs $w_a + w_c \lt \theta$ and $w_b + w_d \lt \theta$; adding these, the same sum is less than $2\theta$. Both cannot hold. With one nonlinearity per branch, the task is trivial. Beniaguev, Segev and London (2021) pushed the comparison further: to reproduce the spike output of a detailed layer 5 pyramidal neuron with NMDA synapses at millisecond precision, they needed a temporal convolutional network five to eight layers deep.
+
+<Bridge title="Neurons inside neurons"
+  neuro="Active dendrites make a single neuron a layered computer: branches perform their own nonlinear integration, and where synapses sit, clustered or dispersed, changes what the neuron computes. Plasticity that groups related inputs on the same branch would then be a way of storing associations."
+  ai="The units of artificial networks are point neurons. If biological neurons are small networks, comparisons of neuron counts between brains and models understate the brain by a large factor, and architectures with dendrite-like units, where groups of inputs are combined nonlinearly before summation, are an active area of research, for continual learning in particular.">
+
+Before counting a brain's neurons, ask how much each one computes.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Back-propagating action potentials were shown by...", options: ["Hodgkin and Huxley", "Stuart and Sakmann (1994)", "Rall (1959)", "Neher and Sakmann (1976)"], answer: 1, explain: "Dual soma and dendrite recordings." },
+  { q: "The NMDA receptor's voltage dependence comes from...", options: ["Sodium inactivation", "Block by external magnesium relieved by depolarisation", "Calcium pumps", "Potassium channels"], answer: 1, explain: "Jahr and Stevens' B(V)." },
+  { q: "With magnesium present, a branch's response to increasing numbers of NMDA synapses is...", options: ["Linear", "Sublinear from the start", "S-shaped: supralinear, then saturating", "Zero"], answer: 2, explain: "Regenerative NMDA current." },
+  { q: "Clustering synapses on one branch, compared with spreading them, gives a somatic response that is...", options: ["Smaller", "Larger, when branches are supralinear", "Identical", "Negative"], answer: 1, explain: "Today's Step 3." },
+  { q: "Poirazi, Brannon and Mel found that a pyramidal neuron behaves like...", options: ["A point neuron", "A two-layer neural network", "A linear filter only", "A random number generator"], answer: 1, explain: "Branch sigmoids, then a somatic nonlinearity." },
+  { q: "A single linear threshold unit cannot compute the feature-binding task because...", options: ["The weights are too small", "Adding its constraints gives a contradiction", "It has no bias", "It is too slow"], answer: 1, explain: "The sums must be both above and below 2θ." },
+  { q: "Gidon and colleagues (2020) found in human cortical neurons...", options: ["No dendritic spikes", "Dendritic calcium spikes able to compute XOR", "Only sodium spikes", "That dendrites are passive"], answer: 1, explain: "Graded, non-monotonic calcium spikes." },
+  { q: "Beniaguev, Segev and London (2021) needed to model a layer 5 pyramidal neuron with...", options: ["A single unit", "A deep temporal convolutional network", "A linear model", "A lookup table"], answer: 1, explain: "Five to eight layers with NMDA." },
+]} />
+
+<Flashcards cards={[
+  { front: "NMDA magnesium block?", back: "$B(V) = 1/(1 + [\\text{Mg}]/3.57\\,e^{-0.062V})$: blocked near rest, unblocked by depolarisation." },
+  { front: "Dendritic spikes?", back: "Local regenerative events in dendrites: sodium (brief), calcium (apical tuft, longer), NMDA (plateaus of tens of ms)." },
+  { front: "Clustered versus dispersed input?", back: "With supralinear branches, synapses clustered on one branch drive the soma more than the same synapses spread out." },
+  { front: "Two-layer neuron?", back: "Each branch applies a sigmoid to its summed input; the soma sums branch outputs (Poirazi, Brannon and Mel, 2003)." },
+  { front: "Why can't a point neuron do feature binding?", back: "Firing for (a,b) and (c,d) but not (a,c) or (b,d) requires $w_a + w_b + w_c + w_d$ to be both above and below $2\\theta$." },
+]} />
+
+<Predict revisit question="Twelve synapses on four branches: does the soma depolarise more with all on one branch or three on each?" />
+
+<Key title="Before you go">
+<ul>
+<li>Dendrites are active: spikes back-propagate into them and they generate local sodium, calcium and NMDA spikes.</li>
+<li>The NMDA receptor's magnesium block makes a branch's response S-shaped in the number of active synapses.</li>
+<li>With nonlinear branches, clustered inputs drive the soma more than dispersed ones.</li>
+<li>A pyramidal neuron behaves like a two-layer network and can compute functions no point neuron can.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Poirazi, Brannon and Mel (2003), <em>Pyramidal neuron as two-layer neural network</em>.</li>
+<li>Stuart and Sakmann (1994), <em>Active propagation of somatic action potentials into neocortical pyramidal cell dendrites</em>, Nature 367, 69 to 72.</li>
+<li>London and Häusser (2005), <em>Dendritic computation</em>, Annual Review of Neuroscience 28, 503 to 532.</li>
+<li>Beniaguev, Segev and London (2021), <em>Single cortical neurons as deep artificial neural networks</em>, Neuron 109(17), 2727 to 2739.</li>
+<li>Gidon and colleagues (2020), <em>Dendritic action potentials and computation in human layer 2/3 cortical neurons</em>, Science 367(6473), 83 to 87.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If a neuron's branches compute separately, then which synapses share a branch matters as much as their weights. Propose a learning rule, in words, that would cluster correlated inputs on the same branch, and say what it would let a neuron remember that a point neuron could not." />

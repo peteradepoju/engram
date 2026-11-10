@@ -1,0 +1,235 @@
+export const meta = {
+  title: "Finite cables, branching trees and Rall's equivalent cylinder",
+  intro: "Yesterday's dendrite was a single, uniform tube. Real dendrites end, and branch, again and again, into trees of hundreds of segments of different diameters. Wilfrid Rall's insight in 1959 was that under one condition on the diameters at each branch point, the whole tree behaves electrically like a single cylinder, which can then be analysed with yesterday's equation. Today you find how a cable's input resistance depends on its diameter and length, derive Rall's three-halves power rule from that dependence, and test it by building a branching tree from compartments and comparing it with its equivalent cylinder.",
+  goals: [
+    "Compute the input resistance of semi-infinite and sealed finite cables",
+    "Explain why input resistance scales as diameter to the power minus three halves",
+    "Derive the three-halves power rule for branch points",
+    "Build a branching compartmental tree and test whether it matches an equivalent cylinder",
+  ],
+  plan: [
+    { label: "Predict and input resistance of a cable", minutes: 25 },
+    { label: "The soma and its dendrites", minutes: 15 },
+    { label: "Branch points and the three-halves rule", minutes: 40 },
+    { label: "How real trees compare", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "rall-1959",
+};
+
+<Predict question="A 4 μm dendrite splits into two equal daughters. For the tree to behave electrically like a single unbranched 4 μm cylinder, should each daughter be 2 μm (halving the diameter), about 2.5 μm, or about 2.8 μm (halving the cross-sectional area)?" />
+
+<Step n={1} title="Input resistance of a cable" minutes={25} />
+
+Inject a steady current $I$ into the end of a semi-infinite cable. The voltage there is $V_0 = IR_\infty$, where $R_\infty$, the cable's input resistance, equals the axial resistance of one length constant of core: $R_\infty = \frac{4r_i}{\pi d^2}\lambda$. Substituting $\lambda = \sqrt{r_md/(4r_i)}$,
+
+$$
+R_\infty = \frac{2}{\pi}\sqrt{r_mr_i}\;d^{-3/2}.
+$$
+
+The power $-3/2$ is the key to today. Thicker cables have lower axial resistance, which lowers $R_\infty$ as $d^{-2}$, but also longer length constants, which raises it as $d^{1/2}$. A finite cable of length $L$ with a sealed end has a higher input resistance, because current cannot leak out beyond its tip: $R_{in} = R_\infty\coth(L/\lambda)$.
+
+<PyCell id="rin" title="Input resistance from compartments" tests={String.raw`
+  import numpy as np
+  def test_rinf():
+      "R_inf follows the formula, and scales with diameter to the power -3/2"
+      assert abs(R_inf(2.0) - 2 / np.pi * np.sqrt(20000 * 150) * (2e-4) ** -1.5) < 1e-3
+      assert abs(R_inf(4.0) / R_inf(1.0) - 4 ** -1.5) < 1e-12
+
+  def test_sealed():
+      "the compartmental input resistance of a sealed cable of length lambda matches R_inf coth(1) within 1%"
+      assert abs(R_sim - R_inf(2.0) / np.tanh(1.0)) / R_sim < 0.01
+`} prompt="Write `R_inf(d_um)`, the input resistance (Ω) of a semi-infinite cable. Then write `cable_rin(d_um, L_cm)`, which builds the conductance matrix of a sealed cable of 200 compartments, injects 1 nA into the first, and returns V/I. Compare it with R_inf coth(L/λ) for a 2 μm cable one length constant long."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rm, ri = 20000.0, 150.0
+
+  def lam_cm(d_um):
+      return np.sqrt(rm * d_um * 1e-4 / (4 * ri))
+
+  def R_inf(d_um):
+      return ...
+
+  def cable_rin(d_um, L_cm, N=200):
+      d, dx = d_um * 1e-4, L_cm / N
+      ga, gm = np.pi * d**2 / (4 * ri * dx), np.pi * d * dx / rm
+      A = np.diag(np.full(N, gm + 2 * ga)) - ga * np.eye(N, k=1) - ga * np.eye(N, k=-1)
+      A[0, 0] -= ga; A[-1, -1] -= ga
+      I = np.zeros(N); I[0] = 1e-9
+      return ...
+
+  for d in (1, 2, 4):
+      print(f"d = {d} um: R_inf = {R_inf(d) / 1e6:6.1f} MOhm")
+  R_sim = cable_rin(2.0, lam_cm(2.0))
+  print(f"sealed cable of length lambda: compartments {R_sim / 1e6:.1f} MOhm, formula {R_inf(2.0) / np.tanh(1) / 1e6:.1f} MOhm")
+`}
+hint="return 2 / np.pi * np.sqrt(rm * ri) * (d_um * 1e-4) ** -1.5; in cable_rin: return np.linalg.solve(A, I)[0] / 1e-9."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  rm, ri = 20000.0, 150.0
+
+  def lam_cm(d_um):
+      return np.sqrt(rm * d_um * 1e-4 / (4 * ri))
+
+  def R_inf(d_um):
+      return 2 / np.pi * np.sqrt(rm * ri) * (d_um * 1e-4) ** -1.5
+
+  def cable_rin(d_um, L_cm, N=200):
+      d, dx = d_um * 1e-4, L_cm / N
+      ga, gm = np.pi * d**2 / (4 * ri * dx), np.pi * d * dx / rm
+      A = np.diag(np.full(N, gm + 2 * ga)) - ga * np.eye(N, k=1) - ga * np.eye(N, k=-1)
+      A[0, 0] -= ga; A[-1, -1] -= ga
+      I = np.zeros(N); I[0] = 1e-9
+      return np.linalg.solve(A, I)[0] / 1e-9
+
+  for d in (1, 2, 4):
+      print(f"d = {d} um: R_inf = {R_inf(d) / 1e6:6.1f} MOhm")
+  R_sim = cable_rin(2.0, lam_cm(2.0))
+  print(f"sealed cable of length lambda: compartments {R_sim / 1e6:.1f} MOhm, formula {R_inf(2.0) / np.tanh(1) / 1e6:.1f} MOhm")
+`} />
+
+A semi-infinite 1 μm cable has an input resistance of 1.1 GΩ, a 2 μm one 390 MΩ and a 4 μm one 138 MΩ: each doubling of diameter divides it by $2^{3/2} \approx 2.8$. A sealed 2 μm cable one length constant long has 512 MΩ by the formula and 511 MΩ from the compartments, 31% more than the semi-infinite cable, because current cannot leak out past its tip.
+
+<Video id="dNHqd6nGr5o" title="6. Dendrites" by="Michale Fee (MIT 9.40 Introduction to Neural Computation, MIT OpenCourseWare)" note="Michale Fee's lecture on dendrites: the cable equation, length constants, and how dendritic geometry shapes the signals that reach the soma." />
+
+<Step n={2} title="The soma and its dendrites" minutes={15} />
+
+A neuron's input resistance, measured at the soma, combines the soma's own membrane with the dendrites hanging off it, all in parallel. Rall expressed the balance as the **dendritic-to-somatic conductance ratio**, $\rho = G_{dendrites}/G_{soma}$. For motoneurons he estimated $\rho$ between about 5 and 25: most of the current injected at the soma flows out through the dendrites. This was the original point of today's paper. Earlier estimates of the membrane's specific resistance had treated the motoneuron as a sphere, and so had underestimated it many times over; taking the dendrites into account, Rall showed that the membrane is far less leaky than had been thought, and therefore that distant synapses are not electrically remote.
+
+<Step n={3} title="Branch points and the three-halves rule" minutes={40} />
+
+At a branch point, the parent cable sees its daughters as a load. If the daughters' combined input conductance equals that of the parent's own continuation, the parent cannot tell the difference: the voltage and current pass through the branch point as if it were not there. For daughters long enough to look semi-infinite, input conductance scales as $d^{3/2}$, so the condition is
+
+$$
+d_{parent}^{3/2} = \sum_j d_j^{3/2}.
+$$
+
+This is **Rall's three-halves power rule**. If, in addition, all terminal branches end at the same electrotonic distance from the soma (with sealed ends), the whole tree can be collapsed into a single **equivalent cylinder** with the parent's diameter and the tree's total electrotonic length. That answers the prediction: two equal daughters of a 4 μm parent must each be $4/2^{2/3} \approx$ 2.52 μm.
+
+<Figure caption="Steady-state voltage along a parent dendrite and its two daughters, compared with the equivalent cylinder. Set the daughters' diameter." credit="Interactive figure by Engram, after Rall (1959).">
+  <BranchRule />
+</Figure>
+
+<PyCell id="tree" title="Testing the equivalent cylinder" tests={String.raw`
+  import numpy as np
+  def test_rall():
+      "d_rall satisfies the three-halves rule for two equal daughters of a 4 um parent"
+      assert abs(2 * d_rall ** 1.5 - 4.0 ** 1.5) < 1e-9
+
+  def test_match():
+      "with Rall's diameter the tree matches the cylinder within 1%, with 1.5 um daughters it differs by more than 10%"
+      assert abs(rin_tree[round(d_rall, 3)] / rin_cyl - 1) < 0.01 and abs(rin_tree[1.5] / rin_cyl - 1) > 0.1
+`} prompt="`tree_rin(segments)` builds a compartmental model of any tree given as a list of (diameter in μm, length in cm, parent index) and returns the input resistance at the root. Compute the daughter diameter `d_rall` that satisfies the rule for a 4 μm parent, then compare the input resistance of a tree (parent of length 0.6 λ, two daughters each 0.6 of their own λ) with a cylinder of the parent's diameter and length 1.2 λ, for daughters of `d_rall`, 1.5 and 3.5 μm."
+code={String.raw`
+  def tree_rin(segments, n_per=50):
+      gm, edges, last = [], [], {}
+      for s, (d_um, L, parent) in enumerate(segments):
+          d, dx, start = d_um * 1e-4, L / n_per, len(gm)
+          for j in range(n_per):
+              gm.append(np.pi * d * dx / rm)
+              if j > 0:
+                  edges.append((start + j - 1, start + j, np.pi * d**2 / (4 * ri * dx)))
+          if parent is not None:
+              pd, pL, _ = segments[parent]
+              r = 4 * ri * (pL / n_per / 2) / (np.pi * (pd * 1e-4) ** 2) + 4 * ri * (dx / 2) / (np.pi * d**2)
+              edges.append((last[parent], start, 1 / r))
+          last[s] = start + n_per - 1
+      A = np.diag(gm)
+      for i, j, g in edges:
+          A[i, i] += g; A[j, j] += g; A[i, j] -= g; A[j, i] -= g
+      I = np.zeros(len(gm)); I[0] = 1e-9
+      return np.linalg.solve(A, I)[0] / 1e-9
+
+  d_rall = ...
+  rin_cyl = tree_rin([(4.0, 1.2 * lam_cm(4.0), None)])
+  rin_tree = {}
+  for dd in (round(d_rall, 3), 1.5, 3.5):
+      tree = [(4.0, 0.6 * lam_cm(4.0), None), (dd, 0.6 * lam_cm(dd), 0), (dd, 0.6 * lam_cm(dd), 0)]
+      rin_tree[dd] = ...
+      print(f"daughters {dd:5.3f} um (sum of d^1.5 / parent's = {2 * dd ** 1.5 / 4 ** 1.5:.2f}): tree {rin_tree[dd] / 1e6:6.1f} MOhm, cylinder {rin_cyl / 1e6:6.1f} MOhm")
+`}
+hint="d_rall = (4.0 ** 1.5 / 2) ** (2 / 3); rin_tree[dd] = tree_rin(tree)."
+solution={String.raw`
+  def tree_rin(segments, n_per=50):
+      gm, edges, last = [], [], {}
+      for s, (d_um, L, parent) in enumerate(segments):
+          d, dx, start = d_um * 1e-4, L / n_per, len(gm)
+          for j in range(n_per):
+              gm.append(np.pi * d * dx / rm)
+              if j > 0:
+                  edges.append((start + j - 1, start + j, np.pi * d**2 / (4 * ri * dx)))
+          if parent is not None:
+              pd, pL, _ = segments[parent]
+              r = 4 * ri * (pL / n_per / 2) / (np.pi * (pd * 1e-4) ** 2) + 4 * ri * (dx / 2) / (np.pi * d**2)
+              edges.append((last[parent], start, 1 / r))
+          last[s] = start + n_per - 1
+      A = np.diag(gm)
+      for i, j, g in edges:
+          A[i, i] += g; A[j, j] += g; A[i, j] -= g; A[j, i] -= g
+      I = np.zeros(len(gm)); I[0] = 1e-9
+      return np.linalg.solve(A, I)[0] / 1e-9
+
+  d_rall = (4.0 ** 1.5 / 2) ** (2 / 3)
+  rin_cyl = tree_rin([(4.0, 1.2 * lam_cm(4.0), None)])
+  rin_tree = {}
+  for dd in (round(d_rall, 3), 1.5, 3.5):
+      tree = [(4.0, 0.6 * lam_cm(4.0), None), (dd, 0.6 * lam_cm(dd), 0), (dd, 0.6 * lam_cm(dd), 0)]
+      rin_tree[dd] = tree_rin(tree)
+      print(f"daughters {dd:5.3f} um (sum of d^1.5 / parent's = {2 * dd ** 1.5 / 4 ** 1.5:.2f}): tree {rin_tree[dd] / 1e6:6.1f} MOhm, cylinder {rin_cyl / 1e6:6.1f} MOhm")
+`} />
+
+With 2.52 μm daughters, the tree's input resistance is 164.4 MΩ against the cylinder's 163.7 MΩ, the same within the discretisation error. With 1.5 μm daughters, whose $d^{3/2}$ add up to only 46% of the parent's, it is 198 MΩ: the parent sees a lighter load than its own continuation would be, so the voltage is higher. With 3.5 μm daughters it is 142 MΩ, a heavier load. The figure shows the same in the voltage profile: a kink at the branch point whenever the rule is broken.
+
+<Step n={4} title="How real trees compare" minutes={15} />
+
+Do real neurons obey the rule? Near the soma, many come close: Rall's own analysis of cat motoneurons, and later anatomical reconstructions, found branch points with the sum of $d^{3/2}$ roughly conserved. Further out, and in many cell types, the rule fails, and terminal branches end at very different electrotonic distances. The equivalent cylinder is therefore an idealisation, valuable because it turns a tree into something you can solve by hand and reason about, and because the departures from it tell you where a tree's geometry does something special. For real trees, the practical tool is the compartmental model of tomorrow, which handles any geometry.
+
+<Bridge title="Collapsing a structure into an equivalent one"
+  neuro="Rall's rule says when a branching tree is electrically equivalent to a single cable, so that its many segments can be described by two numbers, a diameter and an electrotonic length. Finding when a complex structure is equivalent to a simple one is how theory makes biology tractable."
+  ai="Network pruning, low-rank factorisation and model distillation ask the same kind of question of artificial networks: when does a large structure behave like a much smaller one? As with dendrites, the answer usually depends on a conservation condition, here of conductance, there of the function computed on the data that matter.">
+
+A complicated shape can be simple electrically, if the right quantity is conserved at every branch.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The input resistance of a semi-infinite cable scales with diameter as...", options: ["d⁻¹", "d⁻²", "d^(-3/2)", "d^(1/2)"], answer: 2, explain: "Axial resistance falls as d⁻², λ rises as d^(1/2)." },
+  { q: "A sealed finite cable's input resistance compared with a semi-infinite one is...", options: ["Lower", "Higher, by coth(L/λ)", "The same", "Zero"], answer: 1, explain: "Current cannot escape past the tip." },
+  { q: "Rall's three-halves rule requires that at each branch point...", options: ["d_parent = Σ d_daughter", "d_parent^(3/2) = Σ d_daughter^(3/2)", "d_parent² = Σ d_daughter²", "All diameters are equal"], answer: 1, explain: "Input conductances must match." },
+  { q: "Two equal daughters of a 4 μm parent obey the rule when each is about...", options: ["2 μm", "2.52 μm", "2.83 μm", "4 μm"], answer: 1, explain: "4 / 2^(2/3)." },
+  { q: "An equivalent cylinder also requires...", options: ["All terminals at the same electrotonic distance", "Active channels", "No soma", "Myelin"], answer: 0, explain: "So that the tree collapses to one length." },
+  { q: "Rall's 1959 paper showed that motoneuron membrane resistivity...", options: ["Had been overestimated", "Had been underestimated by ignoring dendrites", "Is zero", "Varies with time"], answer: 1, explain: "Dendrites carry most of the input current." },
+  { q: "The dendritic-to-somatic conductance ratio ρ for motoneurons is about...", options: ["0.1", "1", "5 to 25", "1,000"], answer: 2, explain: "Most current flows into the dendrites." },
+  { q: "Real dendritic trees...", options: ["Obey the 3/2 rule exactly everywhere", "Often approximate it near the soma but not distally", "Never branch", "Have no electrical structure"], answer: 1, explain: "An idealisation." },
+]} />
+
+<Flashcards cards={[
+  { front: "Semi-infinite cable input resistance?", back: "$R_\\infty = \\frac{2}{\\pi}\\sqrt{r_mr_i}\\,d^{-3/2}$; sealed finite cable: $R_\\infty\\coth(L/\\lambda)$." },
+  { front: "Rall's three-halves rule?", back: "$d_p^{3/2} = \\sum d_j^{3/2}$ at each branch point: daughters load the parent like its own continuation." },
+  { front: "Equivalent cylinder?", back: "A tree obeying the 3/2 rule, with all terminals at equal electrotonic distance, behaves like one cylinder of the parent's diameter." },
+  { front: "Dendritic-to-somatic conductance ratio?", back: "$\\rho = G_{dendrites}/G_{soma}$, about 5 to 25 for motoneurons." },
+  { front: "Why $d^{3/2}$?", back: "Axial resistance scales as $d^{-2}$ and the length constant as $d^{1/2}$." },
+]} />
+
+<Predict revisit question="How thick must each of two equal daughters be for a 4 μm dendrite to behave like an unbranched cylinder?" />
+
+<Key title="Before you go">
+<ul>
+<li>A cable's input resistance scales as d to the power -3/2, and a sealed end raises it by coth(L/λ).</li>
+<li>Dendrites carry most of the current injected at a neuron's soma.</li>
+<li>Rall's 3/2 rule makes a branch point electrically invisible; with equal electrotonic lengths a tree collapses to an equivalent cylinder.</li>
+<li>Real trees only approximate the rule; compartmental models handle the rest.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Rall (1959), <em>Branching dendritic trees and motoneuron membrane resistivity</em>.</li>
+<li>Segev, Rinzel and Shepherd (eds) (1995), <em>The Theoretical Foundation of Dendritic Function: Selected Papers of Wilfrid Rall with Commentaries</em>, MIT Press.</li>
+<li>Koch (1999), <em>Biophysics of Computation</em>, chapter 3, on branched cables.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Rall's equivalent cylinder is an idealisation that real neurons only roughly obey. Describe one question about a neuron that the equivalent cylinder would answer well, and one it would answer badly, and explain why in each case." />
