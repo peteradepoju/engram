@@ -1,0 +1,268 @@
+export const meta = {
+  title: "Measuring activity I: electrodes, from single units to Neuropixels",
+  intro: "Most of what is known about how neurons compute comes from electrodes placed among them. An electrode outside a cell picks up a small, brief voltage dip each time a nearby neuron fires, mixed with the spikes of other neurons, slower field potentials and noise. Today you learn where that signal comes from and how it is turned into spike trains: filtering, detecting spikes against noise, sorting them into neurons by their shapes, and checking the result with the refractory period. Modern probes such as Neuropixels do this for hundreds of neurons at once.",
+  goals: [
+    "Explain what an extracellular electrode measures and why spike size falls with distance",
+    "Separate spikes from the local field potential by filtering",
+    "Detect spikes with a robust noise threshold and measure detection accuracy",
+    "Sort spikes into units with PCA and clustering, and check units with refractory violations",
+  ],
+  plan: [
+    { label: "Predict and the extracellular signal", minutes: 20 },
+    { label: "Filtering and detection", minutes: 30 },
+    { label: "Spike sorting", minutes: 30 },
+    { label: "Is it one neuron?", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "buzsaki-2012",
+};
+
+<Predict question="A single electrode records two neurons, and spike sorting mistakenly merges them into one unit. Both fire at 10 spikes per second with a 2 ms refractory period. What fraction of the merged unit's interspike intervals will be shorter than 2 ms: none, about 1 to 2%, or about 20%?" />
+
+<Step n={1} title="The extracellular signal" minutes={20} />
+
+When a neuron fires, current flows into the cell at the active membrane and out elsewhere, and that current flowing through the resistive extracellular space produces a small voltage, tens to a few hundred microvolts at a nearby electrode, lasting about 1 ms. Its size falls steeply with distance (Buzsáki, Anastassiou and Koch, 2012, today's paper), so an electrode sees a handful of neurons within about 50 to 100 μm, each with its own waveform. The slower currents of synaptic inputs, summed over many cells, make up the **local field potential** (LFP), below a few hundred hertz.
+
+Recording technology has scaled up from single wires, through **tetrodes** (four wires close together, so each spike appears on several), to silicon probes. **Neuropixels** probes carry hundreds of sites along a 1 cm shank, recording from hundreds of neurons across several brain regions at once.
+
+<Figure caption="Two neurons beside a linear probe and the spike amplitude on each site. Drag the neurons." credit="Interactive figure by Engram.">
+  <ElectrodeArray />
+</Figure>
+
+<Video id="LTSmoACr918" title="Lecture on Kilosort" by="Marius Pachitariu (UCL Neuropixels course, 2023)" note="Marius Pachitariu explains how Kilosort sorts spikes from high-density probes such as Neuropixels by matching templates, the modern version of today's pipeline." />
+
+<Step n={2} title="Filtering and detection" minutes={30} />
+
+Simulate one channel: two neurons with different waveforms, a slow LFP and noise, sampled at 30 kHz. First **high-pass filter** the trace to remove the LFP, then detect spikes as crossings of a negative threshold. The noise level is estimated robustly from the median absolute value, $\hat\sigma = \mathrm{median}(|x|)/0.6745$ (Quiroga and colleagues, 2004), because the ordinary standard deviation is inflated by the spikes themselves.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  fs, T = 30000, 60.0
+  n = int(fs * T); t = np.arange(n) / fs
+  rs = np.random.default_rng(28)
+
+  def spike_train(rate, ref=0.002):
+      isi = ref + rs.exponential(1 / rate, int(rate * T * 2))
+      st = np.cumsum(isi); return st[st < T - 0.01]
+
+  wt = np.arange(-30, 45) / fs                     # 2.5 ms of waveform
+  shapeA = -np.exp(-(wt / 0.0002) ** 2) + 0.35 * np.exp(-((wt - 0.0006) / 0.00035) ** 2)
+  shapeB = -np.exp(-(wt / 0.0003) ** 2) + 0.20 * np.exp(-((wt - 0.0009) / 0.0005) ** 2)
+  trains = {"A": spike_train(10.0), "B": spike_train(10.0)}
+  x = 3.0 * np.sin(2 * np.pi * 6 * t) + 1.0 * rs.normal(size=n)       # slow LFP plus noise (arbitrary units)
+  for name, shape, amp in (("A", shapeA, 9.0), ("B", shapeB, 6.5)):
+      for s in trains[name]:
+          i = int(s * fs); x[i - 30:i + 45] += amp * shape
+  print(f"{len(trains['A'])} spikes from A, {len(trains['B'])} from B in {T:.0f} s")
+`} />
+
+<PyCell id="detect" title="Finding the spikes" tests={String.raw`
+  import numpy as np
+  def test_filter():
+      "xf has the 6 Hz LFP removed: its power at 6 Hz is below 1% of the raw trace's"
+      f = np.fft.rfftfreq(n, 1 / fs); k = np.argmin(np.abs(f - 6))
+      assert np.abs(np.fft.rfft(xf))[k] < 0.01 * np.abs(np.fft.rfft(x))[k]
+
+  def test_threshold():
+      "thr is -4.5 times the median absolute deviation estimate of the noise"
+      assert abs(thr + 4.5 * np.median(np.abs(xf)) / 0.6745) < 1e-9
+
+  def test_hits():
+      "over 90% of true spikes are detected within 0.5 ms, with under 5% false detections"
+      assert hit_rate > 0.9 and false_rate < 0.05
+`} prompt="High-pass filter the trace by zeroing all FFT components below 300 Hz to get `xf`. Set the threshold `thr` at −4.5 times the robust noise estimate, and detect a spike at every downward crossing (ignoring crossings within 1 ms of the previous one), keeping the sample of the minimum within the next 1 ms, in `det` (sample indices). Then compute the fraction of true spikes detected within 0.5 ms (`hit_rate`) and the fraction of detections matching no true spike (`false_rate`)."
+code={String.raw`
+  X = np.fft.rfft(x); f = np.fft.rfftfreq(n, 1 / fs)
+  X[f < 300] = 0
+  xf = ...
+  thr = ...
+  cross = np.where((xf[1:] < thr) & (xf[:-1] >= thr))[0] + 1
+  det, last = [], -10**9
+  for c in cross:                                    # 1 ms dead time: one detection per spike
+      if c - last > 30:
+          det.append(c + np.argmin(xf[c:c + 30])); last = c
+  det = np.array(det)
+  true = np.sort(np.concatenate([trains["A"], trains["B"]]) * fs).astype(int)
+  near = lambda a, b: np.min(np.abs(b[:, None] - a[None, :]), axis=1) <= 15   # for each of b, is some a within 0.5 ms?
+  hit_rate = ...
+  false_rate = ...
+  print(f"threshold {thr:.2f};  {len(det)} detections;  hits {hit_rate:.3f}, false {false_rate:.3f}")
+`}
+hint="xf = np.fft.irfft(X, n=n); thr = -4.5 * np.median(np.abs(xf)) / 0.6745; hit_rate = near(det, true).mean(); false_rate = 1 - near(true, det).mean()."
+solution={String.raw`
+  X = np.fft.rfft(x); f = np.fft.rfftfreq(n, 1 / fs)
+  X[f < 300] = 0
+  xf = np.fft.irfft(X, n=n)
+  thr = -4.5 * np.median(np.abs(xf)) / 0.6745
+  cross = np.where((xf[1:] < thr) & (xf[:-1] >= thr))[0] + 1
+  det, last = [], -10**9
+  for c in cross:                                    # 1 ms dead time: one detection per spike
+      if c - last > 30:
+          det.append(c + np.argmin(xf[c:c + 30])); last = c
+  det = np.array(det)
+  true = np.sort(np.concatenate([trains["A"], trains["B"]]) * fs).astype(int)
+  near = lambda a, b: np.min(np.abs(b[:, None] - a[None, :]), axis=1) <= 15   # for each of b, is some a within 0.5 ms?
+  hit_rate = near(det, true).mean()
+  false_rate = 1 - near(true, det).mean()
+  print(f"threshold {thr:.2f};  {len(det)} detections;  hits {hit_rate:.3f}, false {false_rate:.3f}")
+`} />
+
+Removing everything below 300 Hz takes out the slow wave entirely. With the threshold at −4.6 (in these units, from a noise level of about 1), 99.4% of the true spikes are found within 0.5 ms and only 0.3% of detections are false. Two details matter in practice: the robust noise estimate, which barely notices the spikes, and the 1 ms dead time, without which one broad spike can cross the threshold twice and be counted twice.
+
+<Step n={3} title="Spike sorting" minutes={30} />
+
+Each detected event is a short snippet of waveform, a point in a space with as many dimensions as samples. Spikes from the same neuron cluster together; PCA reduces the snippets to a few features and clustering separates the neurons (Week 7 and Day 3). Modern sorters such as Kilosort instead fit a template for each neuron across many channels and subtract them, which also handles overlapping spikes.
+
+<PyCell id="sort" title="PCA and clustering of waveforms" tests={String.raw`
+  import numpy as np
+  def test_snips():
+      "snips holds one 2.5 ms waveform (75 samples) per detection"
+      assert snips.shape == (len(det), 75)
+
+  def test_accuracy():
+      "the sorted units match the true neuron of each matched detection with over 95% accuracy"
+      assert sort_accuracy > 0.95
+`} prompt="Cut a 75-sample snippet around each detection (30 before, 45 after), take the top two principal components, and cluster them into two units with k-means (10 restarts, local rng seed 2). For detections that match a true spike, compare the units with the true neuron, taking the better naming, and store the result in `sort_accuracy`."
+code={String.raw`
+  det = det[(det > 30) & (det < n - 45)]
+  snips = np.array([xf[d - 30:d + 45] for d in det])
+  S = snips - snips.mean(0)
+  Vt = np.linalg.svd(S, full_matrices=False)[2]
+  F = S @ Vt[:2].T
+
+  def kmeans(X, k=2, iters=50, restarts=10):
+      best, best_cost, rk = None, np.inf, np.random.default_rng(2)
+      for _ in range(restarts):
+          c = X[rk.choice(len(X), k, replace=False)]
+          for _ in range(iters):
+              d = ((X[:, None] - c[None]) ** 2).sum(-1); lab = d.argmin(1)
+              c = np.array([X[lab == j].mean(0) if np.any(lab == j) else c[j] for j in range(k)])
+          cost = d[np.arange(len(X)), lab].sum()
+          if cost < best_cost: best, best_cost = lab, cost
+      return best
+
+  units = kmeans(F)
+  tA, tB = (trains["A"] * fs).astype(int), (trains["B"] * fs).astype(int)
+  isA = np.min(np.abs(det[:, None] - tA[None]), 1) <= 15
+  isB = np.min(np.abs(det[:, None] - tB[None]), 1) <= 15
+  ok = isA ^ isB
+  sort_accuracy = ...
+  print(f"sorting accuracy {sort_accuracy:.3f} on {ok.sum()} matched detections")
+  plt.scatter(F[:, 0], F[:, 1], c=units, s=4); plt.xlabel("PC1"); plt.ylabel("PC2"); plt.show()
+`}
+hint="sort_accuracy = max(np.mean(units[ok] == isA[ok]), np.mean(units[ok] != isA[ok]))."
+solution={String.raw`
+  det = det[(det > 30) & (det < n - 45)]
+  snips = np.array([xf[d - 30:d + 45] for d in det])
+  S = snips - snips.mean(0)
+  Vt = np.linalg.svd(S, full_matrices=False)[2]
+  F = S @ Vt[:2].T
+
+  def kmeans(X, k=2, iters=50, restarts=10):
+      best, best_cost, rk = None, np.inf, np.random.default_rng(2)
+      for _ in range(restarts):
+          c = X[rk.choice(len(X), k, replace=False)]
+          for _ in range(iters):
+              d = ((X[:, None] - c[None]) ** 2).sum(-1); lab = d.argmin(1)
+              c = np.array([X[lab == j].mean(0) if np.any(lab == j) else c[j] for j in range(k)])
+          cost = d[np.arange(len(X)), lab].sum()
+          if cost < best_cost: best, best_cost = lab, cost
+      return best
+
+  units = kmeans(F)
+  tA, tB = (trains["A"] * fs).astype(int), (trains["B"] * fs).astype(int)
+  isA = np.min(np.abs(det[:, None] - tA[None]), 1) <= 15
+  isB = np.min(np.abs(det[:, None] - tB[None]), 1) <= 15
+  ok = isA ^ isB
+  sort_accuracy = max(np.mean(units[ok] == isA[ok]), np.mean(units[ok] != isA[ok]))
+  print(f"sorting accuracy {sort_accuracy:.3f} on {ok.sum()} matched detections")
+  plt.scatter(F[:, 0], F[:, 1], c=units, s=4); plt.xlabel("PC1"); plt.ylabel("PC2"); plt.show()
+`} />
+
+In the first two principal components the snippets form two clouds, and k-means assigns 99.5% of matched spikes to the right neuron. This is an easy case: two neurons with well-separated shapes on a clean channel. With dozens of neurons, similar shapes, overlapping spikes and electrode drift, single-channel sorting fails, which is why modern probes record each spike on many sites and sorters such as Kilosort match multi-channel templates.
+
+<Step n={4} title="Is it one neuron?" minutes={25} />
+
+A real neuron cannot fire twice within its refractory period of about 2 ms. A sorted unit with many interspike intervals shorter than that is contaminated, or is several neurons merged. Count the **refractory violations** of each sorted unit and of a unit made by merging both.
+
+<PyCell id="refractory" title="Refractory violations" tests={String.raw`
+  import numpy as np
+  def test_function():
+      "violations returns the fraction of interspike intervals below 2 ms"
+      assert abs(violations(np.array([0.0, 0.001, 0.010, 0.011])) - 2 / 3) < 1e-12
+
+  def test_merged():
+      "the merged unit violates far more often than either sorted unit"
+      assert v_merged > 3 * max(v_units)
+`} prompt="Write `violations(times)`, the fraction of intervals between consecutive sorted spike times (in seconds) shorter than 2 ms. Compute it for each sorted unit (`v_units`, a list of two) and for all detections pooled into one unit (`v_merged`)."
+code={String.raw`
+  def violations(times):
+      isi = np.diff(np.sort(times))
+      return ...
+
+  det_t = det / fs
+  v_units = [violations(det_t[units == u]) for u in (0, 1)]
+  v_merged = ...
+  print(f"violations: units {np.round(v_units, 4)}, merged {v_merged:.4f}")
+`}
+hint="return np.mean(isi < 0.002); v_merged = violations(det_t)."
+solution={String.raw`
+  def violations(times):
+      isi = np.diff(np.sort(times))
+      return np.mean(isi < 0.002)
+
+  det_t = det / fs
+  v_units = [violations(det_t[units == u]) for u in (0, 1)]
+  v_merged = violations(det_t)
+  print(f"violations: units {np.round(v_units, 4)}, merged {v_merged:.4f}")
+`} />
+
+The sorted units have almost no intervals under 2 ms (0% and 0.2%), but the merged unit has 1.5%, because the second neuron's spikes are free to fall within the first's refractory period. That answers the prediction: about 1 to 2%, roughly the rate of the other neuron times the 2 ms window, a little reduced here by the dead time. A small number, but far above a single neuron's near zero, which is why refractory violations are a standard quality metric.
+
+<Bridge title="Recording in brains and machines"
+  neuro="Every spike train in this course went through a pipeline like today's, and its errors (missed spikes, merged or split units, a bias towards large, active neurons near the electrode) shape what analyses can conclude. Reporting sorting quality is part of honest science."
+  ai="Spike sorting is a classic unsupervised learning problem, and modern sorters use template matching, deep networks and drift correction. The same data feed brain-computer interfaces, where decoders sometimes skip sorting and use threshold crossings directly, trading purity for robustness.">
+
+A spike train is the output of a measurement pipeline; know its error rates.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "An extracellular spike recorded near a neuron is typically...", options: ["About 70 mV", "Tens to hundreds of microvolts", "Several volts", "Constant"], answer: 1, explain: "Much smaller than the intracellular spike." },
+  { q: "The local field potential is dominated by...", options: ["Action potentials of one neuron", "Summed synaptic currents of many neurons", "Glial heat", "Electrode noise"], answer: 1, explain: "Today's paper." },
+  { q: "Spikes are separated from the LFP by...", options: ["Low-pass filtering", "High-pass filtering", "Averaging", "Sorting"], answer: 1, explain: "Keep the fast components." },
+  { q: "The noise level for spike detection is estimated from the median absolute value because...", options: ["It is faster", "It is not inflated by the spikes themselves", "It is always larger", "It removes the LFP"], answer: 1, explain: "Robust estimation." },
+  { q: "Spike sorting groups spikes by...", options: ["Their timing alone", "Their waveform shapes, often across several channels", "Their size alone", "Random assignment"], answer: 1, explain: "Clustering in waveform space." },
+  { q: "Many interspike intervals under 2 ms in a unit suggest...", options: ["A very healthy neuron", "Contamination or merged neurons", "A slow neuron", "Nothing"], answer: 1, explain: "Refractory violations." },
+  { q: "Neuropixels probes record...", options: ["One neuron", "Hundreds of neurons across several regions", "Only the LFP", "Blood flow"], answer: 1, explain: "Hundreds of sites on one shank." },
+]} />
+
+<Flashcards cards={[
+  { front: "Extracellular spike?", back: "A brief dip of tens to hundreds of μV from a neuron within about 100 μm; size falls steeply with distance." },
+  { front: "LFP?", back: "Low-frequency extracellular signal dominated by summed synaptic currents." },
+  { front: "Robust noise estimate?", back: "$\\hat\\sigma = \\mathrm{median}(|x|)/0.6745$; threshold at about −4 to −5σ." },
+  { front: "Spike sorting?", back: "Detect, extract waveforms, reduce (PCA), cluster or template-match; check quality." },
+  { front: "Refractory violation check?", back: "Fraction of interspike intervals below about 2 ms should be near zero for a single neuron." },
+]} />
+
+<Predict revisit question="If two 10 Hz neurons are merged into one unit, what fraction of its intervals fall below 2 ms?" />
+
+<Key title="Before you go">
+<ul>
+<li>Electrodes record nearby neurons' spikes and the LFP of many; distance makes each neuron visible on few sites.</li>
+<li>Filter, detect against a robust noise threshold, extract waveforms, cluster.</li>
+<li>Check units with refractory violations; merged units betray themselves.</li>
+<li>High-density probes record hundreds of neurons, but every spike train carries its sorting errors.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Buzsáki, Anastassiou and Koch (2012), <em>The origin of extracellular fields and currents: EEG, ECoG, LFP and spikes</em>.</li>
+<li>Quiroga, Nadasdy and Ben-Shaul (2004), <em>Unsupervised spike detection and sorting with wavelets and superparamagnetic clustering</em>, Neural Computation 16(8), 1661 to 1687.</li>
+<li>Jun and colleagues (2017), <em>Fully integrated silicon probes for high-density recording of neural activity</em>, Nature 551, 232 to 236, the Neuropixels paper (Week 1).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Extracellular recordings favour large neurons that fire often and sit close to the electrode. Describe one finding that this sampling bias could distort, and how you would check whether it had." />

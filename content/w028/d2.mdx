@@ -1,0 +1,239 @@
+export const meta = {
+  title: "A tour of the brain: areas, layers and pathways",
+  intro: "Today is a guided tour: the brain's main divisions and what each is thought to do, the six-layered sheet of the neocortex and the circuit that runs through its layers, and the way areas connect into pathways and hierarchies. You will treat the visual system's wiring as a graph and measure its structure, simulate a signal flowing through the cortical layers, and fit the rule by which connections between areas weaken with distance. These are the anatomical facts that every model in the rest of the course has to respect.",
+  goals: [
+    "Name the brain's main divisions and their broad roles",
+    "Describe the layers of neocortex and a simplified canonical circuit",
+    "Analyse a cortical hierarchy as a directed graph",
+    "Fit the exponential decline of connection strength with distance",
+  ],
+  plan: [
+    { label: "Predict and the main divisions", minutes: 25 },
+    { label: "The cortical sheet and its layers", minutes: 25 },
+    { label: "Areas as a network", minutes: 30 },
+    { label: "Wiring and distance", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "felleman-1991",
+};
+
+<Predict question="A signal from the eye arrives in primary visual cortex (V1). Along the shortest route through the connections between visual areas, how many steps does it take to reach the inferotemporal cortex, where neurons respond to whole objects such as faces: 1, 3 or 10?" />
+
+<Step n={1} title="The main divisions" minutes={25} />
+
+Running from the spinal cord upwards:
+
+- **Brainstem** (medulla, pons, midbrain): breathing, heart rate, arousal, eye movements, relaying signals to and from the body. The midbrain contains the dopamine neurons of the substantia nigra and ventral tegmental area.
+- **Cerebellum**: coordination, timing and motor learning; it holds most of the brain's neurons, in a strikingly regular circuit.
+- **Thalamus**: the gateway to the cortex. Almost every sensory signal except smell passes through it, and it forms loops with every cortical area.
+- **Hypothalamus**: hunger, thirst, temperature, hormones, and innate behaviours such as aggression and mating.
+- **Basal ganglia**: action selection and reinforcement learning, in loops through the thalamus and cortex.
+- **Hippocampus and amygdala**: memory and spatial navigation; emotional learning.
+- **Cerebral cortex**: a folded sheet, organised into areas for sensing, moving, planning, language and much else; in humans about 16 billion neurons.
+
+The functions listed are simplifications: every area takes part in many functions, and every function involves many areas.
+
+<Video id="ba-HMvDn_vU" title="1. Introduction to the Human Brain" by="Nancy Kanwisher (MIT OpenCourseWare)" note="The first lecture of Nancy Kanwisher's MIT course on the human brain, an overview of its organisation and of how its parts are studied." />
+
+<Step n={2} title="The cortical sheet and its layers" minutes={25} />
+
+The neocortex is a sheet 2 to 4 mm thick and, in humans, about 2,000 cm² in area, folded to fit the skull. Across its thickness it has six layers, which differ in their cell types and connections. Within an area, a simplified **canonical circuit** carries signals from the thalamus into layer 4, up to layers 2/3, then down to layers 5 and 6, which send outputs out of the cortex and back to the thalamus.
+
+<Figure caption="The six layers of neocortex and the main paths of a simplified canonical circuit. Tap a layer." credit="Interactive figure by Engram, after Douglas and Martin's canonical microcircuit.">
+  <CortexLayers />
+</Figure>
+
+<PyCell id="layers" title="A signal flowing through the layers" tests={String.raw`
+  import numpy as np
+  def test_order():
+      "the response peaks in layer 4 first, then layers 2/3, then layer 5"
+      assert peak["L4"] < peak["L2/3"] < peak["L5"]
+
+  def test_shape():
+      "r holds one row per layer and one column per time step"
+      assert r.shape == (4, len(ts))
+`} prompt="Model four layers as leaky rate units (τ = 10 ms) connected in the canonical order: thalamus to L4, L4 to L2/3, L2/3 to L5, L5 to L6 (weights 1), with a brief thalamic pulse from 5 to 10 ms. Simulate 100 ms with Euler steps of 0.1 ms, store the rates in `r` (layers L4, L2/3, L5, L6) and each layer's peak time in `peak`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  names = ["L4", "L2/3", "L5", "L6"]
+  W = np.array([[0, 0, 0, 0],      # row = target, column = source
+                [1, 0, 0, 0],
+                [0, 1, 0, 0],
+                [0, 0, 1, 0]], float)
+  tau, dt = 10.0, 0.1
+  ts = np.arange(0, 100, dt)
+  thal = ((ts >= 5) & (ts < 10)).astype(float)
+  r = np.zeros((4, len(ts)))
+  for k in range(1, len(ts)):
+      inp = W @ r[:, k - 1] + np.array([thal[k - 1], 0, 0, 0])
+      r[:, k] = ...                                 # leaky integration towards the input
+  peak = {n: float(ts[np.argmax(r[i])]) for i, n in enumerate(names)}
+  print("peak times (ms):", peak)
+  for i, n in enumerate(names): plt.plot(ts, r[i], label=n)
+  plt.legend(); plt.xlabel("ms"); plt.show()
+`}
+hint="r[:, k] = r[:, k - 1] + dt / tau * (-r[:, k - 1] + inp)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  names = ["L4", "L2/3", "L5", "L6"]
+  W = np.array([[0, 0, 0, 0],      # row = target, column = source
+                [1, 0, 0, 0],
+                [0, 1, 0, 0],
+                [0, 0, 1, 0]], float)
+  tau, dt = 10.0, 0.1
+  ts = np.arange(0, 100, dt)
+  thal = ((ts >= 5) & (ts < 10)).astype(float)
+  r = np.zeros((4, len(ts)))
+  for k in range(1, len(ts)):
+      inp = W @ r[:, k - 1] + np.array([thal[k - 1], 0, 0, 0])
+      r[:, k] = r[:, k - 1] + dt / tau * (-r[:, k - 1] + inp)                                 # leaky integration towards the input
+  peak = {n: float(ts[np.argmax(r[i])]) for i, n in enumerate(names)}
+  print("peak times (ms):", peak)
+  for i, n in enumerate(names): plt.plot(ts, r[i], label=n)
+  plt.legend(); plt.xlabel("ms"); plt.show()
+`} />
+
+The response peaks in layer 4 at 10 ms, as the thalamic pulse ends, then in layers 2/3 at 17.7 ms, layer 5 at 27.6 ms and layer 6 at 37.6 ms, each stage adding about one time constant of delay and smoothing the signal further. Recordings across cortical depth after a sensory stimulus show a similar order, with layer 4 and the deep part of layer 6 responding first, though real circuits have many more paths than this chain.
+
+<Step n={3} title="Areas as a network" minutes={30} />
+
+Felleman and Van Essen (1991, today's paper) used the layers in which each connection between two areas starts and ends to call it feedforward or feedback, and arranged the macaque's visual areas in a hierarchy. Below is a small, simplified subset of the visual pathways: from V1, a ventral stream through V2 and V4 to the inferotemporal areas TEO and TE, concerned with object identity, and a dorsal stream through MT and MST to parietal area 7a, concerned with motion and space. Most connections are reciprocal.
+
+<PyCell id="graph" title="The visual hierarchy as a graph" tests={String.raw`
+  import numpy as np
+  def test_dist():
+      "dist holds breadth-first distances from V1 along feedforward edges"
+      assert dist["V1"] == 0 and dist["V2"] == 1 and dist["TE"] == 3 and dist["7a"] == 3
+
+  def test_recip():
+      "reciprocity is the fraction of feedforward edges whose reverse is a feedback edge"
+      assert abs(reciprocity - sum((b, a) in feedback for a, b in feedforward) / len(feedforward)) < 1e-12
+`} prompt="Compute the number of feedforward steps from V1 to every area, `dist`, by breadth-first search, and the fraction of feedforward connections matched by a feedback connection in the opposite direction, `reciprocity`."
+code={String.raw`
+  from collections import deque
+  feedforward = [("V1", "V2"), ("V1", "MT"), ("V2", "V4"), ("V2", "MT"), ("V4", "TEO"), ("TEO", "TE"),
+                 ("V4", "TE"), ("MT", "MST"), ("MST", "7a"), ("V4", "MT")]
+  feedback = [("V2", "V1"), ("MT", "V1"), ("V4", "V2"), ("MT", "V2"), ("TEO", "V4"), ("TE", "TEO"),
+              ("MST", "MT"), ("7a", "MST")]
+  graph = {}
+  for a, b in feedforward: graph.setdefault(a, []).append(b)
+
+  dist, queue = {"V1": 0}, deque(["V1"])
+  while queue:
+      a = queue.popleft()
+      for b in graph.get(a, []):
+          if b not in dist:
+              dist[b] = ...
+              queue.append(b)
+  reciprocity = ...
+  print("feedforward steps from V1:", dist); print(f"reciprocity {reciprocity:.2f}")
+`}
+hint="dist[b] = dist[a] + 1; reciprocity = sum((b, a) in feedback for a, b in feedforward) / len(feedforward)."
+solution={String.raw`
+  from collections import deque
+  feedforward = [("V1", "V2"), ("V1", "MT"), ("V2", "V4"), ("V2", "MT"), ("V4", "TEO"), ("TEO", "TE"),
+                 ("V4", "TE"), ("MT", "MST"), ("MST", "7a"), ("V4", "MT")]
+  feedback = [("V2", "V1"), ("MT", "V1"), ("V4", "V2"), ("MT", "V2"), ("TEO", "V4"), ("TE", "TEO"),
+              ("MST", "MT"), ("7a", "MST")]
+  graph = {}
+  for a, b in feedforward: graph.setdefault(a, []).append(b)
+
+  dist, queue = {"V1": 0}, deque(["V1"])
+  while queue:
+      a = queue.popleft()
+      for b in graph.get(a, []):
+          if b not in dist:
+              dist[b] = dist[a] + 1
+              queue.append(b)
+  reciprocity = sum((b, a) in feedback for a, b in feedforward) / len(feedforward)
+  print("feedforward steps from V1:", dist); print(f"reciprocity {reciprocity:.2f}")
+`} />
+
+V2 and MT are one step from V1; V4 and MST two; TEO, TE and 7a three. That answers the prediction: about three steps to inferotemporal cortex, even though the hierarchy has several levels, because some connections skip levels (V4 projects to TE directly, V1 to MT). Eight of the ten feedforward connections here have a feedback partner; in the full dataset most connections are reciprocal. A hierarchy with short paths and abundant feedback is very different from a deep feedforward chain.
+
+<Step n={4} title="Wiring and distance" minutes={25} />
+
+Connections cost space and energy, so the brain keeps most wiring short. Tract-tracing studies in the macaque (Markov and colleagues, 2014; Ercsey-Ravasz and colleagues, 2013) found that the density of connections between two areas falls roughly exponentially with the distance between them, an **exponential distance rule**. Fit one to simulated data drawn from such a rule.
+
+<PyCell id="edr" title="The exponential distance rule" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "lam_hat is the decay rate from regressing log strength on distance, within 15% of the true 0.19 per mm"
+      assert abs(lam_hat - 0.19) / 0.19 < 0.15
+
+  def test_half():
+      "half_dist is ln 2 / lam_hat"
+      assert abs(half_dist - np.log(2) / lam_hat) < 1e-12
+`} prompt="For 300 pairs of areas, connection strength is 10 exp(−λd) times log-normal scatter (sd 0.8 in natural log), with λ = 0.19 per mm and distances 2 to 40 mm (local rng seed 13). Fit log strength against distance by least squares to estimate `lam_hat`, and compute the distance over which strength halves, `half_dist`."
+code={String.raw`
+  r13 = np.random.default_rng(13)
+  d = r13.uniform(2, 40, 300)
+  strength = 10 * np.exp(-0.19 * d) * np.exp(0.8 * r13.normal(size=300))
+  slope, intercept = ...
+  lam_hat = -slope
+  half_dist = ...
+  print(f"decay rate {lam_hat:.3f} per mm;  strength halves every {half_dist:.1f} mm")
+  plt.semilogy(d, strength, ".", ms=3); plt.xlabel("distance (mm)"); plt.ylabel("connection strength"); plt.show()
+`}
+hint="slope, intercept = np.polyfit(d, np.log(strength), 1); half_dist = np.log(2) / lam_hat."
+solution={String.raw`
+  r13 = np.random.default_rng(13)
+  d = r13.uniform(2, 40, 300)
+  strength = 10 * np.exp(-0.19 * d) * np.exp(0.8 * r13.normal(size=300))
+  slope, intercept = np.polyfit(d, np.log(strength), 1)
+  lam_hat = -slope
+  half_dist = np.log(2) / lam_hat
+  print(f"decay rate {lam_hat:.3f} per mm;  strength halves every {half_dist:.1f} mm")
+  plt.semilogy(d, strength, ".", ms=3); plt.xlabel("distance (mm)"); plt.ylabel("connection strength"); plt.show()
+`} />
+
+The fit recovers a decay rate of 0.196 per mm (true 0.19), so connection strength halves every 3.5 mm, and falls a thousandfold over about 35 mm. Distant areas are still connected, but weakly: most of the brain's wiring budget is spent locally, which shapes everything from the size of cortical areas to how fast signals can spread across the brain.
+
+<Bridge title="Architecture in brains and machines"
+  neuro="The cortex combines a repeated local circuit, organised in layers, with a long-range network of areas arranged in a distributed hierarchy, with feedforward and feedback pathways. Models of perception, from predictive coding to deep networks, borrow this layout."
+  ai="Convolutional networks were inspired by the ventral visual stream's hierarchy, and their layers have been compared stage by stage with V1, V4 and IT. But cortex is far more recurrent: most of its connections are local, lateral or feedback, which feedforward networks lack.">
+
+The brain is a repeated circuit wired into a distance-limited, reciprocal hierarchy.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Almost all sensory signals except smell reach the cortex through...", options: ["The cerebellum", "The thalamus", "The hypothalamus", "The amygdala"], answer: 1, explain: "The gateway to the cortex." },
+  { q: "The main thalamic input to a primary sensory area arrives in...", options: ["Layer 1", "Layer 4", "Layer 5", "Layer 6"], answer: 1, explain: "The canonical circuit's entry point." },
+  { q: "The main output from cortex to subcortical structures leaves from...", options: ["Layer 2/3", "Layer 4", "Layer 5", "Layer 1"], answer: 2, explain: "Large pyramidal cells." },
+  { q: "Felleman and Van Essen classified connections as feedforward or feedback using...", options: ["Conduction speed", "The layers where connections start and end", "Neurotransmitter", "Area size"], answer: 1, explain: "Laminar patterns." },
+  { q: "The ventral visual stream is concerned mainly with...", options: ["Motion", "Object identity", "Eye movements", "Balance"], answer: 1, explain: "Towards inferotemporal cortex." },
+  { q: "Most connections between cortical areas are...", options: ["One-way", "Reciprocal", "Absent", "Inhibitory"], answer: 1, explain: "Feedforward paired with feedback." },
+  { q: "Connection strength between areas falls with distance roughly...", options: ["Linearly", "Exponentially", "Not at all", "As a step"], answer: 1, explain: "The exponential distance rule." },
+]} />
+
+<Flashcards cards={[
+  { front: "Thalamus?", back: "Gateway and loop partner of the cortex; relays almost all sensory input except smell." },
+  { front: "Canonical cortical circuit?", back: "Thalamus to L4, to L2/3 (to other areas), to L5 (out of cortex) and L6 (back to thalamus)." },
+  { front: "Ventral and dorsal streams?", back: "Ventral: V1, V2, V4, IT, for identity. Dorsal: V1, MT, MST, parietal, for motion and space." },
+  { front: "Felleman and Van Essen (1991)?", back: "Laminar patterns place visual areas in a distributed hierarchy of about ten levels." },
+  { front: "Exponential distance rule?", back: "Connection density between areas decays roughly as exp(−λd)." },
+]} />
+
+<Predict revisit question="How many feedforward steps from V1 to inferotemporal cortex?" />
+
+<Key title="Before you go">
+<ul>
+<li>Brainstem, cerebellum, thalamus, hypothalamus, basal ganglia, hippocampus, amygdala and cortex each have broad roles, and none works alone.</li>
+<li>The cortex is a layered sheet with a repeated circuit from thalamic input to subcortical output.</li>
+<li>Areas form a distributed, mostly reciprocal hierarchy in which the shortest path is often only a few steps.</li>
+<li>Wiring is expensive, so connection strength falls steeply with distance.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Felleman and Van Essen (1991), <em>Distributed hierarchical processing in the primate cerebral cortex</em>.</li>
+<li>Douglas and Martin (2004), <em>Neuronal circuits of the neocortex</em>, Annual Review of Neuroscience 27, 419 to 451.</li>
+<li>Kandel, Koester, Mack and Siegelbaum (eds.), <em>Principles of Neural Science</em>, the chapters on the organisation of the brain, as a reference throughout Part 2.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Choose one brain structure from today's list that you knew least about. Write what it does, what goes in and out of it, and one question about it that a computational model could help answer." />

@@ -1,0 +1,243 @@
+export const meta = {
+  title: "Measuring activity II: imaging, fMRI and EEG",
+  intro: "Electrodes record spikes precisely but from few, unseen cells. Other methods trade that precision for coverage. Calcium imaging watches thousands of identified neurons, through a slow fluorescent signal; fMRI sees the whole human brain, through blood flow, seconds late and millimetres wide; EEG catches millisecond timing from the scalp, but only when many neurons act together. Today you model each signal as a transformation of neural activity, from Week 10's convolution to Week 17's regression, and learn what each can and cannot reveal.",
+  goals: [
+    "Place the main recording methods by their spatial and temporal resolution",
+    "Model calcium fluorescence as filtered spikes and deconvolve it",
+    "Fit an fMRI response with a haemodynamic model and a general linear model",
+    "Explain why EEG depends on synchrony, by summing many sources",
+  ],
+  plan: [
+    { label: "Predict and the methods map", minutes: 20 },
+    { label: "Calcium imaging", minutes: 30 },
+    { label: "fMRI and the general linear model", minutes: 35 },
+    { label: "EEG and synchrony", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "logothetis-2001",
+};
+
+<Predict question="10,000 neurons each produce a 10 Hz oscillation of the same size. If their phases are random, the summed signal at a distant electrode has some amplitude A. If they all oscillate in phase, how much larger is the sum: 10 times, 100 times or 10,000 times?" />
+
+<Step n={1} title="The methods map" minutes={20} />
+
+<Figure caption="Methods for measuring brain activity, placed by spatial and temporal resolution. Tap a method for what it measures." credit="Interactive figure by Engram, after similar maps by Churchland and Sejnowski.">
+  <MethodsMap />
+</Figure>
+
+Each method measures something that is related to neural activity by a transformation, and an analysis must model that transformation. Calcium indicators turn each spike into a slow rise and decay of fluorescence. The **BOLD** signal of fMRI follows changes in blood oxygenation that lag neural activity by seconds. EEG measures the electric field that reaches the scalp, which only many aligned neurons, active together, can produce.
+
+<Video id="ZL-Tr1KSMKY" title="Principles of fMRI (lecture series)" by="Martin Lindquist and Tor Wager" note="The opening video of Lindquist and Wager's lecture series on functional MRI, covering what the BOLD signal is and how it is analysed, the background for today's general linear model." />
+
+<Step n={2} title="Calcium imaging" minutes={30} />
+
+When a neuron fires, calcium floods in; a genetically encoded indicator such as GCaMP fluoresces more brightly while calcium is high, then decays over hundreds of milliseconds. A simple model, with frames every $\Delta t$:
+
+$$
+c_t = \gamma c_{t-1} + s_t, \qquad F_t = c_t + \varepsilon_t, \qquad \gamma = e^{-\Delta t/\tau},
+$$
+
+where $s_t$ is the number of spikes in frame $t$. Fluorescence is a leaky integration (Week 10) of spikes plus noise. **Deconvolution** inverts it: $\hat s_t = F_t - \gamma F_{t-1}$, clipped at zero because spike counts cannot be negative.
+
+<PyCell id="calcium" title="From fluorescence back to spikes" tests={String.raw`
+  import numpy as np
+  def test_model():
+      "F follows the autoregressive calcium model plus noise"
+      c = np.zeros(len(s))
+      for t_ in range(1, len(s)): c[t_] = gamma * c[t_ - 1] + s[t_]
+      assert np.allclose(F - c, noise)
+
+  def test_deconv():
+      "deconvolution correlates better with the true spikes than raw fluorescence does, and above 0.6"
+      assert corr_deconv > 0.6 and corr_deconv > corr_raw
+`} prompt="Simulate 60 s of a neuron firing Poisson spikes at 2 Hz, imaged at 30 frames per second with an indicator decaying with τ = 0.5 s and noise of sd 0.3 (local rng seed 6). Compute `F`, deconvolve it into `s_hat` (clipping at zero), and compare the correlation of `F` and `s_hat` with the true spikes per frame, `s`, as `corr_raw` and `corr_deconv`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r6 = np.random.default_rng(6)
+  fps, T, tau = 30, 60, 0.5
+  nf = fps * T; gamma = np.exp(-1 / (fps * tau))
+  s = r6.poisson(2.0 / fps, nf).astype(float)        # spikes per frame
+  noise = 0.3 * r6.normal(size=nf)
+  c = np.zeros(nf)
+  for t_ in range(1, nf):
+      c[t_] = ...
+  F = c + noise
+  s_hat = np.zeros(nf)
+  s_hat[1:] = ...                                    # F_t - gamma F_{t-1}, clipped at zero
+  corr_raw = np.corrcoef(F, s)[0, 1]
+  corr_deconv = np.corrcoef(s_hat, s)[0, 1]
+  print(f"correlation with true spikes: raw fluorescence {corr_raw:.2f}, deconvolved {corr_deconv:.2f}")
+  tt = np.arange(nf) / fps
+  plt.plot(tt[:300], F[:300], label="fluorescence"); plt.plot(tt[:300], s[:300] * 2, label="spikes (x2)"); plt.legend(); plt.xlabel("s"); plt.show()
+`}
+hint="c[t_] = gamma * c[t_ - 1] + s[t_]; s_hat[1:] = np.clip(F[1:] - gamma * F[:-1], 0, None)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r6 = np.random.default_rng(6)
+  fps, T, tau = 30, 60, 0.5
+  nf = fps * T; gamma = np.exp(-1 / (fps * tau))
+  s = r6.poisson(2.0 / fps, nf).astype(float)        # spikes per frame
+  noise = 0.3 * r6.normal(size=nf)
+  c = np.zeros(nf)
+  for t_ in range(1, nf):
+      c[t_] = gamma * c[t_ - 1] + s[t_]
+  F = c + noise
+  s_hat = np.zeros(nf)
+  s_hat[1:] = np.clip(F[1:] - gamma * F[:-1], 0, None)                                    # F_t - gamma F_{t-1}, clipped at zero
+  corr_raw = np.corrcoef(F, s)[0, 1]
+  corr_deconv = np.corrcoef(s_hat, s)[0, 1]
+  print(f"correlation with true spikes: raw fluorescence {corr_raw:.2f}, deconvolved {corr_deconv:.2f}")
+  tt = np.arange(nf) / fps
+  plt.plot(tt[:300], F[:300], label="fluorescence"); plt.plot(tt[:300], s[:300] * 2, label="spikes (x2)"); plt.legend(); plt.xlabel("s"); plt.show()
+`} />
+
+Raw fluorescence correlates only 0.35 with the true spikes in each frame, because every spike's trace lingers for many frames. Deconvolution raises the correlation to 0.69. The rest is lost to noise: a single spike adds 1 unit of fluorescence against noise of sd 0.3, and spikes close in time blur together. Real pipelines, such as OASIS or the deconvolution in Suite2p, add sparsity priors and fit the indicator's dynamics, but none recovers exact spike times from imaging alone.
+
+<Step n={3} title="fMRI and the general linear model" minutes={35} />
+
+Active neurons use energy, and within a second or two blood flow increases more than oxygen use does, so the local blood becomes more oxygenated, which changes the MRI signal. The **haemodynamic response** to a brief burst of activity peaks about 5 s later and dips below baseline at around 15 s. Logothetis and colleagues (2001, today's deep read) showed that BOLD tracks the local field potential, the input to an area, better than its spiking output.
+
+Analyses treat BOLD as neural activity convolved with a haemodynamic response function (HRF), and fit the result with a **general linear model**, ordinary least squares on predicted regressors (Week 5), testing whether each condition's weight is non-zero.
+
+<PyCell id="glm" title="A block design and its GLM" tests={String.raw`
+  import numpy as np
+  def test_hrf():
+      "the HRF peaks between 4 and 6 s and has a negative undershoot"
+      assert 4 <= th[np.argmax(hrf)] <= 6 and hrf.min() < 0
+
+  def test_beta():
+      "the estimated effect is within 0.3 of the true 2.0 and its t statistic above 5"
+      assert abs(beta[1] - 2.0) < 0.3 and t_stat > 5
+
+  def test_better():
+      "the HRF-convolved model explains more variance than the raw boxcar"
+      assert r2_hrf > r2_box
+`} prompt="Build a double-gamma HRF on a 0 to 30 s grid, h(t) = t⁵e^(−t)/5! − t¹⁵e^(−t)/(6·15!). For 300 s of 20 s on and 20 s off blocks sampled every 1 s (TR), convolve the boxcar with the HRF to get the regressor, simulate a voxel as 2 × regressor + noise (sd 1, local rng seed 7), fit an intercept and the regressor by least squares (`beta`), compute the t statistic of the effect, and compare R² with a model that uses the raw boxcar instead."
+code={String.raw`
+  from math import factorial
+  th = np.arange(0, 30, 1.0)
+  hrf = ...                                         # double-gamma haemodynamic response
+  hrf = hrf / hrf.max()
+  t_scan = np.arange(300)
+  box = ((t_scan // 20) % 2 == 1).astype(float)    # 20 s off, 20 s on
+  reg = np.convolve(box, hrf)[:300]
+  y = 2.0 * reg + np.random.default_rng(7).normal(size=300)
+
+  def fit(x):
+      X = np.c_[np.ones(300), x]
+      b = np.linalg.lstsq(X, y, rcond=None)[0]
+      res = y - X @ b
+      s2 = res @ res / (300 - 2)
+      se = np.sqrt(s2 * np.linalg.inv(X.T @ X)[1, 1])
+      return b, b[1] / se, 1 - res @ res / np.sum((y - y.mean()) ** 2)
+
+  beta, t_stat, r2_hrf = fit(reg)
+  _, _, r2_box = ...
+  print(f"effect {beta[1]:.2f} (true 2.0), t = {t_stat:.1f};  R2 with HRF {r2_hrf:.3f}, with raw boxcar {r2_box:.3f}")
+  plt.plot(t_scan, y, lw=0.6); plt.plot(t_scan, beta[0] + beta[1] * reg); plt.xlabel("s"); plt.show()
+`}
+hint="hrf = th ** 5 * np.exp(-th) / factorial(5) - th ** 15 * np.exp(-th) / (6 * factorial(15)); _, _, r2_box = fit(box)."
+solution={String.raw`
+  from math import factorial
+  th = np.arange(0, 30, 1.0)
+  hrf = th ** 5 * np.exp(-th) / factorial(5) - th ** 15 * np.exp(-th) / (6 * factorial(15))                                         # double-gamma haemodynamic response
+  hrf = hrf / hrf.max()
+  t_scan = np.arange(300)
+  box = ((t_scan // 20) % 2 == 1).astype(float)    # 20 s off, 20 s on
+  reg = np.convolve(box, hrf)[:300]
+  y = 2.0 * reg + np.random.default_rng(7).normal(size=300)
+
+  def fit(x):
+      X = np.c_[np.ones(300), x]
+      b = np.linalg.lstsq(X, y, rcond=None)[0]
+      res = y - X @ b
+      s2 = res @ res / (300 - 2)
+      se = np.sqrt(s2 * np.linalg.inv(X.T @ X)[1, 1])
+      return b, b[1] / se, 1 - res @ res / np.sum((y - y.mean()) ** 2)
+
+  beta, t_stat, r2_hrf = fit(reg)
+  _, _, r2_box = fit(box)
+  print(f"effect {beta[1]:.2f} (true 2.0), t = {t_stat:.1f};  R2 with HRF {r2_hrf:.3f}, with raw boxcar {r2_box:.3f}")
+  plt.plot(t_scan, y, lw=0.6); plt.plot(t_scan, beta[0] + beta[1] * reg); plt.xlabel("s"); plt.show()
+`} />
+
+With the haemodynamic model the fit recovers an effect of 2.02 (true 2.0) with t = 93 and explains 97% of the variance. The raw boxcar, which assumes BOLD follows activity instantly, explains only 34%: in a 20 s block design the 5 s lag puts much of each block's response in the wrong place. This is a toy (a single voxel, white noise, a perfectly known HRF); real fMRI data add slow drifts, autocorrelated noise, head motion and an HRF that varies between regions and people.
+
+<Step n={4} title="EEG and synchrony" minutes={20} />
+
+A scalp electrode sums the fields of millions of neurons, each tiny and attenuated by distance and by the skull. Sources oscillating with random phases largely cancel; sources in phase add. Pyramidal cells, aligned in parallel with their dendrites perpendicular to the cortical surface, add best, which is why they are thought to dominate the EEG.
+
+<PyCell id="sync" title="Why the EEG needs synchrony" tests={String.raw`
+  import numpy as np
+  def test_amps():
+      "the in-phase amplitude is N; the root-mean-square random-phase amplitude is within 10% of sqrt(N)"
+      assert abs(amp_sync - N) < 1e-6 * N and abs(amp_random / np.sqrt(N) - 1) < 0.1
+`} prompt="Sinusoids of the same frequency add like phasors (Week 11): N unit sources with phases φ sum to a sinusoid of amplitude |Σ exp(iφ)|. Compute this amplitude for N = 10,000 sources all in phase (`amp_sync`), and the root-mean-square amplitude over 200 sets of random phases (local rng seed 8) (`amp_random`)."
+code={String.raw`
+  N = 10000
+  r8 = np.random.default_rng(8)
+  amp_sync = ...                                    # all phases zero
+  amps = [abs(np.exp(1j * r8.uniform(0, 2 * np.pi, N)).sum()) for _ in range(200)]
+  amp_random = ...                                  # root mean square over the 200 draws
+  print(f"in phase: {amp_sync:.0f};  random phases: {amp_random:.0f} (single draws from {min(amps):.0f} to {max(amps):.0f});  ratio {amp_sync / amp_random:.0f}")
+`}
+hint="amp_sync = abs(np.exp(1j * np.zeros(N)).sum()); amp_random = np.sqrt(np.mean(np.square(amps)))."
+solution={String.raw`
+  N = 10000
+  r8 = np.random.default_rng(8)
+  amp_sync = abs(np.exp(1j * np.zeros(N)).sum())                                    # all phases zero
+  amps = [abs(np.exp(1j * r8.uniform(0, 2 * np.pi, N)).sum()) for _ in range(200)]
+  amp_random = np.sqrt(np.mean(np.square(amps)))                                  # root mean square over the 200 draws
+  print(f"in phase: {amp_sync:.0f};  random phases: {amp_random:.0f} (single draws from {min(amps):.0f} to {max(amps):.0f});  ratio {amp_sync / amp_random:.0f}")
+`} />
+
+In phase, 10,000 unit sources sum to 10,000. With random phases the sum's amplitude averages 98 in root-mean-square terms, about $\sqrt N = 100$, though single draws range widely, from 6 to 232. That answers the prediction: in-phase sources produce about 100 times the signal, $\sqrt N$. The scalp EEG is therefore dominated by whatever populations are synchronised, which is why it is so sensitive to rhythms and so blind to the asynchronous activity that carries much of the brain's information.
+
+<Bridge title="Measurement models in brains and machines"
+  neuro="Each method sees neural activity through a filter: the calcium indicator's decay, the haemodynamic response, the volume conduction of the skull. Comparing findings across methods, or across species measured with different methods, means modelling those filters explicitly, as today's exercises did."
+  ai="Encoding models that predict fMRI or EEG from deep network activations, a central NeuroAI method (Part 6), must include the same measurement models: a network's features are convolved with the HRF before fitting to BOLD. Ignoring the measurement throws away the timing, or attributes it to the wrong cause.">
+
+Model the measurement before you interpret the brain.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Calcium imaging measures...", options: ["Spikes directly", "Fluorescence of an indicator that rises with intracellular calcium after spikes", "Blood flow", "Magnetic fields"], answer: 1, explain: "A slow proxy for spiking." },
+  { q: "Deconvolving calcium fluorescence aims to recover...", options: ["Blood oxygen", "The spike train", "Noise", "The HRF"], answer: 1, explain: "Inverting the indicator's filter." },
+  { q: "The BOLD haemodynamic response peaks about...", options: ["50 ms after activity", "5 s after activity", "1 minute after", "Before activity"], answer: 1, explain: "And undershoots near 15 s." },
+  { q: "Logothetis and colleagues found BOLD best predicted by...", options: ["Spiking output", "The local field potential", "Heart rate", "Head motion"], answer: 1, explain: "Today's deep read." },
+  { q: "An fMRI general linear model is...", options: ["A deep network", "Least-squares regression on HRF-convolved predictors", "A clustering method", "Spike sorting"], answer: 1, explain: "Week 5 and Week 17 again." },
+  { q: "N sources in phase sum to an amplitude of about...", options: ["√N", "N", "N²", "1"], answer: 1, explain: "Random phases give about √N." },
+  { q: "EEG is dominated by...", options: ["Interneurons", "Synchronous activity of aligned pyramidal cells", "Glia", "Single spikes"], answer: 1, explain: "Their fields add." },
+]} />
+
+<Flashcards cards={[
+  { front: "Calcium model?", back: "$c_t = \\gamma c_{t-1} + s_t$, $F_t = c_t + \\varepsilon_t$, $\\gamma = e^{-\\Delta t/\\tau}$." },
+  { front: "Simple calcium deconvolution?", back: "$\\hat s_t = \\max(0, F_t - \\gamma F_{t-1})$." },
+  { front: "Haemodynamic response?", back: "Peaks about 5 s after activity, undershoots around 15 s; BOLD ≈ activity convolved with it." },
+  { front: "fMRI GLM?", back: "Regress the voxel signal on HRF-convolved condition regressors; test the weights." },
+  { front: "Synchrony and summed fields?", back: "In phase: amplitude ∝ N. Random phase: ∝ √N." },
+]} />
+
+<Predict revisit question="How much larger is the sum of 10,000 in-phase oscillations than of 10,000 random-phase ones?" />
+
+<Key title="Before you go">
+<ul>
+<li>Every method trades resolution for coverage and measures activity through a transformation.</li>
+<li>Calcium fluorescence is low-pass filtered spiking; deconvolution partly recovers spikes.</li>
+<li>BOLD is activity convolved with a slow haemodynamic response; the GLM fits it.</li>
+<li>EEG sees only synchronous, aligned sources, whose fields add instead of cancelling.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper (deep read): Logothetis, Pauls, Augath, Trinath and Oeltermann (2001), <em>Neurophysiological investigation of the basis of the fMRI signal</em>.</li>
+<li>Chen and colleagues (2013), <em>Ultrasensitive fluorescent proteins for imaging neuronal activity</em>, Nature 499, 295 to 300, which introduced GCaMP6.</li>
+<li>Poldrack, Mumford and Nichols, <em>Handbook of Functional MRI Data Analysis</em> (Cambridge University Press, 2011), chapters 5 and 6.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Pick a question about the brain that interests you. Which method or combination of methods from this week would you use to answer it, and what would each fail to show? Be specific about spatial and temporal scale." />

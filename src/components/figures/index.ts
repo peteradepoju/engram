@@ -124,3 +124,8 @@ export { MatrixFourWays } from "./matrix-four-ways";
 export { TwoOverLambda } from "./two-over-lambda";
 export { IntervalCoverage } from "./interval-coverage";
 export { AutocorrZoo } from "./autocorr-zoo";
+export { BrainNumbers } from "./brain-numbers";
+export { CortexLayers } from "./cortex-layers";
+export { SpikeWidth } from "./spike-width";
+export { ElectrodeArray } from "./electrode-array";
+export { MethodsMap } from "./methods-map";

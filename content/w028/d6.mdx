@@ -1,0 +1,194 @@
+export const meta = {
+  title: "Forge: Week 28 challenge, quiz and deep read",
+  intro: "Part 2 began this week with the brain's numbers, its anatomy, its cells and the methods that measure it. Today's challenge asks what those methods can tell you about the same underlying activity. You will simulate one population of tuned neurons and read it out through three windows, spikes, calcium imaging and a single fMRI voxel, and measure how much stimulus information each keeps. Then you will estimate how badly electrode recordings over-represent active neurons. Finally the quiz, and a critique of the study that linked fMRI to neural activity.",
+  goals: [
+    "Compare how much stimulus information spikes, calcium signals and BOLD keep from the same population",
+    "Decode stimuli with cross-validated nearest-centroid classification",
+    "Estimate the sampling bias of electrode recordings towards active neurons",
+    "Critique the interpretation of the BOLD signal",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "logothetis-2001",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. If the brain's 20 W allowed one spike per neuron per second, how many spikes would the whole human brain fire per second?
+2. A calcium indicator decays with τ = 0.5 s, imaged at 30 Hz. What is γ, the fraction of signal left after one frame?
+3. How much larger is the summed field of 400 synchronous sources than of 400 with random phases?
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  print("1.", f"{86e9:.1e} spikes per second")
+  print("2. gamma =", round(float(np.exp(-1 / (30 * 0.5))), 4))
+  print("3. N / sqrt(N) =", 400 / np.sqrt(400))
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: one population, three windows.** Fifty neurons have cosine-like tuning to four stimulus directions and fire Poisson spikes in a 1 s window. Measure each trial three ways: (1) every neuron's spike count; (2) a calcium-like signal, half the count plus measurement noise of sd 8; (3) a single fMRI-like voxel, the summed activity of all 50 neurons plus noise of sd 15. Decode the stimulus from each with leave-one-out nearest-centroid classification.
+
+<PyCell id="partA" title="Part A: what each method keeps" tests={String.raw`
+  import numpy as np
+  def test_cv():
+      "cv_acc gives leave-one-out nearest-centroid accuracy"
+      assert 0 <= acc["spikes"] <= 1 and abs(cv_acc(counts) - acc["spikes"]) < 1e-12
+
+  def test_order():
+      "spikes decode best, calcium next, and the voxel worst but above the chance level of 0.25"
+      assert acc["spikes"] >= acc["calcium"] > acc["voxel"] > 0.3
+`} prompt="Write `cv_acc(X)`: for each trial, compute the mean response to each stimulus over all other trials, assign the trial to the nearest mean (squared distance), and return the fraction correct. Build the calcium-like and voxel measurements (local rng seed 2 for their noise) and store the three accuracies in `acc`."
+code={String.raw`
+  r = np.random.default_rng(1)
+  N, S, trials = 50, 4, 40
+  pref = r.uniform(0, 2 * np.pi, N); stim_ang = np.arange(S) * np.pi / 2
+  rate = lambda s: 2 + 18 * np.exp(np.cos(stim_ang[s] - pref) - 1)     # spikes per second
+  labels = np.repeat(np.arange(S), trials)
+  counts = np.array([r.poisson(rate(s)) for s in labels]).astype(float)
+
+  def cv_acc(X):
+      correct = []
+      for k in range(len(labels)):
+          train = np.arange(len(labels)) != k
+          centres = np.array([X[train & (labels == s)].mean(0) for s in range(S)])
+          correct.append(...)
+      return np.mean(correct)
+
+  r2 = np.random.default_rng(2)
+  calcium = 0.5 * counts + r2.normal(0, 8, counts.shape)
+  voxel = ...                                       # summed activity plus noise, as a 1-column array
+  acc = {"spikes": cv_acc(counts), "calcium": cv_acc(calcium), "voxel": cv_acc(voxel)}
+  print({k: round(float(v), 3) for k, v in acc.items()}, " (chance 0.25)")
+`}
+hint="correct.append(np.argmin(((centres - X[k]) ** 2).sum(1)) == labels[k]); voxel = counts.sum(1, keepdims=True) + r2.normal(0, 15, (len(labels), 1))."
+solution={String.raw`
+  r = np.random.default_rng(1)
+  N, S, trials = 50, 4, 40
+  pref = r.uniform(0, 2 * np.pi, N); stim_ang = np.arange(S) * np.pi / 2
+  rate = lambda s: 2 + 18 * np.exp(np.cos(stim_ang[s] - pref) - 1)     # spikes per second
+  labels = np.repeat(np.arange(S), trials)
+  counts = np.array([r.poisson(rate(s)) for s in labels]).astype(float)
+
+  def cv_acc(X):
+      correct = []
+      for k in range(len(labels)):
+          train = np.arange(len(labels)) != k
+          centres = np.array([X[train & (labels == s)].mean(0) for s in range(S)])
+          correct.append(np.argmin(((centres - X[k]) ** 2).sum(1)) == labels[k])
+      return np.mean(correct)
+
+  r2 = np.random.default_rng(2)
+  calcium = 0.5 * counts + r2.normal(0, 8, counts.shape)
+  voxel = counts.sum(1, keepdims=True) + r2.normal(0, 15, (len(labels), 1))                                       # summed activity plus noise, as a 1-column array
+  acc = {"spikes": cv_acc(counts), "calcium": cv_acc(calcium), "voxel": cv_acc(voxel)}
+  print({k: round(float(v), 3) for k, v in acc.items()}, " (chance 0.25)")
+`} />
+
+From the same activity, the spike counts identify every trial's stimulus (100%), the noisier calcium-like signal 87%, and the single voxel only 42%, against chance at 25%. The voxel loses most of the information not because it is noisy but because it sums neurons with different preferences, so the stimulus-specific pattern averages away; what is left is the small difference in total activity between stimuli. An absent BOLD effect can therefore hide rich information in the neurons beneath it.
+
+**Part B: the silent majority.** Firing rates in cortex are roughly log-normal: most neurons fire rarely, a few fire a lot. An experimenter searching with an electrode notices a unit only if it fires enough spikes while they listen, say at least 50 in a minute. How biased is the recorded sample?
+
+<PyCell id="partB" title="Part B: who gets recorded" tests={String.raw`
+  import numpy as np
+  def test_bias():
+      "the recorded neurons' mean rate is over 1.4 times the population's, and over a third of neurons are never recorded"
+      assert mean_recorded > 1.4 * mean_true and frac_missed > 1 / 3
+`} prompt="Draw 100,000 rates from a log-normal distribution with median 1 Hz and log-sd 1.2 (local rng seed 3). A neuron is recorded if a Poisson count over 60 s reaches at least 50 spikes. Compute the true mean rate `mean_true`, the mean rate of recorded neurons `mean_recorded`, and the fraction never recorded `frac_missed`."
+code={String.raw`
+  r3 = np.random.default_rng(3)
+  rates = np.exp(r3.normal(0.0, 1.2, 100000))
+  seen = ...
+  mean_true, mean_recorded = rates.mean(), ...
+  frac_missed = ...
+  print(f"true mean {mean_true:.2f} Hz, recorded mean {mean_recorded:.2f} Hz;  {100 * frac_missed:.0f}% of neurons never recorded")
+  plt.hist(np.log10(rates), 80, alpha=0.5, label="all"); plt.hist(np.log10(rates[seen]), 80, alpha=0.5, label="recorded")
+  plt.xlabel("log10 rate (Hz)"); plt.legend(); plt.show()
+`}
+hint="seen = r3.poisson(rates * 60) >= 50; mean_recorded = rates[seen].mean(); frac_missed = 1 - seen.mean()."
+solution={String.raw`
+  r3 = np.random.default_rng(3)
+  rates = np.exp(r3.normal(0.0, 1.2, 100000))
+  seen = r3.poisson(rates * 60) >= 50
+  mean_true, mean_recorded = rates.mean(), rates[seen].mean()
+  frac_missed = 1 - seen.mean()
+  print(f"true mean {mean_true:.2f} Hz, recorded mean {mean_recorded:.2f} Hz;  {100 * frac_missed:.0f}% of neurons never recorded")
+  plt.hist(np.log10(rates), 80, alpha=0.5, label="all"); plt.hist(np.log10(rates[seen]), 80, alpha=0.5, label="recorded")
+  plt.xlabel("log10 rate (Hz)"); plt.legend(); plt.show()
+`} />
+
+The population's mean rate is 2.05 Hz, but the recorded neurons average 3.32 Hz, and 44% of neurons are never recorded at all because they fire too little to be noticed. Real recordings show the same pattern: estimates of how silent cortex is suggest many neurons are rarely if ever sampled. Any statement about "typical" neurons from electrode data describes the active ones.
+
+**Part C (written).** Answer in your journal: using Parts A and B, explain why a finding such as "neurons in area X do not encode variable Y" is weaker evidence when it comes from fMRI or from a small sample of well-isolated units than when it comes from large-scale imaging of identified cells. What would you need to claim that an area truly does not encode something?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. Random phases add up to the square root of N" task="Let $\phi_1, \dots, \phi_N$ be independent and uniform on $[0, 2\pi)$. Show that $\mathbb E\left|\sum_k e^{i\phi_k}\right|^2 = N$.">
+
+Expand the squared modulus as a double sum: $\left|\sum_k e^{i\phi_k}\right|^2 = \sum_j\sum_k e^{i(\phi_j - \phi_k)}$.
+
+The $N$ terms with $j = k$ each equal 1. For $j \ne k$, independence gives $\mathbb E[e^{i\phi_j}]\,\mathbb E[e^{-i\phi_k}]$, and $\mathbb E[e^{i\phi}] = \frac{1}{2\pi}\int_0^{2\pi}e^{i\phi}\,\mathrm d\phi = 0$, so those terms vanish.
+
+Hence the expectation is $N$, and the root-mean-square amplitude is $\sqrt N$, against $N$ for sources in phase: the same square-root law as the random walk, now for phases.
+
+</Prove>
+
+<Prove title="2. Deconvolution inverts the calcium filter" task="If $c_t = \gamma c_{t-1} + s_t$ and the fluorescence has no noise, $F_t = c_t$, show that $F_t - \gamma F_{t-1} = s_t$ exactly, and that with noise $\varepsilon_t$ of variance $\sigma^2$ the estimate's error has variance $(1 + \gamma^2)\sigma^2$.">
+
+Substitute: $F_t - \gamma F_{t-1} = c_t - \gamma c_{t-1} = s_t$, by the definition of $c_t$.
+
+With noise, $F_t - \gamma F_{t-1} = s_t + \varepsilon_t - \gamma\varepsilon_{t-1}$. The error $\varepsilon_t - \gamma\varepsilon_{t-1}$ is a sum of independent terms, with variance $\sigma^2 + \gamma^2\sigma^2$.
+
+With $\gamma$ close to 1 (slow indicators, fast imaging), the error variance nearly doubles: deconvolution sharpens the signal in time at the price of amplifying noise, which is why practical methods add priors such as sparsity and non-negativity.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 28 quiz (15 questions)" questions={[
+  { q: "The human brain has about how many neurons?", options: ["86 million", "86 billion", "86 trillion", "860 billion"], answer: 1, explain: "Herculano-Houzel." },
+  { q: "The brain's energy budget limits average firing to about...", options: ["0.1 to a few spikes per second", "50 spikes per second", "500 spikes per second", "No limit"], answer: 0, explain: "Day 1." },
+  { q: "Across primates, neuron number scales with brain mass...", options: ["Roughly in proportion", "As the square root", "Not at all", "As the square"], answer: 0, explain: "Day 1." },
+  { q: "Thalamic input to primary sensory cortex arrives mainly in layer...", options: ["1", "4", "5", "6"], answer: 1, explain: "Day 2." },
+  { q: "Cortical areas are connected mostly...", options: ["One-way", "Reciprocally, with feedforward and feedback pathways", "Not at all", "Only to the thalamus"], answer: 1, explain: "Felleman and Van Essen." },
+  { q: "Connection strength between areas falls with distance...", options: ["Exponentially", "Linearly", "Not at all", "As a step"], answer: 0, explain: "The exponential distance rule." },
+  { q: "About what fraction of cortical neurons are inhibitory?", options: ["5%", "20%", "50%", "80%"], answer: 1, explain: "Day 3." },
+  { q: "Dale's principle says...", options: ["Neurons fire at fixed rates", "Each neuron releases the same transmitters at all its synapses", "Glia outnumber neurons", "Inhibition is weak"], answer: 1, explain: "Day 3." },
+  { q: "Transcriptomic cell types are found by...", options: ["Counting spikes", "Clustering single-cell gene expression", "fMRI", "Electrode impedance"], answer: 1, explain: "Tasic and colleagues." },
+  { q: "An extracellular spike falls off with distance roughly as...", options: ["1/r²", "r", "Constant", "e^r"], answer: 0, explain: "Day 4." },
+  { q: "Many interspike intervals under 2 ms in a sorted unit indicate...", options: ["A good unit", "Contamination or merged neurons", "A fast neuron", "Low noise"], answer: 1, explain: "Refractory violations." },
+  { q: "Calcium fluorescence relates to spikes as...", options: ["An exact copy", "A low-pass filtered version plus noise", "Its derivative", "Unrelated"], answer: 1, explain: "Day 5." },
+  { q: "The BOLD response peaks about...", options: ["50 ms after activity", "5 s after activity", "1 minute later", "Before activity"], answer: 1, explain: "Day 5." },
+  { q: "BOLD was found to track best...", options: ["Spiking output", "The local field potential", "Glial calcium", "Heart rate"], answer: 1, explain: "Logothetis and colleagues (2001)." },
+  { q: "A single voxel's summed activity loses stimulus information mainly because...", options: ["It is noisy only", "Summing over differently tuned neurons averages the tuning away", "It is too fast", "fMRI uses magnets"], answer: 1, explain: "Part A." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Logothetis, Pauls, Augath, Trinath and Oeltermann (2001) its third pass and write your critique under the five headings. Focus on one question: **what does a change in the BOLD signal tell you about neural activity?** Consider that the recordings were made under anaesthesia, in one area, with a small number of electrodes; that LFP and spiking were often correlated, so separating their contributions needed the cases where they diverged; that BOLD reflects energy use, which is dominated by synaptic activity and so by an area's inputs; what Part A showed about information lost by summing over neurons; and what later work has shown about inhibition, neuromodulation and the haemodynamic response. End with how you would interpret a reported BOLD increase in a human study.
+
+<Callout kind="research">
+
+Part A's voxel lost information because it summed neurons with different tuning. Multivoxel pattern analysis tries to recover information from patterns across many voxels, each a slightly different mix of neurons. Extend Part A: simulate 20 voxels, each summing a random, uneven subset of the 50 neurons, and decode from the pattern. How does accuracy depend on how uneven the mixing is, and what does that imply about fMRI decoding studies?
+
+</Callout>
+
+<Key title="Week 28 review checklist">
+<ul>
+<li>I can state the brain's key numbers and estimate quantities with honest uncertainty.</li>
+<li>I can describe the brain's main divisions, the cortical layers and the hierarchy of areas.</li>
+<li>I can describe neuron and glial types, interneuron classes and Dale's principle, and cluster cells into types.</li>
+<li>I can explain how spikes are recorded, detected and sorted, and check unit quality.</li>
+<li>I can model calcium, BOLD and EEG signals as transformations of neural activity.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C: why is a negative finding from fMRI or a small unit sample weaker evidence, and what would you need to claim an area does not encode something? Then note your result for the multivoxel research callout." />

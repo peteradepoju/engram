@@ -1,0 +1,247 @@
+export const meta = {
+  title: "Neurons and glia: what a cell type is",
+  intro: "A brain is made of cells, and not all cells are alike. Today you meet the neuron's parts and its two great families, excitatory and inhibitory, the main classes of inhibitory interneuron, and the glial cells that outnumber or match neurons depending on where you count. Then you face a question that turns out to be hard: what makes two cells the same type? You will classify units by their spike shapes, find cell types in simulated gene expression data with PCA and clustering, and build a network that obeys Dale's principle.",
+  goals: [
+    "Describe the parts of a neuron and the roles of the main glial cells",
+    "Distinguish excitatory and inhibitory neurons and the main interneuron classes",
+    "Cluster cells into types from electrophysiological and transcriptomic features",
+    "Build connectivity that obeys Dale's principle and balances excitation with inhibition",
+  ],
+  plan: [
+    { label: "Predict and anatomy of a neuron", minutes: 20 },
+    { label: "Excitatory and inhibitory families", minutes: 25 },
+    { label: "Types from spikes", minutes: 25 },
+    { label: "Types from genes", minutes: 30 },
+    { label: "Dale's principle, quiz and journal", minutes: 20 },
+  ],
+  paper: "tasic-2018",
+};
+
+<Predict question="About what fraction of the neurons in the neocortex are inhibitory: 5%, 20% or 50%?" />
+
+<Step n={1} title="Anatomy of a neuron" minutes={20} />
+
+A neuron receives inputs on its **dendrites**, branched processes that can carry thousands of synapses; integrates them in its **soma** (cell body); and, when its membrane voltage at the **axon initial segment** crosses threshold, fires an action potential that travels down its **axon** to synapses on other cells. Axons may be local, branching within a millimetre, or project across the brain; many are wrapped in **myelin**, which speeds conduction.
+
+**Glia** are the brain's other cells. **Astrocytes** regulate ions and neurotransmitters around synapses, couple activity to blood flow (the basis of the fMRI signal, Day 5) and may take part in signalling. **Oligodendrocytes** make myelin in the brain and spinal cord. **Microglia** are the brain's immune cells and prune synapses during development. In the human brain, glia and neurons are roughly equal in number overall, not ten to one as once claimed.
+
+<Video id="zIoky_TaOy8" title="Brain Basics | Excitatory Neurons" by="Allen Institute" note="A short Allen Institute explainer on excitatory neurons, the majority of cells in the cortex, and how researchers distinguish their types." />
+
+<Step n={2} title="Excitatory and inhibitory families" minutes={25} />
+
+In the neocortex about 80% of neurons are **excitatory**: mostly pyramidal cells that release glutamate, with a pyramid-shaped soma, a long apical dendrite and, often, long-range axons. The other 20% are **inhibitory** interneurons that release GABA and mostly connect locally. Three classes, defined by marker proteins, cover most of them:
+
+- **Parvalbumin (PV)** cells, often basket cells, target the soma of pyramidal cells, fire fast with brief spikes, and control the timing of output; they drive gamma rhythms.
+- **Somatostatin (SST)** cells, such as Martinotti cells, target dendrites and control how inputs are integrated.
+- **VIP** cells mainly inhibit SST cells, so activating them disinhibits pyramidal dendrites.
+
+**Dale's principle** says that a neuron releases the same neurotransmitters at all its synapses, so a cortical neuron is either excitatory or inhibitory onto every target. Most artificial networks ignore this; brains do not.
+
+<Step n={3} title="Types from spikes" minutes={25} />
+
+Extracellular recordings do not reveal a neuron's genes or shape, but its spike waveform and firing hint at its type: fast-spiking PV cells tend to have narrow spikes and high rates.
+
+<Figure caption="Narrow and broad spike waveforms and the distribution of their widths, with a threshold to classify them. Move the threshold." credit="Interactive figure by Engram.">
+  <SpikeWidth />
+</Figure>
+
+<PyCell id="kmeans" title="Clustering units by spike width and rate" tests={String.raw`
+  import numpy as np
+  def test_labels():
+      "labels assigns every unit to cluster 0 or 1"
+      assert labels.shape == (200,) and set(np.unique(labels)) <= {0, 1}
+
+  def test_accuracy():
+      "after matching cluster names to the true classes, accuracy is above 90%"
+      assert accuracy > 0.9
+`} prompt="200 simulated units have two features, spike width (ms) and log firing rate; 40 are narrow-spiking. Standardise each feature, then write `kmeans(X, k=2, iters=50)` (from each of 10 random starts, local rng seed 2, alternate assigning each point to its nearest centre and moving each centre to its points' mean; keep the run with the smallest total squared distance). Store the result in `labels`, and the accuracy against the true classes, taking the better of the two ways of naming the clusters, in `accuracy`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(3)
+  narrow = np.arange(200) < 40
+  width = np.where(narrow, 0.3, 0.65) + np.where(narrow, 0.05, 0.09) * r.normal(size=200)
+  lograte = np.where(narrow, np.log(15), np.log(3)) + 0.6 * r.normal(size=200)
+  X = np.c_[width, lograte]
+  Xs = (X - X.mean(0)) / X.std(0)
+
+  def kmeans(X, k=2, iters=50, restarts=10):
+      best, best_cost = None, np.inf
+      rk = np.random.default_rng(2)
+      for _ in range(restarts):                     # several random starts; keep the tightest clustering
+          centres = X[rk.choice(len(X), k, replace=False)]
+          for _ in range(iters):
+              d = ((X[:, None, :] - centres[None, :, :]) ** 2).sum(-1)   # points x centres
+              lab = ...
+              centres = ...
+          cost = d[np.arange(len(X)), lab].sum()
+          if cost < best_cost: best, best_cost = lab, cost
+      return best
+
+  labels = kmeans(Xs)
+  accuracy = max(np.mean(labels == narrow), np.mean(labels != narrow))
+  print(f"accuracy {accuracy:.3f}")
+  plt.scatter(width, np.exp(lograte), c=labels, s=8); plt.yscale("log"); plt.xlabel("width (ms)"); plt.ylabel("rate (Hz)"); plt.show()
+`}
+hint="lab = d.argmin(1); centres = np.array([X[lab == j].mean(0) if np.any(lab == j) else centres[j] for j in range(k)])."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(3)
+  narrow = np.arange(200) < 40
+  width = np.where(narrow, 0.3, 0.65) + np.where(narrow, 0.05, 0.09) * r.normal(size=200)
+  lograte = np.where(narrow, np.log(15), np.log(3)) + 0.6 * r.normal(size=200)
+  X = np.c_[width, lograte]
+  Xs = (X - X.mean(0)) / X.std(0)
+
+  def kmeans(X, k=2, iters=50, restarts=10):
+      best, best_cost = None, np.inf
+      rk = np.random.default_rng(2)
+      for _ in range(restarts):                     # several random starts; keep the tightest clustering
+          centres = X[rk.choice(len(X), k, replace=False)]
+          for _ in range(iters):
+              d = ((X[:, None, :] - centres[None, :, :]) ** 2).sum(-1)   # points x centres
+              lab = d.argmin(1)
+              centres = np.array([X[lab == j].mean(0) if np.any(lab == j) else centres[j] for j in range(k)])
+          cost = d[np.arange(len(X)), lab].sum()
+          if cost < best_cost: best, best_cost = lab, cost
+      return best
+
+  labels = kmeans(Xs)
+  accuracy = max(np.mean(labels == narrow), np.mean(labels != narrow))
+  print(f"accuracy {accuracy:.3f}")
+  plt.scatter(width, np.exp(lograte), c=labels, s=8); plt.yscale("log"); plt.xlabel("width (ms)"); plt.ylabel("rate (Hz)"); plt.show()
+`} />
+
+Two features are enough to recover the narrow-spiking class with 99% accuracy here. Two cautions carry over to real data: k-means can settle in a poor solution from an unlucky start, which is why it is run from several starts and the tightest result kept; and it always returns k clusters, whether or not the data have k types. Choosing k is the same problem as choosing a dimensionality, and has no automatic answer.
+
+<Step n={4} title="Types from genes" minutes={30} />
+
+Tasic and colleagues (2018, today's paper) measured the RNA of each of about 24,000 cells and grouped cells with similar gene expression, finding 133 types in two areas of mouse cortex. The pipeline is one you know: normalise, reduce dimensionality with PCA, cluster. Try it on simulated cells of three interneuron types, each defined by a few marker genes plus noise across 50 genes.
+
+<PyCell id="genes" title="PCA and clustering of single-cell expression" tests={String.raw`
+  import numpy as np
+  def test_pcs():
+      "Z holds each cell's scores on the top five principal components"
+      assert Z.shape == (300, 5)
+
+  def test_types():
+      "the best matching of clusters to true types is over 95% accurate"
+      assert type_accuracy > 0.95
+`} prompt="300 cells of three types (100 each) express 50 genes; each type has 5 marker genes raised by 3 units, on top of noise. Log-transform and centre the expression, take the top five principal components into `Z`, cluster with your k-means (k = 3), and compute `type_accuracy`, the agreement with the true types under the best of the 6 possible matchings of cluster names."
+code={String.raw`
+  from itertools import permutations
+  rg = np.random.default_rng(18)
+  types = np.repeat([0, 1, 2], 100)
+  expr = rg.gamma(2.0, 1.0, (300, 50))
+  for t in range(3):
+      expr[types == t, t * 5:(t + 1) * 5] += 3.0                  # marker genes, like Pvalb, Sst and Vip
+  Y = np.log1p(expr); Y = Y - Y.mean(0)
+  Vt = np.linalg.svd(Y, full_matrices=False)[2]
+  Z = ...
+  clusters = kmeans(Z, k=3)
+  type_accuracy = max(np.mean(np.array(p)[clusters] == types) for p in permutations(range(3)))
+  print(f"type recovery {type_accuracy:.3f}")
+  plt.scatter(Z[:, 0], Z[:, 1], c=clusters, s=8); plt.xlabel("PC1"); plt.ylabel("PC2"); plt.show()
+`}
+hint="Z = Y @ Vt[:5].T."
+solution={String.raw`
+  from itertools import permutations
+  rg = np.random.default_rng(18)
+  types = np.repeat([0, 1, 2], 100)
+  expr = rg.gamma(2.0, 1.0, (300, 50))
+  for t in range(3):
+      expr[types == t, t * 5:(t + 1) * 5] += 3.0                  # marker genes, like Pvalb, Sst and Vip
+  Y = np.log1p(expr); Y = Y - Y.mean(0)
+  Vt = np.linalg.svd(Y, full_matrices=False)[2]
+  Z = Y @ Vt[:5].T
+  clusters = kmeans(Z, k=3)
+  type_accuracy = max(np.mean(np.array(p)[clusters] == types) for p in permutations(range(3)))
+  print(f"type recovery {type_accuracy:.3f}")
+  plt.scatter(Z[:, 0], Z[:, 1], c=clusters, s=8); plt.xlabel("PC1"); plt.ylabel("PC2"); plt.show()
+`} />
+
+PCA followed by k-means recovers all three types perfectly, because each type raises its own marker genes, which PCA turns into separate directions. With a single random start, the same clustering can recover only about half of them, by merging two types and splitting a third, which is why restarts matter. Real transcriptomic data are far messier: thousands of genes, technical noise, continuous variation within types, and types that differ by a handful of genes. Tasic and colleagues validated their clusters by checking that they were stable under resampling and matched known anatomy.
+
+<Step n={5} title="Dale's principle, quiz and journal" minutes={20} />
+
+<PyCell id="dale" title="A network that obeys Dale's principle" tests={String.raw`
+  import numpy as np
+  def test_signs():
+      "every excitatory column is non-negative and every inhibitory column non-positive"
+      assert np.all(W[:, :NE] >= 0) and np.all(W[:, NE:] <= 0)
+
+  def test_balance():
+      "with g = NE/NI times the excitatory weight, the mean input to each neuron is close to zero"
+      assert abs(W.sum(1).mean()) < 0.05 * W[:, :NE].sum(1).mean()
+`} prompt="Build a 500-neuron connectivity matrix W (row = target, column = source) with 400 excitatory and 100 inhibitory neurons, connection probability 0.1 (local rng seed 5), excitatory weight w = 0.1 and inhibitory weight −g·w. Choose g so that, on average, each neuron's excitatory and inhibitory inputs cancel."
+code={String.raw`
+  rd = np.random.default_rng(5)
+  N, NE = 500, 400; NI = N - NE; w = 0.1
+  mask = rd.random((N, N)) < 0.1
+  g = ...                                          # inhibitory strength relative to excitatory
+  W = np.zeros((N, N))
+  W[:, :NE] = ...
+  W[:, NE:] = ...
+  print(f"g = {g};  mean excitatory input {W[:, :NE].sum(1).mean():.2f}, mean inhibitory {W[:, NE:].sum(1).mean():.2f}, net {W.sum(1).mean():.3f}")
+`}
+hint="g = NE / NI; W[:, :NE] = w * mask[:, :NE]; W[:, NE:] = -g * w * mask[:, NE:]."
+solution={String.raw`
+  rd = np.random.default_rng(5)
+  N, NE = 500, 400; NI = N - NE; w = 0.1
+  mask = rd.random((N, N)) < 0.1
+  g = NE / NI                                          # inhibitory strength relative to excitatory
+  W = np.zeros((N, N))
+  W[:, :NE] = w * mask[:, :NE]
+  W[:, NE:] = -g * w * mask[:, NE:]
+  print(f"g = {g};  mean excitatory input {W[:, :NE].sum(1).mean():.2f}, mean inhibitory {W[:, NE:].sum(1).mean():.2f}, net {W.sum(1).mean():.3f}")
+`} />
+
+With four times as many excitatory cells, inhibitory synapses must be about four times stronger for the books to balance. Balanced excitation and inhibition is a central idea of Part 5 (Week 107): it keeps activity stable and makes neurons fire irregularly.
+
+<Bridge title="Cell types in brains and machines"
+  neuro="Cell types give the brain a division of labour that artificial networks rarely copy: inhibitory classes that control timing, gain and which inputs count, and excitatory classes defined by where they send their axons. Genetic access to types, through tools such as Cre lines, is what makes modern circuit experiments possible."
+  ai="Most artificial networks have one kind of unit whose weights can be positive or negative. Networks built with separate excitatory and inhibitory populations, obeying Dale's principle, can learn too, and are more directly comparable with cortex, one of the design choices you will meet in Parts 5 and 6.">
+
+A cell type is a cluster in a space of features; which features you choose decides what types you find.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A neuron's action potential is usually initiated at...", options: ["The dendrite tips", "The axon initial segment", "The synapse", "The nucleus"], answer: 1, explain: "Highest density of sodium channels." },
+  { q: "About what fraction of cortical neurons are inhibitory?", options: ["5%", "20%", "50%", "80%"], answer: 1, explain: "The rest are mostly pyramidal cells." },
+  { q: "Myelin in the brain is made by...", options: ["Astrocytes", "Oligodendrocytes", "Microglia", "Neurons"], answer: 1, explain: "Schwann cells do it in the peripheral nerves." },
+  { q: "PV interneurons typically target...", options: ["Dendrites of other interneurons only", "The soma of pyramidal cells", "Blood vessels", "Axons in white matter"], answer: 1, explain: "Basket cells." },
+  { q: "VIP interneurons mainly inhibit...", options: ["Pyramidal cell somas", "SST interneurons", "Astrocytes", "The thalamus"], answer: 1, explain: "Disinhibition." },
+  { q: "Dale's principle says a neuron...", options: ["Fires at a fixed rate", "Releases the same transmitters at all its synapses", "Has one dendrite", "Never adapts"], answer: 1, explain: "Excitatory or inhibitory to every target." },
+  { q: "Tasic and colleagues found that across two cortical areas...", options: ["All types were shared", "Inhibitory types were largely shared, excitatory types mostly area-specific", "No types could be found", "Only glia differed"], answer: 1, explain: "Today's paper." },
+]} />
+
+<Flashcards cards={[
+  { front: "Parts of a neuron?", back: "Dendrites (input), soma (integration), axon initial segment (spike initiation), axon (output), synapses." },
+  { front: "Main glial cells?", back: "Astrocytes (ions, transmitters, blood flow), oligodendrocytes (myelin), microglia (immunity, pruning)." },
+  { front: "Three main interneuron classes?", back: "PV (soma-targeting, fast), SST (dendrite-targeting), VIP (inhibit SST)." },
+  { front: "Dale's principle?", back: "One neuron, one set of transmitters: excitatory or inhibitory onto all targets." },
+  { front: "Transcriptomic cell type?", back: "A cluster of cells with similar gene expression, found by dimensionality reduction and clustering." },
+]} />
+
+<Predict revisit question="What fraction of cortical neurons are inhibitory?" />
+
+<Key title="Before you go">
+<ul>
+<li>Neurons integrate inputs on dendrites and send spikes along axons; glia support, insulate and defend them.</li>
+<li>About 80% of cortical neurons are excitatory; PV, SST and VIP interneurons divide the inhibitory work.</li>
+<li>Cell types are clusters in feature spaces: waveforms, genes, shapes, connections.</li>
+<li>Dale's principle fixes each neuron's sign; balance requires stronger inhibitory synapses.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Tasic and colleagues (2018), <em>Shared and distinct transcriptomic cell types across neocortical areas</em>.</li>
+<li>Tremblay, Lee and Rudy (2016), <em>GABAergic interneurons in the neocortex: from cellular properties to circuits</em>, Neuron 91(2), 260 to 292.</li>
+<li>Allen Institute, Brain Basics videos on inhibitory neurons and glia, from the same series as today's video.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Is a cell type a natural kind that we discover, or a useful category that we impose? Use today's clustering exercises to argue one way, and say what evidence would change your mind." />

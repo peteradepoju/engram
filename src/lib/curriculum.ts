@@ -247,6 +247,14 @@ export const DAY_TITLES: Record<number, string[]> = {
     "Review V: information, dynamics and stochastic processes",
     "Part 1 exam",
   ],
+  28: [
+    "Scales of the brain: from molecules to behaviour",
+    "A tour of the brain: areas, layers and pathways",
+    "Neurons and glia: what a cell type is",
+    "Measuring activity I: electrodes, from single units to Neuropixels",
+    "Measuring activity II: imaging, fMRI and EEG",
+    "Forge: Week 28 challenge, quiz and deep read",
+  ],
 };
 
 export const DAYS_PER_WEEK = 6;
@@ -275,7 +283,7 @@ export function dayTitle(w: number, d: number): string {
 }
 
 /** Weeks whose lesson files exist. Kept in sync by hand as content is written. */
-export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26];
+export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 28];
 export const isWritten = (w: number) => WRITTEN_WEEKS.includes(w);
 
 /** Every lesson that is published, in order. */
