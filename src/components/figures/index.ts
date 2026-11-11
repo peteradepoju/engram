@@ -154,3 +154,8 @@ export { TMSynapse } from "./tm-synapse";
 export { SynapticFilter } from "./synaptic-filter";
 export { MemoryTrace } from "./memory-trace";
 export { Neuromodulation } from "./neuromodulation";
+export { RenewalProcess } from "./renewal-process";
+export { FanoQuench } from "./fano-quench";
+export { TuningFit } from "./tuning-fit";
+export { NoiseCorrelation } from "./noise-correlation";
+export { LatencyCode } from "./latency-code";

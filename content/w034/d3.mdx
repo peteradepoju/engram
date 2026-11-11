@@ -1,0 +1,259 @@
+export const meta = {
+  title: "Tuning curves: fitting, uncertainty and selectivity",
+  intro: "In 1959 Hubel and Wiesel found that neurons in the cat's primary visual cortex fire for bars of light at particular orientations; their 1962 paper, today's, mapped those receptive fields across cortex. A tuning curve, the mean response as a function of a stimulus feature, has been the basic summary of a sensory neuron ever since. Week 4 described tuning with dot products and Week 17 fitted tuning curves by maximum likelihood. Today concentrates on what goes wrong in practice: how to fit an orientation tuning curve quickly, how certain you can be of a neuron's preferred orientation from a handful of trials, and why the most common measure of selectivity reports tuning even in neurons that have none.",
+  goals: [
+    "Fit a von Mises orientation tuning curve by least squares over a parameter grid",
+    "Put a bootstrap confidence interval on a neuron's preferred orientation",
+    "Compute an orientation selectivity index and show its bias with few trials",
+    "Use a shuffle control to judge whether a neuron is tuned",
+  ],
+  plan: [
+    { label: "Predict and orientation tuning", minutes: 20 },
+    { label: "Fitting a tuning curve", minutes: 30 },
+    { label: "How sure is the preferred orientation?", minutes: 25 },
+    { label: "Selectivity and its bias", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "hubel-wiesel-1962",
+};
+
+<Predict question="A neuron that is not tuned at all fires about 2 spikes per trial at every orientation. You test 8 orientations with 5 trials each and compute an orientation selectivity index that runs from 0 (untuned) to 1 (perfectly tuned). Will the index come out at about 0, or noticeably above 0?" />
+
+<Step n={1} title="Orientation tuning" minutes={20} />
+
+Hubel and Wiesel recorded from single neurons in cat visual cortex while moving slits and bars of light across a screen. Most cells responded only when a bar had a particular orientation, and often only in a particular part of the visual field; some, the simple cells, had receptive fields with separate on and off regions, others, the complex cells, did not. Today the same measurement is usually made with drifting gratings at 8 or 12 orientations, repeated a few to a few dozen times.
+
+Orientation has a period of 180°: a bar at 10° is the same as one at 190°. A convenient tuning curve with this symmetry is a **von Mises** function of twice the angle,
+
+$$
+f(\theta) = b + A\,e^{\kappa(\cos 2(\theta - \theta_p) - 1)},
+$$
+
+with baseline $b$, amplitude $A$, preferred orientation $\theta_p$ and concentration $\kappa$, which sets the width (larger $\kappa$, sharper tuning).
+
+<Video id="fCqt07IXUPI" title="9. Receptive Fields" by="Michale Fee (MIT 9.40 Introduction to Neural Computation, MIT OpenCourseWare)" note="Michale Fee on receptive fields and tuning curves, from Hubel and Wiesel's oriented cells to how tuning is measured and modelled." />
+
+<Step n={2} title="Fitting a tuning curve" minutes={30} />
+
+For fixed $\theta_p$ and $\kappa$, the model is linear in $b$ and $A$, so those two can be solved by least squares in closed form and only a two-dimensional grid is needed for the rest. With NumPy, the whole grid can be evaluated at once.
+
+<Figure caption="Noisy responses of an orientation-tuned neuron with a fitted von Mises curve and a bootstrap band. Set the number of trials per orientation." credit="Interactive figure by Engram.">
+  <TuningFit />
+</Figure>
+
+<PyCell id="fit" title="A von Mises fit" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "the fit recovers the preferred orientation within 5 degrees and a positive amplitude"
+      b, A, tp, k = params
+      assert abs(tp - 70) < 5 and A > 10
+`} prompt="`counts` holds Poisson responses of a neuron to 8 orientations, 10 trials each. Complete `fit(y)`, which takes the 8 mean responses: for every (θ_p, κ) on the grid, the basis G is precomputed; solve for b and A by least squares and return the (b, A, θ_p, κ) with the smallest squared error."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(62)
+  ori = np.arange(0, 180, 22.5)
+
+  def vm(th, b, A, tp, k):
+      return b + A * np.exp(k * (np.cos(2 * np.deg2rad(th - tp)) - 1))
+
+  counts = r.poisson(vm(ori, 2, 18, 70, 2.0)[:, None] * np.ones(10))      # orientations x trials
+  TP, K = np.arange(0, 180, 1.0), np.arange(0.25, 6.01, 0.25)
+  G = np.exp(K[None, :, None] * (np.cos(2 * np.deg2rad(ori[None, None, :] - TP[:, None, None])) - 1))   # tp x k x ori
+
+  def fit(y):
+      n = len(y)
+      sg, sgg, sy, sgy = G.sum(-1), (G * G).sum(-1), y.sum(), (G * y).sum(-1)
+      det = n * sgg - sg * sg
+      A = (n * sgy - sg * sy) / det
+      b = (sy - A * sg) / n
+      err = ...
+      i = np.unravel_index(np.argmin(err), err.shape)
+      return b[i], A[i], TP[i[0]], K[i[1]]
+
+  params = fit(counts.mean(1))
+  print("baseline {:.1f}, amplitude {:.1f}, preferred {:.0f} deg, kappa {:.2f}".format(*params))
+  th = np.linspace(0, 180, 181)
+  plt.plot(ori, counts.mean(1), "o"); plt.plot(th, vm(th, *params)); plt.xlabel("orientation (deg)"); plt.ylabel("spikes per trial"); plt.show()
+`}
+hint="err = ((b[..., None] + A[..., None] * G - y) ** 2).sum(-1)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(62)
+  ori = np.arange(0, 180, 22.5)
+
+  def vm(th, b, A, tp, k):
+      return b + A * np.exp(k * (np.cos(2 * np.deg2rad(th - tp)) - 1))
+
+  counts = r.poisson(vm(ori, 2, 18, 70, 2.0)[:, None] * np.ones(10))      # orientations x trials
+  TP, K = np.arange(0, 180, 1.0), np.arange(0.25, 6.01, 0.25)
+  G = np.exp(K[None, :, None] * (np.cos(2 * np.deg2rad(ori[None, None, :] - TP[:, None, None])) - 1))   # tp x k x ori
+
+  def fit(y):
+      n = len(y)
+      sg, sgg, sy, sgy = G.sum(-1), (G * G).sum(-1), y.sum(), (G * y).sum(-1)
+      det = n * sgg - sg * sg
+      A = (n * sgy - sg * sy) / det
+      b = (sy - A * sg) / n
+      err = ((b[..., None] + A[..., None] * G - y) ** 2).sum(-1)
+      i = np.unravel_index(np.argmin(err), err.shape)
+      return b[i], A[i], TP[i[0]], K[i[1]]
+
+  params = fit(counts.mean(1))
+  print("baseline {:.1f}, amplitude {:.1f}, preferred {:.0f} deg, kappa {:.2f}".format(*params))
+  th = np.linspace(0, 180, 181)
+  plt.plot(ori, counts.mean(1), "o"); plt.plot(th, vm(th, *params)); plt.xlabel("orientation (deg)"); plt.ylabel("spikes per trial"); plt.show()
+`} />
+
+The fit gives a baseline of 2.3, an amplitude of 19.1, a preferred orientation of 70° and κ = 2.25, close to the values used to simulate the data (2, 18, 70° and 2). The whole grid of 4,320 combinations is evaluated in one set of array operations, which is what makes the bootstrap that follows affordable.
+
+<Step n={3} title="How sure is the preferred orientation?" minutes={25} />
+
+A fitted preferred orientation is a point estimate. The bootstrap (Week 18) estimates its uncertainty without any formula: resample trials with replacement within each orientation, refit, and repeat; the spread of the refitted values is the sampling distribution. Because orientation is circular, the percentile interval must be read with care when it straddles 0° and 180°; here the preference is well away from the wrap.
+
+<PyCell id="bootstrap" title="A confidence interval by resampling" tests={String.raw`
+  import numpy as np
+  def test_ci():
+      "the 95% interval contains the true 70 degrees and is narrower than 20 degrees"
+      assert ci[0] <= 70 <= ci[1] and ci[1] - ci[0] < 20
+
+  def test_fewer():
+      "with only 3 trials per orientation the interval is wider"
+      assert (ci3[1] - ci3[0]) > (ci[1] - ci[0])
+`} prompt="Write `boot_ci(counts, n_boot=200)`: resample trials with replacement within each orientation, refit, and return the 2.5th and 97.5th percentiles of the fitted preferred orientations. Apply it to all 10 trials (`ci`) and to the first 3 trials only (`ci3`)."
+code={String.raw`
+  def boot_ci(c, n_boot=200):
+      pref = []
+      for _ in range(n_boot):
+          idx = r.integers(0, c.shape[1], c.shape)
+          y = ...
+          pref.append(fit(y)[2])
+      return np.percentile(pref, [2.5, 97.5])
+
+  ci = boot_ci(counts)
+  ci3 = boot_ci(counts[:, :3])
+  print(f"10 trials: preferred orientation 95% interval {ci[0]:.0f} to {ci[1]:.0f} deg;  3 trials: {ci3[0]:.0f} to {ci3[1]:.0f} deg")
+`}
+hint="y = np.take_along_axis(c, idx, 1).mean(1)."
+solution={String.raw`
+  def boot_ci(c, n_boot=200):
+      pref = []
+      for _ in range(n_boot):
+          idx = r.integers(0, c.shape[1], c.shape)
+          y = np.take_along_axis(c, idx, 1).mean(1)
+          pref.append(fit(y)[2])
+      return np.percentile(pref, [2.5, 97.5])
+
+  ci = boot_ci(counts)
+  ci3 = boot_ci(counts[:, :3])
+  print(f"10 trials: preferred orientation 95% interval {ci[0]:.0f} to {ci[1]:.0f} deg;  3 trials: {ci3[0]:.0f} to {ci3[1]:.0f} deg")
+`} />
+
+With 10 trials per orientation, the 95% interval for the preferred orientation runs from 68° to 72°; with 3 trials, from 66° to 71°. This neuron is strongly tuned, so its preference is well determined even from few trials. With weaker tuning or lower rates the interval widens quickly, and for a broadly tuned neuron it can cover much of the circle: a reason never to report preferred orientations without intervals.
+
+<Step n={4} title="Selectivity and its bias" minutes={30} />
+
+To compare neurons, tuning is often summarised by an **orientation selectivity index**. A robust version uses all orientations: treat each mean response as a vector at twice its angle and measure how far their resultant is from the origin,
+
+$$
+\text{OSI} = \frac{\left|\sum_j R_j e^{2i\theta_j}\right|}{\sum_j R_j},
+$$
+
+which is 0 if responses are equal at all orientations and 1 if only one orientation drives the cell (it is one minus the circular variance). But noise makes mean responses unequal even in an untuned cell, and an index built from magnitudes can only be pushed upwards. The fix is a null distribution: shuffle the orientation labels across trials, recompute, and ask whether the real index is unusually large.
+
+<PyCell id="osi" title="Tuning from nothing" tests={String.raw`
+  import numpy as np
+  def test_bias():
+      "an untuned neuron's mean OSI is clearly above 0 with 5 trials and smaller with 50"
+      assert bias[5] > 0.07 and bias[50] < 0.6 * bias[5]
+
+  def test_shuffle():
+      "the tuned neuron's OSI exceeds 95% of its shuffles, the untuned one's does not"
+      assert p_tuned < 0.05 and p_untuned > 0.05
+`} prompt="Write `osi(c)` for a counts array (orientations x trials). Measure its average over 300 simulated untuned neurons (2 spikes per trial at every orientation) with 5 and with 50 trials (`bias[n]`). Then write `shuffle_p(c)`: the fraction of 500 label shuffles (permute all trials across orientations) whose OSI is at least the real one; apply it to `counts` and to one untuned neuron with 5 trials."
+code={String.raw`
+  def osi(c):
+      m = c.mean(1)
+      return ...
+
+  bias = {n: np.mean([osi(r.poisson(2.0, (8, n))) for _ in range(300)]) for n in (5, 50)}
+  print(f"untuned neuron, mean OSI: {bias[5]:.3f} with 5 trials, {bias[50]:.3f} with 50 trials;  tuned neuron OSI {osi(counts):.2f}")
+
+  def shuffle_p(c, n_shuf=500):
+      real, flat = osi(c), c.ravel()
+      null = [osi(r.permutation(flat).reshape(c.shape)) for _ in range(n_shuf)]
+      return ...
+
+  untuned = r.poisson(2.0, (8, 5))
+  p_tuned, p_untuned = shuffle_p(counts), shuffle_p(untuned)
+  print(f"shuffle p-values: tuned neuron {p_tuned:.3f} (OSI {osi(counts):.2f}), untuned neuron {p_untuned:.3f} (OSI {osi(untuned):.2f})")
+`}
+hint="return abs((m * np.exp(2j * np.deg2rad(ori))).sum()) / m.sum(); in shuffle_p: return np.mean(np.array(null) >= real)."
+solution={String.raw`
+  def osi(c):
+      m = c.mean(1)
+      return abs((m * np.exp(2j * np.deg2rad(ori))).sum()) / m.sum()
+
+  bias = {n: np.mean([osi(r.poisson(2.0, (8, n))) for _ in range(300)]) for n in (5, 50)}
+  print(f"untuned neuron, mean OSI: {bias[5]:.3f} with 5 trials, {bias[50]:.3f} with 50 trials;  tuned neuron OSI {osi(counts):.2f}")
+
+  def shuffle_p(c, n_shuf=500):
+      real, flat = osi(c), c.ravel()
+      null = [osi(r.permutation(flat).reshape(c.shape)) for _ in range(n_shuf)]
+      return np.mean(np.array(null) >= real)
+
+  untuned = r.poisson(2.0, (8, 5))
+  p_tuned, p_untuned = shuffle_p(counts), shuffle_p(untuned)
+  print(f"shuffle p-values: tuned neuron {p_tuned:.3f} (OSI {osi(counts):.2f}), untuned neuron {p_untuned:.3f} (OSI {osi(untuned):.2f})")
+`} />
+
+An untuned neuron's index averages about 0.1 with 5 trials per orientation and about 0.03 with 50: noise alone produces apparent selectivity, which shrinks only slowly with more data. That answers the prediction. The shuffle test separates the cases cleanly: the tuned neuron's index of 0.52 exceeds all 500 shuffles, while the untuned neuron's 0.11 is typical of its shuffles (p = 0.46). A fixed threshold, such as calling every neuron with an index above 0.1 tuned, would have counted the untuned neuron as selective.
+
+<Bridge title="Summaries with error bars"
+  neuro="A tuning curve compresses many noisy trials into a few numbers, and each has uncertainty and sometimes bias. Reporting preferred orientations with bootstrap intervals, and selectivity against a shuffle null, separates what a neuron does from what a small sample happened to show."
+  ai="The same discipline applies when interpreting units in artificial networks. Single units that seem selective for a concept may reflect chance in a finite probe set, and selectivity indices for artificial neurons have the same upward bias. Shuffle controls and held-out stimuli are as necessary for network dissection as for electrophysiology.">
+
+Every summary statistic of a neuron is an estimate; give it an interval and a null.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Hubel and Wiesel found that many neurons in primary visual cortex respond best to...", options: ["Diffuse light", "Bars or edges at particular orientations", "Colours only", "Sounds"], answer: 1, explain: "Oriented receptive fields." },
+  { q: "Orientation tuning curves have a period of...", options: ["90°", "180°", "360°", "45°"], answer: 1, explain: "A bar at θ equals one at θ + 180°." },
+  { q: "In the von Mises tuning curve, κ controls...", options: ["The baseline", "The preferred orientation", "The width of tuning", "The noise"], answer: 2, explain: "Larger κ, sharper tuning." },
+  { q: "For fixed θ_p and κ, the von Mises model is linear in...", options: ["θ", "b and A", "κ", "Nothing"], answer: 1, explain: "Solve them in closed form." },
+  { q: "A bootstrap confidence interval for the preferred orientation is obtained by...", options: ["Assuming Gaussian errors", "Resampling trials and refitting many times", "Using one fit", "Averaging neurons"], answer: 1, explain: "Week 18's method." },
+  { q: "An untuned neuron's OSI with few trials is...", options: ["Exactly 0", "Biased above 0", "Negative", "1"], answer: 1, explain: "Noise always adds magnitude." },
+  { q: "A shuffle control for tuning permutes...", options: ["Spike times within trials", "Orientation labels across trials", "Neurons", "Nothing"], answer: 1, explain: "Breaks any real tuning." },
+  { q: "Fewer trials make the confidence interval on the preferred orientation...", options: ["Narrower", "Wider", "Unchanged", "Zero"], answer: 1, explain: "More sampling noise." },
+]} />
+
+<Flashcards cards={[
+  { front: "Von Mises orientation tuning?", back: "$f(\\theta) = b + Ae^{\\kappa(\\cos 2(\\theta - \\theta_p) - 1)}$; doubled angle for 180° periodicity." },
+  { front: "Fast tuning-curve fitting?", back: "Grid over θ_p and κ; solve b and A by least squares in closed form at each grid point." },
+  { front: "Bootstrap for preferred orientation?", back: "Resample trials within each orientation, refit, take percentiles; beware the wrap at 0° and 180°." },
+  { front: "Vector OSI?", back: "$|\\sum R_je^{2i\\theta_j}| / \\sum R_j$, one minus the circular variance." },
+  { front: "Why test OSI against shuffles?", back: "Noise biases the index upwards; label shuffles give the distribution expected without tuning." },
+]} />
+
+<Predict revisit question="What OSI does an untuned neuron give with 5 trials per orientation?" />
+
+<Key title="Before you go">
+<ul>
+<li>Orientation tuning is periodic over 180° and well described by a von Mises curve of the doubled angle.</li>
+<li>Splitting linear and nonlinear parameters makes fitting fast and reliable.</li>
+<li>The bootstrap gives confidence intervals for fitted tuning parameters.</li>
+<li>Selectivity indices are biased upwards with few trials; shuffle controls fix the inference.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Hubel and Wiesel (1962), <em>Receptive fields, binocular interaction and functional architecture in the cat's visual cortex</em>.</li>
+<li>Mazurek, Kager and Van Hooser (2014), <em>Robust quantification of orientation selectivity and direction selectivity</em>, Frontiers in Neural Circuits 8, 92.</li>
+<li>Swindale (1998), <em>Orientation tuning curves: empirical description and estimation of parameters</em>, Biological Cybernetics 78(1), 45 to 56.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A paper reports that 40% of neurons in an area are orientation selective, using an OSI threshold of 0.2 and 5 trials per orientation. Using today's results, write the two questions you would ask the authors before believing the number, and the analysis you would suggest." />

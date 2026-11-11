@@ -1,0 +1,177 @@
+export const meta = {
+  title: "Rate codes and temporal codes: what spike timing adds",
+  intro: "Since Adrian's recordings in the 1920s (Week 10), the default assumption has been that neurons signal with their firing rate. But an animal often has to act within tens of milliseconds of a stimulus, too fast to count more than a spike or two, and Week 31 showed that neurons can time spikes to a millisecond. Today asks what timing adds. You will compare decoding a stimulus from spike counts and from the latency of the first spike, find, as Gollisch and Meister did in the salamander retina, that latency can carry more information than the count in a short window, and see why latencies measured relative to other neurons survive a problem that absolute latencies cannot: the brain does not know exactly when the stimulus arrived.",
+  goals: [
+    "Distinguish rate codes from temporal codes, including latency and relative-latency codes",
+    "Decode a stimulus from spike counts and from first-spike latencies and compare their accuracy",
+    "Show that relative latencies between cells are robust to unknown stimulus timing",
+    "Discuss what decides whether a code is used, not only whether information is present",
+  ],
+  plan: [
+    { label: "Predict and what counts as a code", minutes: 20 },
+    { label: "Counts against latencies", minutes: 30 },
+    { label: "Relative latency", minutes: 30 },
+    { label: "Information present, information used", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "gollisch-meister-2008",
+};
+
+<Predict question="Two retinal cells, one excited and one suppressed by a stimulus feature, each fire their first spike at a latency that depends on the stimulus. The brain does not know exactly when the stimulus appeared: its onset time varies by 15 ms from trial to trial. Can the stimulus still be read accurately from the cells' first spikes?" />
+
+<Step n={1} title="What counts as a code" minutes={20} />
+
+A **rate code** carries information in how many spikes a neuron fires in a window, averaged over time, trials or a population of similar neurons (Gerstner's three definitions of rate). A **temporal code** carries information in when spikes occur: the latency of the first spike after a stimulus, the phase of spikes relative to an ongoing rhythm (as in hippocampal place cells, Week 11), or precise patterns across neurons. The distinction is not absolute, since a rate measured in a 5 ms window is also a statement about timing, but it matters in practice: a rate code needs time to count, a temporal code needs a reference against which to time.
+
+Gollisch and Meister (2008), today's paper, recorded from many ganglion cells at once in the salamander retina while flashing gratings at different spatial phases. Spike counts said rather little about the phase within the first 100 ms; the latency of the first spike said a great deal, and the differences in latency between pairs of cells said even more.
+
+<Video id="aSz3KRmago4" title="Rate codes versus temporal codes (Neuronal Dynamics 6.5)" by="Wulfram Gerstner (EPFL)" note="Wulfram Gerstner contrasts rate codes and temporal codes, including latency and phase codes, and what each requires of the neurons that read them." />
+
+<Step n={2} title="Counts against latencies" minutes={30} />
+
+Simulate a cell responding to four stimuli. Its first spike comes 6 ms earlier for each step up in stimulus strength, with 3 ms of jitter, while its count in the first 50 ms rises only slightly, from 2 to about 3 spikes, with Poisson noise. Decode the stimulus from each quantity with a nearest-mean classifier trained on half the trials and tested on the other half.
+
+<Figure caption="First-spike latencies of two cells, one excited and one suppressed by the stimulus, across trials with jittered stimulus onset. Set the stimulus and the onset jitter." credit="Interactive figure by Engram, after Gollisch and Meister (2008).">
+  <LatencyCode />
+</Figure>
+
+<PyCell id="latency" title="Decoding from counts and from latency" tests={String.raw`
+  import numpy as np
+  def test_decoder():
+      "nearest_mean assigns each test value to the class whose training mean is closest"
+      tr_x, tr_y = np.array([0.0, 0.2, 5.0, 5.2]), np.array([0, 0, 1, 1])
+      assert np.array_equal(nearest_mean(tr_x, tr_y, np.array([0.1, 4.0])), [0, 1])
+
+  def test_accuracy():
+      "latency decodes above 0.65 and counts below 0.45, against chance at 0.25"
+      assert acc["latency"] > 0.65 and acc["count"] < 0.45
+`} prompt="Write `nearest_mean(train_x, train_y, test_x)`, which assigns each test value to the stimulus whose training mean is closest. Use the first 100 trials of each stimulus to train and the rest to test, and store the test accuracy of decoding from counts and from latencies in `acc`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2008)
+  stim = np.repeat(np.arange(4), 200)
+  latency = 40 - 6 * stim + r.normal(0, 3, stim.size)          # ms
+  count = r.poisson(2 + 0.3 * stim)                             # spikes in the first 50 ms
+  train = np.tile(np.r_[np.ones(100, bool), np.zeros(100, bool)], 4)
+
+  def nearest_mean(train_x, train_y, test_x):
+      classes = np.unique(train_y)
+      means = np.array([train_x[train_y == c].mean() for c in classes])
+      return ...
+
+  acc = {}
+  for name, x in (("count", count), ("latency", latency)):
+      pred = nearest_mean(x[train], stim[train], x[~train])
+      acc[name] = np.mean(pred == stim[~train])
+      print(f"decoding from {name:7s}: accuracy {acc[name]:.2f} (chance 0.25)")
+`}
+hint="return classes[np.argmin(np.abs(test_x[:, None] - means[None, :]), axis=1)]."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2008)
+  stim = np.repeat(np.arange(4), 200)
+  latency = 40 - 6 * stim + r.normal(0, 3, stim.size)          # ms
+  count = r.poisson(2 + 0.3 * stim)                             # spikes in the first 50 ms
+  train = np.tile(np.r_[np.ones(100, bool), np.zeros(100, bool)], 4)
+
+  def nearest_mean(train_x, train_y, test_x):
+      classes = np.unique(train_y)
+      means = np.array([train_x[train_y == c].mean() for c in classes])
+      return classes[np.argmin(np.abs(test_x[:, None] - means[None, :]), axis=1)]
+
+  acc = {}
+  for name, x in (("count", count), ("latency", latency)):
+      pred = nearest_mean(x[train], stim[train], x[~train])
+      acc[name] = np.mean(pred == stim[~train])
+      print(f"decoding from {name:7s}: accuracy {acc[name]:.2f} (chance 0.25)")
+`} />
+
+From the spike count, the stimulus is decoded on 33% of test trials, barely above chance at 25%; from the first-spike latency, on 75%. The count changes by less than one spike across the four stimuli, against Poisson noise of about 1.5 spikes; the latency changes by 6 ms per step, against 3 ms of jitter. In a 50 ms window, timing is the better code here, as Gollisch and Meister found for many retinal cells.
+
+<Step n={3} title="Relative latency" minutes={30} />
+
+There is a catch. A latency is measured from the moment the stimulus appeared, and the brain has no clock that marks that moment: an eye movement lands at a slightly different time on each fixation, a sound arrives unannounced. Add an unknown onset jitter common to all cells on a trial, and absolute latencies become unreliable. But if two cells respond with opposite dependence on the stimulus, one earlier and one later as the stimulus grows, the difference between their latencies is unaffected by the shared jitter. Gollisch and Meister found exactly such pairs, and the relative latency was the most informative quantity they measured.
+
+<PyCell id="relative" title="A code that needs no clock" tests={String.raw`
+  import numpy as np
+  def test_jitter():
+      "with 15 ms of onset jitter, cell A's absolute latency decodes below 0.55 and the latency difference above 0.75"
+      assert acc_j["absolute"] < 0.55 and acc_j["relative"] > 0.75
+`} prompt="Cell A's latency is 40 - 6s ms and cell B's 22 + 6s ms, each with 3 ms of private jitter, and on each trial both are shifted by the same onset jitter of standard deviation 15 ms. Decode the stimulus from A's absolute latency and from the difference B - A, and store the accuracies in `acc_j`."
+code={String.raw`
+  onset = r.normal(0, 15, stim.size)                            # shared, unknown to the decoder
+  lat_A = 40 - 6 * stim + r.normal(0, 3, stim.size) + onset
+  lat_B = 22 + 6 * stim + r.normal(0, 3, stim.size) + onset
+  acc_j = {}
+  for name, x in (("absolute", lat_A), ("relative", ...)):
+      acc_j[name] = ...
+      print(f"{name:8s} latency: accuracy {acc_j[name]:.2f}")
+  plt.scatter(lat_A, lat_B, c=stim, s=6); plt.xlabel("cell A latency (ms)"); plt.ylabel("cell B latency (ms)"); plt.show()
+`}
+hint="Use lat_B - lat_A for 'relative'; acc_j[name] = np.mean(nearest_mean(x[train], stim[train], x[~train]) == stim[~train])."
+solution={String.raw`
+  onset = r.normal(0, 15, stim.size)                            # shared, unknown to the decoder
+  lat_A = 40 - 6 * stim + r.normal(0, 3, stim.size) + onset
+  lat_B = 22 + 6 * stim + r.normal(0, 3, stim.size) + onset
+  acc_j = {}
+  for name, x in (("absolute", lat_A), ("relative", lat_B - lat_A)):
+      acc_j[name] = np.mean(nearest_mean(x[train], stim[train], x[~train]) == stim[~train])
+      print(f"{name:8s} latency: accuracy {acc_j[name]:.2f}")
+  plt.scatter(lat_A, lat_B, c=stim, s=6); plt.xlabel("cell A latency (ms)"); plt.ylabel("cell B latency (ms)"); plt.show()
+`} />
+
+With 15 ms of onset jitter, cell A's absolute latency decodes only 37% of trials, while the difference between B and A decodes 88%, better even than A's latency without onset jitter, because the two cells move in opposite directions and their difference doubles the signal. That answers the prediction: yes, from the relative latency.
+
+<Step n={4} title="Information present, information used" minutes={15} />
+
+Showing that information is present in spike timing is not showing that the brain uses it. A downstream neuron with a 20 ms time constant cannot distinguish latencies a millisecond apart; a decoder that needs to compare two cells' first spikes needs circuitry that does so, such as coincidence detection with suitable delays. Evidence for use comes from other kinds of experiment: reaction times too short for rate counting, as in Thorpe's work on ultra-rapid visual categorisation; behaviour that tracks timing manipulations; or circuits, such as the auditory brainstem's coincidence detectors for sound localisation, whose anatomy implements a timing code. The question for any proposed code is the one Week 36 takes up: what does a decoder have to do to read it?
+
+<Bridge title="Codes with and without a clock"
+  neuro="A first spike can carry as much information as many spikes counted later, but only relative to a reference. Relative-latency codes carry their own reference, comparing cells with each other, and so work without knowing when a stimulus arrived."
+  ai="Spiking neural networks trained with time-to-first-spike codes can classify inputs with very few spikes, which is attractive for low-power neuromorphic hardware. Transformers solve the reference problem differently, with positional encodings that tell every token where it sits; relative position encodings, which encode only differences, are the analogue of relative latency.">
+
+Timing is information only if there is something to time it against.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A rate code carries information in...", options: ["When each spike occurs", "How many spikes occur in a window", "Spike shape", "Dendritic location"], answer: 1, explain: "Counting." },
+  { q: "A latency code carries information in...", options: ["The count", "The time of the first spike after a stimulus", "The firing rate in 1 s", "The ISI CV"], answer: 1, explain: "Timing relative to onset." },
+  { q: "In short windows, latency can carry more information than counts because...", options: ["Counts are always zero", "Few spikes are available to count, while timing varies strongly with the stimulus", "Latency is noiseless", "Counts are not Poisson"], answer: 1, explain: "Today's Step 2." },
+  { q: "Absolute latency codes are vulnerable to...", options: ["Unknown stimulus onset times", "High firing rates", "Myelin", "Inhibition"], answer: 0, explain: "The brain lacks a perfect clock." },
+  { q: "Relative latencies between oppositely tuned cells are robust because...", options: ["They have no noise", "A shared onset shift cancels in the difference", "They fire more", "They are slower"], answer: 1, explain: "The code carries its own reference." },
+  { q: "Gollisch and Meister recorded from...", options: ["Monkey cortex", "Salamander retina", "Human EEG", "Fly motion neurons"], answer: 1, explain: "Ganglion cell populations." },
+  { q: "Showing information is present in spike timing proves the brain uses it...", options: ["Always", "No; that needs evidence about decoding circuits or behaviour", "Only for vision", "Only in sleep"], answer: 1, explain: "Present is not used." },
+  { q: "Relative position encodings in transformers resemble...", options: ["Rate codes", "Relative-latency codes", "Myelin", "Dropout"], answer: 1, explain: "Only differences matter." },
+]} />
+
+<Flashcards cards={[
+  { front: "Rate versus temporal code?", back: "Rate: information in spike counts over a window. Temporal: information in spike times (latency, phase, patterns)." },
+  { front: "First-spike latency code?", back: "The time from stimulus onset to the first spike varies with the stimulus; fast to read but needs an onset reference." },
+  { front: "Relative-latency code?", back: "Differences in first-spike times between cells; robust to unknown onset because shared shifts cancel (Gollisch and Meister, 2008)." },
+  { front: "Nearest-mean decoder?", back: "Assign a response to the class whose training mean is closest; a simple, cross-validated test of information." },
+  { front: "Present versus used?", back: "Decodable information shows a code is possible; evidence that it is used needs reaction times, behaviour or decoding circuitry." },
+]} />
+
+<Predict revisit question="With 15 ms of onset jitter, can the stimulus be read from two oppositely tuned cells' first spikes?" />
+
+<Key title="Before you go">
+<ul>
+<li>Rate codes count spikes; temporal codes use spike times, such as first-spike latency.</li>
+<li>In short windows, latency can carry far more information than counts.</li>
+<li>Absolute latencies need a clock; relative latencies between cells do not.</li>
+<li>Information in a code is not proof that the brain reads it.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Gollisch and Meister (2008), <em>Rapid neural coding in the retina with relative spike latencies</em>.</li>
+<li>Thorpe, Fize and Marlot (1996), <em>Speed of processing in the human visual system</em>, Nature 381(6582), 520 to 522.</li>
+<li>Panzeri, Brunel, Logothetis and Kayser (2010), <em>Sensory neural codes using multiplexed temporal scales</em>, Trends in Neurosciences 33(3), 111 to 120.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Choose a behaviour that must be fast, such as catching a falling object, and one that can be slow, such as judging a colour. For each, argue whether you would expect the relevant neurons to use a rate code or a temporal code, and what experiment would test your guess." />

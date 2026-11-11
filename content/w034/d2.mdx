@@ -1,0 +1,219 @@
+export const meta = {
+  title: "Trial-to-trial variability: Fano factors and variability quenching",
+  intro: "Show a monkey the same stimulus a hundred times and a cortical neuron will fire a different number of spikes each time. Week 15 measured that variability with the Fano factor and found it near or above 1. Today asks where it comes from and what the brain does to it. Part of it is the randomness of spiking itself; part is that the neuron's underlying rate wanders from trial to trial. You will simulate a doubly stochastic neuron that has both, separate the two parts, and reproduce the finding of Churchland and colleagues, this week's deep read, that the onset of a stimulus quenches variability across cortex, and why comparing Fano factors at different rates needs care.",
+  goals: [
+    "Simulate a doubly stochastic neuron whose rate varies across trials",
+    "Compute PSTHs and time-resolved Fano factors across trials",
+    "Separate spiking variability from rate variability",
+    "Explain variability quenching and why Fano factors must be compared at matched means",
+  ],
+  plan: [
+    { label: "Predict and two sources of variability", minutes: 20 },
+    { label: "Fano factors over time", minutes: 30 },
+    { label: "Separating the two sources", minutes: 25 },
+    { label: "Comparing like with like", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "churchland-2010",
+};
+
+<Predict question="A neuron's firing rate varies from trial to trial by about 30% around its mean, and it fires Poisson spikes given that rate. If its mean count in a window goes up from 1 to 8 spikes, does its Fano factor stay the same, fall, or rise?" />
+
+<Step n={1} title="Two sources of variability" minutes={20} />
+
+A Poisson neuron with a fixed rate has a Fano factor of exactly 1. Cortical neurons often show more, and a natural explanation is that their rate is not fixed: attention, arousal and the state of the network change it from trial to trial. A neuron whose spikes are Poisson given a rate that itself varies randomly across trials is **doubly stochastic**. If the rate on a trial gives an expected count $\Lambda$, with mean $\mu$ and variance $\sigma_\Lambda^2$ across trials, the law of total variance (Week 16) gives
+
+$$
+\text{Var}(N) = \mathbb E[\text{Var}(N \mid \Lambda)] + \text{Var}(\mathbb E[N \mid \Lambda]) = \mu + \sigma_\Lambda^2, \qquad F = 1 + \frac{\sigma_\Lambda^2}{\mu}.
+$$
+
+The first term is the point-process variability; the second, the variability of the rate. Writing the rate's coefficient of variation as $c = \sigma_\Lambda/\mu$, $F = 1 + c^2\mu$.
+
+<Video id="osYGG7TKcz8" title="8. Spike Trains" by="Michale Fee (MIT 9.40 Introduction to Neural Computation, MIT OpenCourseWare)" note="Michale Fee on spike trains: rasters, peristimulus time histograms, Poisson statistics and measures of variability across trials." />
+
+<Step n={2} title="Fano factors over time" minutes={30} />
+
+Churchland and colleagues (2010), today's paper, pooled recordings from many cortical areas and species and found the same pattern everywhere: the Fano factor falls sharply when a stimulus appears, even in neurons whose rate barely changes. Simulate a population of trials in which, before the stimulus, the trial-to-trial gain varies by 50%, and after it by only 15%.
+
+<Figure caption="A doubly stochastic neuron before and after stimulus onset: raster of trials and Fano factor in sliding windows. Set the trial-to-trial variability of the rate before and after the onset." credit="Interactive figure by Engram, after Churchland and colleagues (2010).">
+  <FanoQuench />
+</Figure>
+
+<PyCell id="fano" title="Variability is quenched" tests={String.raw`
+  import numpy as np
+  def test_psth():
+      "psth is the mean count per window divided by the window length, in Hz"
+      assert np.allclose(psth, counts.mean(0) / 0.2)
+
+  def test_quench():
+      "the Fano factor is above 1.3 before the stimulus and below 1.25 after it"
+      assert fano[centres < -100].mean() > 1.3 and fano[centres > 300].mean() < 1.25
+`} prompt="Spikes from 300 trials are simulated from -500 to 1000 ms with the stimulus at 0: 10 Hz before and 40 Hz after, each trial's rate multiplied by a gamma-distributed gain whose CV is 0.5 before and 0.15 after. Count spikes in 200 ms windows stepped by 50 ms, and compute the PSTH (Hz) and Fano factor in each window."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2010)
+  trials, dt = 300, 1.0
+  t = np.arange(-500, 1000, dt)
+
+  def gains(cv, n):
+      k = 1 / cv**2
+      return r.gamma(k, 1 / k, n)                      # mean 1, given CV
+
+  g_pre, g_post = gains(0.5, trials), gains(0.15, trials)
+  rate = np.where(t < 0, 10.0, 40.0)                   # Hz
+  lam = np.where(t[None, :] < 0, g_pre[:, None], g_post[:, None]) * rate[None, :] / 1000 * dt
+  spikes = r.uniform(size=lam.shape) < lam             # one Bernoulli draw per ms
+
+  starts = np.arange(-500, 801, 50)
+  centres = starts + 100
+  counts = np.array([spikes[:, (t >= s) & (t < s + 200)].sum(1) for s in starts]).T   # trials x windows
+  psth = ...
+  fano = ...
+  for c, p, f in zip(centres[::4], psth[::4], fano[::4]):
+      print(f"window centred at {c:5.0f} ms: {p:5.1f} Hz, Fano {f:.2f}")
+  fig, ax = plt.subplots(2, 1, sharex=True)
+  ax[0].plot(centres, psth); ax[0].set_ylabel("Hz"); ax[1].plot(centres, fano); ax[1].axhline(1, color="gray", lw=0.5)
+  ax[1].set_ylabel("Fano"); ax[1].set_xlabel("ms from stimulus"); plt.show()
+`}
+hint="psth = counts.mean(0) / 0.2; fano = counts.var(0) / counts.mean(0)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2010)
+  trials, dt = 300, 1.0
+  t = np.arange(-500, 1000, dt)
+
+  def gains(cv, n):
+      k = 1 / cv**2
+      return r.gamma(k, 1 / k, n)                      # mean 1, given CV
+
+  g_pre, g_post = gains(0.5, trials), gains(0.15, trials)
+  rate = np.where(t < 0, 10.0, 40.0)                   # Hz
+  lam = np.where(t[None, :] < 0, g_pre[:, None], g_post[:, None]) * rate[None, :] / 1000 * dt
+  spikes = r.uniform(size=lam.shape) < lam             # one Bernoulli draw per ms
+
+  starts = np.arange(-500, 801, 50)
+  centres = starts + 100
+  counts = np.array([spikes[:, (t >= s) & (t < s + 200)].sum(1) for s in starts]).T   # trials x windows
+  psth = counts.mean(0) / 0.2
+  fano = counts.var(0) / counts.mean(0)
+  for c, p, f in zip(centres[::4], psth[::4], fano[::4]):
+      print(f"window centred at {c:5.0f} ms: {p:5.1f} Hz, Fano {f:.2f}")
+  fig, ax = plt.subplots(2, 1, sharex=True)
+  ax[0].plot(centres, psth); ax[0].set_ylabel("Hz"); ax[1].plot(centres, fano); ax[1].axhline(1, color="gray", lw=0.5)
+  ax[1].set_ylabel("Fano"); ax[1].set_xlabel("ms from stimulus"); plt.show()
+`} />
+
+Before the stimulus the neuron fires at about 10 Hz with a Fano factor of 1.5 to 1.6; after it, at about 40 Hz with a Fano factor of 1.0 to 1.1. The rate quadrupled while the variability relative to the mean fell, the signature Churchland and colleagues found. The drop happens even though, by the formula above, a higher mean would raise the Fano factor if the rate variability stayed the same: the fall in rate variability, from 50% to 15%, wins.
+
+<Step n={3} title="Separating the two sources" minutes={25} />
+
+The law of total variance suggests a way to estimate the rate variability directly: $\sigma_\Lambda^2 = \text{Var}(N) - \mathbb E[N]$, the excess of the count variance over what Poisson spiking alone would give. Churchland and colleagues (2011) called this the variance of the underlying rate and showed that it is what the stimulus quenches.
+
+<PyCell id="partition" title="How variable is the rate?" tests={String.raw`
+  import numpy as np
+  def test_estimate():
+      "the estimated rate CV is within 0.1 of the true gain CV before (0.5) and after (0.15) onset"
+      assert abs(rate_cv["pre"] - 0.5) < 0.1 and abs(rate_cv["post"] - 0.15) < 0.1
+`} prompt="Using counts in a window before the stimulus (starting at -400 ms) and one after (starting at 400 ms), estimate the variance of the underlying rate as Var(N) minus mean(N), and convert it to a coefficient of variation of the rate, sqrt(variance)/mean, stored in `rate_cv['pre']` and `rate_cv['post']`."
+code={String.raw`
+  rate_cv = {}
+  for name, s in (("pre", -400), ("post", 400)):
+      n = counts[:, list(starts).index(s)]
+      var_rate = ...
+      rate_cv[name] = ...
+      print(f"{name:4s}: mean count {n.mean():.2f}, variance {n.var():.2f}, rate variance {var_rate:.2f}, rate CV {rate_cv[name]:.2f}")
+`}
+hint="var_rate = n.var() - n.mean(); rate_cv[name] = np.sqrt(max(var_rate, 0)) / n.mean()."
+solution={String.raw`
+  rate_cv = {}
+  for name, s in (("pre", -400), ("post", 400)):
+      n = counts[:, list(starts).index(s)]
+      var_rate = n.var() - n.mean()
+      rate_cv[name] = np.sqrt(max(var_rate, 0)) / n.mean()
+      print(f"{name:4s}: mean count {n.mean():.2f}, variance {n.var():.2f}, rate variance {var_rate:.2f}, rate CV {rate_cv[name]:.2f}")
+`} />
+
+Before the stimulus the estimated rate CV is 0.46, close to the true 0.5. After it the estimate is 0.06, against a true 0.15: the excess variance (0.19 spikes squared) is small next to a Poisson variance of nearly 8, so 300 trials estimate it poorly. Partitioning works best when rate variability is a large part of the total, a limitation Goris, Movshon and Simoncelli (2014) addressed by fitting a model across many stimuli.
+
+<Step n={4} title="Comparing like with like" minutes={30} />
+
+There is a trap. By the formula $F = 1 + c^2\mu$, a doubly stochastic neuron's Fano factor rises with its mean count even if its rate variability $c$ does not change. A stimulus that raises rates would then raise Fano factors, and one that lowers rates would lower them, with no change in the underlying variability. Churchland and colleagues guarded against this with **mean matching**: they compared Fano factors only across sets of neurons whose distributions of mean counts had been made identical, by discarding neurons, at each time point.
+
+<PyCell id="meanmatch" title="Fano rises with the mean" tests={String.raw`
+  import numpy as np
+  def test_rise():
+      "with a fixed rate CV of 0.3, the Fano factor rises with the mean count and matches 1 + c^2 mu within 0.1"
+      assert all(a < b for a, b in zip(F_sim, F_sim[1:]))
+      assert all(abs(f - (1 + 0.09 * m)) < 0.1 for f, m in zip(F_sim, means))
+`} prompt="For mean counts of 1, 4, 8 and 16 with a fixed rate CV of 0.3, simulate 4,000 trials of a doubly stochastic neuron (gamma gain, Poisson counts) and compute its Fano factor, `F_sim`. Compare with 1 + c² μ."
+code={String.raw`
+  means = [1, 4, 8, 16]
+  F_sim = []
+  for m in means:
+      lam_trial = m * gains(0.3, 4000)
+      n = ...
+      F_sim.append(n.var() / n.mean())
+      print(f"mean {m:2d}: Fano {F_sim[-1]:.2f}, theory {1 + 0.09 * m:.2f}")
+`}
+hint="n = r.poisson(lam_trial)."
+solution={String.raw`
+  means = [1, 4, 8, 16]
+  F_sim = []
+  for m in means:
+      lam_trial = m * gains(0.3, 4000)
+      n = r.poisson(lam_trial)
+      F_sim.append(n.var() / n.mean())
+      print(f"mean {m:2d}: Fano {F_sim[-1]:.2f}, theory {1 + 0.09 * m:.2f}")
+`} />
+
+With the rate's variability fixed at 30%, the Fano factor rises from 1.05 at a mean of 1 spike to 1.35, 1.77 and 2.43 at means of 4, 8 and 16, following 1 + c²μ. That answers the prediction. A Fano factor that changes along with the rate tells you little by itself; only at matched means, or with the rate-variance estimate, can a change in variability be separated from a change in rate.
+
+<Bridge title="Variability as a signature of state"
+  neuro="Trial-to-trial variability in cortex is not just noise added to a fixed response: much of it is shared fluctuation in the network's state, and stimuli and attention reduce it. The decline of variability at stimulus onset is one of the most general findings in systems neuroscience, and a constraint that any model of cortical dynamics must meet."
+  ai="Variability can be a feature as well as a nuisance. Sampling-based models of inference (Week 19) predict that a stimulus should narrow the distribution of responses as it narrows the posterior, which is one reading of quenching. In networks trained with dropout or noise, the spread of activations across repeated passes is used in the same way, as an estimate of the model's uncertainty.">
+
+Variability that shrinks when a stimulus arrives is telling you something about the circuit.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A doubly stochastic neuron has...", options: ["Two spikes at a time", "Poisson spikes given a rate that itself varies across trials", "Two thresholds", "No variability"], answer: 1, explain: "Two layers of randomness." },
+  { q: "For a doubly stochastic neuron, the count variance is...", options: ["μ", "μ + σ_Λ²", "σ_Λ²", "μ²"], answer: 1, explain: "Law of total variance." },
+  { q: "With a fixed rate CV, the Fano factor as the mean count rises...", options: ["Falls", "Rises", "Stays at 1", "Becomes negative"], answer: 1, explain: "F = 1 + c²μ." },
+  { q: "Churchland and colleagues (2010) found that stimulus onset...", options: ["Increases variability", "Quenches variability across many areas", "Has no effect", "Only changes rates"], answer: 1, explain: "A widespread cortical phenomenon." },
+  { q: "Mean matching is needed because...", options: ["Fano factors depend on the mean count for doubly stochastic neurons", "Means are noisy", "Rates are Gaussian", "Windows differ"], answer: 0, explain: "Compare at matched means." },
+  { q: "The variance of the underlying rate can be estimated as...", options: ["Var(N)", "Var(N) - E[N]", "E[N]²", "Var(N)/E[N]"], answer: 1, explain: "Subtract the Poisson part." },
+  { q: "A PSTH estimates...", options: ["The trial-averaged firing rate over time", "The interval distribution", "The Fano factor", "Correlations"], answer: 0, explain: "Mean count per bin over bin width." },
+  { q: "One interpretation of quenching is that the stimulus...", options: ["Silences neurons", "Stabilises network state, reducing shared fluctuations", "Adds noise", "Changes spike shape"], answer: 1, explain: "A constraint on circuit models." },
+]} />
+
+<Flashcards cards={[
+  { front: "Law of total variance for spike counts?", back: "$\\text{Var}(N) = \\mathbb E[N] + \\text{Var}(\\Lambda)$ for Poisson spiking with a random rate." },
+  { front: "Fano factor of a doubly stochastic neuron?", back: "$F = 1 + c^2\\mu$, with c the rate's CV across trials and μ the mean count." },
+  { front: "Variability quenching?", back: "The Fano factor and the variance of the underlying rate fall at stimulus onset across many cortical areas (Churchland and colleagues, 2010)." },
+  { front: "Mean matching?", back: "Comparing Fano factors only across neuron sets whose mean-count distributions are equalised, because F depends on the mean." },
+  { front: "Estimating rate variability?", back: "$\\sigma_\\Lambda^2 \\approx \\text{Var}(N) - \\text{mean}(N)$." },
+]} />
+
+<Predict revisit question="With a fixed 30% rate variability, what happens to the Fano factor as the mean count rises from 1 to 8?" />
+
+<Key title="Before you go">
+<ul>
+<li>Cortical variability combines Poisson-like spiking with trial-to-trial changes in rate.</li>
+<li>The law of total variance gives F = 1 + c²μ and lets the rate variance be estimated.</li>
+<li>Stimulus onset quenches variability widely across cortex.</li>
+<li>Because F depends on the mean, comparisons need matched means.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Churchland and colleagues (2010), <em>Stimulus onset quenches neural variability: a widespread cortical phenomenon</em>.</li>
+<li>Churchland, Yu, Sahani and Shenoy (2007), <em>Techniques for extracting single-trial activity patterns from large-scale neural recordings</em>, Current Opinion in Neurobiology 17(5), 609 to 618.</li>
+<li>Goris, Movshon and Simoncelli (2014), <em>Partitioning neuronal variability</em>, Nature Neuroscience 17(6), 858 to 865.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Suggest two different mechanisms that could make a neuron's rate vary from trial to trial before a stimulus, and for each, say why a stimulus might reduce that variability. Which would you test first, and how?" />

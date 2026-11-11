@@ -1,0 +1,224 @@
+export const meta = {
+  title: "Correlated variability: measuring and interpreting noise correlations",
+  intro: "Yesterday treated neurons one at a time. Recorded together, neighbouring neurons' trial-to-trial fluctuations are not independent: when one fires more than its average, the other tends to as well. These noise correlations are usually small, around 0.1, yet they matter, because they do not average away when many neurons are pooled. Week 16 met correlations in the context of population coding and Week 17 information-limiting correlations. Today is practical. Following Cohen and Kohn's guide, you will measure spike count correlations and see how much the answer depends on the counting window, work out what correlations do to a pooled signal, and see why their effect on what a population can tell depends on how they line up with the neurons' tuning.",
+  goals: [
+    "Distinguish signal correlations from noise correlations",
+    "Measure spike count correlations and show how they depend on the counting window",
+    "Compute how correlated noise limits the benefit of pooling many neurons",
+    "Show that the effect of noise correlations on discrimination depends on their relation to tuning",
+  ],
+  plan: [
+    { label: "Predict and two kinds of correlation", minutes: 20 },
+    { label: "Measuring r_sc", minutes: 30 },
+    { label: "Pooling correlated neurons", minutes: 25 },
+    { label: "Help or harm?", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "cohen-kohn-2011",
+};
+
+<Predict question="You average the spike counts of N neurons that respond identically to a stimulus, each with trial-to-trial noise, and any two of them have a noise correlation of 0.1. As N grows from 1 to 1,000, does the noise in the average keep falling like 1/√N, fall at first and then level off, or not fall at all?" />
+
+<Step n={1} title="Two kinds of correlation" minutes={20} />
+
+For two neurons recorded together across many stimuli and trials, there are two correlations. The **signal correlation** is the correlation between their tuning curves, their mean responses across stimuli: high for neurons with similar preferences. The **noise correlation**, $r_{sc}$, is the correlation of their trial-to-trial fluctuations around those means for a fixed stimulus. Noise correlations in cortex are typically 0.05 to 0.25, larger for nearby neurons with similar tuning, and they change with attention, learning and arousal.
+
+To compute $r_{sc}$ for one stimulus, take each neuron's counts across trials, subtract the mean, and correlate. Pooling across stimuli requires converting counts to z-scores within each stimulus first, so that differences in mean between stimuli do not masquerade as correlation.
+
+<Video id="QWJFdLhO7cA" title="Sources of variability (Neuronal Dynamics 5.2)" by="Wulfram Gerstner (EPFL)" note="Wulfram Gerstner on where variability in neural responses comes from, from channel noise to fluctuating network input, the shared part of which produces noise correlations." />
+
+<Step n={2} title="Measuring r_sc" minutes={30} />
+
+Correlations often come from shared input that fluctuates on some time scale, tens to hundreds of milliseconds. Counted in windows much shorter than that, each neuron's own Poisson-like spiking dominates the count and the shared part is swamped; in longer windows the shared fluctuations accumulate. So the measured $r_{sc}$ depends on the counting window, one of the main points of Cohen and Kohn (2011), today's paper.
+
+<PyCell id="rsc" title="Correlation depends on the window" tests={String.raw`
+  import numpy as np
+  def test_corr():
+      "rsc holds the count correlation for each window, rising from under 0.08 at 10 ms to over 0.12 at 200 ms"
+      assert rsc[10] < 0.08 and rsc[200] > 0.12 and rsc[1000] > 3 * rsc[10]
+`} prompt="Two neurons fire Poisson spikes at 20 Hz, each multiplied by exp(0.4 s(t)), where s(t) is a shared Ornstein-Uhlenbeck process with a 50 ms time constant. For 300 one-second trials, count spikes in non-overlapping windows of 10, 50, 200 and 1,000 ms, and compute the correlation of the two neurons' counts across all windows, `rsc[w]`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2011)
+  trials, T = 300, 1000
+  a = np.exp(-1 / 50.0); x = np.zeros(trials); s = np.empty((trials, T)); xi = r.normal(size=(trials, T))
+  for k in range(T):                                  # shared fluctuation, one value per trial per ms
+      x = a * x + np.sqrt(1 - a * a) * xi[:, k]; s[:, k] = x
+  rate = 20 * np.exp(0.4 * s - 0.08) / 1000           # spikes per ms, mean about 20 Hz
+  sp1 = r.uniform(size=(trials, T)) < rate
+  sp2 = r.uniform(size=(trials, T)) < rate
+
+  rsc = {}
+  for w in (10, 50, 200, 1000):
+      n1 = sp1.reshape(trials, -1, w).sum(2).ravel()
+      n2 = sp2.reshape(trials, -1, w).sum(2).ravel()
+      rsc[w] = ...
+      print(f"window {w:4d} ms: r_sc = {rsc[w]:.3f}")
+`}
+hint="rsc[w] = np.corrcoef(n1, n2)[0, 1]."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2011)
+  trials, T = 300, 1000
+  a = np.exp(-1 / 50.0); x = np.zeros(trials); s = np.empty((trials, T)); xi = r.normal(size=(trials, T))
+  for k in range(T):                                  # shared fluctuation, one value per trial per ms
+      x = a * x + np.sqrt(1 - a * a) * xi[:, k]; s[:, k] = x
+  rate = 20 * np.exp(0.4 * s - 0.08) / 1000           # spikes per ms, mean about 20 Hz
+  sp1 = r.uniform(size=(trials, T)) < rate
+  sp2 = r.uniform(size=(trials, T)) < rate
+
+  rsc = {}
+  for w in (10, 50, 200, 1000):
+      n1 = sp1.reshape(trials, -1, w).sum(2).ravel()
+      n2 = sp2.reshape(trials, -1, w).sum(2).ravel()
+      rsc[w] = np.corrcoef(n1, n2)[0, 1]
+      print(f"window {w:4d} ms: r_sc = {rsc[w]:.3f}")
+`} />
+
+The same two neurons have a count correlation of 0.03 in 10 ms windows, 0.10 in 50 ms, 0.18 in 200 ms and 0.18 in 1 s. Their shared input never changed; only the window did. Once windows are much longer than the 50 ms correlation time of the shared input, the estimate stops growing. Comparing correlations across studies without matching windows compares different quantities.
+
+<Step n={3} title="Pooling correlated neurons" minutes={25} />
+
+Why do such small correlations matter? Average the responses of $N$ neurons, each with noise variance $\sigma^2$ and pairwise correlation $\rho$. The variance of the average is
+
+$$
+\text{Var}\left(\frac{1}{N}\sum_i n_i\right) = \frac{\sigma^2}{N}\left(1 + (N - 1)\rho\right) \xrightarrow{N \to \infty} \rho\sigma^2.
+$$
+
+With $\rho = 0$ the noise falls without limit; with any positive $\rho$ it levels off at $\rho\sigma^2$, reached once $N$ is a few times $1/\rho$. Zohary, Shadlen and Newsome (1994) used this argument to explain why monkeys discriminating motion do not perform far better than single neurons: pooling hundreds of correlated neurons helps little more than pooling a few dozen.
+
+<Figure caption="Noise in the average of N identically tuned neurons with pairwise noise correlation ρ, compared with independent neurons. Set ρ and N." credit="Interactive figure by Engram, after Zohary, Shadlen and Newsome (1994).">
+  <NoiseCorrelation />
+</Figure>
+
+<PyCell id="pool" title="Diminishing returns" tests={String.raw`
+  import numpy as np
+  def test_formula():
+      "the simulated variance of the average matches the formula within 10%"
+      assert all(abs(sim[N] / theory(N) - 1) < 0.1 for N in Ns)
+
+  def test_floor():
+      "with rho = 0.1, going from 100 to 1,000 neurons reduces the variance by less than 15%"
+      assert theory(1000) > 0.85 * theory(100)
+`} prompt="Simulate N correlated neurons with unit variance and pairwise correlation 0.1 by giving each a shared Gaussian term (variance 0.1) plus a private one (variance 0.9), over 5,000 trials. Compute the variance of their average for N = 1, 10, 100 and 1,000 (`sim[N]`) and compare with `theory(N)`."
+code={String.raw`
+  rho = 0.1
+
+  def theory(N):
+      return ...
+
+  Ns = (1, 10, 100, 1000)
+  sim = {}
+  for N in Ns:
+      shared = r.normal(0, np.sqrt(rho), (5000, 1))
+      private = r.normal(0, np.sqrt(1 - rho), (5000, N))
+      sim[N] = (shared + private).mean(1).var()
+      print(f"N = {N:4d}: variance of the average {sim[N]:.4f}, formula {theory(N):.4f}, independent neurons {1 / N:.4f}")
+`}
+hint="return (1 + (N - 1) * rho) / N."
+solution={String.raw`
+  rho = 0.1
+
+  def theory(N):
+      return (1 + (N - 1) * rho) / N
+
+  Ns = (1, 10, 100, 1000)
+  sim = {}
+  for N in Ns:
+      shared = r.normal(0, np.sqrt(rho), (5000, 1))
+      private = r.normal(0, np.sqrt(1 - rho), (5000, N))
+      sim[N] = (shared + private).mean(1).var()
+      print(f"N = {N:4d}: variance of the average {sim[N]:.4f}, formula {theory(N):.4f}, independent neurons {1 / N:.4f}")
+`} />
+
+The simulations match the formula: the variance of the average falls from 1 for a single neuron to 0.19 for 10 neurons, 0.11 for 100 and 0.10 for 1,000, whereas for independent neurons it would reach 0.001. That answers the prediction: the noise falls at first and then levels off near ρ = 0.1. Beyond about 30 neurons, adding more barely helps.
+
+<Step n={4} title="Help or harm?" minutes={30} />
+
+Averaging is not the only way to read a population, and with an optimal linear decoder correlations can help as well as hurt. Take two neurons and a small change in the stimulus that changes their mean responses by $f' = (f_1', f_2')$. The best linear discrimination is measured by the linear Fisher information, $I = f'^\top\Sigma^{-1}f'$, where $\Sigma$ is the noise covariance (Week 17). If both neurons increase with the stimulus, positive noise correlation makes their shared noise look like signal and reduces $I$. If one increases and the other decreases, the decoder takes their difference, which cancels shared noise, and positive correlation increases $I$. What matters is the alignment of the noise with the direction in which the signal moves, the idea behind the information-limiting correlations of Week 17.
+
+<PyCell id="sign" title="Same tuning, opposite tuning" tests={String.raw`
+  import numpy as np
+  def test_info():
+      "fisher_info computes f' Sigma^-1 f'"
+      assert abs(fisher_info(np.array([1.0, 1.0]), 0.0) - 2) < 1e-12
+
+  def test_sign():
+      "with rho = 0.3, information falls for same-sign tuning and rises for opposite-sign tuning"
+      assert info["same"][0.3] < info["same"][0.0] < info["opposite"][0.3]
+`} prompt="Write `fisher_info(fp, rho)` for two neurons with unit noise variance and correlation rho. Compute it for signal changes f' = (1, 1) ('same') and (1, -1) ('opposite') at rho = -0.3, 0 and 0.3."
+code={String.raw`
+  def fisher_info(fp, rho):
+      Sigma = np.array([[1.0, rho], [rho, 1.0]])
+      return ...
+
+  info = {"same": {}, "opposite": {}}
+  for name, fp in (("same", np.array([1.0, 1.0])), ("opposite", np.array([1.0, -1.0]))):
+      for rho_ in (-0.3, 0.0, 0.3):
+          info[name][rho_] = fisher_info(fp, rho_)
+      print(f"{name:8s} tuning: I = {info[name][-0.3]:.2f} (rho -0.3), {info[name][0.0]:.2f} (0), {info[name][0.3]:.2f} (0.3)")
+`}
+hint="return fp @ np.linalg.solve(Sigma, fp)."
+solution={String.raw`
+  def fisher_info(fp, rho):
+      Sigma = np.array([[1.0, rho], [rho, 1.0]])
+      return fp @ np.linalg.solve(Sigma, fp)
+
+  info = {"same": {}, "opposite": {}}
+  for name, fp in (("same", np.array([1.0, 1.0])), ("opposite", np.array([1.0, -1.0]))):
+      for rho_ in (-0.3, 0.0, 0.3):
+          info[name][rho_] = fisher_info(fp, rho_)
+      print(f"{name:8s} tuning: I = {info[name][-0.3]:.2f} (rho -0.3), {info[name][0.0]:.2f} (0), {info[name][0.3]:.2f} (0.3)")
+`} />
+
+With no correlation both pairs carry 2 units of information. A correlation of 0.3 cuts the same-sign pair to 1.54 and raises the opposite-sign pair to 2.86; a negative correlation does the reverse. Correlations are neither good nor bad in themselves: what matters is whether the shared noise looks like the signal. Noise that moves the population in the same direction as a change in the stimulus, the information-limiting correlations of Week 17, is the kind no decoder can remove.
+
+<Bridge title="Shared noise in brains and networks"
+  neuro="Noise correlations are small but cannot be averaged away, and their effect on what a population encodes depends on their structure relative to tuning. Changes in correlations with attention and learning may be one way the brain improves what it can read out."
+  ai="Ensembles of machine-learning models face the same arithmetic: averaging N models helps only as long as their errors are not correlated, and the benefit levels off at the shared part of the error. Methods that decorrelate ensemble members, such as training on different data or with different objectives, are the machine-learning answer to noise correlations.">
+
+What limits a crowd is not how noisy its members are, but how much of their noise they share.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A noise correlation is the correlation between two neurons'...", options: ["Tuning curves", "Trial-to-trial fluctuations for a fixed stimulus", "Spike shapes", "Mean rates"], answer: 1, explain: "Signal correlation is about tuning." },
+  { q: "Typical noise correlations between nearby cortical neurons are about...", options: ["0.001", "0.05 to 0.25", "0.9", "-1"], answer: 1, explain: "Small but important." },
+  { q: "Measured spike count correlations usually...", options: ["Shrink with longer windows", "Grow with longer counting windows up to the time scale of shared input", "Do not depend on the window", "Are always zero in 1 s windows"], answer: 1, explain: "Cohen and Kohn (2011)." },
+  { q: "When pooling N neurons with correlation ρ, the variance of their average tends to...", options: ["Zero", "ρσ²", "σ²", "Infinity"], answer: 1, explain: "Correlated noise does not average out." },
+  { q: "Zohary, Shadlen and Newsome used correlations to explain...", options: ["Why pooling many neurons improves behaviour little beyond a few dozen", "Spike shapes", "Synaptic depression", "Orientation tuning"], answer: 0, explain: "Pooling saturates." },
+  { q: "For two neurons with opposite tuning, positive noise correlation...", options: ["Hurts discrimination", "Helps discrimination", "Has no effect", "Stops firing"], answer: 1, explain: "The difference cancels shared noise." },
+  { q: "To pool correlations across stimuli you should first...", options: ["Average the counts", "Z-score counts within each stimulus", "Sort neurons", "Remove spikes"], answer: 1, explain: "Otherwise tuning inflates correlation." },
+  { q: "Linear Fisher information for two neurons is...", options: ["f'ᵀ Σ f'", "f'ᵀ Σ⁻¹ f'", "Σ / f'", "f' + Σ"], answer: 1, explain: "Week 17." },
+]} />
+
+<Flashcards cards={[
+  { front: "Signal versus noise correlation?", back: "Signal: correlation of tuning curves. Noise: correlation of trial-to-trial fluctuations at a fixed stimulus." },
+  { front: "Window dependence of $r_{sc}$?", back: "Counts in short windows are dominated by private spiking noise; correlation grows with window length up to the time scale of shared fluctuations." },
+  { front: "Variance of a pooled average?", back: "$\\frac{\\sigma^2}{N}(1 + (N - 1)\\rho) \\to \\rho\\sigma^2$." },
+  { front: "When do correlations help?", back: "When shared noise lies along directions the decoder can cancel, as for oppositely tuned neurons; they hurt when aligned with the signal." },
+  { front: "Cohen and Kohn's main cautions?", back: "Correlations depend on window, rate, recording quality and how they are pooled; interpret them relative to tuning and behaviour." },
+]} />
+
+<Predict revisit question="With pairwise noise correlation 0.1, how does the noise in an average of N neurons behave as N grows?" />
+
+<Key title="Before you go">
+<ul>
+<li>Signal correlations describe shared tuning; noise correlations describe shared fluctuations.</li>
+<li>Measured spike count correlations depend strongly on the counting window.</li>
+<li>Positive correlations put a floor of ρσ² under the noise of any average.</li>
+<li>Whether correlations hurt or help depends on how they align with the signal.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Cohen and Kohn (2011), <em>Measuring and interpreting neuronal correlations</em>.</li>
+<li>Zohary, Shadlen and Newsome (1994), <em>Correlated neuronal discharge rate and its implications for psychophysical performance</em>, Nature 370(6485), 140 to 143.</li>
+<li>Averbeck, Latham and Pouget (2006), <em>Neural correlations, population coding and computation</em> (Week 16's paper).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Attention reduces noise correlations between neurons in visual cortex. Using today's two results, explain when that reduction would improve what a downstream area can read out, and when it might make no difference." />

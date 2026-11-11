@@ -1,0 +1,195 @@
+export const meta = {
+  title: "Spike trains as point processes: renewal models and the time-rescaling test",
+  intro: "Week 15 described spike counts with the Poisson distribution, and Week 24 added random walks to threshold. This week turns to the questions a neuroscientist asks of real spike trains: how regular are they, how variable from trial to trial, how are they tuned and correlated, and what in their timing carries information. Today treats a spike train as a point process, a random sequence of event times. You will meet renewal processes, in which each interval is drawn afresh from a distribution, see how the regularity of intervals sets the variability of counts, and learn the time-rescaling theorem, a general test of whether a model of a neuron's firing rate fits its spike train.",
+  goals: [
+    "Describe a spike train by its interspike interval distribution and hazard function",
+    "Simulate gamma renewal processes and relate interval CV to count Fano factor",
+    "Generate inhomogeneous Poisson spike trains by thinning",
+    "Apply the time-rescaling theorem and a Kolmogorov-Smirnov test to judge a rate model",
+  ],
+  plan: [
+    { label: "Predict and point processes", minutes: 20 },
+    { label: "Renewal processes, CV and Fano", minutes: 30 },
+    { label: "Time rescaling", minutes: 35 },
+    { label: "What the test is for", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "brown-2002",
+};
+
+<Predict question="A neuron fires with interspike intervals drawn independently from a distribution with a coefficient of variation of 0.5, more regular than Poisson. Counted in long windows, will its spike counts have a Fano factor of about 1, about 0.5, or about 0.25?" />
+
+<Step n={1} title="Point processes" minutes={20} />
+
+A spike train is a list of times $t_1 \lt t_2 \lt \dots$. Three equivalent descriptions are useful. The **interspike interval (ISI) distribution** $p(\tau)$ gives the probability density of the gap between successive spikes. The **survivor function** $S(\tau) = \int_\tau^\infty p(s)\,ds$ is the probability that no spike has yet occurred $\tau$ after the last one. And the **hazard function** $h(\tau) = p(\tau)/S(\tau)$ is the instantaneous rate of firing, given that the neuron has been silent for $\tau$. For a Poisson process the hazard is constant, so the past does not matter; a refractory neuron has zero hazard just after a spike, rising afterwards.
+
+If successive intervals are independent and identically distributed, the process is a **renewal process**: each spike resets the clock. The gamma family is a convenient set of renewal models, with ISI density $p(\tau) \propto \tau^{k-1}e^{-k\tau/\mu}$, mean $\mu$ and coefficient of variation $1/\sqrt k$: $k = 1$ is Poisson, $k \gt 1$ more regular, $k \lt 1$ burstier.
+
+<Video id="TEc428h0nxQ" title="Interspike intervals and renewal processes (Neuronal Dynamics 6.2)" by="Wulfram Gerstner (EPFL)" note="Wulfram Gerstner defines interval distributions, survivor and hazard functions, and renewal processes, the vocabulary for describing spike trains used today." />
+
+<Step n={2} title="Renewal processes, CV and Fano" minutes={30} />
+
+Two numbers are often reported for a neuron's variability: the CV of its intervals and the Fano factor of its counts, variance over mean in a window of fixed length. For a renewal process they are linked: in windows much longer than the mean interval, $F \to CV^2$. Intuitively, a regular neuron fires almost the same number of spikes in every long window.
+
+<Figure caption="A gamma renewal process: raster, interval histogram, CV and Fano factor. Set the shape parameter." credit="Interactive figure by Engram.">
+  <RenewalProcess />
+</Figure>
+
+<PyCell id="renewal" title="Regularity of intervals, variability of counts" tests={String.raw`
+  import numpy as np
+  def test_cv():
+      "each process's interval CV is within 0.05 of 1 / sqrt(k)"
+      assert all(abs(res[k][0] - 1 / np.sqrt(k)) < 0.05 for k in res)
+
+  def test_fano():
+      "each long-window Fano factor is close to CV squared"
+      assert all(abs(res[k][1] - res[k][0] ** 2) < 0.3 * res[k][0] ** 2 + 0.05 for k in res)
+`} prompt="For gamma renewal processes with shape k = 0.5, 1, 4 and 16 and mean interval 50 ms (20 Hz), draw 8,000 intervals each (local rng, seed 34), and compute the interval CV and the Fano factor of counts in 2 s windows. Store (CV, Fano) in `res[k]`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(34)
+  res = {}
+  for k in (0.5, 1, 4, 16):
+      isi = r.gamma(k, 50 / k, size=8000)               # shape k, mean 50 ms
+      spikes = np.cumsum(isi)
+      cv = ...
+      counts = np.histogram(spikes, np.arange(0, spikes[-1], 2000))[0]
+      fano = ...
+      res[k] = (cv, fano)
+      print(f"k = {k:4}: CV {cv:.3f} (1/sqrt(k) = {1 / np.sqrt(k):.3f}), Fano in 2 s windows {fano:.3f}, CV^2 {cv ** 2:.3f}")
+`}
+hint="cv = isi.std() / isi.mean(); fano = counts.var() / counts.mean()."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(34)
+  res = {}
+  for k in (0.5, 1, 4, 16):
+      isi = r.gamma(k, 50 / k, size=8000)               # shape k, mean 50 ms
+      spikes = np.cumsum(isi)
+      cv = isi.std() / isi.mean()
+      counts = np.histogram(spikes, np.arange(0, spikes[-1], 2000))[0]
+      fano = counts.var() / counts.mean()
+      res[k] = (cv, fano)
+      print(f"k = {k:4}: CV {cv:.3f} (1/sqrt(k) = {1 / np.sqrt(k):.3f}), Fano in 2 s windows {fano:.3f}, CV^2 {cv ** 2:.3f}")
+`} />
+
+The interval CVs come out at 1.43, 1.00, 0.50 and 0.25 for k = 0.5, 1, 4 and 16, matching 1/√k, and the Fano factors in 2 s windows at 2.29, 0.99, 0.23 and 0.07, close to CV² in each case. That answers the prediction: a neuron with interval CV 0.5 has a long-window Fano factor near 0.25. A Fano factor well below 1 is therefore a sign of regular firing; one above 1 can come from bursty intervals or, as tomorrow shows, from a rate that changes between trials, which a renewal process does not have.
+
+<Step n={3} title="Time rescaling" minutes={35} />
+
+Real neurons' rates change with the stimulus, so their intervals are not identically distributed. Suppose you have a model of the rate, $\lambda(t)$. The **time-rescaling theorem** says: if the spikes really come from a Poisson process with that rate, then the rescaled intervals
+
+$$
+\tau_k = \int_{t_{k-1}}^{t_k}\lambda(t)\,dt = \Lambda(t_k) - \Lambda(t_{k-1})
+$$
+
+are independent exponential variables with mean 1, whatever $\lambda(t)$ looks like. Stretch time where the rate is high and compress it where it is low, and every inhomogeneous Poisson process becomes a unit-rate one. Brown and colleagues (2002), today's paper, turned this into a goodness-of-fit test: transform $z_k = 1 - e^{-\tau_k}$, which should be uniform on [0, 1], and compare its empirical distribution with the uniform one using the Kolmogorov-Smirnov (KS) statistic, the largest gap between the two cumulative distributions. With $n$ spikes, a gap above about $1.36/\sqrt n$ rejects the model at the 5% level.
+
+<PyCell id="rescale" title="Does the model fit?" tests={String.raw`
+  import numpy as np
+  def test_thinning():
+      "spikes were generated by thinning, so their number is close to the integral of the rate"
+      assert abs(len(s) - Lam(T)) < 4 * np.sqrt(Lam(T))
+
+  def test_ks():
+      "the true rate model passes the KS test and the constant-rate model fails it"
+      crit = 1.36 / np.sqrt(len(s) - 1)
+      assert ks(np.diff(Lam(s))) < crit and ks(np.diff(s) * len(s) / T) > crit
+`} prompt="Generate 60 s of spikes from an inhomogeneous Poisson process with rate 20 + 15 sin(2πt / 1 s) Hz by thinning: draw candidate times at 35 Hz and keep each with probability λ(t)/35 Hz. Write `ks(tau)`, the KS distance between the transformed intervals z = 1 - e^(-τ) and the uniform distribution. Apply it to intervals rescaled by the true rate and by a constant rate equal to the mean."
+code={String.raw`
+  r = np.random.default_rng(2002)
+  T = 60000.0                                                  # ms
+  lam = lambda t: (20 + 15 * np.sin(2 * np.pi * t / 1000)) / 1000     # spikes per ms
+  Lam = lambda t: (20 * t - 15 * 1000 / (2 * np.pi) * (np.cos(2 * np.pi * t / 1000) - 1)) / 1000
+  cand = np.sort(r.uniform(0, T, r.poisson(35 / 1000 * T)))
+  s = ...                                                      # keep each candidate with probability lam / (35 / 1000)
+
+  def ks(tau):
+      z = np.sort(1 - np.exp(-tau)); n = len(z)
+      above = np.arange(1, n + 1) / n - z
+      below = z - np.arange(0, n) / n
+      return ...
+
+  print(f"{len(s)} spikes; KS distance with the true rate {ks(np.diff(Lam(s))):.3f}, with a constant rate {ks(np.diff(s) * len(s) / T):.3f}, critical value {1.36 / np.sqrt(len(s) - 1):.3f}")
+  for tau, label in ((np.diff(Lam(s)), "true rate"), (np.diff(s) * len(s) / T, "constant rate")):
+      z = np.sort(1 - np.exp(-tau)); plt.plot(np.linspace(0, 1, len(z)), z, label=label)
+  plt.plot([0, 1], [0, 1], "k--"); plt.xlabel("uniform quantiles"); plt.ylabel("rescaled quantiles"); plt.legend(); plt.show()
+`}
+hint="s = cand[r.uniform(size=cand.size) < lam(cand) / (35 / 1000)]; return max(above.max(), below.max())."
+solution={String.raw`
+  r = np.random.default_rng(2002)
+  T = 60000.0                                                  # ms
+  lam = lambda t: (20 + 15 * np.sin(2 * np.pi * t / 1000)) / 1000     # spikes per ms
+  Lam = lambda t: (20 * t - 15 * 1000 / (2 * np.pi) * (np.cos(2 * np.pi * t / 1000) - 1)) / 1000
+  cand = np.sort(r.uniform(0, T, r.poisson(35 / 1000 * T)))
+  s = cand[r.uniform(size=cand.size) < lam(cand) / (35 / 1000)]  # keep each candidate with probability lam / (35 / 1000)
+
+  def ks(tau):
+      z = np.sort(1 - np.exp(-tau)); n = len(z)
+      above = np.arange(1, n + 1) / n - z
+      below = z - np.arange(0, n) / n
+      return max(above.max(), below.max())
+
+  print(f"{len(s)} spikes; KS distance with the true rate {ks(np.diff(Lam(s))):.3f}, with a constant rate {ks(np.diff(s) * len(s) / T):.3f}, critical value {1.36 / np.sqrt(len(s) - 1):.3f}")
+  for tau, label in ((np.diff(Lam(s)), "true rate"), (np.diff(s) * len(s) / T, "constant rate")):
+      z = np.sort(1 - np.exp(-tau)); plt.plot(np.linspace(0, 1, len(z)), z, label=label)
+  plt.plot([0, 1], [0, 1], "k--"); plt.xlabel("uniform quantiles"); plt.ylabel("rescaled quantiles"); plt.legend(); plt.show()
+`} />
+
+Rescaled by the true rate, the 1,205 intervals give a KS distance of 0.025, inside the critical value of 0.039: the model passes. Rescaled by a constant rate equal to the mean, they give 0.093 and the model is rejected, because the true train has too many short intervals in its high-rate phases and too many long ones in its low-rate phases, more variability than any constant-rate Poisson process can produce. In the plot, the failing model's curve bends away from the diagonal in an S shape.
+
+<Step n={4} title="What the test is for" minutes={15} />
+
+The time-rescaling test is general: any model that gives a conditional rate, $\lambda(t \mid \text{history, stimulus})$, can be checked this way, including the generalised linear models of next week, whose rate depends on the neuron's own recent spikes. That makes it the standard check of whether a point-process model has captured a spike train's structure, not only its average rate. It also shows where a model fails: a KS plot that bends above the diagonal at short intervals means the model predicts too few short intervals, usually a sign of missing bursting; one that bends below means missing refractoriness.
+
+Two cautions. A model fitted to the same data it is tested on will pass more easily than it should, so the test belongs on held-out data (Week 17). And with very many spikes, every model fails, because no model is exactly right; then the size and shape of the departure matter more than the p-value.
+
+<Bridge title="Checking a generative model"
+  neuro="The time-rescaling theorem turns any model of a neuron's instantaneous firing rate into a prediction that can be falsified: rescaled intervals must look exponential. It checks the whole distribution of spike times, not just the mean."
+  ai="Probabilistic models in machine learning face the same question of calibration. The probability integral transform, which maps observations through a model's predicted cumulative distribution to get uniform values if the model is right, is the same idea, and it is used to check probabilistic forecasts, normalising flows and diffusion models.">
+
+A model that predicts rates also predicts when spikes should come; check that too.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The hazard function of a Poisson process is...", options: ["Zero", "Constant", "Increasing", "Decreasing"], answer: 1, explain: "No memory of the last spike." },
+  { q: "A renewal process is one in which...", options: ["The rate is constant", "Successive intervals are independent and identically distributed", "Spikes come in bursts", "Counts are Gaussian"], answer: 1, explain: "Each spike resets the clock." },
+  { q: "For a gamma renewal process with shape k, the interval CV is...", options: ["k", "1/k", "1/√k", "√k"], answer: 2, explain: "k = 1 is Poisson." },
+  { q: "In long windows, a renewal process's Fano factor approaches...", options: ["1", "CV", "CV²", "Zero"], answer: 2, explain: "F → CV²." },
+  { q: "Thinning generates an inhomogeneous Poisson process by...", options: ["Deleting candidate spikes with probability depending on the rate", "Adding noise", "Rescaling time", "Smoothing"], answer: 0, explain: "Keep each with probability λ(t)/λ_max." },
+  { q: "Under the correct rate model, rescaled intervals are...", options: ["Uniform", "Exponential with mean 1", "Gaussian", "Gamma with shape 2"], answer: 1, explain: "The time-rescaling theorem." },
+  { q: "The KS statistic measures...", options: ["The mean difference", "The largest gap between two cumulative distributions", "The variance", "Correlation"], answer: 1, explain: "Compared with about 1.36/√n." },
+  { q: "A model tested on the same data it was fitted to...", options: ["Is tested fairly", "Will pass too easily", "Always fails", "Cannot be tested"], answer: 1, explain: "Use held-out data." },
+]} />
+
+<Flashcards cards={[
+  { front: "ISI distribution, survivor and hazard?", back: "$p(\\tau)$; $S(\\tau) = \\int_\\tau^\\infty p$; $h(\\tau) = p(\\tau)/S(\\tau)$, the firing rate given silence for τ." },
+  { front: "Gamma renewal process?", back: "Independent gamma intervals with shape k: CV = $1/\\sqrt k$; k = 1 Poisson, k above 1 regular, below 1 bursty." },
+  { front: "Fano and CV for renewal processes?", back: "In long windows, $F \\to CV^2$." },
+  { front: "Time-rescaling theorem?", back: "If spikes come from rate λ(t), the intervals in $\\Lambda(t) = \\int\\lambda$ are independent unit exponentials." },
+  { front: "KS test for spike-train models?", back: "Transform $z = 1 - e^{-\\tau}$, compare with the uniform; reject if the largest gap exceeds about $1.36/\\sqrt n$." },
+]} />
+
+<Predict revisit question="What is the long-window Fano factor of a renewal process with interval CV 0.5?" />
+
+<Key title="Before you go">
+<ul>
+<li>A spike train can be described by its interval distribution, survivor function or hazard.</li>
+<li>In renewal processes, regular intervals mean low count variability: F tends to CV².</li>
+<li>Thinning simulates inhomogeneous Poisson trains.</li>
+<li>Time rescaling turns any rate model into a test: rescaled intervals must be unit exponentials.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Brown, Barbieri, Ventura, Kass and Frank (2002), <em>The time-rescaling theorem and its application to neural spike train data analysis</em>.</li>
+<li>Gerstner, Kistler, Naud and Paninski (2014), <em>Neuronal Dynamics</em>, chapter 7, on variability and renewal processes (free online).</li>
+<li>Kass, Eden and Brown (2014), <em>Analysis of Neural Data</em>, Springer, chapter 19 on point processes.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Two neurons fire at 20 Hz. One has interval CV 0.3, the other 1.2. Describe what their rasters would look like, what kinds of mechanism could produce each, and how you would test whether either is a renewal process." />

@@ -1,0 +1,233 @@
+export const meta = {
+  title: "Forge: Week 34 challenge, quiz and deep read",
+  intro: "This week took spike trains apart: point processes and the time-rescaling test, trial-to-trial variability and its quenching, tuning curves with honest uncertainty, noise correlations and their consequences, and the information in spike timing. Today's challenge is the first-pass characterisation every new population recording gets. Twenty simultaneously recorded neurons respond to gratings at eight orientations; you will decide which are tuned, with a proper null, estimate their preferred orientations, measure their noise correlations and find out how those depend on tuning similarity. Then the quiz, and a critique of Churchland and colleagues' study of variability quenching.",
+  goals: [
+    "Fit tuning curves to a population and identify tuned neurons with a shuffle test",
+    "Compute noise correlations correctly, after removing stimulus-driven differences",
+    "Relate noise correlations to the similarity of neurons' preferred orientations",
+    "Critique a cross-area claim about neural variability",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "churchland-2010",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. A gamma renewal process has shape 9. What are its interval CV and long-window Fano factor?
+2. A neuron's rate varies by 20% across trials; its mean count is 10. What is its Fano factor?
+3. Fifty neurons with pairwise correlation 0.2 are averaged. By what factor is the noise variance reduced compared with one neuron?
+
+<PyCell code={String.raw`
+  import numpy as np
+  print("1. CV", round(1 / np.sqrt(9), 3), " Fano", round(1 / 9, 3))
+  print("2.", 1 + 0.2 ** 2 * 10)
+  print("3.", round(1 / ((1 + 49 * 0.2) / 50), 2), "times")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: who is tuned?** Twenty neurons were recorded together while gratings were shown at 8 orientations, 30 trials each. Most neurons are orientation tuned, with preferences spread around the circle, but some are not. On each trial, a shared gain fluctuation multiplies all neurons' rates, and a second one affects similarly tuned neurons together. Fit each neuron, compute its OSI and a shuffle p-value, and call it tuned if p is below 0.01.
+
+<PyCell id="partA" title="Part A: tuning across a population" tests={String.raw`
+  import numpy as np
+  def test_osi():
+      "osi computes the vector selectivity index from the orientation means"
+      c = counts[0]; m = c.mean(1)
+      assert abs(osi(c) - abs((m * np.exp(2j * np.deg2rad(ori))).sum()) / m.sum()) < 1e-12
+
+  def test_tuned():
+      "the shuffle test finds all 16 tuned neurons and flags at most one of the 4 untuned ones"
+      assert tuned[:16].all() and tuned[16:].sum() <= 1
+`} prompt="`counts[i]` is neuron i's counts (orientations x trials). Write `shuffle_p(c)` as on Day 3 with 300 shuffles, compute it for every neuron, and set `tuned` to a boolean array, True where p is below 0.01. Compare with the hidden truth `is_tuned`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1962)
+  ori = np.arange(0, 180, 22.5); n_neurons, n_trials = 20, 30
+  is_tuned = np.r_[np.ones(16, bool), np.zeros(4, bool)]
+  prefs = np.r_[np.linspace(0, 180, 16, endpoint=False), np.zeros(4)]
+  amp = np.where(is_tuned, 12.0, 0.0)
+  mean_rate = 3 + amp[:, None] * np.exp(2.0 * (np.cos(2 * np.deg2rad(ori[None, :] - prefs[:, None])) - 1))   # neurons x orientations
+  z = r.normal(size=(3, len(ori), n_trials))                                                                 # shared trial factors
+  loggain = 0.15 * z[0][None] + 0.25 * (np.cos(2 * np.deg2rad(prefs))[:, None, None] * z[1][None]
+                                         + np.sin(2 * np.deg2rad(prefs))[:, None, None] * z[2][None])
+  counts = r.poisson(mean_rate[:, :, None] * np.exp(loggain - 0.5 * (0.15**2 + 0.25**2)))                   # neurons x orientations x trials
+
+  def osi(c):
+      m = c.mean(1)
+      return abs((m * np.exp(2j * np.deg2rad(ori))).sum()) / m.sum()
+
+  def shuffle_p(c, n_shuf=300):
+      ...
+
+  pvals = np.array([shuffle_p(counts[i]) for i in range(n_neurons)])
+  tuned = ...
+  print("OSI:", np.round([osi(counts[i]) for i in range(n_neurons)], 2))
+  print("p:  ", np.round(pvals, 3))
+  print(f"{tuned.sum()} neurons tuned; agreement with the truth: {np.mean(tuned == is_tuned):.0%}")
+`}
+hint="real, flat = osi(c), c.ravel(); null = [osi(r.permutation(flat).reshape(c.shape)) for _ in range(n_shuf)]; return np.mean(np.array(null) >= real). tuned = pvals < 0.01."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1962)
+  ori = np.arange(0, 180, 22.5); n_neurons, n_trials = 20, 30
+  is_tuned = np.r_[np.ones(16, bool), np.zeros(4, bool)]
+  prefs = np.r_[np.linspace(0, 180, 16, endpoint=False), np.zeros(4)]
+  amp = np.where(is_tuned, 12.0, 0.0)
+  mean_rate = 3 + amp[:, None] * np.exp(2.0 * (np.cos(2 * np.deg2rad(ori[None, :] - prefs[:, None])) - 1))   # neurons x orientations
+  z = r.normal(size=(3, len(ori), n_trials))                                                                 # shared trial factors
+  loggain = 0.15 * z[0][None] + 0.25 * (np.cos(2 * np.deg2rad(prefs))[:, None, None] * z[1][None]
+                                         + np.sin(2 * np.deg2rad(prefs))[:, None, None] * z[2][None])
+  counts = r.poisson(mean_rate[:, :, None] * np.exp(loggain - 0.5 * (0.15**2 + 0.25**2)))                   # neurons x orientations x trials
+
+  def osi(c):
+      m = c.mean(1)
+      return abs((m * np.exp(2j * np.deg2rad(ori))).sum()) / m.sum()
+
+  def shuffle_p(c, n_shuf=300):
+      real, flat = osi(c), c.ravel()
+      null = [osi(r.permutation(flat).reshape(c.shape)) for _ in range(n_shuf)]
+      return np.mean(np.array(null) >= real)
+
+  pvals = np.array([shuffle_p(counts[i]) for i in range(n_neurons)])
+  tuned = pvals < 0.01
+  print("OSI:", np.round([osi(counts[i]) for i in range(n_neurons)], 2))
+  print("p:  ", np.round(pvals, 3))
+  print(f"{tuned.sum()} neurons tuned; agreement with the truth: {np.mean(tuned == is_tuned):.0%}")
+`} />
+
+All 16 tuned neurons have indices between 0.35 and 0.42 and shuffle p-values below 0.003. Of the 4 untuned neurons, three are correctly rejected, but one, with an index of only 0.10, comes out with p below 0.01: a false positive. With 4 untuned neurons each tested at the 1% level, that should happen in about one recording in 25; here it happened. Across many neurons, a false discovery rate correction (Week 18) is the safer threshold.
+
+**Part B: noise correlations and tuning similarity.** For each pair of tuned neurons, compute the noise correlation: z-score each neuron's counts within each orientation (subtract that orientation's mean, divide by its standard deviation), then correlate the two neurons' z-scores across all trials of all orientations. Then group pairs by the difference in their preferred orientations.
+
+<PyCell id="partB" title="Part B: limited-range correlations" tests={String.raw`
+  import numpy as np
+  def test_z():
+      "zscore removes each orientation's mean"
+      zs = zscore(counts[0])
+      assert np.allclose(zs.mean(1), 0)
+
+  def test_range():
+      "pairs with preferences within 30 degrees are more correlated than pairs about 90 degrees apart, and the mean correlation is positive"
+      assert r_by_diff["similar"] > r_by_diff["orthogonal"] + 0.1 and np.mean(list(rsc.values())) > 0
+`} prompt="Write `zscore(c)` for one neuron's counts (orientations x trials). Compute `rsc[(i, j)]` for every pair of tuned neurons, the circular difference in preferred orientation (0 to 90 degrees), and the mean correlation of pairs within 30 degrees (`r_by_diff['similar']`) and more than 60 degrees apart (`r_by_diff['orthogonal']`)."
+code={String.raw`
+  def zscore(c):
+      return ...
+
+  idx = np.where(tuned)[0]
+  Z = {i: zscore(counts[i]).ravel() for i in idx}
+  rsc, dpref = {}, {}
+  for a_ in range(len(idx)):
+      for b_ in range(a_ + 1, len(idx)):
+          i, j = idx[a_], idx[b_]
+          rsc[(i, j)] = np.corrcoef(Z[i], Z[j])[0, 1]
+          d = abs(prefs[i] - prefs[j]) % 180
+          dpref[(i, j)] = min(d, 180 - d)
+  pairs = list(rsc)
+  r_by_diff = {"similar": np.mean([rsc[p] for p in pairs if dpref[p] <= 30]),
+               "orthogonal": ...}
+  print(f"{len(pairs)} pairs; mean r_sc {np.mean(list(rsc.values())):.3f}")
+  print(f"preferences within 30 deg: r_sc {r_by_diff['similar']:.3f};  more than 60 deg apart: {r_by_diff['orthogonal']:.3f}")
+  plt.scatter([dpref[p] for p in pairs], [rsc[p] for p in pairs], s=10)
+  plt.xlabel("difference in preferred orientation (deg)"); plt.ylabel("noise correlation"); plt.show()
+`}
+hint="return (c - c.mean(1, keepdims=True)) / c.std(1, keepdims=True); 'orthogonal': np.mean([rsc[p] for p in pairs if dpref[p] > 60])."
+solution={String.raw`
+  def zscore(c):
+      return (c - c.mean(1, keepdims=True)) / c.std(1, keepdims=True)
+
+  idx = np.where(tuned)[0]
+  Z = {i: zscore(counts[i]).ravel() for i in idx}
+  rsc, dpref = {}, {}
+  for a_ in range(len(idx)):
+      for b_ in range(a_ + 1, len(idx)):
+          i, j = idx[a_], idx[b_]
+          rsc[(i, j)] = np.corrcoef(Z[i], Z[j])[0, 1]
+          d = abs(prefs[i] - prefs[j]) % 180
+          dpref[(i, j)] = min(d, 180 - d)
+  pairs = list(rsc)
+  r_by_diff = {"similar": np.mean([rsc[p] for p in pairs if dpref[p] <= 30]),
+               "orthogonal": np.mean([rsc[p] for p in pairs if dpref[p] > 60])}
+  print(f"{len(pairs)} pairs; mean r_sc {np.mean(list(rsc.values())):.3f}")
+  print(f"preferences within 30 deg: r_sc {r_by_diff['similar']:.3f};  more than 60 deg apart: {r_by_diff['orthogonal']:.3f}")
+  plt.scatter([dpref[p] for p in pairs], [rsc[p] for p in pairs], s=10)
+  plt.xlabel("difference in preferred orientation (deg)"); plt.ylabel("noise correlation"); plt.show()
+`} />
+
+The 136 pairs of tuned neurons have a mean noise correlation of 0.08, but the average hides the structure: pairs whose preferences are within 30° correlate at 0.29, while pairs more than 60° apart correlate at -0.11. Such limited-range correlations, larger for similarly tuned neurons, are what recordings in visual cortex typically show, and by Day 4 they are the kind that can limit discrimination between nearby orientations.
+
+**Part C (written).** Answer in your journal: using Day 4, would these correlations limit how well the population could discriminate two nearby orientations, and which pairs would matter most? Then say what would have happened to your correlation estimates if you had correlated raw counts across all orientations instead of z-scores.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The law of total variance for spike counts" task="Let $N \mid \Lambda \sim \text{Poisson}(\Lambda)$, with $\Lambda$ random, mean $\mu$ and variance $\sigma^2$. Show that $\text{Var}(N) = \mu + \sigma^2$.">
+
+The law of total variance says $\text{Var}(N) = \mathbb E[\text{Var}(N \mid \Lambda)] + \text{Var}(\mathbb E[N \mid \Lambda])$.
+
+For a Poisson count, both the conditional mean and variance equal $\Lambda$, so the first term is $\mathbb E[\Lambda] = \mu$ and the second is $\text{Var}(\Lambda) = \sigma^2$.
+
+Hence $\text{Var}(N) = \mu + \sigma^2$ and the Fano factor is $1 + \sigma^2/\mu$: always at least 1, with the excess measuring variability of the underlying rate.
+
+</Prove>
+
+<Prove title="2. Variance of a correlated average" task="Show that the average of $N$ variables, each with variance $\sigma^2$ and pairwise correlation $\rho$, has variance $\frac{\sigma^2}{N}(1 + (N - 1)\rho)$.">
+
+$\text{Var}\left(\frac{1}{N}\sum_i n_i\right) = \frac{1}{N^2}\sum_{i,j}\text{Cov}(n_i, n_j)$.
+
+There are $N$ diagonal terms, each $\sigma^2$, and $N(N - 1)$ off-diagonal terms, each $\rho\sigma^2$. The sum is $N\sigma^2 + N(N - 1)\rho\sigma^2$.
+
+Dividing by $N^2$ gives $\frac{\sigma^2}{N}(1 + (N - 1)\rho)$, which tends to $\rho\sigma^2$ as $N$ grows.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 34 quiz (15 questions)" questions={[
+  { q: "The hazard function gives...", options: ["The mean rate", "The firing rate given the time since the last spike", "The ISI variance", "The Fano factor"], answer: 1, explain: "Day 1." },
+  { q: "For a renewal process in long windows, Fano tends to...", options: ["1", "CV", "CV²", "0"], answer: 2, explain: "Day 1." },
+  { q: "The time-rescaling theorem says rescaled intervals under the right model are...", options: ["Uniform", "Unit exponentials", "Gaussian", "Gamma"], answer: 1, explain: "Day 1." },
+  { q: "A doubly stochastic neuron's Fano factor is...", options: ["1", "1 + c²μ", "μ", "c"], answer: 1, explain: "Day 2." },
+  { q: "Variability quenching refers to...", options: ["Higher rates", "A drop in Fano factor and rate variance at stimulus onset", "Synaptic depression", "Refractoriness"], answer: 1, explain: "Churchland and colleagues (2010)." },
+  { q: "Mean matching is needed because...", options: ["Fano depends on the mean for doubly stochastic neurons", "Means are biased", "Trials differ", "Windows overlap"], answer: 0, explain: "Day 2." },
+  { q: "A von Mises tuning curve for orientation uses...", options: ["cos θ", "cos 2θ", "sin θ only", "A Gaussian on a line"], answer: 1, explain: "Day 3." },
+  { q: "The OSI of an untuned neuron with few trials is...", options: ["Zero", "Biased above zero", "Negative", "Undefined"], answer: 1, explain: "Day 3." },
+  { q: "Spike count correlations usually...", options: ["Fall with window length", "Rise with window length", "Are constant", "Are negative"], answer: 1, explain: "Day 4." },
+  { q: "Averaging N neurons with correlation ρ leaves a noise floor of...", options: ["0", "ρσ²", "σ²/N", "σ"], answer: 1, explain: "Day 4." },
+  { q: "Positive noise correlation between oppositely tuned neurons...", options: ["Hurts discrimination", "Helps discrimination", "Has no effect", "Silences them"], answer: 1, explain: "Day 4." },
+  { q: "In short windows, latency can carry more information than counts because...", options: ["Counts are tiny and noisy while latency shifts strongly", "Latency is noiseless", "Counts are zero", "Rates are constant"], answer: 0, explain: "Day 5." },
+  { q: "Relative-latency codes are robust to...", options: ["Firing rate changes", "Unknown stimulus onset", "Noise correlations", "Adaptation"], answer: 1, explain: "Day 5." },
+  { q: "Noise correlations should be computed from...", options: ["Raw counts across stimuli", "Counts z-scored within each stimulus", "Tuning curves", "Spike shapes"], answer: 1, explain: "Part B." },
+  { q: "Limited-range correlations are...", options: ["Larger for neurons with similar tuning", "Larger for opposite tuning", "Constant", "Only negative"], answer: 0, explain: "Part B." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Churchland and colleagues (2010) its third pass and write your critique under the five headings. Focus on one question: **is variability quenching a general property of cortex, and what causes it?** Consider how many areas, species and tasks the data come from, and how comparable the recordings are; the mean-matching procedure and what it discards; whether the Fano factor's dependence on window length and rate (Days 1 and 2) could create or hide the effect; the use of the variance of the underlying rate as a cleaner measure; the explanations they consider, such as stabilisation of network dynamics or attractor states, and how a balanced network (Week 31) might produce it; and whether quenching reflects the stimulus itself or the animal's attention and readiness. End with an experiment that would separate those last two.
+
+<Callout kind="research">
+
+Quenching has been explained by stimulus-driven suppression of chaotic or fluctuating network dynamics, and by the stimulus pulling a multi-stable network into a single state. Build a small rate network with strong random recurrent connections (Week 23's chaotic regime), add a strong constant input at "stimulus onset", and measure the across-trial variance of the units' activity before and after. Does the input quench the variability, as Rajan, Abbott and Sompolinsky (2010) predicted for chaotic networks?
+
+</Callout>
+
+<Key title="Week 34 review checklist">
+<ul>
+<li>I can describe spike trains as point processes, simulate renewal processes and apply the time-rescaling test.</li>
+<li>I can compute PSTHs and Fano factors over time, separate rate variability from spiking variability, and explain quenching.</li>
+<li>I can fit tuning curves, put bootstrap intervals on their parameters and test selectivity against shuffles.</li>
+<li>I can measure noise correlations properly and explain their effect on pooling and discrimination.</li>
+<li>I can compare rate and latency codes and explain why relative timing needs no clock.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then list the five numbers you would now report for every neuron in a new recording, and the one plot you would make for every pair." />
