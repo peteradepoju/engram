@@ -303,6 +303,14 @@ export const DAY_TITLES: Record<number, string[]> = {
     "Rate codes and temporal codes: what spike timing adds",
     "Forge: Week 34 challenge, quiz and deep read",
   ],
+  35: [
+    "Receptive fields from natural stimuli: whitening and regularisation",
+    "Spike-triggered covariance: finding more than one filter",
+    "The Poisson GLM with spike history",
+    "Comparing encoding models: bits per spike, time rescaling and coupling",
+    "Deep networks as encoding models",
+    "Forge: Week 35 challenge, quiz and deep read",
+  ],
 };
 
 export const DAYS_PER_WEEK = 6;
@@ -331,7 +339,7 @@ export function dayTitle(w: number, d: number): string {
 }
 
 /** Weeks whose lesson files exist. Kept in sync by hand as content is written. */
-export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 28, 29, 30, 31, 32, 33, 34];
+export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 28, 29, 30, 31, 32, 33, 34, 35];
 export const isWritten = (w: number) => WRITTEN_WEEKS.includes(w);
 
 /** Every lesson that is published, in order. */

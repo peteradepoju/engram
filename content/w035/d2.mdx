@@ -1,0 +1,190 @@
+export const meta = {
+  title: "Spike-triggered covariance: finding more than one filter",
+  intro: "The spike-triggered average finds one filter, and it finds it only if the neuron's response depends on whether the stimulus matches the filter or its opposite. Many neurons do not work that way. A complex cell in V1 responds to an oriented grating whatever its phase, bright bar or dark bar, so positive and negative matches both drive it, and their average is zero. Today you build such a neuron from two filters, watch the STA fail, and recover both filters from the spike-triggered covariance, the second-order extension that Schwartz, Pillow, Rust and Simoncelli set out. You will test which eigenvalues are significant against a shuffle null and look at the shape of the nonlinearity in the subspace the filters span.",
+  goals: [
+    "Show that the STA is zero for a neuron that responds symmetrically to a filter and its negative",
+    "Compute the spike-triggered covariance and find the relevant filters from its eigenvectors",
+    "Assess eigenvalue significance with a shuffle null",
+    "Describe the nonlinearity of an energy model in its filter subspace",
+  ],
+  plan: [
+    { label: "Predict and when the STA fails", minutes: 20 },
+    { label: "Spike-triggered covariance", minutes: 35 },
+    { label: "Which eigenvalues are real?", minutes: 25 },
+    { label: "The nonlinearity in the subspace", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "schwartz-2006",
+};
+
+<Predict question="A model complex cell fires at a rate proportional to the sum of the squares of its stimulus's projections onto two filters, so a stimulus and its negative drive it equally. With plenty of white-noise data, what will its spike-triggered average look like: one of the filters, their sum, or flat noise near zero?" />
+
+<Step n={1} title="When the STA fails" minutes={20} />
+
+The **energy model** of a complex cell, proposed by Adelson and Bergen in 1985, takes two linear filters with the same orientation and frequency but phases 90° apart (a quadrature pair), squares their outputs and adds them:
+
+$$
+r(t) = \alpha\left[(k_1 \cdot x_t)^2 + (k_2 \cdot x_t)^2\right].
+$$
+
+The response is the local "energy" of the stimulus at the filters' frequency, independent of phase. Because $x$ and $-x$ give the same response, the spike-triggered stimuli are distributed symmetrically about zero, and their average carries no information. What changes is their spread: along $k_1$ and $k_2$, spike-triggered stimuli are larger in magnitude than the stimulus in general, so their variance increases in those directions.
+
+<Video id="xAwBbDAVtgw" title="Escape noise (Neuronal Dynamics 6.1)" by="Wulfram Gerstner (EPFL)" note="Wulfram Gerstner describes neurons whose firing probability is a nonlinear function of a filtered input, the linear-nonlinear structure that spike-triggered analyses aim to recover." />
+
+<Step n={2} title="Spike-triggered covariance" minutes={35} />
+
+The **spike-triggered covariance** (STC) is the covariance of the stimuli that preceded spikes. Subtract the covariance of all stimuli and take eigenvectors: directions where spikes are associated with more variance than usual have positive eigenvalues (excitatory axes), directions with less have negative eigenvalues (suppressive axes), and the rest are near zero.
+
+<Figure caption="Stimuli projected onto a neuron's two filters: all stimuli (grey) and those that preceded spikes (coloured). Compare a simple cell, with one thresholded filter, and a complex cell, with two squared filters." credit="Interactive figure by Engram, after Schwartz, Pillow, Rust and Simoncelli (2006).">
+  <STCSubspace />
+</Figure>
+
+<PyCell id="stc" title="Recovering two filters" tests={String.raw`
+  import numpy as np
+  def test_sta():
+      "the STA is small: its norm is below 0.3"
+      assert np.linalg.norm(sta) < 0.3
+
+  def test_stc():
+      "the two largest eigenvalues stand well above the rest, and their eigenvectors span the filters' plane (overlap above 0.9)"
+      assert ev[-2] > 4 * abs(ev[-3]) and overlap > 0.9
+`} prompt="A model complex cell with quadrature filters k1 and k2 is driven by white noise. Compute the STA (weighted by spike counts), the STC (the weighted covariance of spike-triggered stimuli about the STA), subtract the stimulus covariance, and take eigenvalues `ev` (ascending) and eigenvectors. Measure the `overlap` of the top two eigenvectors with the plane of k1 and k2 (1 is perfect)."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2006)
+  D, T = 20, 20000
+  X = np.lib.stride_tricks.sliding_window_view(r.normal(size=T + D - 1), D)[:T][:, ::-1]
+  lag = np.arange(D)
+  k1 = np.exp(-lag / 5) * np.sin(lag / 2); k1 /= np.linalg.norm(k1)
+  k2 = np.exp(-lag / 5) * np.cos(lag / 2); k2 -= (k2 @ k1) * k1; k2 /= np.linalg.norm(k2)
+  y = r.poisson(0.05 * ((X @ k1) ** 2 + (X @ k2) ** 2))
+
+  sta = ...
+  Xc = X - sta
+  stc = ...                                       # spike-weighted covariance about the STA
+  ev, V = np.linalg.eigh(stc - np.cov(X.T))
+  B = V[:, -2:]
+  overlap = np.linalg.norm(B.T @ np.c_[k1, k2]) ** 2 / 2
+  print(f"{y.sum()} spikes; STA norm {np.linalg.norm(sta):.3f}")
+  print("largest eigenvalues:", np.round(ev[-4:], 3), " smallest:", np.round(ev[:2], 3))
+  print(f"overlap of the top two eigenvectors with the filters' plane: {overlap:.3f}")
+  plt.plot(ev, "o"); plt.xlabel("rank"); plt.ylabel("STC eigenvalue minus prior"); plt.show()
+`}
+hint="sta = X.T @ y / y.sum(); stc = (Xc * y[:, None]).T @ Xc / y.sum()."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2006)
+  D, T = 20, 20000
+  X = np.lib.stride_tricks.sliding_window_view(r.normal(size=T + D - 1), D)[:T][:, ::-1]
+  lag = np.arange(D)
+  k1 = np.exp(-lag / 5) * np.sin(lag / 2); k1 /= np.linalg.norm(k1)
+  k2 = np.exp(-lag / 5) * np.cos(lag / 2); k2 -= (k2 @ k1) * k1; k2 /= np.linalg.norm(k2)
+  y = r.poisson(0.05 * ((X @ k1) ** 2 + (X @ k2) ** 2))
+
+  sta = X.T @ y / y.sum()
+  Xc = X - sta
+  stc = (Xc * y[:, None]).T @ Xc / y.sum()        # spike-weighted covariance about the STA
+  ev, V = np.linalg.eigh(stc - np.cov(X.T))
+  B = V[:, -2:]
+  overlap = np.linalg.norm(B.T @ np.c_[k1, k2]) ** 2 / 2
+  print(f"{y.sum()} spikes; STA norm {np.linalg.norm(sta):.3f}")
+  print("largest eigenvalues:", np.round(ev[-4:], 3), " smallest:", np.round(ev[:2], 3))
+  print(f"overlap of the top two eigenvectors with the filters' plane: {overlap:.3f}")
+  plt.plot(ev, "o"); plt.xlabel("rank"); plt.ylabel("STC eigenvalue minus prior"); plt.show()
+`} />
+
+The STA has length about 0.12, close to zero, which answers the prediction: flat noise. The covariance tells the real story. Two eigenvalues of the spike-triggered covariance, about 0.97 and 1.08, stand far above the rest, which lie between about -0.2 and 0.2, and the top two eigenvectors lie almost entirely (overlap 0.98) in the plane of the two true filters. STC recovers the subspace, not necessarily the individual filters: any rotation of the two filters within the plane gives the same energy model, so the eigenvectors can be any orthogonal pair in it.
+
+<Step n={3} title="Which eigenvalues are real?" minutes={25} />
+
+With finite data every eigenvalue scatters around zero, so "well above the rest" needs a null. Shift the spike train in time relative to the stimulus by a random amount (circular shift), which keeps the number and timing statistics of spikes but breaks their relation to the stimulus, recompute the STC, and record the largest and smallest eigenvalues. Repeating this gives a null band; eigenvalues outside it are significant. Schwartz and colleagues recommend a nested version, projecting out each significant axis and testing again, but the simple band is a good start.
+
+<PyCell id="null" title="A shuffle null for eigenvalues" tests={String.raw`
+  import numpy as np
+  def test_band():
+      "exactly two real eigenvalues exceed the top of the null band"
+      assert np.sum(ev > band[1]) == 2
+`} prompt="For 20 random circular shifts of y (by at least 100 bins), recompute the STC eigenvalues and record their maximum and minimum. Set `band` to (lowest minimum, highest maximum) across shifts and count how many real eigenvalues lie above it."
+code={String.raw`
+  def stc_eigs(yy):
+      s = X.T @ yy / yy.sum(); Xs = X - s
+      return np.linalg.eigvalsh((Xs * yy[:, None]).T @ Xs / yy.sum() - np.cov(X.T))
+
+  mins, maxs = [], []
+  for _ in range(20):
+      e = stc_eigs(np.roll(y, r.integers(100, T - 100)))
+      ...
+  band = (min(mins), max(maxs))
+  print(f"null band {band[0]:.3f} to {band[1]:.3f};  {np.sum(ev > band[1])} eigenvalues above it, {np.sum(ev < band[0])} below")
+`}
+hint="mins.append(e.min()); maxs.append(e.max())."
+solution={String.raw`
+  def stc_eigs(yy):
+      s = X.T @ yy / yy.sum(); Xs = X - s
+      return np.linalg.eigvalsh((Xs * yy[:, None]).T @ Xs / yy.sum() - np.cov(X.T))
+
+  mins, maxs = [], []
+  for _ in range(20):
+      e = stc_eigs(np.roll(y, r.integers(100, T - 100)))
+      mins.append(e.min()); maxs.append(e.max())
+  band = (min(mins), max(maxs))
+  print(f"null band {band[0]:.3f} to {band[1]:.3f};  {np.sum(ev > band[1])} eigenvalues above it, {np.sum(ev < band[0])} below")
+`} />
+
+Across 20 shifts, the null eigenvalues stay between about -0.21 and 0.25. The two real eigenvalues near 1 are far above this band, and no eigenvalue is significantly below it, so the analysis finds exactly two excitatory axes and no suppressive ones, as it should for this model. A neuron with a suppressive surround or divisive normalisation would show one or more eigenvalues below the band: stimulus directions along which spikes are less variable than chance.
+
+<Step n={4} title="The nonlinearity in the subspace" minutes={15} />
+
+Once the relevant subspace is found, the nonlinearity can be estimated within it, as Week 10 did for one filter: bin the projections of all stimuli onto the recovered axes, and divide the spike count in each bin by the number of stimuli. For the energy model the result is a bowl, rising with the distance from the origin in every direction, which you can see in the figure above as a ring of spike-triggered stimuli. With two axes this is a two-dimensional histogram; with more, the data run out quickly, which is why the GLMs of tomorrow, and the deep encoding models of Day 5, impose more structure on the nonlinearity.
+
+STC has limits. It needs Gaussian stimuli, since with natural stimuli the stimulus's own higher-order structure contaminates the covariance, and it finds the subspace, not the individual filters within it: any rotation of $k_1$ and $k_2$ in their plane fits equally well. Rust, Schwartz, Movshon and Simoncelli (2005) used it to find up to a dozen excitatory and suppressive axes in V1 neurons, far more than the textbook simple and complex cells.
+
+<Bridge title="Beyond the first moment"
+  neuro="The STA asks how spike-triggered stimuli differ in their mean; the STC asks how they differ in their spread. Neurons that respond to energy, contrast or features in any phase, which are common beyond the retina, reveal themselves only to the second."
+  ai="Units in deep networks that respond to a feature regardless of its sign or position, after squaring or pooling, are invisible to linear probes for the same reason, and their representations are characterised by the subspace they respond to rather than a single direction. Second-order methods, such as covariance-based probes and the analysis of subspaces rather than individual units, are the network-analysis versions of STC.">
+
+If the average of what makes a neuron fire is zero, look at the spread.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The energy model of a complex cell squares and sums...", options: ["Two quadrature-phase filter outputs", "Two different orientations", "Spike counts", "Noise"], answer: 0, explain: "Adelson and Bergen (1985)." },
+  { q: "The STA of an energy-model neuron is...", options: ["Its first filter", "Close to zero", "The sum of its filters", "Negative"], answer: 1, explain: "x and -x drive it equally." },
+  { q: "The spike-triggered covariance is...", options: ["The covariance of spike counts", "The covariance of stimuli preceding spikes", "The STA squared", "The ISI variance"], answer: 1, explain: "Second-order analysis." },
+  { q: "A positive eigenvalue of STC minus the stimulus covariance indicates...", options: ["A suppressive direction", "An excitatory direction", "Noise only", "Refractoriness"], answer: 1, explain: "More variance before spikes." },
+  { q: "Circularly shifting the spike train relative to the stimulus...", options: ["Preserves the stimulus relation", "Breaks the stimulus relation while keeping spike statistics", "Changes the stimulus", "Removes spikes"], answer: 1, explain: "A null for eigenvalues." },
+  { q: "STC recovers...", options: ["Each filter uniquely", "The subspace spanned by the filters", "The spike times", "The nonlinearity directly"], answer: 1, explain: "Rotations within the plane are equivalent." },
+  { q: "STC requires the stimulus to be...", options: ["Natural images", "Gaussian", "Binary only", "Silent"], answer: 1, explain: "Otherwise stimulus structure contaminates it." },
+  { q: "Rust and colleagues (2005) found that V1 neurons can have...", options: ["Only one filter", "Many excitatory and suppressive axes", "No filters", "Only suppressive axes"], answer: 1, explain: "Richer than the textbook models." },
+]} />
+
+<Flashcards cards={[
+  { front: "Energy model?", back: "$r = \\alpha[(k_1\\cdot x)^2 + (k_2\\cdot x)^2]$ with a quadrature pair: phase-invariant, STA near zero." },
+  { front: "Spike-triggered covariance?", back: "Covariance of spike-triggered stimuli minus the stimulus covariance; eigenvectors with large positive or negative eigenvalues are excitatory or suppressive axes." },
+  { front: "Testing STC eigenvalues?", back: "Recompute after random circular shifts of the spike train; real eigenvalues lie outside the null band." },
+  { front: "What STC cannot do?", back: "Identify individual filters within the subspace, or work with non-Gaussian stimuli without correction." },
+  { front: "Nonlinearity in the subspace?", back: "Histogram of spike counts over histogram of stimuli in the recovered axes; a bowl for an energy model." },
+]} />
+
+<Predict revisit question="What does a model complex cell's spike-triggered average look like?" />
+
+<Key title="Before you go">
+<ul>
+<li>Neurons that respond equally to a feature and its opposite have a near-zero STA.</li>
+<li>The spike-triggered covariance reveals their filters as directions of changed variance.</li>
+<li>A shuffle null decides how many axes are real.</li>
+<li>STC finds a subspace and needs Gaussian stimuli; nonlinearities in many dimensions need more structured models.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Schwartz, Pillow, Rust and Simoncelli (2006), <em>Spike-triggered neural characterization</em>.</li>
+<li>Adelson and Bergen (1985), <em>Spatiotemporal energy models for the perception of motion</em>, Journal of the Optical Society of America A 2(2), 284 to 299.</li>
+<li>Rust, Schwartz, Movshon and Simoncelli (2005), <em>Spatiotemporal elements of macaque V1 receptive fields</em>, Neuron 46(6), 945 to 956.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A neuron in auditory cortex responds to a frequency sweep in either direction but not to a steady tone. Describe what its STA and its STC would look like, and how many significant axes you would expect." />

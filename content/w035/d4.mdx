@@ -1,0 +1,303 @@
+export const meta = {
+  title: "Comparing encoding models: bits per spike, time rescaling and coupling",
+  intro: "Yesterday's GLM recovered a history filter, but is it a better model than the LNP, and by how much? Today you learn the two standard ways to answer: held-out log-likelihood, reported in bits per spike, and the time-rescaling test from Week 34, which checks the whole distribution of spike times. Then you add a third ingredient, coupling, by letting one neuron's spikes enter another's model, the step from single-neuron GLMs to the population models of Pillow and colleagues. The data that motivated much of this work came from primate retinal ganglion cells recorded by Uzzell and Chichilnisky, whose spike timing was far more precise than a Poisson model allows.",
+  goals: [
+    "Compute held-out log-likelihood in bits per spike relative to a homogeneous Poisson model",
+    "Apply the time-rescaling test to discrete-time GLM predictions",
+    "Fit a coupled GLM in which one neuron's spikes influence another's",
+    "Interpret what each comparison says about a model's adequacy",
+  ],
+  plan: [
+    { label: "Predict and why likelihood", minutes: 15 },
+    { label: "Bits per spike", minutes: 30 },
+    { label: "Time rescaling for GLMs", minutes: 30 },
+    { label: "Coupling between neurons", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "uzzell-2004",
+};
+
+<Predict question="An LNP model and a GLM with spike history are fitted to the same refractory neuron. On held-out data, which do you expect to fail the time-rescaling test: the LNP, the GLM, both, or neither?" />
+
+<Step n={1} title="Why likelihood" minutes={15} />
+
+For spike trains, mean squared error is a poor measure of fit: spikes are sparse, and a model that predicts zero everywhere can have a small squared error. The natural measure for a probabilistic model is its **log-likelihood on held-out data**, how probable it makes the spikes that actually occurred. To make numbers comparable across neurons and recordings, it is reported relative to a homogeneous Poisson model with the neuron's mean rate, and divided by the number of spikes and by $\ln 2$:
+
+$$
+\text{bits per spike} = \frac{\mathcal L_{model} - \mathcal L_{Poisson}}{N_{spikes}\ln 2}.
+$$
+
+It is the information each spike carries about the model's predictors, in the sense of Week 20, as far as the model can tell.
+
+<Video id="LT0KRaotIxo" title="Likelihood of a spike train (Neuronal Dynamics 6.3)" by="Wulfram Gerstner (EPFL)" note="Wulfram Gerstner derives the likelihood of an observed spike train under a point-process model, the quantity used today to fit and compare encoding models." />
+
+<Step n={2} title="Bits per spike" minutes={30} />
+
+<PyCell id="bits" title="LNP against GLM on held-out data" tests={String.raw`
+  import numpy as np
+  def test_positive():
+      "both models beat the homogeneous Poisson baseline on held-out data"
+      assert bps["LNP"] > 0 and bps["GLM"] > 0
+
+  def test_gain():
+      "the history terms add more than 0.1 bits per spike"
+      assert bps["GLM"] - bps["LNP"] > 0.1
+`} prompt="The cell below re-creates yesterday's neuron and fits. Write `loglik(X, w, y)`, the Poisson log-likelihood (dropping the log y! term) for design X with a constant column appended, and compute bits per spike on the held-out last 15 s for both models, relative to a Poisson model with the training mean rate."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2005)
+  T, D, H = 60000, 20, 40
+  x = r.normal(size=T); lag = np.arange(D); hl = np.arange(1, H + 1)
+  k = np.exp(-lag / 4) * np.sin(lag / 2.5); k = 0.6 * k / np.linalg.norm(k)
+  h = -5 * np.exp(-hl / 2) + 0.8 * np.exp(-((hl - 10) / 4) ** 2)
+  Xs = np.zeros((T, D))
+  for j in range(D):
+      Xs[j:, j] = x[: T - j]
+  drive = Xs @ k + np.log(0.03); y = np.zeros(T, int)
+  for t in range(T):
+      y[t] = r.poisson(np.exp(drive[t]))
+      if y[t]:
+          e = min(T, t + 1 + H); drive[t + 1:e] += y[t] * h[: e - t - 1]
+  tt = np.log(hl + 3); cs = np.linspace(np.log(3), np.log(H + 3), 6); wd = cs[1] - cs[0]
+  Bh = np.array([np.where(np.abs(tt - c) < 2 * wd, 0.5 * (1 + np.cos(np.pi * (tt - c) / (2 * wd))), 0) for c in cs]).T
+  Yh = np.zeros((T, H))
+  for i in range(1, H + 1):
+      Yh[i:, i - 1] = y[: T - i]
+  Xh = Yh @ Bh
+
+  def fit_glm(X, y, iters=25):
+      X = np.c_[X, np.ones(len(y))]; w = np.zeros(X.shape[1]); w[-1] = np.log(y.mean())
+      for _ in range(iters):
+          lam = np.exp(X @ w)
+          w = w + np.linalg.solve((X * lam[:, None]).T @ X + 1e-6 * np.eye(len(w)), X.T @ (y - lam))
+      return w
+
+  train, test = np.arange(T) < 45000, np.arange(T) >= 45000
+  designs = {"LNP": Xs, "GLM": np.c_[Xs, Xh]}
+  weights = {m: fit_glm(X[train], y[train]) for m, X in designs.items()}
+
+  def loglik(X, w, y):
+      eta = np.c_[X, np.ones(len(y))] @ w
+      return ...
+
+  r0 = y[train].mean()
+  ll0 = np.sum(y[test] * np.log(r0) - r0)
+  bps = {m: (loglik(designs[m][test], weights[m], y[test]) - ll0) / (y[test].sum() * np.log(2)) for m in designs}
+  print({m: round(float(v), 3) for m, v in bps.items()}, "bits per spike on held-out data")
+`}
+hint="return np.sum(y * eta - np.exp(eta))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2005)
+  T, D, H = 60000, 20, 40
+  x = r.normal(size=T); lag = np.arange(D); hl = np.arange(1, H + 1)
+  k = np.exp(-lag / 4) * np.sin(lag / 2.5); k = 0.6 * k / np.linalg.norm(k)
+  h = -5 * np.exp(-hl / 2) + 0.8 * np.exp(-((hl - 10) / 4) ** 2)
+  Xs = np.zeros((T, D))
+  for j in range(D):
+      Xs[j:, j] = x[: T - j]
+  drive = Xs @ k + np.log(0.03); y = np.zeros(T, int)
+  for t in range(T):
+      y[t] = r.poisson(np.exp(drive[t]))
+      if y[t]:
+          e = min(T, t + 1 + H); drive[t + 1:e] += y[t] * h[: e - t - 1]
+  tt = np.log(hl + 3); cs = np.linspace(np.log(3), np.log(H + 3), 6); wd = cs[1] - cs[0]
+  Bh = np.array([np.where(np.abs(tt - c) < 2 * wd, 0.5 * (1 + np.cos(np.pi * (tt - c) / (2 * wd))), 0) for c in cs]).T
+  Yh = np.zeros((T, H))
+  for i in range(1, H + 1):
+      Yh[i:, i - 1] = y[: T - i]
+  Xh = Yh @ Bh
+
+  def fit_glm(X, y, iters=25):
+      X = np.c_[X, np.ones(len(y))]; w = np.zeros(X.shape[1]); w[-1] = np.log(y.mean())
+      for _ in range(iters):
+          lam = np.exp(X @ w)
+          w = w + np.linalg.solve((X * lam[:, None]).T @ X + 1e-6 * np.eye(len(w)), X.T @ (y - lam))
+      return w
+
+  train, test = np.arange(T) < 45000, np.arange(T) >= 45000
+  designs = {"LNP": Xs, "GLM": np.c_[Xs, Xh]}
+  weights = {m: fit_glm(X[train], y[train]) for m, X in designs.items()}
+
+  def loglik(X, w, y):
+      eta = np.c_[X, np.ones(len(y))] @ w
+      return np.sum(y * eta - np.exp(eta))
+
+  r0 = y[train].mean()
+  ll0 = np.sum(y[test] * np.log(r0) - r0)
+  bps = {m: (loglik(designs[m][test], weights[m], y[test]) - ll0) / (y[test].sum() * np.log(2)) for m in designs}
+  print({m: round(float(v), 3) for m, v in bps.items()}, "bits per spike on held-out data")
+`} />
+
+On the last 15 seconds, which neither model saw, the LNP gains about 0.20 bits per spike over a constant rate and the GLM about 0.40: the history terms double the information the model extracts. The LNP is not useless, it captures the stimulus, but it is blind to the structure the neuron imposes on its own spike train. Bits per spike can be negative on held-out data, which happens when a model overfits so badly that it does worse than a constant rate; regularisation from Day 1 is the cure.
+
+<Step n={3} title="Time rescaling for GLMs" minutes={30} />
+
+Week 34's time-rescaling test applies to any model that gives a conditional intensity, including one that depends on the neuron's own spikes. In discrete time, the rescaled interval between successive spikes is the sum of the predicted intensities over the bins between them, plus a share of the bin in which the later spike falls. Summing the whole spike bin biases the test when bins are coarse relative to the rate, so Haslinger, Pipa and Brown (2010) proposed drawing that share at random: if the spike bin has intensity $\lambda_s$, add $-\ln(1 - u(1 - e^{-\lambda_s}))$ with $u$ uniform on (0, 1). If the model is right, the corrected sums are unit exponentials.
+
+<Figure caption="Time-rescaling plots for the LNP and the GLM on held-out data: the quantiles of the transformed intervals against uniform quantiles, with the 99% band." credit="Interactive figure by Engram, after Brown and colleagues (2002) and Haslinger, Pipa and Brown (2010).">
+  <KSPlot />
+</Figure>
+
+<PyCell id="ks" title="Which model passes?" tests={String.raw`
+  import numpy as np
+  def test_ks():
+      "at the 99% level, the LNP fails the time-rescaling test and the GLM passes it"
+      assert ks_stat["LNP"] > crit and ks_stat["GLM"] < crit
+`} prompt="For each model, compute the predicted intensity on the test set, the corrected rescaled intervals (the intensities summed over the bins strictly between successive test spikes, plus the random share of the later spike's bin), and the KS distance of 1 - exp(-τ) from the uniform distribution."
+code={String.raw`
+  def ks_distance(tau):
+      z = np.sort(1 - np.exp(-tau)); n = len(z)
+      return max((np.arange(1, n + 1) / n - z).max(), (z - np.arange(n) / n).max())
+
+  spk = np.where(y[test] > 0)[0]
+  u = np.random.default_rng(2010).uniform(size=len(spk) - 1)
+  ks_stat = {}
+  for m in designs:
+      lam = np.exp(np.c_[designs[m][test], np.ones(test.sum())] @ weights[m])
+      cum = np.cumsum(lam); ls = lam[spk[1:]]
+      between = np.diff(cum[spk]) - ls
+      tau = ...
+      ks_stat[m] = ks_distance(tau)
+  crit = 1.63 / np.sqrt(len(spk) - 1)
+  print({m: round(float(v), 3) for m, v in ks_stat.items()}, f"99% critical value {crit:.3f}")
+`}
+hint="tau = between - np.log(1 - u * (1 - np.exp(-ls)))."
+solution={String.raw`
+  def ks_distance(tau):
+      z = np.sort(1 - np.exp(-tau)); n = len(z)
+      return max((np.arange(1, n + 1) / n - z).max(), (z - np.arange(n) / n).max())
+
+  spk = np.where(y[test] > 0)[0]
+  u = np.random.default_rng(2010).uniform(size=len(spk) - 1)
+  ks_stat = {}
+  for m in designs:
+      lam = np.exp(np.c_[designs[m][test], np.ones(test.sum())] @ weights[m])
+      cum = np.cumsum(lam); ls = lam[spk[1:]]
+      between = np.diff(cum[spk]) - ls
+      tau = between - np.log(1 - u * (1 - np.exp(-ls)))
+      ks_stat[m] = ks_distance(tau)
+  crit = 1.63 / np.sqrt(len(spk) - 1)
+  print({m: round(float(v), 3) for m, v in ks_stat.items()}, f"99% critical value {crit:.3f}")
+`} />
+
+The LNP's KS distance is about 0.12, well beyond the 99% critical value of 0.07: it predicts the right number of spikes but at the wrong times, with too many short intervals. The GLM's is about 0.05, inside the band. Without the discrete-time correction, even the GLM drifts towards the edge, which is a reminder that a goodness-of-fit test is itself a model with assumptions. Note that the two tests answer different questions: bits per spike ranks models, and time rescaling asks whether the best one is good enough.
+
+<Step n={4} title="Coupling between neurons" minutes={30} />
+
+Neurons recorded together influence each other, through direct connections or shared input. A **coupled GLM** adds, for each other neuron $j$, a coupling filter $c_j$ applied to $j$'s recent spikes. Pillow and colleagues (2008, Week 17's paper) fitted such a model to a complete population of primate retinal ganglion cells and found that coupling improved predictions of single spikes and of the population's correlations. Here, simulate two neurons in which neuron B receives brief excitation from neuron A's spikes, and ask whether fitting B with a coupling term recovers it.
+
+<PyCell id="coupling" title="Recovering a connection" tests={String.raw`
+  import numpy as np
+  def test_sign():
+      "the fitted coupling from A to B is positive at lags of 2 to 6 ms"
+      assert c_fit[1:6].mean() > 0.3
+
+  def test_bits():
+      "adding coupling improves B's held-out bits per spike"
+      assert bps_B["coupled"] > bps_B["uncoupled"] + 0.02
+`} prompt="Neuron A is the neuron above. Neuron B has its own stimulus filter and history, plus a coupling filter that adds 1.5 exp(-((t - 3)/1.5)²) to its drive t ms after each spike of A. Fit B with stimulus and history only, and with an added coupling term (A's past spikes projected onto the same basis Bh); compare held-out bits per spike and reconstruct the coupling filter `c_fit`."
+code={String.raw`
+  c_true = 1.5 * np.exp(-((hl - 3) / 1.5) ** 2)
+  kB = np.roll(k, 2)
+  driveB = Xs @ kB + np.log(0.02); yB = np.zeros(T, int)
+  for t in range(T):
+      yB[t] = r.poisson(np.exp(driveB[t]))
+      e = min(T, t + 1 + H)
+      if yB[t]:
+          driveB[t + 1:e] += yB[t] * h[: e - t - 1]
+      if y[t]:
+          driveB[t + 1:e] += y[t] * c_true[: e - t - 1]
+  YhB = np.zeros((T, H))
+  for i in range(1, H + 1):
+      YhB[i:, i - 1] = yB[: T - i]
+  designs_B = {"uncoupled": np.c_[Xs, YhB @ Bh], "coupled": ...}
+  wB = {m: fit_glm(X[train], yB[train]) for m, X in designs_B.items()}
+  r0B = yB[train].mean(); ll0B = np.sum(yB[test] * np.log(r0B) - r0B)
+  bps_B = {m: (loglik(designs_B[m][test], wB[m], yB[test]) - ll0B) / (yB[test].sum() * np.log(2)) for m in designs_B}
+  c_fit = Bh @ wB["coupled"][D + 6:D + 12]
+  print({m: round(float(v), 3) for m, v in bps_B.items()}, "bits per spike for neuron B")
+  print("coupling, first 8 ms: fitted", np.round(c_fit[:8], 2), " true", np.round(c_true[:8], 2))
+`}
+hint="'coupled': np.c_[Xs, YhB @ Bh, Xh], since Xh already holds A's past spikes on the basis."
+solution={String.raw`
+  c_true = 1.5 * np.exp(-((hl - 3) / 1.5) ** 2)
+  kB = np.roll(k, 2)
+  driveB = Xs @ kB + np.log(0.02); yB = np.zeros(T, int)
+  for t in range(T):
+      yB[t] = r.poisson(np.exp(driveB[t]))
+      e = min(T, t + 1 + H)
+      if yB[t]:
+          driveB[t + 1:e] += yB[t] * h[: e - t - 1]
+      if y[t]:
+          driveB[t + 1:e] += y[t] * c_true[: e - t - 1]
+  YhB = np.zeros((T, H))
+  for i in range(1, H + 1):
+      YhB[i:, i - 1] = yB[: T - i]
+  designs_B = {"uncoupled": np.c_[Xs, YhB @ Bh], "coupled": np.c_[Xs, YhB @ Bh, Xh]}
+  wB = {m: fit_glm(X[train], yB[train]) for m, X in designs_B.items()}
+  r0B = yB[train].mean(); ll0B = np.sum(yB[test] * np.log(r0B) - r0B)
+  bps_B = {m: (loglik(designs_B[m][test], wB[m], yB[test]) - ll0B) / (yB[test].sum() * np.log(2)) for m in designs_B}
+  c_fit = Bh @ wB["coupled"][D + 6:D + 12]
+  print({m: round(float(v), 3) for m, v in bps_B.items()}, "bits per spike for neuron B")
+  print("coupling, first 8 ms: fitted", np.round(c_fit[:8], 2), " true", np.round(c_true[:8], 2))
+`} />
+
+Adding A's spikes raises B's held-out score from about 0.48 to 0.78 bits per spike, and the fitted coupling filter is positive over the first 5 ms with its peak near 2 to 3 ms, the shape that was put in, though smoothed by the six basis functions (the true peak of 1.5 at 3 ms comes back as about 1.2). With 100 neurons, each with 99 coupling filters, the parameter count grows quickly, so fits to large populations rely on a compact basis and on regularisation that keeps most couplings small.
+
+<Callout kind="warning">
+
+A fitted coupling filter is not proof of a synapse. Two neurons that share an unrecorded input will show coupling in a GLM fitted only to each other, which is the omitted-variable problem of causal inference. Coupling filters describe statistical dependence given the variables in the model; inferring connections needs either the whole circuit or interventions, a theme the course returns to when it reaches causal inference.
+
+</Callout>
+
+<Bridge title="Scoring models fairly"
+  neuro="Held-out log-likelihood in bits per spike, and goodness-of-fit tests such as time rescaling, let encoding models of very different kinds be compared on the same footing. Uzzell and Chichilnisky's precise retinal spike trains were a test that Poisson models failed and history-dependent models passed."
+  ai="Language models are compared by held-out log-likelihood too: perplexity is the exponential of the average negative log-likelihood per token, and bits per character or byte are used for the same reason as bits per spike, to make numbers comparable across datasets. Calibration tests play the role of time rescaling.">
+
+A model that assigns probability to data can be scored by how much probability it gives to what actually happened.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Bits per spike measures...", options: ["Spikes per second", "Held-out log-likelihood improvement over a homogeneous Poisson model, per spike", "Mean squared error", "Firing rate variance"], answer: 1, explain: "Comparable across neurons." },
+  { q: "Mean squared error is a poor score for spike prediction because...", options: ["Spikes are sparse, so predicting zero can score well", "It is too slow", "It needs Gaussian data only", "It ignores bias"], answer: 0, explain: "Likelihood respects the point-process nature." },
+  { q: "In discrete time, a rescaled interval is...", options: ["The number of bins between spikes", "The sum of predicted intensities between successive spikes", "The ISI squared", "The spike count"], answer: 1, explain: "Time rescaling with a GLM's intensity." },
+  { q: "A refractory neuron fitted with an LNP model typically...", options: ["Passes the time-rescaling test", "Fails it, because the model predicts too many short intervals", "Has no spikes", "Has negative likelihood only"], answer: 1, explain: "No history term." },
+  { q: "A coupling filter in a GLM applies to...", options: ["The stimulus", "Another neuron's recent spikes", "The neuron's own spikes", "The bias"], answer: 1, explain: "Population GLMs." },
+  { q: "A positive fitted coupling filter proves...", options: ["A direct excitatory synapse", "Statistical dependence given the model's variables, not necessarily a synapse", "Nothing", "Inhibition"], answer: 1, explain: "Unobserved common input can produce it." },
+  { q: "Uzzell and Chichilnisky found primate retinal ganglion cell spike trains to be...", options: ["Poisson", "More precise and regular than Poisson", "Random", "Silent"], answer: 1, explain: "Precision of spike trains." },
+  { q: "Perplexity in language models is related to...", options: ["Held-out log-likelihood per token", "Accuracy only", "Model size", "Learning rate"], answer: 0, explain: "The same idea as bits per spike." },
+]} />
+
+<Flashcards cards={[
+  { front: "Bits per spike?", back: "$(\\mathcal L_{model} - \\mathcal L_{Poisson})/(N_{spikes}\\ln 2)$ on held-out data." },
+  { front: "Time rescaling for GLMs?", back: "Sum the predicted intensity between successive spikes, with a random share of the spike bin (the discrete-time correction); under a correct model these are unit exponentials." },
+  { front: "Coupled GLM?", back: "Adds filters on other neurons' recent spikes to a neuron's GLM; captures dependence within a population." },
+  { front: "Coupling is not connectivity?", back: "Shared unobserved inputs produce coupling without a synapse; causal claims need interventions or full observation." },
+  { front: "LNP versus GLM on refractory data?", back: "The GLM gains bits per spike and passes time rescaling; the LNP fails because it allows too many short intervals." },
+]} />
+
+<Predict revisit question="Which model fails the time-rescaling test on held-out data from a refractory neuron?" />
+
+<Key title="Before you go">
+<ul>
+<li>Score spike-train models by held-out log-likelihood, in bits per spike.</li>
+<li>Time rescaling checks the whole distribution of spike times, including a GLM's history effects.</li>
+<li>Coupled GLMs capture interactions between neurons and improve predictions.</li>
+<li>Coupling filters describe dependence, not necessarily synapses.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Uzzell and Chichilnisky (2004), <em>Precision of spike trains in primate retinal ganglion cells</em>.</li>
+<li>Pillow, Paninski, Uzzell, Simoncelli and Chichilnisky (2005), <em>Prediction and decoding of retinal ganglion cell responses with a probabilistic spiking model</em>, Journal of Neuroscience 25(47), 11003 to 11013.</li>
+<li>Haslinger, Pipa and Brown (2010), <em>Discrete time rescaling theorem: determining goodness of fit for discrete time statistical models of neural spiking</em>, Neural Computation 22(10), 2477 to 2506.</li>
+<li>Stevenson and colleagues (2012), <em>Functional connectivity and tuning curves in populations of simultaneously recorded neurons</em>, PLoS Computational Biology 8(11), e1002775.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="You fit coupled GLMs to 100 simultaneously recorded neurons and find a strong positive coupling from neuron 12 to neuron 47. List three explanations other than a direct synapse, and describe an experiment that would distinguish them." />

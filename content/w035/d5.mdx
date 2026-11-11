@@ -1,0 +1,254 @@
+export const meta = {
+  title: "Deep networks as encoding models",
+  intro: "Linear filters and GLMs work well in the retina, but neurons further along the visual pathway respond to combinations of features that no single filter captures. In 2014 Yamins and colleagues showed that a convolutional network trained only to recognise objects predicted the responses of neurons in monkey inferior temporal cortex better than any model built by hand, and that the better a network was at the task, the better it predicted the neurons. Today you rebuild the logic of that result in miniature: a neuron that pools rectified local features, an encoding model made of a linear readout from different feature sets, and a noise ceiling that tells you how good any model could possibly be.",
+  goals: [
+    "Fit a linear readout from a feature set to a neuron's responses by ridge regression",
+    "Explain why features matched to the neuron's computation beat pixels and random features",
+    "Estimate a noise ceiling from repeated presentations and report fraction of explainable variance",
+    "Describe the goal-driven modelling approach of Yamins and colleagues and its limits",
+  ],
+  plan: [
+    { label: "Predict and the readout idea", minutes: 20 },
+    { label: "Pixels are not enough", minutes: 25 },
+    { label: "Features from a network", minutes: 35 },
+    { label: "The noise ceiling", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "yamins-2014",
+};
+
+<Predict question="A neuron sums rectified responses of one small edge detector at every position in its receptive field. A linear model of its pixels, ridge-regressed on 2,000 stimuli, will explain roughly what fraction of the explainable variance: almost all, about half, or much less than half?" />
+
+<Step n={1} title="The readout idea" minutes={20} />
+
+An encoding model built from a deep network has two parts. The **features** are the activations of one layer of a network, computed for each stimulus and held fixed. The **readout** is a regularised linear map from those features to each neuron's response, fitted on some stimuli and tested on others. If a layer's features are a good basis for what a brain area computes, a linear readout from them predicts the area's neurons well.
+
+Yamins, Hong, Cadieu, Solomon, Seibert and DiCarlo (2014) took networks optimised to categorise objects in images, never shown any neural data, and found that the top layer predicted single IT neurons, and an intermediate layer predicted V4, better than earlier models. Across many networks, object recognition performance and IT predictivity rose together. This is **goal-driven modelling**: train for the task the brain area seems to serve, then test against neurons.
+
+<Video id="2Jbk7jFBvbU" title="Quantitative comparisons of CNNs and neural activity" by="Neuromatch Academy" note="A Neuromatch Academy tutorial video on comparing convolutional network layers with recorded neural responses, using encoding models and representational similarity." />
+
+<Step n={2} title="Pixels are not enough" minutes={25} />
+
+Here is a model neuron on one-dimensional stimuli of 32 pixels. Its response is the sum, over every position, of a rectified edge detector, plus noise. This is the structure of a complex cell, or of an LN-LN subunit model of a retinal ganglion cell, and a small version of what convolutional networks do.
+
+<PyCell id="pixels" title="A linear model of pixels" tests={String.raw`
+  import numpy as np
+  def test_r2_fn():
+      "ridge_r2 gives R squared of about 1 for a noise-free linear target"
+      w = np.arange(P) / P
+      saved = resp.copy()
+      try:
+          resp[:] = X @ w
+          assert ridge_r2(X, lam=1e-6) > 0.999
+      finally:
+          resp[:] = saved
+
+  def test_pixels_poor():
+      "pixels explain less than 30% of held-out variance"
+      assert r2_pix < 0.3
+`} prompt="Write ridge_r2(F, lam): append a constant column to the features F, fit ridge weights on the training stimuli, predict the test stimuli and return the held-out R² for the global array resp."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(14)
+  P, N = 32, 3000
+  X = r.normal(size=(N, P))
+  g = np.array([-1, -0.5, 1, 2, 1, -0.5, -1.]); g /= np.linalg.norm(g)
+
+  def conv_relu(X, f):
+      L = len(f)
+      return np.maximum(0, np.stack([X[:, j:j + L] @ f for j in range(X.shape[1] - L + 1)], 1))
+
+  clean = conv_relu(X, g).sum(1)
+  sd = 0.5 * clean.std()
+  resp = clean + r.normal(0, sd, N)
+  tr = np.arange(N) < 2000; te = ~tr
+
+  def ridge_r2(F, lam=1.0):
+      F = np.c_[F, np.ones(len(F))]
+      A = F[tr]
+      w = ...
+      pred = F[te] @ w
+      return 1 - np.sum((resp[te] - pred) ** 2) / np.sum((resp[te] - resp[te].mean()) ** 2)
+
+  r2_pix = ridge_r2(X)
+  print(f"held-out R squared from pixels: {r2_pix:.2f}")
+`}
+hint="w = np.linalg.solve(A.T @ A + lam * np.eye(A.shape[1]), A.T @ resp[tr])."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(14)
+  P, N = 32, 3000
+  X = r.normal(size=(N, P))
+  g = np.array([-1, -0.5, 1, 2, 1, -0.5, -1.]); g /= np.linalg.norm(g)
+
+  def conv_relu(X, f):
+      L = len(f)
+      return np.maximum(0, np.stack([X[:, j:j + L] @ f for j in range(X.shape[1] - L + 1)], 1))
+
+  clean = conv_relu(X, g).sum(1)
+  sd = 0.5 * clean.std()
+  resp = clean + r.normal(0, sd, N)
+  tr = np.arange(N) < 2000; te = ~tr
+
+  def ridge_r2(F, lam=1.0):
+      F = np.c_[F, np.ones(len(F))]
+      A = F[tr]
+      w = np.linalg.solve(A.T @ A + lam * np.eye(A.shape[1]), A.T @ resp[tr])
+      pred = F[te] @ w
+      return 1 - np.sum((resp[te] - pred) ** 2) / np.sum((resp[te] - resp[te].mean()) ** 2)
+
+  r2_pix = ridge_r2(X)
+  print(f"held-out R squared from pixels: {r2_pix:.2f}")
+`} />
+
+The linear model explains about 17% of the held-out variance. It is not zero, because the edge detector's rectified output has a linear component that the pixels can follow, but most of the response depends on where and how strongly edges appear, which no single weighting of pixels can express. In the terms of Day 2, the neuron's relevant subspace is large and its nonlinearity is not a simple function of one projection.
+
+<Step n={3} title="Features from a network" minutes={35} />
+
+Now compare three feature sets, each followed by the same ridge readout. **Random ReLU features** are a one-layer network with random weights, 300 units. A **filter bank** is 16 localised, oriented filters (Gabor-like, at four frequencies and four phases) applied at every position and rectified, a stand-in for the early layers of a trained convolutional network, whose first-layer filters look much like these. **Pooled bank** features sum each filter's rectified output over positions, the operation of a pooling layer.
+
+<Figure caption="Held-out R squared of a ridge readout from pixels, random features and a filter bank, as the number of training stimuli grows, with the noise ceiling." credit="Interactive figure by Engram, after the encoding-model comparisons of Yamins and colleagues (2014).">
+  <FeatureReadout />
+</Figure>
+
+<PyCell id="features" title="Pixels, random features and a filter bank" tests={String.raw`
+  import numpy as np
+  def test_order():
+      "random features beat pixels, and the filter bank beats random features"
+      assert r2s["random"] > r2s["pixels"] + 0.15
+      assert r2s["bank"] > r2s["random"] + 0.15
+
+  def test_pooled():
+      "the pooled bank does at least as well as the full bank with far fewer features"
+      assert r2s["pooled"] > r2s["bank"] - 0.02 and F_pool.shape[1] == 16
+`} prompt="Build the bank of 16 filters (a Gaussian window exp(-t²/6) times cos(f t + phase), t from -3 to 3, normalised), the full feature matrix F_bank (each filter's rectified output at every position, concatenated) and the pooled matrix F_pool (each filter's rectified output summed over positions), then compare all four held-out R² values."
+code={String.raw`
+  W = r.normal(size=(P, 300)) / np.sqrt(P)
+  F_rand = np.maximum(0, X @ W)
+  t = np.arange(7) - 3
+  bank = []
+  for f in (0.5, 0.8, 1.2, 1.6):
+      for ph in (0, np.pi / 2, np.pi, 3 * np.pi / 2):
+          b = np.exp(-t ** 2 / 6) * np.cos(f * t + ph)
+          bank.append(b / np.linalg.norm(b))
+  F_bank = ...
+  F_pool = ...
+  r2s = {"pixels": r2_pix, "random": ridge_r2(F_rand), "bank": ridge_r2(F_bank), "pooled": ridge_r2(F_pool)}
+  print({m: round(float(v), 2) for m, v in r2s.items()})
+  plt.bar(list(r2s), list(r2s.values())); plt.ylabel("held-out R squared"); plt.show()
+`}
+hint="F_bank = np.concatenate([conv_relu(X, b) for b in bank], 1); F_pool = np.stack([conv_relu(X, b).sum(1) for b in bank], 1)."
+solution={String.raw`
+  W = r.normal(size=(P, 300)) / np.sqrt(P)
+  F_rand = np.maximum(0, X @ W)
+  t = np.arange(7) - 3
+  bank = []
+  for f in (0.5, 0.8, 1.2, 1.6):
+      for ph in (0, np.pi / 2, np.pi, 3 * np.pi / 2):
+          b = np.exp(-t ** 2 / 6) * np.cos(f * t + ph)
+          bank.append(b / np.linalg.norm(b))
+  F_bank = np.concatenate([conv_relu(X, b) for b in bank], 1)
+  F_pool = np.stack([conv_relu(X, b).sum(1) for b in bank], 1)
+  r2s = {"pixels": r2_pix, "random": ridge_r2(F_rand), "bank": ridge_r2(F_bank), "pooled": ridge_r2(F_pool)}
+  print({m: round(float(v), 2) for m, v in r2s.items()})
+  plt.bar(list(r2s), list(r2s.values())); plt.ylabel("held-out R squared"); plt.show()
+`} />
+
+The ordering is the point: pixels about 0.17, 300 random rectified features about 0.47, the full filter bank about 0.75 and the 16 pooled features about 0.77. Random features help because rectification creates nonlinear features, but they mix pixels from the whole stimulus and are not shared across positions. The bank, with no knowledge of g, gets most of the way, and pooling, by building in the neuron's invariance to position, does slightly better with a fiftieth of the features. Pooling helps here because this neuron is perfectly position-invariant; a neuron that preferred one location would favour the unpooled bank.
+
+<Callout kind="think">
+
+None of the 16 filters is the neuron's own filter g. The bank works because g is close to a combination of its members and because the bank has the right architecture: local, rectified, repeated across positions and pooled. This is the sense in which a trained network can predict neurons it never saw. Its features need not match any single neuron; they need to span the right space, with the right nonlinearities in the right places.
+
+</Callout>
+
+<Step n={4} title="The noise ceiling" minutes={25} />
+
+No model can predict the trial-to-trial noise. If each stimulus is shown twice, the agreement between the two repeats estimates how much of the response variance is stimulus-driven: the explainable variance. A model's R² divided by this **noise ceiling** is the fraction of explainable variance it captures, the number reported in most comparisons of networks with neural data, including the benchmarks of Brain-Score (Schrimpf and colleagues, 2018).
+
+<PyCell id="ceiling" title="How good could any model be?" tests={String.raw`
+  import numpy as np
+  def test_ceiling():
+      "the estimated ceiling is within 0.05 of the true value, 1/(1 + 0.25) = 0.8"
+      assert abs(ceiling - 0.8) < 0.05
+
+  def test_fraction():
+      "the pooled bank captures more than 90% of the explainable variance"
+      assert frac["pooled"] > 0.9
+`} prompt="Simulate a second repeat, resp2 = clean + new noise of the same standard deviation. On the test stimuli, estimate the noise ceiling as the covariance of the two repeats divided by the variance of resp, then divide each model's R² by it."
+code={String.raw`
+  resp2 = clean + r.normal(0, sd, N)
+  a, b = resp[te], resp2[te]
+  ceiling = ...
+  frac = {m: v / ceiling for m, v in r2s.items()}
+  print(f"noise ceiling {ceiling:.2f}")
+  print({m: round(float(v), 2) for m, v in frac.items()}, "fraction of explainable variance")
+`}
+hint="ceiling = np.cov(a, b)[0, 1] / np.var(a, ddof=1)."
+solution={String.raw`
+  resp2 = clean + r.normal(0, sd, N)
+  a, b = resp[te], resp2[te]
+  ceiling = np.cov(a, b)[0, 1] / np.var(a, ddof=1)
+  frac = {m: v / ceiling for m, v in r2s.items()}
+  print(f"noise ceiling {ceiling:.2f}")
+  print({m: round(float(v), 2) for m, v in frac.items()}, "fraction of explainable variance")
+`} />
+
+The ceiling comes out near 0.79, against a true value of 0.8, and the pooled bank reaches about 99% of it: the readout has found almost all the stimulus-driven variance. Pixels reach about 22% of it, so the answer to the prediction is much less than half. For real IT neurons, the best networks in 2014 explained about half of the explainable variance; the gap that remains is a measure of what current models miss.
+
+<Callout kind="warning">
+
+High predictivity is not the same as understanding. A readout from hundreds of features can fit many neurons, so a good score shows that the network's features span the neurons' responses, not that the network computes as the brain does. Yamins and colleagues' strongest evidence was the correlation across models between task performance and predictivity, and later work has found cases where better object recognition stopped bringing better predictions of IT. Representational similarity analysis (Kriegeskorte, Mur and Bandettini, 2008) and controlled stimuli are complementary tests.
+
+</Callout>
+
+<Bridge title="Brains and networks, measured on the same stimuli"
+  neuro="Goal-driven models are trained on a task, not on neurons, and then compared with recordings through a linear readout and a noise ceiling. They have become the leading quantitative models of the ventral visual stream, and the same approach has been applied to auditory cortex and to motor cortex."
+  ai="Linear probes of a trained network's layers are the same tool from the other side: freeze the features, fit a linear map to some target, and ask what is linearly decodable. Interpretability research uses probes on language models just as neuroscientists use readouts on networks.">
+
+A layer's features are judged by what a simple linear map can do with them.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In a deep-network encoding model, what is fitted to each neuron?", options: ["The whole network", "A regularised linear readout from fixed features", "The pixels", "Nothing"], answer: 1, explain: "Features are held fixed." },
+  { q: "Yamins and colleagues' networks were trained on...", options: ["Neural data", "Object categorisation", "Random noise", "Speech"], answer: 1, explain: "Goal-driven modelling." },
+  { q: "Across networks they found that...", options: ["Task performance and IT predictivity were correlated", "They were unrelated", "Smaller networks were better", "Only pixels mattered"], answer: 0, explain: "The central result." },
+  { q: "A linear model of pixels fails for a complex-cell-like neuron because...", options: ["The response depends on rectified local features at many positions", "There is too much data", "Ridge is biased", "The stimuli are Gaussian"], answer: 0, explain: "The computation is nonlinear." },
+  { q: "The noise ceiling estimates...", options: ["The best R² any model could achieve given trial-to-trial noise", "The training error", "The number of neurons", "The learning rate"], answer: 0, explain: "From repeated presentations." },
+  { q: "Fraction of explainable variance is...", options: ["R² times the ceiling", "R² divided by the noise ceiling", "One minus R²", "The ceiling squared"], answer: 1, explain: "Normalises for noise." },
+  { q: "The pooled bank's success with 16 features shows that...", options: ["More features are always better", "The right architecture (local, rectified, pooled) matters more than feature count", "Pooling is useless", "Pixels are best"], answer: 1, explain: "Inductive bias." },
+  { q: "High predictivity alone shows...", options: ["That the network computes as the brain does", "That the network's features span the neurons' responses", "Nothing", "That the brain is a CNN"], answer: 1, explain: "Predictivity is not mechanism." },
+]} />
+
+<Flashcards cards={[
+  { front: "Goal-driven modelling?", back: "Train a network on the task a brain area serves, then compare its layers with neurons through linear readouts." },
+  { front: "Encoding-model readout?", back: "Ridge regression from fixed layer activations to a neuron's responses, scored on held-out stimuli." },
+  { front: "Noise ceiling?", back: "The variance explainable by the stimulus, estimated from repeats; the upper limit of R² for any model." },
+  { front: "Yamins and colleagues (2014)?", back: "Networks optimised for object recognition predicted IT and V4 neurons; better task performance went with better predictivity." },
+  { front: "Why random features are not enough?", back: "They span the wrong space: they lack the local, rectified, pooled structure of the neuron's computation." },
+]} />
+
+<Predict revisit question="What fraction of explainable variance does a linear model of pixels capture for a neuron that pools rectified edge detectors?" />
+
+<Key title="Before you go">
+<ul>
+<li>A deep-network encoding model is fixed features plus a regularised linear readout.</li>
+<li>Features with the right structure beat pixels and random features, even with fewer dimensions.</li>
+<li>Report predictions as a fraction of the noise ceiling.</li>
+<li>Predictivity shows that features span responses; mechanism needs more tests.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Yamins, Hong, Cadieu, Solomon, Seibert and DiCarlo (2014), <em>Performance-optimized hierarchical models predict neural responses in higher visual cortex</em>.</li>
+<li>Yamins and DiCarlo (2016), <em>Using goal-driven deep learning models to understand sensory cortex</em>, Nature Neuroscience 19(3), 356 to 365.</li>
+<li>Kriegeskorte, Mur and Bandettini (2008), <em>Representational similarity analysis: connecting the branches of systems neuroscience</em>, Frontiers in Systems Neuroscience 2, 4.</li>
+<li>Schrimpf and colleagues (2018), <em>Brain-Score: which artificial neural network for object recognition is most brain-like?</em>, bioRxiv 407007.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Two networks predict a set of IT neurons equally well, at 60% of the noise ceiling. One was trained to recognise objects and the other to predict the next video frame. What would you measure next to decide which is the better model of IT, and why?" />

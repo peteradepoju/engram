@@ -1,0 +1,269 @@
+export const meta = {
+  title: "The Poisson GLM with spike history",
+  intro: "The LNP model of Week 10 assumes that, given the stimulus, a neuron's spikes are Poisson: each spike ignores the last. Real neurons are refractory for a few milliseconds after a spike, and many fire in bursts. The generalised linear model of Week 17 fixes this by adding the neuron's own recent spikes to its input, through a spike-history filter, while staying a convex, easily fitted model. Today you simulate such a neuron, build a smooth basis for its history filter, fit stimulus and history filters together by Newton's method, and see the fitted history filter recover refractoriness and rebound. This is the framework Truccolo and colleagues set out for relating spiking to stimuli, history and other neurons.",
+  goals: [
+    "Write the conditional intensity of a Poisson GLM with stimulus and spike-history terms",
+    "Simulate a neuron with refractoriness and rebound from a history filter",
+    "Represent filters with raised-cosine basis functions and build a design matrix",
+    "Fit the GLM by Newton's method and recover the stimulus and history filters",
+  ],
+  plan: [
+    { label: "Predict and the conditional intensity", minutes: 20 },
+    { label: "Simulating with history", minutes: 25 },
+    { label: "Basis functions and the design matrix", minutes: 25 },
+    { label: "Fitting by Newton's method", minutes: 35 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "truccolo-2005",
+};
+
+<Predict question="A neuron is strongly refractory for about 3 ms after each spike. If you fit it with an LNP model, which has no spike history, will the model's predicted rate just after a spike be too low, about right, or too high?" />
+
+<Step n={1} title="The conditional intensity" minutes={20} />
+
+A GLM for a spike train in small time bins writes the expected count in bin $t$ as
+
+$$
+\lambda_t = \exp\left(b + k \cdot x_t + h \cdot y_{t-1:t-H}\right),
+$$
+
+where $x_t$ is the recent stimulus, $k$ the stimulus filter, $y_{t-1:t-H}$ the neuron's own spikes in the previous $H$ bins and $h$ the **spike-history filter**. Large negative values of $h$ at short lags produce refractoriness; positive values a little later produce rebound or bursting. Because $\lambda_t$ depends on the past spikes, this is no longer a Poisson process in the strict sense but a conditionally Poisson one, the conditional intensity of a point process (Week 34). The log-likelihood,
+
+$$
+\mathcal L = \sum_t \left(y_t\log\lambda_t - \lambda_t\right),
+$$
+
+is concave in $(b, k, h)$, so Newton's method finds the unique maximum. Truccolo, Eden, Fellows, Donoghue and Brown (2005), today's paper and this week's deep read, used exactly this framework to relate motor cortical spiking to movement, the neuron's own history and the activity of its neighbours.
+
+<Video id="NFeGW5ljUoI" title="Cosyne 2018 tutorial on generalized linear models" by="Jonathan Pillow (Princeton University)" note="Jonathan Pillow's Cosyne tutorial on fitting Poisson GLMs with stimulus, spike-history and coupling filters to spike trains, recommended by the NeMoS GLM package as an introduction." />
+
+<Step n={2} title="Simulating with history" minutes={25} />
+
+Simulate a neuron in 1 ms bins for 60 s, driven by white noise through a biphasic stimulus filter, with a history filter that is strongly negative for the first few milliseconds and slightly positive around 10 ms. Because each spike changes the future intensity, the simulation must go bin by bin: when a spike occurs, add $h$ to the drive of the following bins.
+
+<Figure caption="A GLM neuron's history filter and the interspike interval distribution it produces. Set the depth of refractoriness and the strength of rebound." credit="Interactive figure by Engram, after Pillow and colleagues' GLM framework.">
+  <HistoryFilter />
+</Figure>
+
+<PyCell id="simulate" title="A neuron with a history" tests={String.raw`
+  import numpy as np
+  def test_rate():
+      "the neuron fires between 20 and 60 Hz"
+      assert 20 < y.sum() / 60 < 60
+
+  def test_refractory():
+      "fewer than 2% of intervals are 2 ms or shorter (a Poisson neuron at this rate would give about 7%)"
+      isi = np.diff(np.where(y > 0)[0])
+      assert np.mean(isi <= 2) < 0.02
+`} prompt="Complete the simulation loop: draw the count in bin t from a Poisson distribution with mean exp(drive[t]), and if any spikes occur, add their number times h to drive[t + 1 : t + 1 + H] (cut at the end)."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2005)
+  T, D, H = 60000, 20, 40                          # 1 ms bins, 20-bin stimulus filter, 40-bin history
+  x = r.normal(size=T)
+  lag = np.arange(D)
+  k = np.exp(-lag / 4) * np.sin(lag / 2.5); k = 0.6 * k / np.linalg.norm(k)
+  hl = np.arange(1, H + 1)
+  h = -5 * np.exp(-hl / 2) + 0.8 * np.exp(-((hl - 10) / 4) ** 2)
+  b = np.log(30 / 1000)
+
+  Xs = np.zeros((T, D))
+  for j in range(D):
+      Xs[j:, j] = x[: T - j]
+  drive = Xs @ k + b
+  y = np.zeros(T, int)
+  for t in range(T):
+      y[t] = ...
+      if y[t]:
+          ...
+  print(f"{y.sum()} spikes, {y.sum() / 60:.1f} Hz; shortest interval {np.diff(np.where(y > 0)[0]).min()} ms")
+  plt.plot(hl, h); plt.axhline(0, color="gray", lw=0.5); plt.xlabel("ms after a spike"); plt.ylabel("history filter"); plt.show()
+`}
+hint="y[t] = r.poisson(np.exp(drive[t])); inside the if: end = min(T, t + 1 + H); drive[t + 1:end] += y[t] * h[: end - t - 1]."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2005)
+  T, D, H = 60000, 20, 40                          # 1 ms bins, 20-bin stimulus filter, 40-bin history
+  x = r.normal(size=T)
+  lag = np.arange(D)
+  k = np.exp(-lag / 4) * np.sin(lag / 2.5); k = 0.6 * k / np.linalg.norm(k)
+  hl = np.arange(1, H + 1)
+  h = -5 * np.exp(-hl / 2) + 0.8 * np.exp(-((hl - 10) / 4) ** 2)
+  b = np.log(30 / 1000)
+
+  Xs = np.zeros((T, D))
+  for j in range(D):
+      Xs[j:, j] = x[: T - j]
+  drive = Xs @ k + b
+  y = np.zeros(T, int)
+  for t in range(T):
+      y[t] = r.poisson(np.exp(drive[t]))
+      if y[t]:
+          end = min(T, t + 1 + H)
+          drive[t + 1:end] += y[t] * h[: end - t - 1]
+  print(f"{y.sum()} spikes, {y.sum() / 60:.1f} Hz; shortest interval {np.diff(np.where(y > 0)[0]).min()} ms")
+  plt.plot(hl, h); plt.axhline(0, color="gray", lw=0.5); plt.xlabel("ms after a spike"); plt.ylabel("history filter"); plt.show()
+`} />
+
+The neuron fires about 2,270 spikes in 60 s, about 38 Hz, and only about 1% of intervals are 2 ms or less, against about 7% for a Poisson neuron at the same rate: the deep negative history filter makes a spike in the next bin or two very unlikely. A few 1 ms intervals remain, because the history filter lowers the rate rather than forbidding spikes. In this model refractoriness is relative, not absolute, which is also true of real neurons for all but the first millisecond or so.
+
+<Step n={3} title="Basis functions and the design matrix" minutes={25} />
+
+A history filter with one weight per millisecond has 40 parameters, most of them describing fine detail at long lags that the data cannot pin down. A common solution is to represent $h$ as a weighted sum of a few smooth bumps, **raised-cosine basis functions**, narrow at short lags and wider at long ones, spaced evenly on a logarithmic time axis. The GLM then fits the weights of the bumps, and the design matrix gets one column per basis function: the past spike train filtered by that bump.
+
+<PyCell id="basis" title="A log-spaced raised-cosine basis" tests={String.raw`
+  import numpy as np
+  def test_basis():
+      "Bh has 40 rows and 6 columns, each a non-negative bump"
+      assert Bh.shape == (40, 6) and (Bh >= 0).all() and (Bh.max(0) > 0.8).all()
+
+  def test_design():
+      "Xh is the past spike train projected onto the basis"
+      assert np.allclose(Xh, Yh @ Bh)
+`} prompt="Complete `raised_cosines(n, H)`: centres evenly spaced on a log(t + 3) axis from log 3 to log(H + 3), each bump 0.5(1 + cos(π(log(t + 3) - c)/(2w))) within 2w of its centre and 0 outside, where w is the spacing. Then build `Yh`, the lagged spike train (T x H), and `Xh = Yh @ Bh`."
+code={String.raw`
+  def raised_cosines(n, H):
+      tt = np.log(hl + 3)
+      centres = np.linspace(np.log(3), np.log(H + 3), n)
+      w = centres[1] - centres[0]
+      cols = []
+      for c in centres:
+          cols.append(...)
+      return np.array(cols).T
+
+  Bh = raised_cosines(6, H)
+  Yh = np.zeros((T, H))
+  for i in range(1, H + 1):
+      Yh[i:, i - 1] = y[: T - i]
+  Xh = ...
+  print("basis shape", Bh.shape, "; design matrix", Xh.shape)
+  plt.plot(hl, Bh); plt.xlabel("ms after a spike"); plt.show()
+`}
+hint="cols.append(np.where(np.abs(tt - c) < 2 * w, 0.5 * (1 + np.cos(np.pi * (tt - c) / (2 * w))), 0.0)); Xh = Yh @ Bh."
+solution={String.raw`
+  def raised_cosines(n, H):
+      tt = np.log(hl + 3)
+      centres = np.linspace(np.log(3), np.log(H + 3), n)
+      w = centres[1] - centres[0]
+      cols = []
+      for c in centres:
+          cols.append(np.where(np.abs(tt - c) < 2 * w, 0.5 * (1 + np.cos(np.pi * (tt - c) / (2 * w))), 0.0))
+      return np.array(cols).T
+
+  Bh = raised_cosines(6, H)
+  Yh = np.zeros((T, H))
+  for i in range(1, H + 1):
+      Yh[i:, i - 1] = y[: T - i]
+  Xh = Yh @ Bh
+  print("basis shape", Bh.shape, "; design matrix", Xh.shape)
+  plt.plot(hl, Bh); plt.xlabel("ms after a spike"); plt.show()
+`} />
+
+Six basis functions now stand in for 40 history lags, so the history part of the design matrix has 6 columns rather than 40. The bumps are narrow at short lags, where the history filter changes quickly, and broad at long lags, where it changes slowly. That spacing lets a handful of weights describe both the sharp refractory dip and the gentle rebound, and the smoothness it imposes is a form of regularisation, as Day 1's ridge penalty was.
+
+<Step n={4} title="Fitting by Newton's method" minutes={35} />
+
+The gradient and Hessian of the Poisson log-likelihood with respect to the weights $w$ of design matrix $X$ are $X^\top(y - \lambda)$ and $-X^\top\text{diag}(\lambda)X$ (Week 17). Newton's method steps by the inverse Hessian times the gradient and converges in a few dozen iterations.
+
+<PyCell id="fit" title="Recovering both filters" tests={String.raw`
+  import numpy as np
+  def test_stim():
+      "both models recover the stimulus filter direction (similarity above 0.95)"
+      c = lambda v: v @ k / (np.linalg.norm(v) * np.linalg.norm(k))
+      assert c(w_lnp[:D]) > 0.95 and c(w_glm[:D]) > 0.95
+
+  def test_hist():
+      "the GLM's fitted history filter is strongly negative in the first 2 ms and positive near 10 ms"
+      assert h_fit[:2].mean() < -2 and h_fit[8:12].mean() > 0
+`} prompt="Write `fit_glm(X, y)`, Newton's method for the Poisson GLM with an added constant column, starting from w = 0 except the bias at log(mean y). Fit the LNP model (stimulus only) and the GLM (stimulus plus history basis) on the first 45 s, and reconstruct the fitted history filter `h_fit = Bh @ w_glm[D:D+6]`."
+code={String.raw`
+  def fit_glm(X, y, iters=25):
+      X = np.c_[X, np.ones(len(y))]
+      w = np.zeros(X.shape[1]); w[-1] = np.log(y.mean())
+      for _ in range(iters):
+          lam = np.exp(X @ w)
+          grad = ...
+          hess = ...
+          w = w + np.linalg.solve(hess + 1e-6 * np.eye(len(w)), grad)
+      return w
+
+  train = np.arange(T) < 45000
+  w_lnp = fit_glm(Xs[train], y[train])
+  w_glm = fit_glm(np.c_[Xs, Xh][train], y[train])
+  h_fit = Bh @ w_glm[D:D + 6]
+  print("history filter, first 12 ms: fitted", np.round(h_fit[:12], 2))
+  print("                             true  ", np.round(h[:12], 2))
+  plt.plot(hl, h, label="true"); plt.plot(hl, h_fit, label="fitted"); plt.legend(); plt.xlabel("ms"); plt.show()
+`}
+hint="grad = X.T @ (y - lam); hess = (X * lam[:, None]).T @ X."
+solution={String.raw`
+  def fit_glm(X, y, iters=25):
+      X = np.c_[X, np.ones(len(y))]
+      w = np.zeros(X.shape[1]); w[-1] = np.log(y.mean())
+      for _ in range(iters):
+          lam = np.exp(X @ w)
+          grad = X.T @ (y - lam)
+          hess = (X * lam[:, None]).T @ X
+          w = w + np.linalg.solve(hess + 1e-6 * np.eye(len(w)), grad)
+      return w
+
+  train = np.arange(T) < 45000
+  w_lnp = fit_glm(Xs[train], y[train])
+  w_glm = fit_glm(np.c_[Xs, Xh][train], y[train])
+  h_fit = Bh @ w_glm[D:D + 6]
+  print("history filter, first 12 ms: fitted", np.round(h_fit[:12], 2))
+  print("                             true  ", np.round(h[:12], 2))
+  plt.plot(hl, h, label="true"); plt.plot(hl, h_fit, label="fitted"); plt.legend(); plt.xlabel("ms"); plt.show()
+`} />
+
+The fitted history filter has the right shape: strongly negative for the first 3 to 4 ms and then positive, peaking at about 0.66 near 9 ms against a true peak of 0.77 at 10 ms. Its depth at 1 ms is underestimated (-2.2 against -3.0) because the broad basis functions cannot follow the steepest part of the true curve. The LNP fit, with no history, must explain the same spikes with the stimulus alone, so just after a spike it predicts the neuron's ordinary stimulus-driven rate. That answers the prediction: too high, since the real neuron is nearly silent then. Day 4 measures what this costs the LNP in held-out likelihood.
+
+<Bridge title="Recurrence in a linear model"
+  neuro="A spike-history filter makes a neuron's model recurrent: its output feeds back into its own input. With one extra filter, the GLM captures refractoriness, bursting and rhythmic firing while remaining a convex model that fits reliably, which is why it became the workhorse of spike-train analysis."
+  ai="Autoregressive models in machine learning, from AR time-series models to language models that condition on their own previous tokens, have the same structure: the output at each step depends on past outputs through learned weights. A GLM with history is a tiny autoregressive model for spikes, and fitting it by maximum likelihood is next-token prediction with a Poisson output.">
+
+A neuron's best predictor is often its own recent past.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In a GLM, the spike-history filter multiplies...", options: ["The stimulus", "The neuron's own recent spikes", "Other neurons only", "The bias"], answer: 1, explain: "Feedback from past output." },
+  { q: "Refractoriness appears in the history filter as...", options: ["Large positive weights at short lags", "Large negative weights at short lags", "Zero", "Weights at long lags only"], answer: 1, explain: "Suppression just after a spike." },
+  { q: "The Poisson GLM log-likelihood is...", options: ["Convex in the weights (has a unique maximum)", "Full of local optima", "Linear", "Undefined"], answer: 0, explain: "Concave, so Newton's method works." },
+  { q: "Raised-cosine basis functions are spaced...", options: ["Evenly in time", "Evenly on a logarithmic time axis", "Randomly", "Only at one lag"], answer: 1, explain: "Fine at short lags, coarse at long ones." },
+  { q: "Using a basis reduces...", options: ["The number of parameters to fit", "The data", "The spike count", "The stimulus"], answer: 0, explain: "Smooth filters with few weights." },
+  { q: "Simulating a GLM with history requires...", options: ["Vectorising over all time at once", "Stepping through time, updating future drive after each spike", "No random numbers", "Only the stimulus"], answer: 1, explain: "Each spike changes the future." },
+  { q: "The Newton step for the Poisson GLM uses the Hessian...", options: ["Xᵀ diag(λ) X", "XᵀX only", "λ", "Identity"], answer: 0, explain: "Weighted by the rate." },
+  { q: "Truccolo and colleagues used the GLM to relate spiking to...", options: ["Only stimuli", "Stimuli or movement, spike history and other neurons' activity", "Blood flow", "Spike shape"], answer: 1, explain: "A unified point-process framework." },
+]} />
+
+<Flashcards cards={[
+  { front: "GLM conditional intensity?", back: "$\\lambda_t = \\exp(b + k\\cdot x_t + h\\cdot y_{past})$: stimulus filter, spike-history filter, bias." },
+  { front: "Poisson GLM log-likelihood?", back: "$\\sum_t(y_t\\log\\lambda_t - \\lambda_t)$; concave in the weights." },
+  { front: "Newton step?", back: "Gradient $X^\\top(y - \\lambda)$, Hessian $-X^\\top\\text{diag}(\\lambda)X$; step by inverse Hessian times gradient." },
+  { front: "Raised-cosine basis?", back: "Smooth bumps evenly spaced on a log time axis; filters are weighted sums of them." },
+  { front: "History filter shapes?", back: "Negative at short lags: refractoriness. Positive bump later: rebound or bursting." },
+]} />
+
+<Predict revisit question="After a spike, is an LNP model's predicted rate too low, about right or too high for a refractory neuron?" />
+
+<Key title="Before you go">
+<ul>
+<li>A GLM adds a spike-history filter to the LNP model while staying convex.</li>
+<li>Simulating it requires stepping through time, feeding each spike back into the future drive.</li>
+<li>Smooth basis functions keep the number of history parameters small.</li>
+<li>Newton's method recovers stimulus and history filters together.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Truccolo, Eden, Fellows, Donoghue and Brown (2005), <em>A point process framework for relating neural spiking activity to spiking history, neural ensemble, and extrinsic covariate effects</em>.</li>
+<li>Pillow and colleagues (2008), <em>Spatio-temporal correlations and visual signalling in a complete neuronal population</em> (Week 17's paper): GLMs with coupling between neurons.</li>
+<li>Pillow's GLM tutorial (github.com/pillowlab/GLMspiketraintutorial_python), with real primate retinal ganglion cell data from the Chichilnisky lab, provided for personal study.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="The GLM treats a neuron's history as just another input. Describe one biophysical mechanism from Weeks 30 and 31 that a negative history filter stands in for, and one a positive filter at 10 ms might stand in for. What would a GLM miss that the biophysical model would capture?" />

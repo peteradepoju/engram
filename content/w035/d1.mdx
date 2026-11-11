@@ -1,0 +1,251 @@
+export const meta = {
+  title: "Receptive fields from natural stimuli: whitening and regularisation",
+  intro: "Week 10 recovered a retinal ganglion cell's filter with the spike-triggered average, and the method worked because the stimulus was white noise, uncorrelated in time and space. Real visual input is not white: neighbouring pixels and successive frames are strongly correlated, and that is the input neurons evolved for. Today you see what correlations do to the spike-triggered average, recover the filter anyway by whitening, which is just linear regression, and discover the price: directions the stimulus rarely explores are poorly constrained, so the estimate needs regularisation, with the strength chosen by cross-validation. This is the problem David, Vinje and Gallant faced when they mapped V1 receptive fields with natural movies.",
+  goals: [
+    "Show that stimulus correlations bias the spike-triggered average",
+    "Recover the filter by whitening, and recognise it as least-squares regression",
+    "Relate the reliability of each filter direction to the stimulus covariance's eigenvalues",
+    "Choose a ridge penalty by cross-validation for a limited dataset",
+  ],
+  plan: [
+    { label: "Predict and correlated stimuli", minutes: 20 },
+    { label: "The STA is blurred", minutes: 30 },
+    { label: "What the stimulus can reveal", minutes: 20 },
+    { label: "Regularisation by cross-validation", minutes: 35 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "david-2004",
+};
+
+<Predict question="A neuron's temporal filter is a brief, biphasic wiggle. You drive it with a stimulus whose successive frames are strongly correlated, like a natural movie, and compute the spike-triggered average. Will the STA look like the filter, like a smoothed, stretched version of it, or like nothing at all?" />
+
+<Step n={1} title="Correlated stimuli" minutes={20} />
+
+For a linear-nonlinear neuron driven by a Gaussian stimulus with covariance $\Sigma$, the spike-triggered average is not the filter $k$ but
+
+$$
+\text{STA} \propto \Sigma k.
+$$
+
+With white noise, $\Sigma = I$ and the STA points along $k$ (Week 10). With correlated noise the STA is the filter blurred by the stimulus's own correlations. The remedy follows from the formula: multiply by $\Sigma^{-1}$. In practice, with stimulus matrix $X$ (one row per time bin) and responses $y$,
+
+$$
+\hat k = (X^\top X)^{-1}X^\top y,
+$$
+
+which is exactly the least-squares regression of Week 5: the **whitened STA**. It removes the bias, but $X^\top X$ may have very small eigenvalues, and dividing by them amplifies noise.
+
+<Video id="Yv89UHeSa9I" title="Linear Gaussian model" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's introduction to fitting a linear encoding model to a neuron's response, the regression that underlies the whitened spike-triggered average." />
+
+<Step n={2} title="The STA is blurred" minutes={30} />
+
+<Figure caption="A neuron's filter, the spike-triggered average and the whitened estimate, for a stimulus with adjustable temporal correlation. Set the correlation and the amount of data." credit="Interactive figure by Engram.">
+  <WhitenedSTA />
+</Figure>
+
+<PyCell id="sta" title="STA against whitened STA" tests={String.raw`
+  import numpy as np
+  def test_white():
+      "with white noise both estimates align with the filter (similarity above 0.95)"
+      assert sims[0.0][0] > 0.95 and sims[0.0][1] > 0.95
+
+  def test_corr():
+      "with correlated noise the STA's similarity falls below 0.85 and the whitened STA stays above 0.9"
+      assert sims[0.9][0] < 0.85 and sims[0.9][1] > 0.9
+`} prompt="For stimulus correlations of 0 and 0.9 (an AR(1) process), simulate an LNP neuron with filter k, and compute the STA (X^T y / sum y) and the whitened STA (least squares). Store their cosine similarities with k in `sims[rho]` as (sta, whitened)."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(35)
+  D, T = 20, 20000
+  k = np.exp(-np.arange(D) / 4) * np.sin(np.arange(D) / 2.5); k /= np.linalg.norm(k)
+
+  def stimulus(rho, n):
+      x = np.empty(n); x[0] = r.normal()
+      e = r.normal(size=n) * np.sqrt(1 - rho**2)
+      for t in range(1, n):
+          x[t] = rho * x[t - 1] + e[t]
+      return x
+
+  def design(x):
+      return np.lib.stride_tricks.sliding_window_view(x, D)[: len(x) - D + 1][:, ::-1]   # row t: x[t], x[t-1], ...
+
+  cos = lambda v: v @ k / np.linalg.norm(v)
+  sims = {}
+  for rho in (0.0, 0.9):
+      X = design(stimulus(rho, T + D - 1))
+      lin = X @ k
+      y = r.poisson(np.exp(lin / lin.std() - 2.5))
+      sta = ...
+      wsta = ...
+      sims[rho] = (cos(sta), cos(wsta))
+      print(f"rho = {rho}: {y.sum()} spikes; STA similarity {sims[rho][0]:.3f}, whitened {sims[rho][1]:.3f}")
+  plt.plot(k, label="true filter"); plt.plot(sta / np.linalg.norm(sta), label="STA (rho 0.9)"); plt.plot(wsta / np.linalg.norm(wsta), label="whitened")
+  plt.xlabel("lag (bins)"); plt.legend(); plt.show()
+`}
+hint="sta = X.T @ y / y.sum(); wsta = np.linalg.solve(X.T @ X, X.T @ y)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(35)
+  D, T = 20, 20000
+  k = np.exp(-np.arange(D) / 4) * np.sin(np.arange(D) / 2.5); k /= np.linalg.norm(k)
+
+  def stimulus(rho, n):
+      x = np.empty(n); x[0] = r.normal()
+      e = r.normal(size=n) * np.sqrt(1 - rho**2)
+      for t in range(1, n):
+          x[t] = rho * x[t - 1] + e[t]
+      return x
+
+  def design(x):
+      return np.lib.stride_tricks.sliding_window_view(x, D)[: len(x) - D + 1][:, ::-1]   # row t: x[t], x[t-1], ...
+
+  cos = lambda v: v @ k / np.linalg.norm(v)
+  sims = {}
+  for rho in (0.0, 0.9):
+      X = design(stimulus(rho, T + D - 1))
+      lin = X @ k
+      y = r.poisson(np.exp(lin / lin.std() - 2.5))
+      sta = X.T @ y / y.sum()
+      wsta = np.linalg.solve(X.T @ X, X.T @ y)
+      sims[rho] = (cos(sta), cos(wsta))
+      print(f"rho = {rho}: {y.sum()} spikes; STA similarity {sims[rho][0]:.3f}, whitened {sims[rho][1]:.3f}")
+  plt.plot(k, label="true filter"); plt.plot(sta / np.linalg.norm(sta), label="STA (rho 0.9)"); plt.plot(wsta / np.linalg.norm(wsta), label="whitened")
+  plt.xlabel("lag (bins)"); plt.legend(); plt.show()
+`} />
+
+With white noise the STA and the whitened STA are equally good, both about 0.996 similar to the true filter in shape. With ρ = 0.9 the STA drops to about 0.76: it is the filter smeared by the stimulus correlations, longer and smoother than the real thing, which answers the prediction. Whitening brings the similarity back to about 0.91 from the same spikes, though not to the white-noise value, for a reason the next step explains.
+
+<Step n={3} title="What the stimulus can reveal" minutes={20} />
+
+Why does whitening need more data? The eigenvectors of $\Sigma$ are directions in filter space, and the eigenvalues say how much the stimulus varies along each. A correlated stimulus varies a lot along smooth, slowly changing directions and very little along rapidly alternating ones. A filter component along a low-variance direction barely affects the response, so the data say little about it, and its estimate is noisy, by a factor of one over the square root of the eigenvalue.
+
+<PyCell id="spectrum" title="The stimulus covariance spectrum" tests={String.raw`
+  import numpy as np
+  def test_spectrum():
+      "the correlated stimulus's covariance eigenvalues span more than a factor of 100, the white one's less than 2"
+      assert ratio[0.9] > 100 and ratio[0.0] < 2
+`} prompt="Compute the eigenvalues of the empirical stimulus covariance X^T X / T for each correlation, and store the ratio of the largest to the smallest in `ratio[rho]`."
+code={String.raw`
+  ratio = {}
+  for rho in (0.0, 0.9):
+      X = design(stimulus(rho, T + D - 1))
+      ev = ...
+      ratio[rho] = ev.max() / ev.min()
+      print(f"rho = {rho}: eigenvalues from {ev.min():.3f} to {ev.max():.2f}, ratio {ratio[rho]:.0f}")
+`}
+hint="ev = np.linalg.eigvalsh(X.T @ X / len(X))."
+solution={String.raw`
+  ratio = {}
+  for rho in (0.0, 0.9):
+      X = design(stimulus(rho, T + D - 1))
+      ev = np.linalg.eigvalsh(X.T @ X / len(X))
+      ratio[rho] = ev.max() / ev.min()
+      print(f"rho = {rho}: eigenvalues from {ev.min():.3f} to {ev.max():.2f}, ratio {ratio[rho]:.0f}")
+`} />
+
+For white noise the eigenvalues all sit near 1 (from about 0.93 to 1.03, sampling noise only), so every direction is probed equally. For ρ = 0.9 they run from about 0.05 to 11.5, a ratio of about 220. Whitening divides by these eigenvalues, so the noise along the weakest directions is amplified by a factor of about 15 in standard deviation compared with the strongest. With natural stimuli, whose spectra fall steeply with frequency, the problem is worse, and the high-frequency parts of a receptive field are the hardest to estimate.
+
+<Step n={4} title="Regularisation by cross-validation" minutes={35} />
+
+With a few thousand bins of a correlated stimulus, the whitened estimate is noisy along the poorly sampled directions. **Ridge regression** (Week 5) adds a penalty: $\hat k_\lambda = (X^\top X + \lambda I)^{-1}X^\top y$. As $\lambda$ grows, the estimate moves from the whitened STA towards a scaled STA, trading variance for bias. The right $\lambda$ is the one that predicts held-out data best. David, Vinje and Gallant fitted V1 receptive fields from natural movies in exactly this way, and found that the fitted filters differed from those measured with white noise: the stimulus statistics changed the receptive field itself.
+
+<PyCell id="ridge" title="Choosing the penalty" tests={String.raw`
+  import numpy as np
+  def test_cv():
+      "the best lambda by validation error lies strictly inside the grid"
+      i = int(np.argmin(val_err))
+      assert 0 < i < len(lams) - 1
+
+  def test_better():
+      "the cross-validated ridge estimate is closer to the true filter than the unregularised one"
+      assert cos(k_ridge) > cos(k_ols)
+`} prompt="With only 2,000 bins of the correlated stimulus, split them into 1,500 for fitting and 500 for validation. For each λ on the grid, fit the ridge estimate on the fitting set and compute the mean squared error of its predictions of the validation counts. Store the errors in `val_err`, and the unregularised and best ridge estimates in `k_ols` and `k_ridge`."
+code={String.raw`
+  X = design(stimulus(0.9, 2000 + D - 1))
+  lin = X @ k
+  y = r.poisson(np.exp(lin / lin.std() - 1.5))
+  fit_, val = np.arange(2000) < 1500, np.arange(2000) >= 1500
+  Xc, yc = X - X[fit_].mean(0), y - y[fit_].mean()
+
+  def ridge(lam):
+      A = Xc[fit_]
+      return ...
+
+  lams = [0, 1, 10, 100, 1000, 10000, 100000]
+  val_err = [np.mean((yc[val] - Xc[val] @ ridge(l)) ** 2) for l in lams]
+  k_ols, k_ridge = ridge(0), ridge(lams[int(np.argmin(val_err))])
+  for l, e in zip(lams, val_err):
+      print(f"lambda {l:6d}: validation error {e:.4f}")
+  print(f"similarity to the true filter: unregularised {cos(k_ols):.3f}, ridge {cos(k_ridge):.3f}, STA {cos(X[fit_].T @ y[fit_]):.3f}")
+`}
+hint="return np.linalg.solve(A.T @ A + lam * np.eye(D), A.T @ yc[fit_])."
+solution={String.raw`
+  X = design(stimulus(0.9, 2000 + D - 1))
+  lin = X @ k
+  y = r.poisson(np.exp(lin / lin.std() - 1.5))
+  fit_, val = np.arange(2000) < 1500, np.arange(2000) >= 1500
+  Xc, yc = X - X[fit_].mean(0), y - y[fit_].mean()
+
+  def ridge(lam):
+      A = Xc[fit_]
+      return np.linalg.solve(A.T @ A + lam * np.eye(D), A.T @ yc[fit_])
+
+  lams = [0, 1, 10, 100, 1000, 10000, 100000]
+  val_err = [np.mean((yc[val] - Xc[val] @ ridge(l)) ** 2) for l in lams]
+  k_ols, k_ridge = ridge(0), ridge(lams[int(np.argmin(val_err))])
+  for l, e in zip(lams, val_err):
+      print(f"lambda {l:6d}: validation error {e:.4f}")
+  print(f"similarity to the true filter: unregularised {cos(k_ols):.3f}, ridge {cos(k_ridge):.3f}, STA {cos(X[fit_].T @ y[fit_]):.3f}")
+`} />
+
+The validation error falls from about 0.289 with no penalty to a minimum of about 0.241 at λ = 10,000, then rises again at 100,000, where the estimate is pulled too far towards the smooth STA. The chosen ridge estimate is about 0.84 similar to the true filter, against 0.69 for the unregularised whitened estimate and 0.73 for the plain STA from the same 1,500 bins. Neither extreme wins: with little data, the best receptive field estimate is a compromise chosen by held-out prediction, and the compromise depends on how much data you have.
+
+<Bridge title="Inputs with structure"
+  neuro="Receptive fields are estimated through the stimulus used to measure them. Correlated, natural stimuli blur the spike-triggered average and leave some filter directions poorly constrained, so the estimate must be whitened and regularised, and natural stimuli can reveal properties that white noise misses."
+  ai="Every learning system faces the same issue with its training data: directions the data rarely vary along are learned poorly, and regularisation fills them in with a prior. Weight decay is ridge regression, and the input whitening once standard before training networks, now largely replaced by normalisation layers, is the whitened STA.">
+
+You can only learn what your stimulus makes the neuron reveal.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "For a Gaussian stimulus with covariance Σ, the STA of an LNP neuron is proportional to...", options: ["k", "Σk", "Σ⁻¹k", "k²"], answer: 1, explain: "The stimulus blurs the filter." },
+  { q: "The whitened STA is the same as...", options: ["The STA", "The least-squares regression estimate", "The STC", "The PSTH"], answer: 1, explain: "(XᵀX)⁻¹Xᵀy." },
+  { q: "A correlated stimulus has covariance eigenvalues that...", options: ["Are all equal", "Span a wide range", "Are zero", "Are negative"], answer: 1, explain: "Smooth directions vary a lot, rapid ones little." },
+  { q: "Filter components along low-variance stimulus directions are...", options: ["Estimated precisely", "Estimated noisily", "Not needed", "Always zero"], answer: 1, explain: "Noise scales as one over the root of the eigenvalue." },
+  { q: "Ridge regression adds...", options: ["λ to the stimulus", "λI to XᵀX", "Noise to y", "A nonlinearity"], answer: 1, explain: "A penalty on large weights." },
+  { q: "As λ grows very large, the ridge estimate approaches...", options: ["The whitened STA", "A scaled STA", "Zero only", "The true filter"], answer: 1, explain: "(XᵀX + λI)⁻¹ ≈ I/λ." },
+  { q: "The ridge penalty should be chosen by...", options: ["Fitting error", "Held-out prediction error", "Guessing", "The largest value"], answer: 1, explain: "Cross-validation." },
+  { q: "David, Vinje and Gallant found that V1 receptive fields estimated from natural movies...", options: ["Were identical to white-noise estimates", "Differed from white-noise estimates", "Could not be estimated", "Were all identical"], answer: 1, explain: "Stimulus statistics matter." },
+]} />
+
+<Flashcards cards={[
+  { front: "STA with correlated stimuli?", back: "STA ∝ Σk: the filter blurred by the stimulus covariance." },
+  { front: "Whitened STA?", back: "$\\hat k = (X^\\top X)^{-1}X^\\top y$, least-squares regression; unbiased but noisy along low-variance directions." },
+  { front: "Why do some filter directions need more data?", back: "Their stimulus variance (eigenvalue of Σ) is small, so they barely affect the response." },
+  { front: "Ridge estimate of a receptive field?", back: "$(X^\\top X + \\lambda I)^{-1}X^\\top y$, interpolating between the whitened STA and the STA; λ by cross-validation." },
+  { front: "Lesson of natural-stimulus mapping?", back: "Receptive fields estimated with natural stimuli can differ from white-noise estimates (David, Vinje and Gallant, 2004)." },
+]} />
+
+<Predict revisit question="What does the STA look like when the stimulus frames are strongly correlated?" />
+
+<Key title="Before you go">
+<ul>
+<li>Correlated stimuli blur the STA by the stimulus covariance.</li>
+<li>Whitening, which is least-squares regression, removes the bias.</li>
+<li>Directions the stimulus rarely explores are estimated noisily.</li>
+<li>Ridge regularisation, tuned by cross-validation, gives better filters from limited natural data.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: David, Vinje and Gallant (2004), <em>Natural stimulus statistics alter the receptive field structure of V1 neurons</em>.</li>
+<li>Theunissen and colleagues (2001), <em>Estimating spatio-temporal receptive fields of auditory and visual neurons from their responses to natural stimuli</em>, Network: Computation in Neural Systems 12(3), 289 to 316.</li>
+<li>Wu, David and Gallant (2006), <em>Complete functional characterization of sensory neurons by system identification</em>, Annual Review of Neuroscience 29, 477 to 505.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Natural images have most of their power at low spatial frequencies. Using today's results, explain which parts of a V1 neuron's receptive field would be hardest to estimate from natural images, and propose a stimulus set that would combine the advantages of natural images and white noise." />

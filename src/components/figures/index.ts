@@ -159,3 +159,8 @@ export { FanoQuench } from "./fano-quench";
 export { TuningFit } from "./tuning-fit";
 export { NoiseCorrelation } from "./noise-correlation";
 export { LatencyCode } from "./latency-code";
+export { KSPlot } from "./ks-plot";
+export { WhitenedSTA } from "./whitened-sta";
+export { STCSubspace } from "./stc-subspace";
+export { HistoryFilter } from "./history-filter";
+export { FeatureReadout } from "./feature-readout";

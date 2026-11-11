@@ -1,0 +1,305 @@
+export const meta = {
+  title: "Forge: Week 35 challenge, quiz and deep read",
+  intro: "This week built encoding models: whitened and regularised receptive fields, spike-triggered covariance for neurons with more than one filter, the Poisson GLM with spike history, fair comparisons by bits per spike and time rescaling, and deep networks as feature sets for a linear readout. Today's challenge is the full pipeline on a neuron modelled on a primate OFF retinal ganglion cell: fit, choose the model's complexity by validation, and then ask the question Pillow and colleagues asked in 2005, whether the fitted model, run as a simulator, reproduces the precision of the real neuron's spike trains on repeated stimuli. Then the quiz, and a critique of Truccolo and colleagues' point-process framework.",
+  goals: [
+    "Fit LNP and GLM models to a long recording and choose the history basis by validation",
+    "Simulate a fitted GLM and compare its repeat-to-repeat variability with the data",
+    "Explain why history terms make spike trains more precise than Poisson",
+    "Critique the point-process GLM framework as a general model of spiking",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "truccolo-2005",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. A white-noise stimulus is filtered so that neighbouring samples correlate with ρ = 0.9. How much smaller is the smallest eigenvalue of its 20 by 20 covariance than the largest, roughly?
+2. A model scores 0.5 bits per spike on a neuron firing 40 spikes per second. How many bits per second is that?
+3. Two repeats of a response agree with covariance 0.6 and each has variance 1. What is the noise ceiling on R²?
+
+<PyCell code={String.raw`
+  import numpy as np
+  from scipy.linalg import toeplitz
+  ev = np.linalg.eigvalsh(toeplitz(0.9 ** np.arange(20)))
+  print("1. ratio", round(ev.max() / ev.min()), "(it approaches ((1 + ρ)/(1 - ρ))² = 361 as the window grows)")
+  print("2.", 0.5 * 40, "bits per second")
+  print("3.", 0.6)
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: fit and choose.** A model OFF cell is driven by 100 s of Gaussian flicker in 1 ms bins. Its stimulus filter is biphasic and negative at short lags; its history filter has a deep refractory period, a slower suppression and a small rebound. Split the recording into 60 s for training, 20 s for validation and 20 s for testing. Fit an LNP model and GLMs whose history filters use 2, 4, 6, 10 and 16 raised-cosine basis functions, choose the number by validation bits per spike, and report the test score of the chosen model.
+
+<PyCell id="partA" title="Part A: the fitting pipeline" tests={String.raw`
+  import numpy as np
+  def test_choice():
+      "the chosen basis size is the one with the best validation score"
+      assert best_nb == max(val, key=val.get)
+
+  def test_gain():
+      "on the test set, the chosen GLM beats the LNP by more than 0.15 bits per spike"
+      assert test_bps["GLM"] - test_bps["LNP"] > 0.15
+
+  def test_filter():
+      "the fitted stimulus filter correlates with the true one above 0.95"
+      assert np.corrcoef(k_fit, k)[0, 1] > 0.95
+`} prompt="The simulation, design helpers and Newton fitter are given. Complete the loop over basis sizes: build the design [Xs, Yh @ B], fit on the training bins and store the validation bits per spike in val[nb]. Then refit the best and report test scores."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2004)
+  T, D, H = 100000, 30, 50
+  lag = np.arange(D); hl = np.arange(1, H + 1)
+  k = -(np.exp(-lag / 3) - 0.6 * np.exp(-lag / 6)) * np.sin(lag / 3 + 0.3); k = 1.2 * k / np.linalg.norm(k)
+  h = -8 * np.exp(-hl / 1.5) - 1.5 * np.exp(-hl / 8) + 0.6 * np.exp(-((hl - 12) / 4) ** 2)
+  b0 = np.log(0.02)
+
+  def lagmat(x, L):
+      M = np.zeros((len(x), L))
+      for j in range(L):
+          M[j:, j] = x[: len(x) - j]
+      return M
+
+  def simulate(drive0, h, rg):
+      drive = drive0.copy(); y = np.zeros(len(drive), int)
+      for t in range(len(drive)):
+          y[t] = rg.poisson(np.exp(min(drive[t], 3)))
+          if y[t]:
+              e = min(len(drive), t + 1 + len(h)); drive[t + 1:e] += y[t] * h[: e - t - 1]
+      return y
+
+  def basis(nb):
+      tt = np.log(hl + 2); cs = np.linspace(np.log(3), np.log(H + 2), nb); wd = cs[1] - cs[0]
+      return np.array([np.where(np.abs(tt - c) < 2 * wd, 0.5 * (1 + np.cos(np.pi * (tt - c) / (2 * wd))), 0) for c in cs]).T
+
+  def fit_glm(X, y, iters=30):
+      X = np.c_[X, np.ones(len(y))]; w = np.zeros(X.shape[1]); w[-1] = np.log(y.mean())
+      for _ in range(iters):
+          lam = np.exp(X @ w)
+          w = w + np.linalg.solve((X * lam[:, None]).T @ X + 1e-6 * np.eye(len(w)), X.T @ (y - lam))
+      return w
+
+  x = r.normal(size=T); Xs = lagmat(x, D)
+  y = simulate(Xs @ k + b0, h, r)
+  Yh = lagmat(np.r_[0, y[:-1]], H)
+  idx = np.arange(T); tr, va, te = idx < 60000, (idx >= 60000) & (idx < 80000), idx >= 80000
+  r0 = y[tr].mean()
+
+  def bps(X, w, m):
+      eta = np.c_[X[m], np.ones(m.sum())] @ w
+      return (np.sum(y[m] * eta - np.exp(eta)) - np.sum(y[m] * np.log(r0) - r0)) / (y[m].sum() * np.log(2))
+
+  w_lnp = fit_glm(Xs[tr], y[tr])
+  val = {}
+  for nb in (2, 4, 6, 10, 16):
+      ...
+  best_nb = max(val, key=val.get)
+  B = basis(best_nb); Xg = np.c_[Xs, Yh @ B]; w_glm = fit_glm(Xg[tr], y[tr])
+  test_bps = {"LNP": bps(Xs, w_lnp, te), "GLM": bps(Xg, w_glm, te)}
+  k_fit, h_fit, b_fit = w_glm[:D], B @ w_glm[D:-1], w_glm[-1]
+  print(f"rate {y.sum() / (T / 1000):.1f} Hz; validation bits per spike", {n: round(float(v), 3) for n, v in val.items()})
+  print(f"chosen {best_nb} basis functions; test", {m: round(float(v), 3) for m, v in test_bps.items()})
+  plt.plot(hl, h, "k--", label="true"); plt.plot(hl, h_fit, label="fitted"); plt.xlabel("ms after a spike"); plt.legend(); plt.show()
+`}
+hint="Inside the loop: B = basis(nb); X = np.c_[Xs, Yh @ B]; w = fit_glm(X[tr], y[tr]); val[nb] = bps(X, w, va)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2004)
+  T, D, H = 100000, 30, 50
+  lag = np.arange(D); hl = np.arange(1, H + 1)
+  k = -(np.exp(-lag / 3) - 0.6 * np.exp(-lag / 6)) * np.sin(lag / 3 + 0.3); k = 1.2 * k / np.linalg.norm(k)
+  h = -8 * np.exp(-hl / 1.5) - 1.5 * np.exp(-hl / 8) + 0.6 * np.exp(-((hl - 12) / 4) ** 2)
+  b0 = np.log(0.02)
+
+  def lagmat(x, L):
+      M = np.zeros((len(x), L))
+      for j in range(L):
+          M[j:, j] = x[: len(x) - j]
+      return M
+
+  def simulate(drive0, h, rg):
+      drive = drive0.copy(); y = np.zeros(len(drive), int)
+      for t in range(len(drive)):
+          y[t] = rg.poisson(np.exp(min(drive[t], 3)))
+          if y[t]:
+              e = min(len(drive), t + 1 + len(h)); drive[t + 1:e] += y[t] * h[: e - t - 1]
+      return y
+
+  def basis(nb):
+      tt = np.log(hl + 2); cs = np.linspace(np.log(3), np.log(H + 2), nb); wd = cs[1] - cs[0]
+      return np.array([np.where(np.abs(tt - c) < 2 * wd, 0.5 * (1 + np.cos(np.pi * (tt - c) / (2 * wd))), 0) for c in cs]).T
+
+  def fit_glm(X, y, iters=30):
+      X = np.c_[X, np.ones(len(y))]; w = np.zeros(X.shape[1]); w[-1] = np.log(y.mean())
+      for _ in range(iters):
+          lam = np.exp(X @ w)
+          w = w + np.linalg.solve((X * lam[:, None]).T @ X + 1e-6 * np.eye(len(w)), X.T @ (y - lam))
+      return w
+
+  x = r.normal(size=T); Xs = lagmat(x, D)
+  y = simulate(Xs @ k + b0, h, r)
+  Yh = lagmat(np.r_[0, y[:-1]], H)
+  idx = np.arange(T); tr, va, te = idx < 60000, (idx >= 60000) & (idx < 80000), idx >= 80000
+  r0 = y[tr].mean()
+
+  def bps(X, w, m):
+      eta = np.c_[X[m], np.ones(m.sum())] @ w
+      return (np.sum(y[m] * eta - np.exp(eta)) - np.sum(y[m] * np.log(r0) - r0)) / (y[m].sum() * np.log(2))
+
+  w_lnp = fit_glm(Xs[tr], y[tr])
+  val = {}
+  for nb in (2, 4, 6, 10, 16):
+      B = basis(nb); X = np.c_[Xs, Yh @ B]
+      w = fit_glm(X[tr], y[tr])
+      val[nb] = bps(X, w, va)
+  best_nb = max(val, key=val.get)
+  B = basis(best_nb); Xg = np.c_[Xs, Yh @ B]; w_glm = fit_glm(Xg[tr], y[tr])
+  test_bps = {"LNP": bps(Xs, w_lnp, te), "GLM": bps(Xg, w_glm, te)}
+  k_fit, h_fit, b_fit = w_glm[:D], B @ w_glm[D:-1], w_glm[-1]
+  print(f"rate {y.sum() / (T / 1000):.1f} Hz; validation bits per spike", {n: round(float(v), 3) for n, v in val.items()})
+  print(f"chosen {best_nb} basis functions; test", {m: round(float(v), 3) for m, v in test_bps.items()})
+  plt.plot(hl, h, "k--", label="true"); plt.plot(hl, h_fit, label="fitted"); plt.xlabel("ms after a spike"); plt.legend(); plt.show()
+`} />
+
+Validation picks 4 basis functions: 2 cannot shape both the deep refractory period and the rebound, while 10 and 16 add parameters without adding fit and start to lose on held-out data. On the test set the chosen GLM reaches about 1.15 bits per spike against the LNP's 0.89, the stimulus filter is recovered almost exactly, and the history filter matches the true one beyond the first millisecond, where the basis is too smooth to follow its full depth. Notice how high both scores are compared with Day 4: this neuron is driven hard by the stimulus, as retinal ganglion cells are by flicker, so its spikes are very predictable.
+
+**Part B: does the model behave like the neuron?** A good likelihood is not the same as realistic spike trains. Show a 2 s frozen stimulus 60 times, recording the true neuron's responses, then run the fitted LNP and GLM as simulators on the same stimulus, 60 times each. Compare the PSTHs and the Fano factor of counts in 20 ms windows where the neuron is active.
+
+<PyCell id="partB" title="Part B: simulating the fitted models" tests={String.raw`
+  import numpy as np
+  def test_fano():
+      "the GLM's Fano factor is within 0.1 of the data's, and the LNP's is above 0.9"
+      assert abs(fano["GLM"] - fano["data"]) < 0.1 and fano["LNP"] > 0.9
+
+  def test_psth():
+      "the GLM's PSTH correlates with the data's PSTH better than the LNP's"
+      assert psth_r["GLM"] > psth_r["LNP"]
+`} prompt="Write fano_active(S), which sums each repeat's spikes in 20 ms windows and returns the mean variance-to-mean ratio across windows whose mean count exceeds 0.5. Then compute it and the smoothed PSTH correlation for the data and both models."
+code={String.raw`
+  Tr, R = 2000, 60
+  Xr = lagmat(r.normal(size=Tr), D)
+  sims = {
+      "data": np.array([simulate(Xr @ k + b0, h, r) for _ in range(R)]),
+      "GLM": np.array([simulate(Xr @ k_fit + b_fit, h_fit, r) for _ in range(R)]),
+      "LNP": np.array([r.poisson(np.exp(np.c_[Xr, np.ones(Tr)] @ w_lnp)) for _ in range(R)]),
+  }
+
+  def fano_active(S):
+      c = S.reshape(len(S), -1, 20).sum(2)
+      ...
+
+  smooth = lambda p: np.convolve(p, np.ones(5) / 5, "same")
+  fano = {m: fano_active(S) for m, S in sims.items()}
+  psth_r = {m: np.corrcoef(smooth(S.mean(0)), smooth(sims["data"].mean(0)))[0, 1] for m, S in sims.items() if m != "data"}
+  print("Fano factor", {m: round(float(v), 2) for m, v in fano.items()})
+  print("PSTH correlation with data", {m: round(float(v), 3) for m, v in psth_r.items()})
+  fig, ax = plt.subplots(3, 1, sharex=True, figsize=(7, 5))
+  for a, (m, S) in zip(ax, sims.items()):
+      tt, rr = np.nonzero(S[:20, :500].T)
+      a.plot(tt, rr, "|", ms=3); a.set_ylabel(m)
+  ax[-1].set_xlabel("ms"); plt.show()
+`}
+hint="m, v = c.mean(0), c.var(0, ddof=1); keep = m > 0.5; return np.mean(v[keep] / m[keep])."
+solution={String.raw`
+  Tr, R = 2000, 60
+  Xr = lagmat(r.normal(size=Tr), D)
+  sims = {
+      "data": np.array([simulate(Xr @ k + b0, h, r) for _ in range(R)]),
+      "GLM": np.array([simulate(Xr @ k_fit + b_fit, h_fit, r) for _ in range(R)]),
+      "LNP": np.array([r.poisson(np.exp(np.c_[Xr, np.ones(Tr)] @ w_lnp)) for _ in range(R)]),
+  }
+
+  def fano_active(S):
+      c = S.reshape(len(S), -1, 20).sum(2)
+      m, v = c.mean(0), c.var(0, ddof=1)
+      keep = m > 0.5
+      return np.mean(v[keep] / m[keep])
+
+  smooth = lambda p: np.convolve(p, np.ones(5) / 5, "same")
+  fano = {m: fano_active(S) for m, S in sims.items()}
+  psth_r = {m: np.corrcoef(smooth(S.mean(0)), smooth(sims["data"].mean(0)))[0, 1] for m, S in sims.items() if m != "data"}
+  print("Fano factor", {m: round(float(v), 2) for m, v in fano.items()})
+  print("PSTH correlation with data", {m: round(float(v), 3) for m, v in psth_r.items()})
+  fig, ax = plt.subplots(3, 1, sharex=True, figsize=(7, 5))
+  for a, (m, S) in zip(ax, sims.items()):
+      tt, rr = np.nonzero(S[:20, :500].T)
+      a.plot(tt, rr, "|", ms=3); a.set_ylabel(m)
+  ax[-1].set_xlabel("ms"); plt.show()
+`} />
+
+The true neuron's Fano factor in active windows is about 0.70, well below the Poisson value of 1. The GLM simulator gives about 0.72; the LNP simulator gives 1.01, Poisson by construction, despite having nearly the same PSTH (correlations with the data of 0.91 and 0.87). The rasters show why: after each spike the data and the GLM are silenced by refractoriness, so the number of spikes in an event varies little from repeat to repeat, while the LNP's spikes ignore one another and their count varies as much as its mean. This is in miniature the result of Pillow and colleagues (2005), whose GLM simulations reproduced both the PSTH and the trial-to-trial precision of primate RGCs, where a Poisson model with the right rate could not.
+
+**Part C (written).** Answer in your journal. First, your neuron was simulated from a GLM, so the GLM was bound to fit well. Name two features of real retinal ganglion cells that this GLM cannot capture, and say how each would show up in Part A's validation scores or Part B's comparisons. Second, Uzzell and Chichilnisky (Day 4) found spike timing in primate RGCs reproducible to about a millisecond. Which term in today's model is responsible for precision of that kind, and why does a Poisson model with the same PSTH fail to reproduce it?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The Poisson GLM log-likelihood is concave" task="With $\lambda_t = \exp(x_t \cdot w)$ and $\mathcal L(w) = \sum_t (y_t\, x_t \cdot w - \lambda_t)$, show that the Hessian is $-X^\top \text{diag}(\lambda) X$ and hence that $\mathcal L$ is concave.">
+
+The gradient is $\nabla \mathcal L = \sum_t (y_t - \lambda_t)\, x_t = X^\top (y - \lambda)$, because $\partial \lambda_t / \partial w = \lambda_t x_t$.
+
+Differentiating again, $\nabla^2 \mathcal L = -\sum_t \lambda_t\, x_t x_t^\top = -X^\top \text{diag}(\lambda) X$.
+
+For any vector $v$, $v^\top \nabla^2 \mathcal L\, v = -\sum_t \lambda_t (x_t \cdot v)^2 \le 0$, since every $\lambda_t$ is positive. The Hessian is negative semi-definite everywhere, so $\mathcal L$ is concave and any local maximum is global. This holds whatever the columns of $X$ contain, stimulus, spike history or other neurons' spikes, because the history enters linearly as data.
+
+</Prove>
+
+<Prove title="2. The STA recovers the filter for Gaussian white noise" task="Let $s \sim \mathcal N(0, I)$ and let the spike probability be $f(k \cdot s)$ for any non-negative $f$ with finite expectation. Show that the spike-triggered average is proportional to $k$.">
+
+The STA is $\mathbb E[s \mid \text{spike}] = \mathbb E[s\, f(k \cdot s)] / \mathbb E[f(k \cdot s)]$.
+
+Write $s = \frac{k}{|k|^2}(k \cdot s) + s_\perp$, where $s_\perp$ is the part orthogonal to $k$. For a Gaussian with identity covariance, $s_\perp$ is independent of $k \cdot s$ and has mean zero.
+
+Hence $\mathbb E[s_\perp f(k \cdot s)] = \mathbb E[s_\perp]\,\mathbb E[f(k \cdot s)] = 0$, and $\mathbb E[s\, f(k \cdot s)] = \frac{k}{|k|^2}\mathbb E[(k \cdot s) f(k \cdot s)]$, a multiple of $k$. The multiple is zero when $f$ is even, which is why Day 2 needed the covariance. With correlated stimuli, $s_\perp$ is no longer independent, and Day 1's whitening restores the result.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 35 quiz (15 questions)" questions={[
+  { q: "With correlated stimuli, the raw STA equals...", options: ["The filter", "The stimulus covariance times the filter, up to scale", "Zero", "The inverse covariance"], answer: 1, explain: "Day 1." },
+  { q: "The whitened STA multiplies the STA by...", options: ["C", "C⁻¹", "C²", "The identity"], answer: 1, explain: "Day 1." },
+  { q: "Ridge regularisation helps most along stimulus directions with...", options: ["Large variance", "Small variance", "Zero mean", "High frequency only if large"], answer: 1, explain: "Day 1." },
+  { q: "For a complex cell, the STA is...", options: ["The filter", "Close to zero", "Doubled", "Negative"], answer: 1, explain: "Day 2." },
+  { q: "STC finds filters as eigenvectors whose eigenvalues...", options: ["Equal 1", "Differ from the stimulus variance", "Are negative", "Are complex"], answer: 1, explain: "Day 2." },
+  { q: "The null distribution for STC eigenvalues is built by...", options: ["Shifting spikes relative to the stimulus", "Adding noise", "Removing spikes", "Doubling the data"], answer: 0, explain: "Day 2." },
+  { q: "A spike-history filter that is negative at short lags produces...", options: ["Bursting", "Refractoriness", "A higher rate", "Coupling"], answer: 1, explain: "Day 3." },
+  { q: "Raised-cosine bases are spaced logarithmically because...", options: ["History effects change fast at short lags and slowly at long ones", "Logs are cheap", "It makes the model linear", "It is required for concavity"], answer: 0, explain: "Day 3." },
+  { q: "The Poisson GLM is fitted efficiently because...", options: ["Its log-likelihood is concave", "It is linear", "It has no parameters", "It uses gradient-free search"], answer: 0, explain: "Derivation 1." },
+  { q: "Bits per spike is computed relative to...", options: ["A homogeneous Poisson model", "The true model", "Zero", "An LNP"], answer: 0, explain: "Day 4." },
+  { q: "The discrete-time correction to time rescaling handles...", options: ["The spike bin's share of the intensity", "Negative rates", "Coupling", "Missing data"], answer: 0, explain: "Day 4." },
+  { q: "A fitted coupling filter shows...", options: ["A synapse", "Dependence given the model's variables", "Nothing", "Causation"], answer: 1, explain: "Day 4." },
+  { q: "In a deep-network encoding model, the readout is...", options: ["Regularised and linear", "A second network", "Fixed", "Nonlinear only"], answer: 0, explain: "Day 5." },
+  { q: "The noise ceiling is estimated from...", options: ["Repeated presentations", "Training error", "The number of features", "The learning rate"], answer: 0, explain: "Day 5." },
+  { q: "A GLM simulator reproduces sub-Poisson Fano factors because...", options: ["Its history filter makes spiking depend on recent spikes", "Its stimulus filter is larger", "It has a higher rate", "It is deterministic"], answer: 0, explain: "Part B." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Truccolo, Eden, Fellows, Donoghue and Brown (2005) its third pass and write your critique under the five headings. Focus on one question: **is the point-process GLM a general framework for spiking, or a convenient approximation?** Consider the three kinds of covariate it combines (extrinsic signals such as movement, the neuron's own history, and the activity of other neurons) and whether their effects really add on the log scale; how the model's quality was judged, by likelihood, by time rescaling and by decoding, and what each misses; the choice of bin width and of basis for the history filter; the danger, from Day 4, of reading ensemble terms as connections; and what the framework cannot represent, such as slow changes in excitability, adaptation over seconds or hidden internal states. End with one way you would extend the model to address the limitation you think matters most, while keeping its likelihood concave if you can.
+
+<Callout kind="research">
+
+A GLM fitted by maximum likelihood can be unstable when run as a simulator: with strong positive history terms, simulated spike trains sometimes run away into bursts that never stop, even though the fit is good one step ahead. Gerhard, Deger and Truccolo (2017) analysed this problem. Fit a GLM to a bursting neuron (raise the rebound bump in Part A's history filter), simulate the fitted model for a long time, and find the rebound strength at which the simulator becomes unstable. Does a validation score based on simulated statistics, such as Part B's, choose a different model from one based on likelihood?
+
+</Callout>
+
+<Key title="Week 35 review checklist">
+<ul>
+<li>I can estimate a receptive field from correlated stimuli by whitening and ridge regression, and choose the penalty by cross-validation.</li>
+<li>I can use spike-triggered covariance to find several filters and test eigenvalues against a shuffle null.</li>
+<li>I can build and fit a Poisson GLM with stimulus, spike-history and coupling filters.</li>
+<li>I can compare models by held-out bits per spike and test them by time rescaling.</li>
+<li>I can fit a linear readout from network features and report it as a fraction of the noise ceiling.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then write the order in which you would try the models of this week on a new neuron from an unknown area, and the result at each step that would make you move on to the next." />
