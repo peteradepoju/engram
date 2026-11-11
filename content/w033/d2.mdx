@@ -1,0 +1,255 @@
+export const meta = {
+  title: "Short-term depression: the Tsodyks-Markram model",
+  intro: "Yesterday every input produced the same conductance. At most synapses in cortex, it does not: the second of two closely spaced spikes evokes a smaller response, the tenth smaller still, and the synapse recovers over hundreds of milliseconds. This short-term depression comes from using up a store of releasable vesicles faster than it is refilled. Today you build the model Tsodyks and Markram used to describe it, find that above a modest input rate a depressing synapse transmits the same total regardless of how fast its input fires, and see why that makes it signal changes in rate rather than the rate itself. Then you fit the model to a paired-pulse experiment.",
+  goals: [
+    "Write and simulate the Tsodyks-Markram model of a depressing synapse",
+    "Derive the steady-state response to a regular spike train",
+    "Explain the limiting frequency above which transmission no longer depends on input rate",
+    "Show that depression signals relative changes in rate",
+    "Fit release probability and recovery time to paired-pulse data",
+  ],
+  plan: [
+    { label: "Predict and running out of vesicles", minutes: 20 },
+    { label: "Steady state and the limiting frequency", minutes: 30 },
+    { label: "Depression as gain control", minutes: 25 },
+    { label: "Fitting a paired-pulse experiment", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "tsodyks-markram-1997",
+};
+
+<Predict question="A depressing synapse is driven at 20 Hz, then at 40 Hz. Once each response has settled, does the postsynaptic neuron receive about twice as much synaptic current per second at 40 Hz, about the same, or half as much?" />
+
+<Step n={1} title="Running out of vesicles" minutes={20} />
+
+Tsodyks and Markram (1997), today's paper, recorded from pairs of connected layer 5 pyramidal neurons in rat cortex and drove the presynaptic cell with trains of spikes. The postsynaptic responses fell during the train and recovered over about a second. Their model has one variable, the fraction $x$ of synaptic **resources** (think of vesicles ready to release) that are available. Each spike releases a fraction $U$ of what is available, producing a response proportional to $Ux$; between spikes the resources recover with time constant $\tau_{rec}$:
+
+$$
+\frac{dx}{dt} = \frac{1 - x}{\tau_{rec}}, \qquad \text{at each spike: } A = A_{max}Ux, \quad x \to x - Ux.
+$$
+
+$U$ plays the role of release probability: a synapse with high $U$ gives a large first response and depresses strongly.
+
+<Video id="a5XPQMAX3ak" title="Synaptic short-term plasticity (Neuronal Dynamics 3.2)" by="Wulfram Gerstner (EPFL)" note="Wulfram Gerstner introduces short-term depression and facilitation and the Tsodyks-Markram model that describes them, today's and tomorrow's subject." />
+
+<Figure caption="Responses of a synapse to a regular train of ten spikes. Set the release fraction, the recovery and facilitation time constants, and the input rate." credit="Interactive figure by Engram, after the model of Tsodyks and Markram.">
+  <TMSynapse />
+</Figure>
+
+<Step n={2} title="Steady state and the limiting frequency" minutes={30} />
+
+For a regular train with interval $\Delta = 1/f$, the available resources settle where what is used at each spike equals what recovers in between. Just before each spike, $x$ satisfies $x_{ss} = 1 - (1 - (1 - U)x_{ss})e^{-\Delta/\tau}$, so
+
+$$
+x_{ss} = \frac{1 - e^{-\Delta/\tau_{rec}}}{1 - (1 - U)e^{-\Delta/\tau_{rec}}}.
+$$
+
+At high rates, $e^{-\Delta/\tau} \approx 1 - \Delta/\tau$, and $x_{ss} \approx \frac{1}{U f\tau_{rec}}$: the response to each spike falls as $1/f$. The total transmitted per second, $f \cdot A_{max}Ux_{ss}$, then approaches $A_{max}/\tau_{rec}$, independent of the rate. Tsodyks and Markram called the rate where this happens, about $1/(U\tau_{rec})$, the **limiting frequency**.
+
+<PyCell id="tm" title="A depressing synapse" tests={String.raw`
+  import numpy as np
+  def test_train():
+      "tm_train returns U x before each spike, with x updated as in the model"
+      a = tm_train(20, 0.5, 800.0, n=3)
+      x2 = 1 - (1 - 0.5) * np.exp(-50 / 800)
+      assert abs(a[0] - 0.5) < 1e-12 and abs(a[1] - 0.5 * x2) < 1e-12
+
+  def test_steady():
+      "the tenth-plus responses approach the steady-state formula, and transmitted current per second barely changes from 20 to 40 Hz"
+      assert abs(tm_train(20, 0.5, 800.0, n=60)[-1] - 0.5 * x_ss(20, 0.5, 800.0)) < 1e-6
+      assert abs(per_second[40] / per_second[20] - 1) < 0.1
+`} prompt="Write `tm_train(f, U, tau, n)`, the responses (as U x, with A_max = 1) to n spikes at f Hz, starting from x = 1, and `x_ss(f, U, tau)` from the formula. Compute the steady-state response per spike and per second for U = 0.5 and τ_rec = 800 ms at 1, 5, 20, 40 and 80 Hz."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def tm_train(f, U, tau, n=10):
+      dt = 1000.0 / f
+      x, out = 1.0, []
+      for k in range(n):
+          out.append(U * x)
+          x = ...                                   # release, then recover over one interval
+      return np.array(out)
+
+  def x_ss(f, U, tau):
+      E = np.exp(-1000.0 / f / tau)
+      return ...
+
+  per_spike, per_second = {}, {}
+  for f in (1, 5, 20, 40, 80):
+      per_spike[f] = 0.5 * x_ss(f, 0.5, 800.0)
+      per_second[f] = f * per_spike[f]
+      print(f"{f:3d} Hz: steady response {per_spike[f]:.3f} of the maximum per spike, {per_second[f]:.2f} per second")
+  print(f"limiting frequency 1/(U tau) = {1000 / (0.5 * 800):.1f} Hz;  1/tau = {1000 / 800:.2f} per second")
+  plt.bar(range(10), tm_train(20, 0.5, 800.0)); plt.xlabel("spike number"); plt.ylabel("response (U x)"); plt.show()
+`}
+hint="x = 1 - (1 - (x - U * x)) * np.exp(-dt / tau); return (1 - E) / (1 - (1 - U) * E)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def tm_train(f, U, tau, n=10):
+      dt = 1000.0 / f
+      x, out = 1.0, []
+      for k in range(n):
+          out.append(U * x)
+          x = 1 - (1 - (x - U * x)) * np.exp(-dt / tau)  # release, then recover over one interval
+      return np.array(out)
+
+  def x_ss(f, U, tau):
+      E = np.exp(-1000.0 / f / tau)
+      return (1 - E) / (1 - (1 - U) * E)
+
+  per_spike, per_second = {}, {}
+  for f in (1, 5, 20, 40, 80):
+      per_spike[f] = 0.5 * x_ss(f, 0.5, 800.0)
+      per_second[f] = f * per_spike[f]
+      print(f"{f:3d} Hz: steady response {per_spike[f]:.3f} of the maximum per spike, {per_second[f]:.2f} per second")
+  print(f"limiting frequency 1/(U tau) = {1000 / (0.5 * 800):.1f} Hz;  1/tau = {1000 / 800:.2f} per second")
+  plt.bar(range(10), tm_train(20, 0.5, 800.0)); plt.xlabel("spike number"); plt.ylabel("response (U x)"); plt.show()
+`} />
+
+With U = 0.5 and τ_rec = 800 ms, the steady response per spike falls from 0.42 of the maximum at 1 Hz to 0.057 at 20 Hz and 0.015 at 80 Hz. The amount transmitted per second rises at first but levels off at 1.14, 1.19 and 1.22 per second at 20, 40 and 80 Hz, approaching 1/τ_rec = 1.25. That answers the prediction: doubling the rate from 20 to 40 Hz adds only 4%. The limiting frequency here is 2.5 Hz, and most cortical neurons fire above it much of the time.
+
+<Step n={3} title="Depression as gain control" minutes={25} />
+
+If the steady transmission is independent of rate, what does a depressing synapse tell its target? Abbott, Varela, Sen and Nelson (1997) answered: changes. Immediately after a step in rate, the resources have not yet adjusted, so the transmitted current jumps by the ratio of the new rate to the old. A step from 10 to 20 Hz and a step from 20 to 40 Hz produce the same relative jump, before both settle back. The synapse reports relative changes in its input rate, like Weber's law in perception.
+
+<PyCell id="gain" title="Steps in rate" tests={String.raw`
+  import numpy as np
+  def test_jump():
+      "the transmitted rate jumps by the same factor, 2, for both steps"
+      assert abs(jump[(10, 20)] - 2) < 0.05 and abs(jump[(20, 40)] - 2) < 0.05
+
+  def test_settle():
+      "afterwards both settle to within 15% of the transmission before the step"
+      assert all(abs(settle[k] - 1) < 0.15 for k in settle)
+`} prompt="Use the averaged model dx/dt = (1 - x)/τ - U x r(t), with r in spikes per ms, and transmitted rate U x r. For steps from 10 to 20 Hz and from 20 to 40 Hz at t = 3 s (U = 0.5, τ = 800 ms, dt = 1 ms), compute the transmitted rate just after the step divided by that just before (`jump`), and the value 2.5 s after the step divided by that before (`settle`)."
+code={String.raw`
+  def step_response(r1, r2, U=0.5, tau=800.0, T=6000, dt=1.0):
+      t = np.arange(0, T, dt)
+      r = np.where(t < 3000, r1, r2) / 1000.0
+      x = np.empty_like(t); xv = 1.0
+      for k in range(len(t)):
+          xv += dt * ((1 - xv) / tau - U * xv * r[k])
+          x[k] = xv
+      return t, U * x * r * 1000
+
+  jump, settle = {}, {}
+  for r1, r2 in ((10, 20), (20, 40)):
+      t, out = step_response(r1, r2)
+      before = out[t == 2999][0]
+      jump[(r1, r2)] = ...
+      settle[(r1, r2)] = ...
+      print(f"{r1} to {r2} Hz: jumps by {jump[(r1, r2)]:.2f}, settles at {settle[(r1, r2)]:.2f} of the earlier level")
+      plt.plot(t / 1000, out, label=f"{r1} to {r2} Hz")
+  plt.xlabel("s"); plt.ylabel("transmitted (resources per s)"); plt.legend(); plt.show()
+`}
+hint="jump[(r1, r2)] = out[t == 3000][0] / before; settle[(r1, r2)] = out[t == 5500][0] / before."
+solution={String.raw`
+  def step_response(r1, r2, U=0.5, tau=800.0, T=6000, dt=1.0):
+      t = np.arange(0, T, dt)
+      r = np.where(t < 3000, r1, r2) / 1000.0
+      x = np.empty_like(t); xv = 1.0
+      for k in range(len(t)):
+          xv += dt * ((1 - xv) / tau - U * xv * r[k])
+          x[k] = xv
+      return t, U * x * r * 1000
+
+  jump, settle = {}, {}
+  for r1, r2 in ((10, 20), (20, 40)):
+      t, out = step_response(r1, r2)
+      before = out[t == 2999][0]
+      jump[(r1, r2)] = out[t == 3000][0] / before
+      settle[(r1, r2)] = out[t == 5500][0] / before
+      print(f"{r1} to {r2} Hz: jumps by {jump[(r1, r2)]:.2f}, settles at {settle[(r1, r2)]:.2f} of the earlier level")
+      plt.plot(t / 1000, out, label=f"{r1} to {r2} Hz")
+  plt.xlabel("s"); plt.ylabel("transmitted (resources per s)"); plt.legend(); plt.show()
+`} />
+
+Both steps make the transmitted rate jump by a factor of 2.0 at the moment of the step, and both then settle back close to the earlier level (1.11 and 1.06 times it) within a couple of seconds. The synapse reports that the rate doubled, whatever it doubled from, and then stops reporting it: its response depends on the relative change, as Weber's law describes for perception.
+
+<Step n={4} title="Fitting a paired-pulse experiment" minutes={30} />
+
+How are $U$ and $\tau_{rec}$ measured? Give two spikes separated by an interval $\Delta$ and measure the ratio of the second response to the first. After the first spike, $x = 1 - U$, and it recovers as $x(\Delta) = 1 - Ue^{-\Delta/\tau_{rec}}$, so the **paired-pulse ratio** is $A_2/A_1 = 1 - Ue^{-\Delta/\tau_{rec}}$. A straight-line fit of $\ln(1 - A_2/A_1)$ against $\Delta$ gives both parameters: the intercept is $\ln U$ and the slope $-1/\tau_{rec}$.
+
+<PyCell id="ppr" title="Release fraction and recovery from pairs" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "the fitted U is within 0.1 of 0.6 and the recovery time within 25% of 500 ms"
+      assert abs(U_fit - 0.6) < 0.1 and abs(tau_fit - 500) / 500 < 0.25
+`} prompt="The array `ppr` holds paired-pulse ratios measured (with noise) at the intervals `gaps`. Fit a straight line to ln(1 - ppr) against the interval and recover `U_fit` and `tau_fit` (ms)."
+code={String.raw`
+  r = np.random.default_rng(33)
+  gaps = np.array([20, 50, 100, 200, 400, 700, 1000.0])
+  ppr = 1 - 0.6 * np.exp(-gaps / 500) + r.normal(0, 0.02, gaps.size)
+  slope, intercept = np.polyfit(gaps, np.log(1 - ppr), 1)
+  U_fit = ...
+  tau_fit = ...
+  print(f"U = {U_fit:.2f}, tau_rec = {tau_fit:.0f} ms")
+  plt.plot(gaps, ppr, "o"); g = np.linspace(0, 1000, 200); plt.plot(g, 1 - U_fit * np.exp(-g / tau_fit))
+  plt.xlabel("interval (ms)"); plt.ylabel("A2 / A1"); plt.show()
+`}
+hint="U_fit = np.exp(intercept); tau_fit = -1 / slope."
+solution={String.raw`
+  r = np.random.default_rng(33)
+  gaps = np.array([20, 50, 100, 200, 400, 700, 1000.0])
+  ppr = 1 - 0.6 * np.exp(-gaps / 500) + r.normal(0, 0.02, gaps.size)
+  slope, intercept = np.polyfit(gaps, np.log(1 - ppr), 1)
+  U_fit = np.exp(intercept)
+  tau_fit = -1 / slope
+  print(f"U = {U_fit:.2f}, tau_rec = {tau_fit:.0f} ms")
+  plt.plot(gaps, ppr, "o"); g = np.linspace(0, 1000, 200); plt.plot(g, 1 - U_fit * np.exp(-g / tau_fit))
+  plt.xlabel("interval (ms)"); plt.ylabel("A2 / A1"); plt.show()
+`} />
+
+The fit gives U = 0.60 and τ_rec = 493 ms, against true values of 0.6 and 500 ms. Real paired-pulse ratios are noisier, and are affected by facilitation and by postsynaptic effects such as receptor desensitisation, so experimenters check the fitted parameters against responses to longer trains, as tomorrow's lesson does.
+
+<Bridge title="Adaptation at the synapse"
+  neuro="Depressing synapses make a neuron's input depend on recent history: a sustained input fades, a new or changed one stands out. Above the limiting frequency the rate itself is no longer transmitted, only its changes, which suits sensory systems that care about novelty and contrast."
+  ai="Normalisation in deep networks, from batch and layer normalisation to the divisive normalisation inspired by the visual system, also removes the overall scale of an input and passes on its relative structure. Depression does this over time at every synapse, with no learned parameters, a form of temporal normalisation built into the connection.">
+
+A depressing synapse tells its target what has changed, not what is.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Short-term depression is mainly caused by...", options: ["Receptor saturation only", "Depletion of releasable vesicles", "Calcium accumulation", "Postsynaptic spikes"], answer: 1, explain: "Resources are used faster than they recover." },
+  { q: "In the Tsodyks-Markram model, U represents...", options: ["The recovery time", "The fraction of available resources released by a spike", "The postsynaptic gain", "The number of synapses"], answer: 1, explain: "Like a release probability." },
+  { q: "At high rates, the steady response per spike of a depressing synapse falls roughly as...", options: ["Constant", "1/f", "1/f²", "e^(-f)"], answer: 1, explain: "x_ss ≈ 1/(U f τ_rec)." },
+  { q: "Above the limiting frequency, the transmitted current per second...", options: ["Grows with rate", "Is about independent of rate", "Falls to zero", "Oscillates"], answer: 1, explain: "It approaches A_max/τ_rec." },
+  { q: "The limiting frequency is about...", options: ["U/τ_rec", "1/(U τ_rec)", "τ_rec/U", "U τ_rec"], answer: 1, explain: "Tsodyks and Markram (1997)." },
+  { q: "Depression makes a synapse signal...", options: ["Absolute rates", "Relative changes in rate", "Only silence", "Spike shapes"], answer: 1, explain: "Abbott, Varela, Sen and Nelson (1997)." },
+  { q: "The paired-pulse ratio of a depressing synapse at short intervals is...", options: ["Above 1", "Below 1", "Exactly 1", "Negative"], answer: 1, explain: "1 - U e^(-Δ/τ)." },
+  { q: "A fit of ln(1 - A2/A1) against interval gives...", options: ["Only U", "ln U as intercept and -1/τ_rec as slope", "Only τ", "Nothing useful"], answer: 1, explain: "A straight line." },
+]} />
+
+<Flashcards cards={[
+  { front: "Tsodyks-Markram depression?", back: "$\\dot x = (1 - x)/\\tau_{rec}$; at each spike the response is $A_{max}Ux$ and $x \\to x - Ux$." },
+  { front: "Steady state for a regular train?", back: "$x_{ss} = \\frac{1 - e^{-\\Delta/\\tau}}{1 - (1 - U)e^{-\\Delta/\\tau}}$." },
+  { front: "Limiting frequency?", back: "About $1/(U\\tau_{rec})$; above it the transmitted rate is about $A_{max}/\\tau_{rec}$, independent of input rate." },
+  { front: "Depression and gain control?", back: "After a rate step the transmission jumps by the ratio of rates, then relaxes back: relative changes are signalled." },
+  { front: "Paired-pulse ratio?", back: "$A_2/A_1 = 1 - Ue^{-\\Delta/\\tau_{rec}}$ for a depressing synapse." },
+]} />
+
+<Predict revisit question="At steady state, how much synaptic current per second does a depressing synapse transmit at 40 Hz compared with 20 Hz?" />
+
+<Key title="Before you go">
+<ul>
+<li>Depression comes from using synaptic resources faster than they recover.</li>
+<li>Two parameters, U and τ_rec, capture it; the steady response falls as 1/f at high rates.</li>
+<li>Above about 1/(U τ_rec), the transmitted rate no longer depends on the input rate.</li>
+<li>Depressing synapses signal relative changes in rate, a form of gain control.</li>
+<li>Paired pulses at several intervals measure U and τ_rec.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Tsodyks and Markram (1997), <em>The neural code between neocortical pyramidal neurons depends on neurotransmitter release probability</em>.</li>
+<li>Abbott, Varela, Sen and Nelson (1997), <em>Synaptic depression and cortical gain control</em>, Science 275(5297), 221 to 224.</li>
+<li>Zucker and Regehr (2002), <em>Short-term synaptic plasticity</em>, Annual Review of Physiology 64, 355 to 405.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A sensory neuron fires at 30 Hz in a quiet room and 60 Hz when a sound starts. Through a depressing synapse, what does its target see over the first second after the sound starts, and afterwards? Describe one situation where this would help an animal and one where it would mislead it." />

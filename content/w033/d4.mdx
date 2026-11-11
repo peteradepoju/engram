@@ -1,0 +1,218 @@
+export const meta = {
+  title: "Short-term plasticity as computation: memory traces and burst detection",
+  intro: "The last two days treated short-term plasticity as a filter. Today you look at two things it might compute. The first is memory. Persistent firing, held by recurrent excitation (Week 22's attractors), has long been the standard model of working memory, but it is costly and some memories seem to survive periods of silence. Mongillo, Barak and Tsodyks proposed that the memory could live in the synapses instead, as facilitation that outlasts the spikes that caused it. The second is burst detection: a facilitating synapse can respond to a burst of spikes while largely ignoring the same number of isolated ones. You will compute both from yesterday's model.",
+  goals: [
+    "Show that facilitation leaves a synaptic memory trace that outlasts activity",
+    "Compute how long a loaded item can be read out after a silent delay",
+    "Show that occasional reactivation maintains the trace at low cost",
+    "Show that facilitating synapses respond preferentially to bursts and depressing ones to isolated spikes",
+  ],
+  plan: [
+    { label: "Predict and memory without spikes", minutes: 20 },
+    { label: "A silent memory trace", minutes: 30 },
+    { label: "Refreshing the trace", minutes: 25 },
+    { label: "Bursts as a unit of information", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "mongillo-2008",
+};
+
+<Predict question="A population fires a brief burst to store an item, then falls silent. Its recurrent synapses facilitate with a time constant of 1.5 s and recover from depression in 0.2 s. One second later, will those synapses be weaker than before the burst, back at baseline, or still stronger?" />
+
+<Step n={1} title="Memory without spikes" minutes={20} />
+
+In delayed-response tasks, neurons in prefrontal cortex often fire persistently while an animal holds an item in mind, and attractor networks explain this as reverberation through strong recurrent connections. But persistent firing is expensive, and in some recordings the delay activity is sparse, or comes in brief bursts, or vanishes and returns. Mongillo, Barak and Tsodyks (2008), today's paper, noticed that synapses between prefrontal pyramidal neurons facilitate strongly, with $\tau_F$ around a second or more. If an item is stored by a brief burst of activity in a population, the population's recurrent synapses facilitate; when the population falls silent, the facilitation decays only slowly. The item is held in the **pattern of synaptic efficacy**, not in spiking, and a weak, non-specific input later reactivates the population whose synapses are still strong.
+
+<Video id="AiExcSomrvc" title="Synapse models" by="Dan Goodman (Neuroscience for Machine Learners)" note="Dan Goodman on how synapses are modelled, from fixed weights to conductance time courses and short-term plasticity, with an eye on what they add to computation in networks." />
+
+<Step n={2} title="A silent memory trace" minutes={30} />
+
+Use the parameters Mongillo and colleagues took for prefrontal synapses: $U$ = 0.2, $\tau_{rec}$ = 0.2 s and $\tau_F$ = 1.5 s. Load an item with a burst of 20 spikes at 50 Hz, then measure the efficacy $ux$ that a single probe spike would find after a silent delay, relative to the baseline efficacy $U$ of an unloaded synapse.
+
+<Figure caption="The facilitation variable u, the resources x and their product, the synaptic efficacy, after a loading burst, with optional low-rate reactivations. Set the facilitation time constant and the reactivation rate." credit="Interactive figure by Engram, after Mongillo, Barak and Tsodyks (2008).">
+  <MemoryTrace />
+</Figure>
+
+<PyCell id="trace" title="How long does the trace last?" tests={String.raw`
+  import numpy as np
+  def test_trace():
+      "the loaded synapse is at least 2.5 times stronger than baseline 1 s after loading, and within 50% of baseline after 4 s"
+      assert gain[1000] > 2.5 and gain[4000] < 1.5
+
+  def test_shape():
+      "the trace first rises, as depression recovers, then falls as facilitation decays"
+      assert gain[500] > gain[200] and gain[500] > gain[2000]
+`} prompt="Using `tm` from yesterday (redefined below), load a synapse with 20 spikes at 50 Hz and compute the efficacy of a probe spike at delays of 200, 500, 1000, 2000 and 4000 ms after the last loading spike, divided by the baseline U. Store it in `gain[delay]`."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def tm(times, U, tauD, tauF):
+      u, x, last, out = U, 1.0, None, []
+      for t in times:
+          if last is not None:
+              d = t - last
+              x = 1 + (x - 1) * np.exp(-d / tauD)
+              u = (U + (u - U) * np.exp(-d / tauF)) if tauF > 0 else U
+          out.append(u * x)
+          x = x - u * x
+          if tauF > 0:
+              u = u + U * (1 - u)
+          last = t
+      return np.array(out)
+
+  U, tauD, tauF = 0.2, 200.0, 1500.0
+  load = np.arange(20) * 20.0                    # 20 spikes at 50 Hz
+  gain = {}
+  for delay in (200, 500, 1000, 2000, 4000):
+      gain[delay] = ...
+      print(f"{delay:5d} ms after loading: efficacy {gain[delay]:.2f} times baseline")
+`}
+hint="gain[delay] = tm(np.r_[load, load[-1] + delay], U, tauD, tauF)[-1] / U."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def tm(times, U, tauD, tauF):
+      u, x, last, out = U, 1.0, None, []
+      for t in times:
+          if last is not None:
+              d = t - last
+              x = 1 + (x - 1) * np.exp(-d / tauD)
+              u = (U + (u - U) * np.exp(-d / tauF)) if tauF > 0 else U
+          out.append(u * x)
+          x = x - u * x
+          if tauF > 0:
+              u = u + U * (1 - u)
+          last = t
+      return np.array(out)
+
+  U, tauD, tauF = 0.2, 200.0, 1500.0
+  load = np.arange(20) * 20.0                    # 20 spikes at 50 Hz
+  gain = {}
+  for delay in (200, 500, 1000, 2000, 4000):
+      gain[delay] = tm(np.r_[load, load[-1] + delay], U, tauD, tauF)[-1] / U
+      print(f"{delay:5d} ms after loading: efficacy {gain[delay]:.2f} times baseline")
+`} />
+
+Two hundred milliseconds after loading, a probe finds the synapse 2.7 times as strong as baseline; at 500 ms, 3.4 times, as depression recovers while facilitation persists; at 1 s, 2.9 times; at 2 s, 2.0; at 4 s, still 1.3. That answers the prediction: a second after the burst the synapses are about three times stronger than before, with no spikes in between. The memory lasts roughly as long as the facilitation time constant.
+
+<Step n={3} title="Refreshing the trace" minutes={25} />
+
+A trace that fades in a few seconds can be kept alive. In Mongillo and colleagues' network, the loaded population, with its facilitated recurrent synapses, is close to firing; occasional brief **population spikes** reactivate it, and each reactivation tops up the facilitation before it has decayed. The memory is then held by a low-rate rhythm of reactivations rather than continuous firing. How rare can the reactivations be?
+
+<PyCell id="refresh" title="Low-rate reactivation" tests={String.raw`
+  import numpy as np
+  def test_refresh():
+      "reactivations at 1 Hz hold the efficacy above 1.5 times baseline, at 3 Hz above 2"
+      assert held[1] > 1.5 and held[3] > 2
+
+  def test_cheap():
+      "the steady efficacy at 3 Hz is within 15% of that at 5 Hz"
+      assert abs(held[3] / held[5] - 1) < 0.15
+`} prompt="For reactivation rates of 0.5, 1, 2, 3 and 5 Hz, drive the synapse with 60 regular spikes and store the steady efficacy, the last response divided by U, in `held[rate]`."
+code={String.raw`
+  held = {}
+  for rate in (0.5, 1, 2, 3, 5):
+      held[rate] = ...
+      print(f"reactivation at {rate} Hz: efficacy held at {held[rate]:.2f} times baseline")
+`}
+hint="held[rate] = tm(np.arange(60) * 1000.0 / rate, U, tauD, tauF)[-1] / U."
+solution={String.raw`
+  held = {}
+  for rate in (0.5, 1, 2, 3, 5):
+      held[rate] = tm(np.arange(60) * 1000.0 / rate, U, tauD, tauF)[-1] / U
+      print(f"reactivation at {rate} Hz: efficacy held at {held[rate]:.2f} times baseline")
+`} />
+
+Reactivations at only 1 Hz hold the efficacy at 1.7 times baseline, and at 3 Hz at 2.5 times; going to 5 Hz adds nothing (2.4). A population that fires one brief synchronous burst every few hundred milliseconds can therefore hold an item indefinitely, at a small fraction of the cost of persistent firing. Mongillo and colleagues showed that such periodic population spikes arise naturally in their network once an item is loaded.
+
+<Callout kind="research">
+
+The synaptic theory predicts that information can survive a period with no elevated firing at all. Experiments in which activity is briefly disrupted during the delay, by a distractor or by stimulation, and the memory survives, have been used to argue for "activity-silent" working memory, and recordings showing bursty rather than persistent delay activity point the same way. Read about one such study and say what a purely attractor-based model would have predicted instead.
+
+</Callout>
+
+<Step n={4} title="Bursts as a unit of information" minutes={30} />
+
+Many neurons fire some of their spikes in bursts, groups of two or more within a few milliseconds. Lisman (1997) argued that bursts might be a unit of information in their own right, read out by synapses that respond to them reliably while ignoring isolated spikes. A facilitating synapse with a short facilitation time does exactly this: facilitation built by the first spike of a burst boosts the next ones, but has decayed by the time an isolated spike arrives. A depressing synapse does the opposite.
+
+<PyCell id="bursts" title="Who reads bursts?" tests={String.raw`
+  import numpy as np
+  def test_fac():
+      "the facilitating synapse transmits more than 1.4 times as much per spike in bursts as in isolated spikes"
+      assert ratio["facilitating"] > 1.4
+
+  def test_dep():
+      "the depressing synapse transmits less per spike in bursts"
+      assert ratio["depressing"] < 0.9
+`} prompt="Compare 21 isolated spikes at 2 Hz with 7 bursts of 3 spikes (5 ms apart, bursts every 1.5 s). For a facilitating synapse (U = 0.1, τ_rec = 50 ms, τ_F = 100 ms) and a depressing one (U = 0.5, τ_rec = 800 ms, no facilitation), compute the mean response per spike in bursts divided by that for isolated spikes, `ratio[name]`."
+code={String.raw`
+  isolated = np.arange(21) * 500.0
+  bursts = np.concatenate([b * 1500.0 + np.arange(3) * 5.0 for b in range(7)])
+  syn = {"facilitating": (0.1, 50.0, 100.0), "depressing": (0.5, 800.0, 0.0)}
+  ratio = {}
+  for name, p in syn.items():
+      ratio[name] = ...
+      print(f"{name:12s}: per spike, bursts give {ratio[name]:.2f} times what isolated spikes give")
+`}
+hint="ratio[name] = tm(bursts, *p).mean() / tm(isolated, *p).mean()."
+solution={String.raw`
+  isolated = np.arange(21) * 500.0
+  bursts = np.concatenate([b * 1500.0 + np.arange(3) * 5.0 for b in range(7)])
+  syn = {"facilitating": (0.1, 50.0, 100.0), "depressing": (0.5, 800.0, 0.0)}
+  ratio = {}
+  for name, p in syn.items():
+      ratio[name] = tm(bursts, *p).mean() / tm(isolated, *p).mean()
+      print(f"{name:12s}: per spike, bursts give {ratio[name]:.2f} times what isolated spikes give")
+`} />
+
+The facilitating synapse transmits 1.55 times as much per spike when the same number of spikes arrives in bursts of three, because the second and third spikes find u raised by the first. The depressing synapse transmits only 0.79 times as much per spike in bursts: the first spike uses resources the others need. Two targets of the same neuron could therefore read different things from one spike train, one its bursts, the other its isolated spikes, as Day 3 suggested.
+
+<Bridge title="State in the connections"
+  neuro="Short-term plasticity gives synapses a hidden state that persists for seconds. That state can hold information when spiking stops, and it lets the same spikes be read differently depending on their pattern, bursts or singles."
+  ai="Fast weights in machine learning, from Hinton and Plaut's 1987 proposal to Ba and colleagues' 2016 recurrent networks with fast associative weights, store recent information in temporary changes to connections rather than in activations. Linear attention in transformers can be written in the same form, as a matrix of fast weights updated by each input. The synaptic theory of working memory is the biological version.">
+
+Memory can live in what the connections are ready to do, not only in what the neurons are doing.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The synaptic theory of working memory stores items in...", options: ["Persistent high firing", "Facilitated synaptic efficacy", "Gene expression", "Myelin"], answer: 1, explain: "Mongillo, Barak and Tsodyks (2008)." },
+  { q: "The trace lasts about as long as...", options: ["τ_rec", "τ_F", "The membrane time constant", "One spike"], answer: 1, explain: "Facilitation decays with τ_F." },
+  { q: "Just after loading, efficacy is lower than a few hundred ms later because...", options: ["Facilitation has not built", "Resources are still depleted and recover with τ_rec", "The neuron is refractory", "Noise"], answer: 1, explain: "Depression recovers faster than facilitation decays." },
+  { q: "Low-rate reactivations maintain the trace because...", options: ["They reset depression", "They top up facilitation before it decays", "They change the weights permanently", "They inhibit other items"], answer: 1, explain: "Population spikes refresh u." },
+  { q: "A facilitating synapse with short τ_F...", options: ["Ignores bursts", "Responds more per spike to bursts than to isolated spikes", "Depresses", "Has no state"], answer: 1, explain: "Facilitation from the first spike boosts the rest." },
+  { q: "A depressing synapse transmits per spike...", options: ["More in bursts", "Less in bursts", "Equally", "Nothing"], answer: 1, explain: "Resources are used up within the burst." },
+  { q: "Lisman (1997) proposed that bursts...", options: ["Are noise", "Can be a unit of information read by reliable synapses", "Cause depression only", "Only occur in sleep"], answer: 1, explain: "Bursts as a unit of neural information." },
+  { q: "Fast weights in machine learning resemble...", options: ["Myelin", "Short-term synaptic changes that store recent information", "Gap junctions", "Dendritic spikes"], answer: 1, explain: "Temporary changes to connections." },
+]} />
+
+<Flashcards cards={[
+  { front: "Synaptic theory of working memory?", back: "An item is held in facilitated recurrent synapses of a population, decaying with τ_F, and read out or refreshed by brief reactivations." },
+  { front: "Shape of the trace after loading?", back: "Efficacy first rises (depression recovers with τ_rec), then falls slowly (facilitation decays with τ_F)." },
+  { front: "Activity-silent memory?", back: "Information held in synaptic state while firing is at baseline; recoverable by a non-specific probe." },
+  { front: "Burst detection by synapses?", back: "Facilitating synapses with short τ_F transmit more per spike in bursts; depressing synapses transmit less." },
+  { front: "Fast weights?", back: "Rapidly changing connection strengths that store recent inputs; a machine-learning analogue of short-term plasticity." },
+]} />
+
+<Predict revisit question="One second after a loading burst, are the facilitating synapses weaker, at baseline or stronger?" />
+
+<Key title="Before you go">
+<ul>
+<li>Facilitation can hold a memory trace for seconds after spiking stops.</li>
+<li>The trace first rises as depression recovers, then decays with the facilitation time constant.</li>
+<li>Rare reactivations, a few per second, refresh it cheaply.</li>
+<li>Facilitating synapses read bursts; depressing synapses read isolated spikes and onsets.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Mongillo, Barak and Tsodyks (2008), <em>Synaptic theory of working memory</em>.</li>
+<li>Lisman (1997), <em>Bursts as a unit of neural information: making unreliable synapses reliable</em>, Trends in Neurosciences 20(1), 38 to 43.</li>
+<li>Ba, Hinton, Mnih, Leibo and Ionescu (2016), <em>Using fast weights to attend to the recent past</em>, Advances in Neural Information Processing Systems 29.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Compare holding a phone number in mind by persistent firing with holding it in facilitated synapses. List one advantage of each, and describe an experiment that could tell which a given brain area uses." />

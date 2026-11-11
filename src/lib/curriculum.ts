@@ -287,6 +287,14 @@ export const DAY_TITLES: Record<number, string[]> = {
     "Axons: propagating the action potential, and why myelin helps",
     "Forge: Week 32 challenge, quiz and deep read",
   ],
+  33: [
+    "From vesicle to conductance: synaptic kinetics and receptor types",
+    "Short-term depression: the Tsodyks-Markram model",
+    "Facilitation and the synapse as a filter",
+    "Short-term plasticity as computation: memory traces and burst detection",
+    "Neuromodulation: changing the rules of a circuit",
+    "Forge: Week 33 challenge, quiz and deep read",
+  ],
 };
 
 export const DAYS_PER_WEEK = 6;
@@ -315,7 +323,7 @@ export function dayTitle(w: number, d: number): string {
 }
 
 /** Weeks whose lesson files exist. Kept in sync by hand as content is written. */
-export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 28, 29, 30, 31, 32];
+export const WRITTEN_WEEKS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 28, 29, 30, 31, 32, 33];
 export const isWritten = (w: number) => WRITTEN_WEEKS.includes(w);
 
 /** Every lesson that is published, in order. */

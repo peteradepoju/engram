@@ -149,3 +149,8 @@ export { BranchRule } from "./branch-rule";
 export { BallAndStick } from "./ball-and-stick";
 export { DendriticNonlinearity } from "./dendritic-nonlinearity";
 export { AxonPropagation } from "./axon-propagation";
+export { SynapseKinetics } from "./synapse-kinetics";
+export { TMSynapse } from "./tm-synapse";
+export { SynapticFilter } from "./synaptic-filter";
+export { MemoryTrace } from "./memory-trace";
+export { Neuromodulation } from "./neuromodulation";

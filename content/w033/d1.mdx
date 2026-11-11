@@ -1,0 +1,279 @@
+export const meta = {
+  title: "From vesicle to conductance: synaptic kinetics and receptor types",
+  intro: "Neurons talk at synapses, and since Week 29 you have treated a synapse as a conductance that switches on. This week looks inside the switch. A spike arriving at a presynaptic terminal releases vesicles of transmitter, which open receptors on the other side for anything from a millisecond to a quarter of a second, depending on the receptor. Today you write those time courses as the difference of two exponentials, build the kinetic receptor model that Destexhe, Mainen and Sejnowski proposed for efficient simulation, see why it saturates when transmitter arrives faster than receptors can close, and find how a receptor's time constant decides how successive inputs add up in the postsynaptic neuron.",
+  goals: [
+    "Describe the steps of chemical transmission and the main receptor types with their time courses",
+    "Write synaptic conductances as differences of exponentials and compute their peak times",
+    "Simulate a two-state kinetic receptor model and show that it saturates at high rates",
+    "Compare how fast and slow synaptic currents summate in a postsynaptic membrane",
+  ],
+  plan: [
+    { label: "Predict and chemical transmission", minutes: 20 },
+    { label: "Conductance waveforms", minutes: 25 },
+    { label: "A kinetic receptor model", minutes: 30 },
+    { label: "Summation in time", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "destexhe-1994",
+};
+
+<Predict question="Five excitatory inputs arrive 50 ms apart on a neuron with a 20 ms membrane time constant. If each opens AMPA receptors (decay about 2 ms), the fifth response is barely bigger than the first. If instead each opens NMDA receptors (decay about 80 ms), is the fifth response about the same, about twice, or more than three times the first?" />
+
+<Step n={1} title="Chemical transmission" minutes={20} />
+
+A spike invading a presynaptic terminal opens voltage-gated calcium channels. Calcium triggers the fusion of vesicles, each holding a few thousand transmitter molecules, with the membrane, a step that takes a fraction of a millisecond. The transmitter diffuses across a cleft about 20 nm wide and binds receptors on the postsynaptic membrane. Two kinds of receptor respond. **Ionotropic** receptors are themselves ion channels and open within a millisecond. **Metabotropic** receptors act through G proteins and second messengers, opening or closing separate channels over tens to hundreds of milliseconds. Release is probabilistic: each vesicle site releases with probability $p$, typically 0.1 to 0.9, which Week 15 modelled as a binomial process.
+
+| Receptor | Transmitter | Ions | Rise (ms) | Decay (ms) | Reversal (mV) |
+|---|---|---|---|---|---|
+| AMPA | glutamate | Na⁺, K⁺ | about 0.2 | 1 to 5 | 0 |
+| NMDA | glutamate | Na⁺, K⁺, Ca²⁺ | about 2 | 50 to 150 | 0, blocked by Mg²⁺ |
+| GABA-A | GABA | Cl⁻ | about 0.5 | 5 to 20 | about -70 |
+| GABA-B | GABA | K⁺ (via G proteins) | 20 to 50 | 100 to 300 | about -90 |
+
+Values vary between cell types and temperatures; these are typical for cortex at physiological temperature.
+
+<Video id="r1VX3WXrYUw" title="7. Synapses" by="Michale Fee (MIT 9.40 Introduction to Neural Computation, MIT OpenCourseWare)" note="Michale Fee's lecture on synaptic transmission: release, receptors, synaptic conductances and their effect on the postsynaptic neuron, the material of today's lesson." />
+
+<Step n={2} title="Conductance waveforms" minutes={25} />
+
+A convenient description of a single synaptic conductance is the difference of two exponentials, one for the rise and one for the decay:
+
+$$
+g(t) = \bar g\,N\left(e^{-t/\tau_d} - e^{-t/\tau_r}\right), \qquad t_{peak} = \frac{\tau_r\tau_d}{\tau_d - \tau_r}\ln\frac{\tau_d}{\tau_r},
+$$
+
+with $N$ chosen so that the peak equals $\bar g$. When $\tau_r = \tau_d$ it becomes the alpha function of Week 21, $t e^{-t/\tau}$. The peak time follows from setting $dg/dt = 0$.
+
+<PyCell id="waveforms" title="Four receptors, four time courses" tests={String.raw`
+  import numpy as np
+  def test_peak():
+      "dexp has a peak of 1 at the time given by the formula"
+      t = np.arange(0, 50, 0.001); g = dexp(t, 0.5, 8.0)
+      tp = 0.5 * 8 / 7.5 * np.log(16)
+      assert abs(g.max() - 1) < 1e-6 and abs(t[np.argmax(g)] - tp) < 0.002
+
+  def test_charge():
+      "charge holds the integral of each normalised waveform, and NMDA's is more than 20 times AMPA's"
+      assert charge["NMDA"] > 20 * charge["AMPA"]
+`} prompt="Write `dexp(t, tr, td)`, the difference of exponentials normalised to a peak of 1. Then compute, for each receptor in `kinetics`, its peak time and the area under its normalised waveform, `charge[name]` (ms), which sets how much current it carries for the same peak."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def dexp(t, tr, td):
+      tp = tr * td / (td - tr) * np.log(td / tr)
+      norm = 1 / (np.exp(-tp / td) - np.exp(-tp / tr))
+      return ...
+
+  kinetics = {"AMPA": (0.2, 2.0), "NMDA": (2.0, 80.0), "GABA-A": (0.5, 8.0), "GABA-B": (30.0, 200.0)}
+  t = np.arange(0, 800, 0.01)
+  charge = {}
+  for name, (tr, td) in kinetics.items():
+      g = dexp(t, tr, td)
+      charge[name] = ...
+      print(f"{name:7s}: peak at {t[np.argmax(g)]:6.2f} ms, area {charge[name]:7.1f} ms")
+      plt.plot(t, g, label=name)
+  plt.xscale("log"); plt.xlim(0.05, 800); plt.xlabel("ms (log scale)"); plt.ylabel("g / g_max"); plt.legend(); plt.show()
+`}
+hint="return norm * (np.exp(-t / td) - np.exp(-t / tr)); charge[name] = np.sum(g) * 0.01."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def dexp(t, tr, td):
+      tp = tr * td / (td - tr) * np.log(td / tr)
+      norm = 1 / (np.exp(-tp / td) - np.exp(-tp / tr))
+      return norm * (np.exp(-t / td) - np.exp(-t / tr))
+
+  kinetics = {"AMPA": (0.2, 2.0), "NMDA": (2.0, 80.0), "GABA-A": (0.5, 8.0), "GABA-B": (30.0, 200.0)}
+  t = np.arange(0, 800, 0.01)
+  charge = {}
+  for name, (tr, td) in kinetics.items():
+      g = dexp(t, tr, td)
+      charge[name] = np.sum(g) * 0.01
+      print(f"{name:7s}: peak at {t[np.argmax(g)]:6.2f} ms, area {charge[name]:7.1f} ms")
+      plt.plot(t, g, label=name)
+  plt.xscale("log"); plt.xlim(0.05, 800); plt.xlabel("ms (log scale)"); plt.ylabel("g / g_max"); plt.legend(); plt.show()
+`} />
+
+AMPA peaks at 0.5 ms, GABA-A at 1.5 ms, NMDA at 7.6 ms and GABA-B at 67 ms. For the same peak conductance, the areas, which set the charge each lets through, differ more than a hundredfold: 2.6 ms for AMPA, 88 for NMDA, 274 for GABA-B. A modest NMDA conductance carries as much current over time as a large AMPA one, which is why NMDA receptors dominate slow integration even when their peak is small.
+
+<Step n={3} title="A kinetic receptor model" minutes={30} />
+
+Waveforms added together assume that each release acts independently. Receptors are molecules that can be occupied, and a receptor that is already open cannot open again. Destexhe, Mainen and Sejnowski (1994), today's paper, proposed the simplest kinetic model that respects this. A fraction $r$ of receptors is open; transmitter at concentration $T$ opens closed ones at rate $\alpha T$, and open ones close at rate $\beta$:
+
+$$
+\frac{dr}{dt} = \alpha T(1 - r) - \beta r.
+$$
+
+If $T$ is a brief square pulse (1 mM for 1 ms) at each release, the equation can be solved exactly between and during pulses, so a whole network's synapses can be updated with one exponential each per step. The model rises and decays with time constants $1/(\alpha T + \beta)$ and $1/\beta$, and, unlike summed waveforms, it cannot exceed $r = 1$.
+
+<Figure caption="Synaptic conductance and postsynaptic potential for a train of five inputs. Choose the receptor type and the input rate." credit="Interactive figure by Engram.">
+  <SynapseKinetics />
+</Figure>
+
+<PyCell id="kinetic" title="Saturation at high rates" tests={String.raw`
+  import numpy as np
+  def test_single():
+      "a single 1 ms pulse opens a fraction of receptors between 0.5 and 0.8"
+      assert 0.5 < single_peak < 0.8
+
+  def test_saturation():
+      "at 20 Hz the kinetic and linear predictions agree within 5%, at 500 Hz the kinetic peak is less than half the linear one"
+      assert abs(peaks[20][0] / peaks[20][1] - 1) < 0.05 and peaks[500][0] < 0.5 * peaks[500][1]
+`} prompt="Complete `kinetic(times)`: Euler integration (dt = 0.01 ms) of the two-state model with α = 1.1 per mM per ms, β = 0.19 per ms and T = 1 mM during the 1 ms after each release time. Then compare its largest r for 10 releases at 20 and 500 Hz with the linear prediction, the sum of shifted copies of the single-release response."
+code={String.raw`
+  alpha, beta, dt = 1.1, 0.19, 0.01
+  t = np.arange(0, 200, dt)
+
+  def kinetic(times):
+      T = np.zeros_like(t)
+      for s in times:
+          T[(t >= s) & (t < s + 1.0)] = 1.0
+      r = np.zeros_like(t)
+      for k in range(1, len(t)):
+          r[k] = ...
+      return r
+
+  single = kinetic([5.0])
+  single_peak = single.max()
+  peaks = {}
+  for f in (20, 500):
+      times = 5.0 + np.arange(10) * 1000 / f
+      linear = sum(np.interp(t - (s - 5.0), t, single, left=0) for s in times)
+      peaks[f] = (kinetic(times).max(), linear.max())
+      print(f"{f:3d} Hz: kinetic peak {peaks[f][0]:.3f}, linear sum {peaks[f][1]:.3f}")
+  print(f"single release opens {single_peak:.2f} of the receptors")
+`}
+hint="r[k] = r[k - 1] + dt * (alpha * T[k - 1] * (1 - r[k - 1]) - beta * r[k - 1])."
+solution={String.raw`
+  alpha, beta, dt = 1.1, 0.19, 0.01
+  t = np.arange(0, 200, dt)
+
+  def kinetic(times):
+      T = np.zeros_like(t)
+      for s in times:
+          T[(t >= s) & (t < s + 1.0)] = 1.0
+      r = np.zeros_like(t)
+      for k in range(1, len(t)):
+          r[k] = r[k - 1] + dt * (alpha * T[k - 1] * (1 - r[k - 1]) - beta * r[k - 1])
+      return r
+
+  single = kinetic([5.0])
+  single_peak = single.max()
+  peaks = {}
+  for f in (20, 500):
+      times = 5.0 + np.arange(10) * 1000 / f
+      linear = sum(np.interp(t - (s - 5.0), t, single, left=0) for s in times)
+      peaks[f] = (kinetic(times).max(), linear.max())
+      print(f"{f:3d} Hz: kinetic peak {peaks[f][0]:.3f}, linear sum {peaks[f][1]:.3f}")
+  print(f"single release opens {single_peak:.2f} of the receptors")
+`} />
+
+A single 1 ms pulse opens 62% of the receptors. At 20 Hz each response has decayed before the next arrives, and the kinetic model and the linear sum agree (0.62). At 500 Hz the linear sum climbs to 1.92, impossible for a fraction of receptors, while the kinetic model saturates at 0.80. Real synapses saturate for this reason, and also because a single vesicle can nearly fill the receptors under it, so at high rates summed waveforms overestimate the conductance.
+
+<Step n={4} title="Summation in time" minutes={30} />
+
+What the postsynaptic neuron feels depends on both the synapse and its own membrane. A brief conductance injects a brief pulse of charge, which the membrane then holds for its own time constant; a long conductance keeps injecting. So inputs arriving 50 ms apart summate weakly through AMPA receptors, whose effect has mostly decayed, and strongly through NMDA receptors, which are still open when the next input arrives.
+
+<PyCell id="summation" title="AMPA against NMDA summation" tests={String.raw`
+  import numpy as np
+  def test_ampa():
+      "with AMPA, the fifth response is less than 1.3 times the first"
+      assert ratio["AMPA"] < 1.3
+
+  def test_nmda():
+      "with NMDA, the fifth response is more than twice the first"
+      assert ratio["NMDA"] > 2
+`} prompt="Drive a passive membrane (C = 200 pF, gL = 10 nS, rest -70 mV) with five synaptic conductances 50 ms apart (reversal 0 mV, peak 1 nS, Mg²⁺ block ignored). For each receptor, compute the depolarisation reached after the fifth input divided by that after the first, `ratio[name]`. The first peak is the maximum before the second input."
+code={String.raw`
+  def psp_train(tr, td, isi=50.0, n_in=5, gmax=1.0, T=500.0, dt=0.05):
+      tt = np.arange(0, T, dt)
+      g = gmax * sum(dexp(np.clip(tt - s, 0, None), tr, td) * (tt >= s) for s in 10 + isi * np.arange(n_in))
+      V = np.empty_like(tt); v = -70.0
+      for k in range(len(tt)):
+          v += dt * (-10 * (v + 70) - g[k] * v) / 200.0
+          V[k] = v
+      return tt, V + 70
+
+  ratio = {}
+  for name in ("AMPA", "NMDA"):
+      tt, dV = psp_train(*kinetics[name])
+      first = dV[tt < 60].max()
+      fifth = ...
+      ratio[name] = fifth / first
+      print(f"{name}: first {first:.2f} mV, after the fifth {fifth:.2f} mV, ratio {ratio[name]:.2f}")
+      plt.plot(tt, dV, label=name)
+  plt.xlabel("ms"); plt.ylabel("depolarisation (mV)"); plt.legend(); plt.show()
+`}
+hint="fifth = dV.max(), since the depolarisation only grows during the train."
+solution={String.raw`
+  def psp_train(tr, td, isi=50.0, n_in=5, gmax=1.0, T=500.0, dt=0.05):
+      tt = np.arange(0, T, dt)
+      g = gmax * sum(dexp(np.clip(tt - s, 0, None), tr, td) * (tt >= s) for s in 10 + isi * np.arange(n_in))
+      V = np.empty_like(tt); v = -70.0
+      for k in range(len(tt)):
+          v += dt * (-10 * (v + 70) - g[k] * v) / 200.0
+          V[k] = v
+      return tt, V + 70
+
+  ratio = {}
+  for name in ("AMPA", "NMDA"):
+      tt, dV = psp_train(*kinetics[name])
+      first = dV[tt < 60].max()
+      fifth = dV.max()
+      ratio[name] = fifth / first
+      print(f"{name}: first {first:.2f} mV, after the fifth {fifth:.2f} mV, ratio {ratio[name]:.2f}")
+      plt.plot(tt, dV, label=name)
+  plt.xlabel("ms"); plt.ylabel("depolarisation (mV)"); plt.legend(); plt.show()
+`} />
+
+With AMPA, the depolarisation after the fifth input is only 1.1 times the first: each conductance has closed long before the next, and only the membrane's 20 ms memory links them. With NMDA (ignoring the magnesium block), the fifth input leaves the cell 2.3 times as depolarised as the first, 10.6 mV against 4.6, because each conductance is still largely open when the next arrives. That answers the prediction. With the magnesium block of Week 32 the effect would be stronger still, since each depolarisation unblocks more NMDA current.
+
+<Bridge title="Time constants as memory"
+  neuro="Each receptor type gives a synapse a memory of its recent input: a few milliseconds for AMPA, a tenth of a second for NMDA, longer still for metabotropic receptors. Mixing them lets one synapse carry both fast timing and slow, integrated signals, and NMDA's long decay is one candidate mechanism for holding information over hundreds of milliseconds."
+  ai="Recurrent networks and state-space models also learn or choose time constants, and models with a spread of them, fast and slow, handle signals with structure at several time scales better. A synapse with AMPA and NMDA components is a two-time-constant filter on its input, the simplest version of the multi-scale memory that modern sequence models build in.">
+
+A synapse is not only a weight: it is a filter with its own memory.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Vesicle fusion at the presynaptic terminal is triggered by...", options: ["Sodium entry", "Calcium entry", "Potassium efflux", "Chloride"], answer: 1, explain: "Voltage-gated calcium channels open." },
+  { q: "Ionotropic receptors differ from metabotropic ones because they...", options: ["Are slower", "Are ion channels themselves and open within about a millisecond", "Use G proteins", "Bind no transmitter"], answer: 1, explain: "Metabotropic receptors act through second messengers." },
+  { q: "Which receptor has the slowest decay?", options: ["AMPA", "GABA-A", "NMDA", "All are equal"], answer: 2, explain: "Tens to hundreds of milliseconds." },
+  { q: "The difference-of-exponentials waveform becomes an alpha function when...", options: ["τ_r is zero", "τ_r equals τ_d", "τ_d is infinite", "The peak is 1"], answer: 1, explain: "The limit gives t e^(-t/τ)." },
+  { q: "In the two-state kinetic model, the open fraction r...", options: ["Can exceed 1 with many inputs", "Cannot exceed 1, so responses saturate at high rates", "Is constant", "Decays with τ_r"], answer: 1, explain: "Receptors already open cannot open again." },
+  { q: "The advantage of the kinetic model for simulation is that...", options: ["It needs no parameters", "It can be updated exactly with one exponential per step", "It is stochastic", "It includes the Mg block"], answer: 1, explain: "Destexhe, Mainen and Sejnowski (1994)." },
+  { q: "Inputs 50 ms apart summate strongly through...", options: ["AMPA receptors", "NMDA receptors", "Neither", "Gap junctions only"], answer: 1, explain: "Their conductance is still open." },
+  { q: "GABA-B receptors produce inhibition that is...", options: ["Fast and brief", "Slow and long-lasting, through potassium channels", "Excitatory", "Chloride-mediated and fast"], answer: 1, explain: "Metabotropic." },
+]} />
+
+<Flashcards cards={[
+  { front: "Difference of exponentials?", back: "$g(t) = \\bar gN(e^{-t/\\tau_d} - e^{-t/\\tau_r})$, peak at $\\frac{\\tau_r\\tau_d}{\\tau_d - \\tau_r}\\ln\\frac{\\tau_d}{\\tau_r}$." },
+  { front: "Typical decays?", back: "AMPA 1 to 5 ms, GABA-A 5 to 20 ms, NMDA 50 to 150 ms, GABA-B 100 to 300 ms." },
+  { front: "Two-state kinetic model?", back: "$\\dot r = \\alpha T(1 - r) - \\beta r$ with a brief transmitter pulse T; saturates at r = 1." },
+  { front: "Ionotropic versus metabotropic?", back: "Ionotropic: the receptor is a channel, fast. Metabotropic: G-protein coupled, slow, acts on other channels." },
+  { front: "Temporal summation?", back: "Depends on the synaptic decay and the membrane time constant; slow NMDA currents summate across inputs tens of ms apart." },
+]} />
+
+<Predict revisit question="With NMDA receptors, how does the fifth of five inputs 50 ms apart compare with the first?" />
+
+<Key title="Before you go">
+<ul>
+<li>Transmission runs from calcium entry to vesicle fusion to receptor opening, in under a millisecond for ionotropic receptors.</li>
+<li>Receptor types differ in time course by two orders of magnitude, from AMPA to GABA-B.</li>
+<li>The difference of exponentials describes single conductances; the kinetic model adds saturation.</li>
+<li>Slow receptors make inputs summate over tens of milliseconds.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Destexhe, Mainen and Sejnowski (1994), <em>An efficient method for computing synaptic conductances based on a kinetic model of receptor binding</em>.</li>
+<li>Roth and van Rossum (2009), <em>Modeling synapses</em>, chapter 6 in De Schutter (ed), Computational Modeling Methods for Neuroscientists, MIT Press.</li>
+<li>Dayan and Abbott (2001), <em>Theoretical Neuroscience</em>, section 5.8, on synaptic conductances.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="NMDA receptors are slow, voltage-dependent and let calcium in. Using today's results and Week 32's NMDA spikes, explain why these three properties together make NMDA receptors suited to detecting when presynaptic input and postsynaptic activity coincide, a theme Week 42 returns to with plasticity." />

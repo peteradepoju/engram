@@ -1,0 +1,242 @@
+export const meta = {
+  title: "Forge: Week 33 challenge, quiz and deep read",
+  intro: "This week opened the synapse: receptor kinetics and saturation, depression and its limiting frequency, facilitation and preferred rates, short-term plasticity as memory and burst detection, and neuromodulators that change all of these. Today's challenge is the analysis a synaptic physiologist does after a paired recording. You get the responses of two unknown connections to the same irregular presynaptic train, fit the Tsodyks-Markram model to each, decide which is which, and test the fits by predicting the responses to a train the models have not seen. Then the quiz, and a critique of Tsodyks and Markram's 1997 paper.",
+  goals: [
+    "Fit the Tsodyks-Markram model to two recorded connections and classify them",
+    "Validate the fits on a held-out spike train",
+    "Explain what each connection transmits about its input",
+    "Critique the claim that release probability sets the neural code between pyramidal neurons",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "tsodyks-markram-1997",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. When does a difference-of-exponentials conductance with τ_r = 1 ms and τ_d = 10 ms peak?
+2. A depressing synapse has U = 0.4 and τ_rec = 500 ms. What is its limiting frequency?
+3. A facilitating synapse has U = 0.1, τ_rec = 100 ms and τ_F = 400 ms. Roughly what rate does it prefer?
+
+<PyCell code={String.raw`
+  import numpy as np
+  print("1.", round(1 * 10 / 9 * np.log(10), 2), "ms")
+  print("2.", 1000 / (0.4 * 500), "Hz")
+  print("3.", round(1000 / np.sqrt(0.1 * 100 * 400), 1), "Hz")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: two unknown connections.** One presynaptic pyramidal neuron, firing an irregular train of 50 spikes at about 12 Hz, contacts two postsynaptic cells. The responses of both connections were recorded with 8% noise. Fit the full Tsodyks-Markram model to each by grid search, with the amplitude scale solved by least squares, and classify each connection as depressing or facilitating.
+
+<PyCell id="partA" title="Part A: fit and classify" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "fit returns (error, U, tauD, tauF, A) with A solved by least squares"
+      e, U, tD, tF, A = fits["cell 1"]
+      m = tm(train, U, tD, tF)
+      assert abs(A - (m @ resp["cell 1"]) / (m @ m)) < 1e-9
+
+  def test_classes():
+      "one connection is classified as depressing and the other as facilitating, with sensible parameters"
+      assert sorted(kind.values()) == ["depressing", "facilitating"]
+      dep = [k for k in kind if kind[k] == "depressing"][0]; fac = [k for k in kind if kind[k] == "facilitating"][0]
+      assert fits[dep][1] > 0.3 and fits[fac][1] < 0.2 and fits[fac][3] >= 200
+`} prompt="Write `fit(amps)`: search U from 0.02 to 0.8 (step 0.02), τ_D in (50, 100, 200, 400, 800, 1200) ms and τ_F in (0, 50, 100, 200, 400, 800, 1600) ms; for each, compute the model responses m, the scale A = (m · amps)/(m · m) and the squared error; return the best (error, U, τ_D, τ_F, A). Then classify each cell: facilitating if the fitted second response exceeds the first, otherwise depressing."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def tm(times, U, tauD, tauF):
+      u, x, last, out = U, 1.0, None, []
+      for t in times:
+          if last is not None:
+              d = t - last
+              x = 1 + (x - 1) * np.exp(-d / tauD)
+              u = (U + (u - U) * np.exp(-d / tauF)) if tauF > 0 else U
+          out.append(u * x)
+          x = x - u * x
+          if tauF > 0:
+              u = u + U * (1 - u)
+          last = t
+      return np.array(out)
+
+  r = np.random.default_rng(97)
+  train = np.cumsum(r.exponential(1000 / 12, 50))
+  hidden = {"cell 1": (0.06, 120.0, 900.0, 3.0), "cell 2": (0.55, 700.0, 0.0, 1.5)}
+  resp = {c: A * tm(train, U, tD, tF) * (1 + 0.08 * r.normal(size=50)) for c, (U, tD, tF, A) in hidden.items()}
+
+  def fit(amps):
+      best = (np.inf, None, None, None, None)
+      for U in np.arange(0.02, 0.81, 0.02):
+          for tD in (50, 100, 200, 400, 800, 1200):
+              for tF in (0, 50, 100, 200, 400, 800, 1600):
+                  ...
+      return best
+
+  fits, kind = {}, {}
+  for c in resp:
+      fits[c] = fit(resp[c])
+      m = tm(train, *fits[c][1:4])
+      kind[c] = ...
+      print(f"{c}: U = {fits[c][1]:.2f}, tau_D = {fits[c][2]}, tau_F = {fits[c][3]}, A = {fits[c][4]:.2f}: {kind[c]}")
+`}
+hint="Inside the loops: m = tm(train, U, float(tD), float(tF)); A = (m @ amps) / (m @ m); err = np.sum((amps - A * m) ** 2); if err < best[0]: best = (err, U, tD, tF, A). Classify with 'facilitating' if m[1] > m[0] else 'depressing'."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def tm(times, U, tauD, tauF):
+      u, x, last, out = U, 1.0, None, []
+      for t in times:
+          if last is not None:
+              d = t - last
+              x = 1 + (x - 1) * np.exp(-d / tauD)
+              u = (U + (u - U) * np.exp(-d / tauF)) if tauF > 0 else U
+          out.append(u * x)
+          x = x - u * x
+          if tauF > 0:
+              u = u + U * (1 - u)
+          last = t
+      return np.array(out)
+
+  r = np.random.default_rng(97)
+  train = np.cumsum(r.exponential(1000 / 12, 50))
+  hidden = {"cell 1": (0.06, 120.0, 900.0, 3.0), "cell 2": (0.55, 700.0, 0.0, 1.5)}
+  resp = {c: A * tm(train, U, tD, tF) * (1 + 0.08 * r.normal(size=50)) for c, (U, tD, tF, A) in hidden.items()}
+
+  def fit(amps):
+      best = (np.inf, None, None, None, None)
+      for U in np.arange(0.02, 0.81, 0.02):
+          for tD in (50, 100, 200, 400, 800, 1200):
+              for tF in (0, 50, 100, 200, 400, 800, 1600):
+                  m = tm(train, U, float(tD), float(tF))
+                  A = (m @ amps) / (m @ m)
+                  err = np.sum((amps - A * m) ** 2)
+                  if err < best[0]:
+                      best = (err, U, tD, tF, A)
+      return best
+
+  fits, kind = {}, {}
+  for c in resp:
+      fits[c] = fit(resp[c])
+      m = tm(train, *fits[c][1:4])
+      kind[c] = "facilitating" if m[1] > m[0] else "depressing"
+      print(f"{c}: U = {fits[c][1]:.2f}, tau_D = {fits[c][2]}, tau_F = {fits[c][3]}, A = {fits[c][4]:.2f}: {kind[c]}")
+`} />
+
+Cell 1 comes out with U = 0.06, τ_D = 100 ms and τ_F = 800 ms: facilitating, close to its hidden values (0.06, 120 and 900). Cell 2 comes out with U = 0.46, τ_D = 800 ms and no facilitation: depressing, against the hidden 0.55, 700 and 0. The depressing synapse's release fraction is underestimated by 16%, compensated by a scale A that is 11% too high: with noisy data, U and A trade off. The classification is unambiguous all the same.
+
+**Part B: predict a new train.** A model is only as good as its predictions. Drive both hidden connections with a new train, a quiet period at 3 Hz, a burst at 60 Hz and a sustained period at 25 Hz, and compare the recorded responses with the fitted models' predictions.
+
+<PyCell id="partB" title="Part B: held-out prediction" tests={String.raw`
+  import numpy as np
+  def test_r2():
+      "both fitted models explain over 70% of the variance of the held-out responses"
+      assert all(r2[c] > 0.7 for c in r2)
+
+  def test_message():
+      "the depressing connection responds most at the start of the burst, the facilitating one later in the train"
+      dep = [k for k in kind if kind[k] == "depressing"][0]; fac = [k for k in kind if kind[k] == "facilitating"][0]
+      assert np.argmax(new_resp[dep]) <= 11 and np.argmax(new_resp[fac]) > 11
+`} prompt="Build the test train: 10 spikes at 3 Hz, 10 at 60 Hz, then 20 at 25 Hz. Record the hidden connections' responses to it (with 8% noise, using the same rng), predict them with the fitted parameters, and compute the R² of each prediction in `r2[c]`."
+code={String.raw`
+  test = np.cumsum(np.r_[np.full(10, 1000 / 3), np.full(10, 1000 / 60), np.full(20, 1000 / 25)])
+  new_resp, r2 = {}, {}
+  for c, (U, tD, tF, A) in hidden.items():
+      new_resp[c] = A * tm(test, U, tD, tF) * (1 + 0.08 * r.normal(size=test.size))
+      pred = ...
+      r2[c] = ...
+      print(f"{c} ({kind[c]}): held-out R^2 = {r2[c]:.2f}")
+      plt.plot(new_resp[c], "o", label=f"{c} recorded"); plt.plot(pred, label=f"{c} predicted")
+  plt.axvline(9.5, color="gray", lw=0.5); plt.axvline(19.5, color="gray", lw=0.5)
+  plt.xlabel("spike number"); plt.ylabel("response"); plt.legend(); plt.show()
+`}
+hint="pred = fits[c][4] * tm(test, *fits[c][1:4]); r2[c] = 1 - np.sum((new_resp[c] - pred) ** 2) / np.sum((new_resp[c] - new_resp[c].mean()) ** 2)."
+solution={String.raw`
+  test = np.cumsum(np.r_[np.full(10, 1000 / 3), np.full(10, 1000 / 60), np.full(20, 1000 / 25)])
+  new_resp, r2 = {}, {}
+  for c, (U, tD, tF, A) in hidden.items():
+      new_resp[c] = A * tm(test, U, tD, tF) * (1 + 0.08 * r.normal(size=test.size))
+      pred = fits[c][4] * tm(test, *fits[c][1:4])
+      r2[c] = 1 - np.sum((new_resp[c] - pred) ** 2) / np.sum((new_resp[c] - new_resp[c].mean()) ** 2)
+      print(f"{c} ({kind[c]}): held-out R^2 = {r2[c]:.2f}")
+      plt.plot(new_resp[c], "o", label=f"{c} recorded"); plt.plot(pred, label=f"{c} predicted")
+  plt.axvline(9.5, color="gray", lw=0.5); plt.axvline(19.5, color="gray", lw=0.5)
+  plt.xlabel("spike number"); plt.ylabel("response"); plt.legend(); plt.show()
+`} />
+
+On the new train, the depressing connection's fit explains 98% of the variance and the facilitating one's 80%. The facilitating synapse is harder to predict because its responses depend on facilitation built up over the whole train, which magnifies small errors in τ_F. And the two connections told their targets different stories: the depressing one responded most to the first spikes of the 60 Hz burst and little afterwards, while the facilitating one grew through the burst and stayed high during the sustained period.
+
+**Part C (written).** Answer in your journal: the two postsynaptic cells received the same spikes. Describe, in one sentence each, what each connection told its target about the test train. Then say which cell type each target is most likely to be, using Day 3, and what that division of labour might do for the circuit.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The peak of a difference of exponentials" task="Show that $e^{-t/\tau_d} - e^{-t/\tau_r}$, with $\tau_d \gt \tau_r$, peaks at $t^* = \frac{\tau_r\tau_d}{\tau_d - \tau_r}\ln\frac{\tau_d}{\tau_r}$.">
+
+The derivative is $-\frac{1}{\tau_d}e^{-t/\tau_d} + \frac{1}{\tau_r}e^{-t/\tau_r}$. Setting it to zero gives $\frac{1}{\tau_r}e^{-t/\tau_r} = \frac{1}{\tau_d}e^{-t/\tau_d}$.
+
+Taking logarithms, $-\ln\tau_r - t/\tau_r = -\ln\tau_d - t/\tau_d$, so $t\left(\frac{1}{\tau_r} - \frac{1}{\tau_d}\right) = \ln\frac{\tau_d}{\tau_r}$.
+
+Since $\frac{1}{\tau_r} - \frac{1}{\tau_d} = \frac{\tau_d - \tau_r}{\tau_r\tau_d}$, the peak is at $t^* = \frac{\tau_r\tau_d}{\tau_d - \tau_r}\ln\frac{\tau_d}{\tau_r}$.
+
+</Prove>
+
+<Prove title="2. The limiting frequency" task="For a depressing synapse driven at rate $f$, show that at high rates the steady response per spike is about $A_{max}/(f\tau_{rec})$, so the transmitted amount per second tends to $A_{max}/\tau_{rec}$, independent of both $f$ and $U$.">
+
+With $E = e^{-\Delta/\tau}$ and $\Delta = 1/f$ small, $E \approx 1 - \Delta/\tau$, so $1 - E \approx \Delta/\tau$ and $1 - (1 - U)E \approx U + (1 - U)\Delta/\tau \approx U$ when $\Delta/\tau \ll U$.
+
+Then $x_{ss} = \frac{1 - E}{1 - (1 - U)E} \approx \frac{\Delta}{U\tau}$, and the response per spike is $A_{max}Ux_{ss} \approx A_{max}\Delta/\tau = A_{max}/(f\tau)$.
+
+Multiplying by $f$ spikes per second gives $A_{max}/\tau_{rec}$. The approximation needs $\Delta/\tau \ll U$, that is $f \gg 1/(U\tau_{rec})$: the limiting frequency.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 33 quiz (15 questions)" questions={[
+  { q: "Vesicle fusion is triggered by...", options: ["Sodium", "Calcium", "Potassium", "Chloride"], answer: 1, explain: "Day 1." },
+  { q: "Which receptor decays slowest among these?", options: ["AMPA", "GABA-A", "NMDA", "All equal"], answer: 2, explain: "Day 1." },
+  { q: "The two-state kinetic receptor model saturates because...", options: ["Open receptors cannot open again", "Transmitter runs out", "Calcium is pumped", "Of noise"], answer: 0, explain: "Day 1." },
+  { q: "In the Tsodyks-Markram model, x represents...", options: ["Facilitation", "Available synaptic resources", "Voltage", "Calcium"], answer: 1, explain: "Day 2." },
+  { q: "Above the limiting frequency, a depressing synapse's transmission per second...", options: ["Grows with rate", "Is about independent of rate", "Is zero", "Oscillates"], answer: 1, explain: "Day 2." },
+  { q: "Depressing synapses signal...", options: ["Absolute rate", "Relative changes in rate", "Only bursts", "Nothing"], answer: 1, explain: "Day 2." },
+  { q: "The paired-pulse ratio of a depressing synapse is...", options: ["Below 1", "Above 1", "Exactly 1", "Negative"], answer: 0, explain: "Day 2." },
+  { q: "Facilitation is caused mainly by...", options: ["Residual calcium", "Depletion", "Receptor saturation", "Neuromodulators"], answer: 0, explain: "Day 3." },
+  { q: "A facilitating synapse acts as a...", options: ["Low-pass filter", "Band-pass filter with a preferred rate", "High-pass filter only", "Delay"], answer: 1, explain: "Day 3." },
+  { q: "The same pyramidal axon's synapses...", options: ["Are identical", "Depend on the target cell type", "Are all facilitating", "Are all depressing"], answer: 1, explain: "Markram, Wang and Tsodyks." },
+  { q: "The synaptic theory of working memory stores items in...", options: ["Persistent firing", "Facilitation", "Myelin", "Genes"], answer: 1, explain: "Day 4." },
+  { q: "Facilitating synapses with short τ_F respond preferentially to...", options: ["Isolated spikes", "Bursts", "Silence", "Inhibition"], answer: 1, explain: "Day 4." },
+  { q: "Neuromodulators mostly act through...", options: ["Ionotropic receptors", "Metabotropic receptors", "Gap junctions", "Axons only"], answer: 1, explain: "Day 5." },
+  { q: "Lowering U at a depressing synapse makes late responses in a train, relative to the first...", options: ["Smaller", "Larger", "Unchanged", "Negative"], answer: 1, explain: "Day 5: the train flattens." },
+  { q: "Validating a fitted synapse model is best done by...", options: ["Its fit error alone", "Predicting responses to a held-out train", "Counting parameters", "Its first response"], answer: 1, explain: "Part B." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Tsodyks and Markram (1997) its third pass and write your critique under the five headings. Focus on one question: **does release probability really set the neural code between pyramidal neurons?** Consider how the recordings were made (paired recordings in slices, at what temperature and with what external calcium); how well the model fitted the data, and whether the fits were tested on trains not used for fitting, as in Part B; the claim that above the limiting frequency only rate changes are transmitted, and what the postsynaptic neuron receives from thousands of synapses at once; how neuromodulators and long-term plasticity, which change U, would change the code; and what in vivo conditions, with spontaneous activity already depressing synapses, would do to the picture. End with an experiment, in an awake animal, that would test the paper's main claim.
+
+<Callout kind="research">
+
+Real release is stochastic: each spike releases a vesicle from each of N sites with probability given by the model's u, and the response is the number released. Turn Part A's deterministic model into a binomial one with N = 10 sites, simulate 20 repeated trials of the same train, and ask how much of the trial-to-trial variability the deterministic fit misses. Then fit U and N from the mean and variance of responses to the first spike, the variance-mean method of Week 29 applied to a synapse.
+
+</Callout>
+
+<Key title="Week 33 review checklist">
+<ul>
+<li>I can describe receptor types and model synaptic conductances with waveforms and kinetic schemes.</li>
+<li>I can simulate depression, compute its steady state and limiting frequency, and fit paired-pulse data.</li>
+<li>I can simulate facilitation, explain preferred rates and fit the full model to irregular trains.</li>
+<li>I can explain synaptic working memory and burst detection by short-term plasticity.</li>
+<li>I can describe how neuromodulators change synapses and neurons, and why this matters for circuits.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then reflect: if every synapse in your brain is a filter with its own short-term dynamics, what is lost when we summarise a connection by a single weight, as most network models and most connectomes do?" />

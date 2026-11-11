@@ -1,0 +1,250 @@
+export const meta = {
+  title: "Facilitation and the synapse as a filter",
+  intro: "Not every synapse depresses. Where release probability is low, each spike leaves behind residual calcium that makes the next release more likely, and responses grow during a train: facilitation. Markram, Wang and Tsodyks found that the same pyramidal axon depresses onto one target and facilitates onto another, depending on the target cell. Today you extend yesterday's model with a facilitation variable, show that depressing synapses act as low-pass filters and facilitating ones as band-pass filters tuned to a preferred rate, derive that rate, and fit all three parameters of the model to a response train driven by irregular spikes.",
+  goals: [
+    "Write the full Tsodyks-Markram model with depression and facilitation",
+    "Compute the steady-state efficacy of depressing and facilitating synapses across input rates",
+    "Explain why facilitating synapses prefer an intermediate rate and estimate it",
+    "Fit release fraction, recovery and facilitation times to responses to an irregular train",
+  ],
+  plan: [
+    { label: "Predict and facilitation", minutes: 20 },
+    { label: "Two synapses, two filters", minutes: 30 },
+    { label: "Fitting the full model", minutes: 35 },
+    { label: "One axon, different messages", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "markram-1998",
+};
+
+<Predict question="A facilitating synapse has a low release fraction (0.05), fast recovery (100 ms) and slow facilitation (1 s). Driven steadily at different rates, will its response per spike be largest at 1 Hz, at around 10 to 20 Hz, or at 80 Hz?" />
+
+<Step n={1} title="Facilitation" minutes={20} />
+
+Facilitation is thought to come mainly from calcium that lingers in the terminal after a spike and adds to the calcium of the next one. Markram, Wang and Tsodyks (1998), today's paper, captured it by letting the release fraction itself change. A variable $u$ starts at $U$; each spike raises it, $u \to u + U(1 - u)$, and between spikes it relaxes back to $U$ with time constant $\tau_F$. The response to a spike is $A_{max}ux$, where $x$ is yesterday's resource variable, which is depleted by $ux$ at each spike and recovers with $\tau_{rec}$. With $\tau_F = 0$ this is yesterday's depressing synapse; with a small $U$ and a long $\tau_F$, facilitation dominates at first, until depletion catches up.
+
+<Video id="Hbz2lj2AO_0" title="Static and dynamic synapses" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's tutorial video on dynamic synapses: how depression and facilitation change the response of a synapse to spike trains of different rates." />
+
+<PyCell id="full" title="The full model" tests={String.raw`
+  import numpy as np
+  def test_dep():
+      "with no facilitation the model reproduces yesterday's depressing responses"
+      a = tm(np.arange(3) * 50.0, 0.5, 800.0, 0.0)
+      assert abs(a[0] - 0.5) < 1e-12 and abs(a[1] - 0.5 * (1 - 0.5 * np.exp(-50 / 800))) < 1e-12
+
+  def test_fac():
+      "the facilitating synapse's response grows over the first ten spikes at 20 Hz"
+      a = tm(np.arange(10) * 50.0, 0.05, 100.0, 1000.0)
+      assert np.all(np.diff(a) > 0)
+`} prompt="Complete `tm(times, U, tauD, tauF)`, which returns u x at each spike time (ms). Between spikes, x recovers towards 1 with τ_D and u relaxes towards U with τ_F (or stays at U if τ_F is 0); at a spike, record u x, deplete x by u x, then raise u by U(1 - u) if τ_F is above 0."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def tm(times, U, tauD, tauF):
+      u, x, last, out = U, 1.0, None, []
+      for t in times:
+          if last is not None:
+              d = t - last
+              x = ...
+              u = (U + (u - U) * np.exp(-d / tauF)) if tauF > 0 else U
+          out.append(u * x)
+          x = x - u * x
+          if tauF > 0:
+              u = ...
+          last = t
+      return np.array(out)
+
+  times = np.arange(10) * 50.0
+  print("depressing  :", np.round(tm(times, 0.5, 800.0, 0.0), 3))
+  print("facilitating:", np.round(tm(times, 0.05, 100.0, 1000.0), 3))
+`}
+hint="x = 1 + (x - 1) * np.exp(-d / tauD); u = u + U * (1 - u)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def tm(times, U, tauD, tauF):
+      u, x, last, out = U, 1.0, None, []
+      for t in times:
+          if last is not None:
+              d = t - last
+              x = 1 + (x - 1) * np.exp(-d / tauD)
+              u = (U + (u - U) * np.exp(-d / tauF)) if tauF > 0 else U
+          out.append(u * x)
+          x = x - u * x
+          if tauF > 0:
+              u = u + U * (1 - u)
+          last = t
+      return np.array(out)
+
+  times = np.arange(10) * 50.0
+  print("depressing  :", np.round(tm(times, 0.5, 800.0, 0.0), 3))
+  print("facilitating:", np.round(tm(times, 0.05, 100.0, 1000.0), 3))
+`} />
+
+The depressing synapse's responses fall from 0.5 to 0.058 over ten spikes at 20 Hz. The facilitating one's rise from 0.05 to 0.23, more than fourfold, because each spike raises u and the 50 ms gaps are too short for it to relax back, while x recovers quickly (τ_rec = 100 ms) and is barely used.
+
+<Step n={2} title="Two synapses, two filters" minutes={30} />
+
+Drive each synapse with long regular trains at different rates and record its steady response per spike, its **efficacy** at that rate. A depressing synapse gives less per spike the faster it is driven: a low-pass filter on rate. A facilitating synapse is different: at low rates, $u$ decays back between spikes and nothing builds up; at high rates, $x$ is depleted. In between, $u$ has accumulated and $x$ has not yet run out, so efficacy peaks at a preferred rate. Treating the two effects as balancing gives a rough estimate of that rate, $f^* \approx 1/\sqrt{U\tau_{rec}\tau_F}$.
+
+<Figure caption="Steady-state efficacy per spike against input rate for a depressing and a facilitating synapse. Adjust the facilitating synapse's parameters." credit="Interactive figure by Engram, after Markram, Wang and Tsodyks (1998).">
+  <SynapticFilter />
+</Figure>
+
+<PyCell id="filter" title="Efficacy against rate" tests={String.raw`
+  import numpy as np
+  def test_dep():
+      "the depressing synapse's efficacy falls monotonically with rate"
+      e = [eff["dep"][f] for f in rates]
+      assert all(a > b for a, b in zip(e, e[1:]))
+
+  def test_fac():
+      "the facilitating synapse's efficacy peaks between 5 and 40 Hz, near the estimate"
+      e = [eff["fac"][f] for f in rates]
+      peak = rates[int(np.argmax(e))]
+      assert 5 <= peak <= 40 and 0.3 < peak / f_star < 3
+`} prompt="For each synapse and each rate, drive the model with 100 regular spikes and store the last response in `eff[name][f]`. Compute the estimate `f_star` (Hz) of the facilitating synapse's preferred rate."
+code={String.raw`
+  rates = [1, 2, 5, 10, 15, 20, 40, 80]
+  params = {"dep": (0.5, 800.0, 0.0), "fac": (0.05, 100.0, 1000.0)}
+  eff = {name: {} for name in params}
+  for name, p in params.items():
+      for f in rates:
+          eff[name][f] = ...
+  f_star = ...
+  for f in rates:
+      print(f"{f:3d} Hz: depressing {eff['dep'][f]:.3f} per spike ({f * eff['dep'][f]:5.2f}/s), facilitating {eff['fac'][f]:.3f} ({f * eff['fac'][f]:5.2f}/s)")
+  print(f"estimated preferred rate of the facilitating synapse: {f_star:.1f} Hz")
+  plt.semilogx(rates, [eff["dep"][f] for f in rates], "o-", label="depressing")
+  plt.semilogx(rates, [eff["fac"][f] for f in rates], "s-", label="facilitating")
+  plt.xlabel("rate (Hz)"); plt.ylabel("steady efficacy per spike"); plt.legend(); plt.show()
+`}
+hint="eff[name][f] = tm(np.arange(100) * 1000.0 / f, *p)[-1]; f_star = 1000 / np.sqrt(0.05 * 100 * 1000)."
+solution={String.raw`
+  rates = [1, 2, 5, 10, 15, 20, 40, 80]
+  params = {"dep": (0.5, 800.0, 0.0), "fac": (0.05, 100.0, 1000.0)}
+  eff = {name: {} for name in params}
+  for name, p in params.items():
+      for f in rates:
+          eff[name][f] = tm(np.arange(100) * 1000.0 / f, *p)[-1]
+  f_star = 1000 / np.sqrt(0.05 * 100 * 1000)
+  for f in rates:
+      print(f"{f:3d} Hz: depressing {eff['dep'][f]:.3f} per spike ({f * eff['dep'][f]:5.2f}/s), facilitating {eff['fac'][f]:.3f} ({f * eff['fac'][f]:5.2f}/s)")
+  print(f"estimated preferred rate of the facilitating synapse: {f_star:.1f} Hz")
+  plt.semilogx(rates, [eff["dep"][f] for f in rates], "o-", label="depressing")
+  plt.semilogx(rates, [eff["fac"][f] for f in rates], "s-", label="facilitating")
+  plt.xlabel("rate (Hz)"); plt.ylabel("steady efficacy per spike"); plt.legend(); plt.show()
+`} />
+
+The depressing synapse's efficacy falls with every increase in rate, from 0.42 at 1 Hz to 0.015 at 80 Hz. The facilitating one's rises from 0.08 at 1 Hz to a peak of 0.31 at 15 Hz, then falls to 0.11 at 80 Hz. The estimate 1/√(U τ_rec τ_F) gives 14 Hz, close to the simulated peak. That answers the prediction. Note that the facilitating synapse's transmission per second keeps rising with rate, to 9 per second at 80 Hz: it has a preferred rate per spike, not per second.
+
+<Step n={3} title="Fitting the full model" minutes={35} />
+
+Regular trains are convenient but not natural. Real spike trains are irregular, and the model's three parameters can be fitted to the responses of a synapse to any train whose timing is known. Markram and colleagues did this for each connection they recorded; the same procedure is used today to classify synapses.
+
+<PyCell id="fit" title="Recovering three parameters" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "the fit recovers U within 0.03, tau_D within 40% and tau_F within 40%"
+      U, tD, tF = best[1:]
+      assert abs(U - 0.1) < 0.03 and abs(tD - 200) / 200 < 0.4 and abs(tF - 600) / 600 < 0.4
+
+  def test_scale():
+      "the amplitude scale A is chosen by least squares for each candidate"
+      U, tD, tF = best[1:]
+      m = tm(spikes, U, tD, tF)
+      assert abs(best_A - (m @ amps) / (m @ m)) < 1e-9
+`} prompt="`amps` holds noisy response amplitudes to an irregular train `spikes` from a synapse with hidden parameters. For each (U, τ_D, τ_F) on the grid, compute the model responses m, choose the best amplitude scale A = (m · amps)/(m · m), and keep the combination with the smallest squared error."
+code={String.raw`
+  r = np.random.default_rng(1998)
+  spikes = np.cumsum(r.exponential(1000 / 15, 40))            # 40 spikes at about 15 Hz, Poisson timing
+  amps = 2.0 * tm(spikes, 0.1, 200.0, 600.0) * (1 + 0.05 * r.normal(size=40))
+
+  best, best_A = (np.inf, None, None, None), None
+  for U in np.arange(0.02, 0.41, 0.02):
+      for tD in (50, 100, 150, 200, 300, 400, 600, 800):
+          for tF in (0, 100, 200, 400, 600, 800, 1200):
+              m = tm(spikes, U, float(tD), float(tF))
+              A = ...
+              err = ...
+              if err < best[0]:
+                  best, best_A = (err, U, tD, tF), A
+  print(f"fit: U = {best[1]:.2f}, tau_D = {best[2]} ms, tau_F = {best[3]} ms, A = {best_A:.2f}  (truth 0.10, 200, 600, 2.0)")
+  plt.plot(amps, "o", label="data"); plt.plot(best_A * tm(spikes, *best[1:]), label="fit")
+  plt.xlabel("spike number"); plt.ylabel("response"); plt.legend(); plt.show()
+`}
+hint="A = (m @ amps) / (m @ m); err = np.sum((amps - A * m) ** 2)."
+solution={String.raw`
+  r = np.random.default_rng(1998)
+  spikes = np.cumsum(r.exponential(1000 / 15, 40))            # 40 spikes at about 15 Hz, Poisson timing
+  amps = 2.0 * tm(spikes, 0.1, 200.0, 600.0) * (1 + 0.05 * r.normal(size=40))
+
+  best, best_A = (np.inf, None, None, None), None
+  for U in np.arange(0.02, 0.41, 0.02):
+      for tD in (50, 100, 150, 200, 300, 400, 600, 800):
+          for tF in (0, 100, 200, 400, 600, 800, 1200):
+              m = tm(spikes, U, float(tD), float(tF))
+              A = (m @ amps) / (m @ m)
+              err = np.sum((amps - A * m) ** 2)
+              if err < best[0]:
+                  best, best_A = (err, U, tD, tF), A
+  print(f"fit: U = {best[1]:.2f}, tau_D = {best[2]} ms, tau_F = {best[3]} ms, A = {best_A:.2f}  (truth 0.10, 200, 600, 2.0)")
+  plt.plot(amps, "o", label="data"); plt.plot(best_A * tm(spikes, *best[1:]), label="fit")
+  plt.xlabel("spike number"); plt.ylabel("response"); plt.legend(); plt.show()
+`} />
+
+The grid search recovers U = 0.10, τ_D = 200 ms, τ_F = 600 ms and A = 1.98, the true values, from 40 noisy responses. An irregular train helps: its mixture of short and long intervals probes recovery and facilitation at many time scales at once, which a regular train cannot. With fewer spikes or more noise, τ_D and τ_F trade off against each other, and a fit should be judged by its predictions on new trains, as in the Forge.
+
+<Step n={4} title="One axon, different messages" minutes={15} />
+
+Markram, Wang and Tsodyks's striking finding was that the dynamics belong to the connection, not to the presynaptic neuron. A single layer 5 pyramidal cell's axon made depressing synapses onto other pyramidal cells and facilitating synapses onto one class of inhibitory interneurons, and depressing ones onto another class. The same spike train therefore carries different messages to different targets: to neighbouring pyramidal cells, mainly the onset of activity and changes in rate; to the facilitating interneurons, mainly sustained high-rate firing, which recruits inhibition only when excitation persists. Later work traced these differences to the identity of the target cell: somatostatin-expressing interneurons receive facilitating input, parvalbumin-expressing ones depressing input, the cell types of Week 28.
+
+<Bridge title="Temporal filters on every connection"
+  neuro="Short-term plasticity turns each synapse into a filter on the presynaptic spike train, low-pass or band-pass, with parameters set by the target. A circuit therefore routes different features of the same signal to different cells, without any change in the presynaptic neuron."
+  ai="Most artificial connections are a single number. Giving each connection its own small dynamical system, as in some spiking and neuromorphic models, adds a cheap form of temporal computation, and attention mechanisms, which let the effective strength of a connection depend on recent inputs, are a learned, far more flexible relative of the same idea.">
+
+The same spikes, read through different synapses, say different things.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Facilitation is thought to arise mainly from...", options: ["Vesicle depletion", "Residual calcium in the terminal", "Receptor desensitisation", "Postsynaptic spikes"], answer: 1, explain: "Calcium left from earlier spikes adds to the next." },
+  { q: "In the full model, a facilitating synapse typically has...", options: ["High U and no τ_F", "Low U and long τ_F", "High U and long τ_rec only", "U = 1"], answer: 1, explain: "Small initial release that grows." },
+  { q: "A depressing synapse acts on input rate as a...", options: ["Low-pass filter", "High-pass filter", "Band-pass filter", "Delay line"], answer: 0, explain: "Efficacy falls with rate." },
+  { q: "A facilitating synapse's efficacy is highest at...", options: ["The lowest rates", "An intermediate preferred rate", "The highest rates", "All rates equally"], answer: 1, explain: "Facilitation builds, then depletion wins." },
+  { q: "The preferred rate is roughly...", options: ["1/(U τ_rec)", "1/√(U τ_rec τ_F)", "τ_F/τ_rec", "U/τ_F"], answer: 1, explain: "Balancing the two effects." },
+  { q: "Markram, Wang and Tsodyks found that one pyramidal axon...", options: ["Has identical synapses everywhere", "Depresses onto some targets and facilitates onto others", "Only facilitates", "Has no short-term plasticity"], answer: 1, explain: "Dynamics depend on the target." },
+  { q: "To fit the model's amplitude scale for given dynamics, use...", options: ["A = (m · data)/(m · m)", "A = max(data)", "A = 1", "A = U"], answer: 0, explain: "Least squares for a single scale factor." },
+  { q: "Somatostatin-expressing interneurons typically receive pyramidal input that is...", options: ["Depressing", "Facilitating", "Absent", "Electrical only"], answer: 1, explain: "Inhibition recruited by sustained firing." },
+]} />
+
+<Flashcards cards={[
+  { front: "Full Tsodyks-Markram model?", back: "Response $A_{max}ux$; at each spike $x \\to x - ux$, $u \\to u + U(1 - u)$; between spikes x recovers with $\\tau_{rec}$, u relaxes to U with $\\tau_F$." },
+  { front: "Depressing versus facilitating filters?", back: "Depressing: efficacy falls with rate (low-pass). Facilitating: efficacy peaks at a preferred rate (band-pass)." },
+  { front: "Preferred rate of a facilitating synapse?", back: "About $1/\\sqrt{U\\tau_{rec}\\tau_F}$." },
+  { front: "Target-specific dynamics?", back: "The same axon makes depressing synapses onto pyramidal cells and parvalbumin interneurons, facilitating ones onto somatostatin interneurons." },
+  { front: "Fitting short-term plasticity?", back: "Grid or gradient search over U, τ_rec, τ_F with the amplitude scale solved by least squares, using responses to irregular trains." },
+]} />
+
+<Predict revisit question="At what rate is a facilitating synapse with U = 0.05, τ_rec = 100 ms and τ_F = 1 s most effective per spike?" />
+
+<Key title="Before you go">
+<ul>
+<li>Facilitation raises the release fraction after each spike and decays with τ_F.</li>
+<li>Depressing synapses are low-pass filters on rate; facilitating ones are band-pass, with a preferred rate near 1/√(U τ_rec τ_F).</li>
+<li>Three parameters can be fitted to responses to an irregular train.</li>
+<li>Synaptic dynamics depend on the target, so one axon sends different messages to different cells.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Markram, Wang and Tsodyks (1998), <em>Differential signaling via the same axon of neocortical pyramidal neurons</em>.</li>
+<li>Tsodyks, Pawelzik and Markram (1998), <em>Neural networks with dynamic synapses</em>, Neural Computation 10(4), 821 to 835.</li>
+<li>Silberberg and Markram (2007), <em>Disynaptic inhibition between neocortical pyramidal cells mediated by Martinotti cells</em>, Neuron 53(5), 735 to 746.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A pyramidal neuron excites a facilitating synapse onto an inhibitory interneuron that projects back to nearby pyramidal cells. Describe what this circuit does when the pyramidal cell fires briefly, and when it fires for a long time at a high rate. Why might a cortex want inhibition that arrives only after sustained activity?" />
