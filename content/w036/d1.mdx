@@ -1,0 +1,331 @@
+export const meta = {
+  title: "Population vectors and Bayesian decoding",
+  intro: "Last week ran in one direction: from the stimulus to the spikes. This week runs the other way, the direction the brain itself must read: from the spikes of a population back to what they represent. You start with the oldest decoder, the population vector of Georgopoulos and colleagues, and see when it works and when it is biased. Then you build the decoder that uses everything the encoding model knows: Bayes' rule with Poisson tuning curves. Zhang, Ginzburg, McNaughton and Sejnowski used it in 1998 to read out a rat's position from its hippocampal place cells, and found that adding a prior for continuity in time made the estimate better still.",
+  goals: [
+    "Compute a population vector and explain when it is biased",
+    "Derive the Poisson Bayesian decoder from tuning curves and Bayes' rule",
+    "Estimate place fields from a run and decode position from held-out spikes",
+    "Explain the trade-off in window length and how a continuity prior helps",
+  ],
+  plan: [
+    { label: "Predict and the population vector", minutes: 25 },
+    { label: "Bayes' rule for spikes", minutes: 20 },
+    { label: "Decoding position from place cells", minutes: 40 },
+    { label: "Windows and continuity", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "zhang-1998",
+};
+
+<Predict question="Sixty motor cortex neurons are cosine tuned to reach direction, but two thirds of them prefer directions within one quarter of the circle. Will the population vector still point in the right direction on average, or will it be pulled towards the crowded quarter?" />
+
+<Step n={1} title="The population vector" minutes={25} />
+
+Georgopoulos, Schwartz and Kettner (1986) recorded neurons in monkey motor cortex during reaches and found that each fired most for one direction, its **preferred direction**, and less for others, roughly as a cosine. They proposed a simple readout: give each neuron a vote along its preferred direction, weighted by how far its rate is above baseline, and add the votes.
+
+$$
+\hat{\mathbf v} = \sum_i (r_i - b_i)\, \mathbf p_i
+$$
+
+The direction of $\hat{\mathbf v}$ is the decoded movement direction. It needs no model beyond the preferred directions, and it worked well enough to predict reaches from a few hundred neurons. But it is not optimal, and it relies on the preferred directions being spread evenly around the circle.
+
+<Video id="eBTEdZx0oKk" title="Analysing" by="Marcus Ghosh (Neuroscience for Machine Learners)" note="Marcus Ghosh introduces how neural recordings are analysed, including decoding a variable from a population's activity, from the Neuroscience for Machine Learners course by Dan Goodman and Marcus Ghosh." />
+
+<PyCell id="popvec" title="Population vector against maximum likelihood" tests={String.raw`
+  import numpy as np
+  def test_uniform():
+      "with uniform preferred directions, the population vector errs by less than 15 degrees on average"
+      assert err["uniform"]["PV"] < 15
+
+  def test_biased():
+      "with clustered preferred directions, the population vector error at least doubles, while maximum likelihood stays under 6 degrees"
+      assert err["clustered"]["PV"] > 2 * err["uniform"]["PV"] and err["clustered"]["ML"] < 6
+`} prompt="Complete pop_vector(n, pd), returning the angle of the sum of (n - baseline counts) times each neuron's unit preferred-direction vector. The maximum-likelihood decoder, which searches a grid of directions for the one that makes the counts most probable under Poisson tuning curves, is given."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1986)
+  N, T, base = 60, 0.5, 5.0
+  grid = np.linspace(0, 2 * np.pi, 360, endpoint=False)
+  pds = {"uniform": r.uniform(0, 2 * np.pi, N),
+         "clustered": np.r_[r.uniform(0, np.pi / 2, 40), r.uniform(0, 2 * np.pi, 20)]}
+  rates = lambda th, pd: base + 15 * np.maximum(0, np.cos(th - pd))
+
+  def pop_vector(n, pd):
+      v = ...
+      return np.arctan2(v[1], v[0])
+
+  def ml_decode(n, pd):
+      F = rates(grid[:, None], pd) * T
+      return grid[np.argmax(np.log(F) @ n - F.sum(1))]
+
+  angdiff = lambda a, b: np.degrees(np.abs(np.angle(np.exp(1j * (a - b)))))
+  err = {}
+  for name, pd in pds.items():
+      e = {"PV": [], "ML": []}
+      for _ in range(1000):
+          th = r.uniform(0, 2 * np.pi); n = r.poisson(rates(th, pd) * T)
+          e["PV"].append(angdiff(pop_vector(n, pd), th)); e["ML"].append(angdiff(ml_decode(n, pd), th))
+      err[name] = {k: float(np.mean(v)) for k, v in e.items()}
+  print({k: {m: round(x, 1) for m, x in v.items()} for k, v in err.items()}, "mean error in degrees")
+`}
+hint="v = np.sum((n - base * T)[:, None] * np.c_[np.cos(pd), np.sin(pd)], 0)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1986)
+  N, T, base = 60, 0.5, 5.0
+  grid = np.linspace(0, 2 * np.pi, 360, endpoint=False)
+  pds = {"uniform": r.uniform(0, 2 * np.pi, N),
+         "clustered": np.r_[r.uniform(0, np.pi / 2, 40), r.uniform(0, 2 * np.pi, 20)]}
+  rates = lambda th, pd: base + 15 * np.maximum(0, np.cos(th - pd))
+
+  def pop_vector(n, pd):
+      v = np.sum((n - base * T)[:, None] * np.c_[np.cos(pd), np.sin(pd)], 0)
+      return np.arctan2(v[1], v[0])
+
+  def ml_decode(n, pd):
+      F = rates(grid[:, None], pd) * T
+      return grid[np.argmax(np.log(F) @ n - F.sum(1))]
+
+  angdiff = lambda a, b: np.degrees(np.abs(np.angle(np.exp(1j * (a - b)))))
+  err = {}
+  for name, pd in pds.items():
+      e = {"PV": [], "ML": []}
+      for _ in range(1000):
+          th = r.uniform(0, 2 * np.pi); n = r.poisson(rates(th, pd) * T)
+          e["PV"].append(angdiff(pop_vector(n, pd), th)); e["ML"].append(angdiff(ml_decode(n, pd), th))
+      err[name] = {k: float(np.mean(v)) for k, v in e.items()}
+  print({k: {m: round(x, 1) for m, x in v.items()} for k, v in err.items()}, "mean error in degrees")
+`} />
+
+With evenly spread preferred directions the population vector errs by about 7° on average, against about 4° for maximum likelihood. Crowd two thirds of the neurons into one quarter of the circle and the population vector's error triples to about 21°: the crowded neurons outvote the rest and drag every estimate towards their quarter, which answers the prediction. Maximum likelihood barely notices (about 5°), because it knows where each neuron's preference lies and weighs its evidence accordingly. The population vector can be corrected for uneven preferences, by the optimal linear estimator of Salinas and Abbott (1994) for example, but only by using more of the encoding model.
+
+<Step n={2} title="Bayes' rule for spikes" minutes={20} />
+
+Suppose each neuron $i$ fires as a Poisson process with rate $f_i(x)$ that depends on the variable $x$, and the neurons are independent given $x$. In a window of length $\tau$, the probability of the counts $n_1, \dots, n_N$ is
+
+$$
+P(\mathbf n \mid x) = \prod_i \frac{(\tau f_i(x))^{n_i}}{n_i!}\, e^{-\tau f_i(x)}.
+$$
+
+Bayes' rule turns this around:
+
+<Derivation>
+<div>
+
+$P(x \mid \mathbf n) \propto P(x)\, P(\mathbf n \mid x)$.
+
+</div>
+<div>
+
+Taking logs and dropping terms that do not depend on $x$: $\log P(x \mid \mathbf n) = \log P(x) + \sum_i n_i \log f_i(x) - \tau \sum_i f_i(x) + \text{const}$.
+
+</div>
+<div>
+
+Each spike adds the log of its neuron's tuning curve; the last sum penalises positions where many neurons should have fired but did not. With a flat prior, the peak of the posterior is the maximum-likelihood estimate used in the cell above.
+
+</div>
+</Derivation>
+
+Unlike the population vector, this decoder uses the actual shape of every tuning curve, so clustered preferences or irregular fields do not bias it, and it gives a whole distribution, so its uncertainty is visible.
+
+<Step n={3} title="Decoding position from place cells" minutes={40} />
+
+Simulate a rat running back and forth on a 100 cm track for 20 minutes, with 20 place cells whose fields have different centres, widths and peak rates. Estimate the place fields from the first half of the session, as an experimenter would, by dividing each cell's spike count in each 2 cm bin by the time spent there. Then decode position from the second half.
+
+<Figure caption="Place fields on a linear track and the posterior over position for one window of spikes. Change the window length and watch the posterior sharpen or blur." credit="Interactive figure by Engram, after Zhang, Ginzburg, McNaughton and Sejnowski (1998).">
+  <BayesDecoder />
+</Figure>
+
+<PyCell id="place" title="Place fields and the posterior" tests={String.raw`
+  import numpy as np
+  def test_fields():
+      "the estimated place fields peak within 6 cm of the true centres for most cells"
+      peaks = bc[np.argmax(tc, 0)]
+      assert np.mean(np.abs(peaks - centres) < 6) > 0.8
+
+  def test_decode():
+      "with 250 ms windows, the median decoding error is below 5 cm"
+      assert err_250 < 5
+`} prompt="Write log_posterior(n, win), returning the log posterior over the 50 position bins (flat prior) for a vector of counts n in a window of win seconds, using the estimated place fields tc (50 bins by 20 cells). Then decode the held-out half in 250 ms windows."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1998)
+  L, dt, dur = 100, 0.01, 1200
+  pos = np.zeros(int(dur / dt)); x, v = 50.0, 20.0
+  for i in range(len(pos)):
+      v += -0.5 * (v - np.sign(v) * 25) * dt + 8 * np.sqrt(dt) * r.normal()
+      x += v * dt
+      if x > L: x, v = 2 * L - x, -v
+      if x < 0: x, v = -x, -v
+      pos[i] = x
+  NC = 20
+  centres = r.uniform(0, L, NC); width = r.uniform(5, 12, NC); peak = r.uniform(3, 12, NC)
+  spk = r.poisson((0.3 + peak * np.exp(-0.5 * ((pos[:, None] - centres) / width) ** 2)) * dt)
+
+  half = len(pos) // 2
+  bins = np.linspace(0, L, 51); bc = (bins[:-1] + bins[1:]) / 2
+  occ = np.histogram(pos[:half], bins)[0] * dt
+  tc = np.array([np.histogram(pos[:half], bins, weights=spk[:half, i])[0] for i in range(NC)]).T / occ[:, None]
+  tc = np.maximum(tc, 0.05)                      # avoid log(0) where a cell never fired
+
+  def windows(win):
+      w = int(round(win / dt)); m = (len(pos) - half) // w
+      n = spk[half:half + m * w].reshape(m, w, NC).sum(1)
+      truth = pos[half:half + m * w].reshape(m, w).mean(1)
+      return n, truth
+
+  def log_posterior(n, win):
+      return ...
+
+  n, truth = windows(0.25)
+  est = np.array([bc[np.argmax(log_posterior(k, 0.25))] for k in n])
+  err_250 = np.median(np.abs(est - truth))
+  print(f"median error with 250 ms windows: {err_250:.1f} cm")
+  plt.plot(truth[:200], "k", label="true"); plt.plot(est[:200], ".", label="decoded"); plt.ylabel("position (cm)"); plt.legend(); plt.show()
+`}
+hint="return n @ np.log(tc.T) - win * tc.sum(1)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1998)
+  L, dt, dur = 100, 0.01, 1200
+  pos = np.zeros(int(dur / dt)); x, v = 50.0, 20.0
+  for i in range(len(pos)):
+      v += -0.5 * (v - np.sign(v) * 25) * dt + 8 * np.sqrt(dt) * r.normal()
+      x += v * dt
+      if x > L: x, v = 2 * L - x, -v
+      if x < 0: x, v = -x, -v
+      pos[i] = x
+  NC = 20
+  centres = r.uniform(0, L, NC); width = r.uniform(5, 12, NC); peak = r.uniform(3, 12, NC)
+  spk = r.poisson((0.3 + peak * np.exp(-0.5 * ((pos[:, None] - centres) / width) ** 2)) * dt)
+
+  half = len(pos) // 2
+  bins = np.linspace(0, L, 51); bc = (bins[:-1] + bins[1:]) / 2
+  occ = np.histogram(pos[:half], bins)[0] * dt
+  tc = np.array([np.histogram(pos[:half], bins, weights=spk[:half, i])[0] for i in range(NC)]).T / occ[:, None]
+  tc = np.maximum(tc, 0.05)                      # avoid log(0) where a cell never fired
+
+  def windows(win):
+      w = int(round(win / dt)); m = (len(pos) - half) // w
+      n = spk[half:half + m * w].reshape(m, w, NC).sum(1)
+      truth = pos[half:half + m * w].reshape(m, w).mean(1)
+      return n, truth
+
+  def log_posterior(n, win):
+      return n @ np.log(tc.T) - win * tc.sum(1)
+
+  n, truth = windows(0.25)
+  est = np.array([bc[np.argmax(log_posterior(k, 0.25))] for k in n])
+  err_250 = np.median(np.abs(est - truth))
+  print(f"median error with 250 ms windows: {err_250:.1f} cm")
+  plt.plot(truth[:200], "k", label="true"); plt.plot(est[:200], ".", label="decoded"); plt.ylabel("position (cm)"); plt.legend(); plt.show()
+`} />
+
+Twenty cells and a quarter of a second of spikes locate the animal to within about 3 cm (median) on a 100 cm track. Most errors are small, a few are large: when only one or two cells fire in a window, the posterior can have several peaks, and the decoder occasionally picks the wrong one. Plot the full posterior for a few windows and you will see both cases.
+
+<Step n={4} title="Windows and continuity" minutes={20} />
+
+Short windows follow the animal closely but contain few spikes; long windows have more spikes but blur a moving animal. Zhang and colleagues added a second step: the rat cannot jump across the track between windows, so the previous estimate is a prior for the next. A simple version of this idea, a Bayesian filter, spreads the previous posterior by a Gaussian of width about the distance the animal could have moved, and multiplies it into the new likelihood.
+
+<PyCell id="continuity" title="Adding a continuity prior" tests={String.raw`
+  import numpy as np
+  def test_short():
+      "at 50 ms, the continuity prior reduces the median error by at least 25%"
+      assert errs[0.05]["prior"] < 0.75 * errs[0.05]["flat"]
+
+  def test_tradeoff():
+      "with a flat prior, the error at 50 ms is more than twice the error at 500 ms"
+      assert errs[0.05]["flat"] > 2 * errs[0.5]["flat"]
+`} prompt="Complete decode_filter: for each window, add the log of the spread previous posterior (K @ prev) to the log likelihood, normalise, and store the peak. The spread width is 1.5 times the distance the animal can travel at 25 cm/s in one window, with a minimum of 2 cm."
+code={String.raw`
+  def decode_filter(win, use_prior):
+      n, truth = windows(win)
+      sig = max(2.0, 1.5 * 25 * win)
+      K = np.exp(-0.5 * ((bc[:, None] - bc[None, :]) / sig) ** 2)
+      prev, est = None, []
+      for k in n:
+          lp = log_posterior(k, win)
+          if use_prior and prev is not None:
+              lp = ...
+          p = np.exp(lp - lp.max()); p /= p.sum(); prev = p
+          est.append(bc[np.argmax(p)])
+      return np.median(np.abs(np.array(est) - truth))
+
+  errs = {w: {"flat": decode_filter(w, False), "prior": decode_filter(w, True)} for w in (0.05, 0.1, 0.25, 0.5, 1.0)}
+  for w, e in errs.items():
+      print(f"{int(w * 1000):5d} ms: flat {e['flat']:.1f} cm, with prior {e['prior']:.1f} cm")
+`}
+hint="lp = lp + np.log(K @ prev + 1e-300)."
+solution={String.raw`
+  def decode_filter(win, use_prior):
+      n, truth = windows(win)
+      sig = max(2.0, 1.5 * 25 * win)
+      K = np.exp(-0.5 * ((bc[:, None] - bc[None, :]) / sig) ** 2)
+      prev, est = None, []
+      for k in n:
+          lp = log_posterior(k, win)
+          if use_prior and prev is not None:
+              lp = lp + np.log(K @ prev + 1e-300)
+          p = np.exp(lp - lp.max()); p /= p.sum(); prev = p
+          est.append(bc[np.argmax(p)])
+      return np.median(np.abs(np.array(est) - truth))
+
+  errs = {w: {"flat": decode_filter(w, False), "prior": decode_filter(w, True)} for w in (0.05, 0.1, 0.25, 0.5, 1.0)}
+  for w, e in errs.items():
+      print(f"{int(w * 1000):5d} ms: flat {e['flat']:.1f} cm, with prior {e['prior']:.1f} cm")
+`} />
+
+With 50 ms windows the flat-prior decoder errs by about 6.9 cm, and the continuity prior brings that down to about 4.6 cm, a third less. The benefit shrinks as windows lengthen (3.4 against 4.7 cm at 100 ms, almost none from 500 ms), because each window already has enough spikes on its own. With a flat prior, the error falls steeply from 50 ms to about 500 ms and then levels off, where blurring of the moving animal starts to cancel the gain from extra spikes. Zhang and colleagues found that the two-step method improved reconstruction from real place cells too; when you read the paper, check how the improvement depends on the time window.
+
+<Bridge title="Reading a population"
+  neuro="Bayesian decoding of place cells is now a standard tool: it is how replay, the rapid sequential reactivation of place cells during rest and sleep, is detected, by decoding positions from short bursts of activity and testing whether they trace a path."
+  ai="The same structure, a likelihood from an observation model combined with a prior that carries information forward in time, is a hidden Markov model or a recursive Bayesian filter, the basis of tracking in robotics and of the Kalman filter you will build on Day 3.">
+
+The best readout of a population uses what each neuron's tuning says, plus what is known about how the variable moves.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The population vector sums...", options: ["Spike counts", "Each neuron's preferred direction weighted by its rate above baseline", "Tuning curve widths", "Posterior probabilities"], answer: 1, explain: "Georgopoulos and colleagues (1986)." },
+  { q: "The population vector is biased when...", options: ["Preferred directions are unevenly distributed", "There are many neurons", "Rates are high", "Tuning is cosine"], answer: 0, explain: "The crowded directions win the vote." },
+  { q: "The Poisson log likelihood adds, for each spike of neuron i...", options: ["f_i(x)", "log f_i(x)", "1/f_i(x)", "Nothing"], answer: 1, explain: "Plus the penalty -τΣf_i(x)." },
+  { q: "The term -τΣ f_i(x) in the log posterior...", options: ["Penalises positions where many cells should have fired but did not", "Is the prior", "Normalises the counts", "Is always zero"], answer: 0, explain: "Silence is informative." },
+  { q: "Place fields are estimated by...", options: ["Spike counts per position bin divided by time spent there", "Counts alone", "Peak rates only", "The STA"], answer: 0, explain: "Occupancy normalisation." },
+  { q: "Very short decoding windows give large errors because...", options: ["They contain few spikes", "The animal moves too much", "The prior is wrong", "Tuning curves change"], answer: 0, explain: "The trade-off." },
+  { q: "Very long windows give larger errors because...", options: ["The animal moves during the window", "There are too many spikes", "Poisson fails", "Of the prior"], answer: 0, explain: "Blurring a moving variable." },
+  { q: "Zhang and colleagues' second step adds...", options: ["A continuity prior from the previous estimate", "More neurons", "A different likelihood", "Smoothing of fields"], answer: 0, explain: "The two-step method." },
+]} />
+
+<Flashcards cards={[
+  { front: "Population vector?", back: "$\\hat{\\mathbf v} = \\sum_i (r_i - b_i)\\mathbf p_i$: a vote along each neuron's preferred direction, weighted by its rate above baseline." },
+  { front: "Poisson log posterior?", back: "$\\log P(x) + \\sum_i n_i\\log f_i(x) - \\tau\\sum_i f_i(x)$ + const." },
+  { front: "Why Bayesian decoding beats the population vector?", back: "It uses each tuning curve's actual shape and is not biased by uneven preferred directions." },
+  { front: "Window-length trade-off?", back: "Short windows have too few spikes; long windows blur a moving variable." },
+  { front: "Continuity prior?", back: "Spread the previous posterior by how far the variable could move and multiply into the new likelihood: a Bayesian filter." },
+]} />
+
+<Predict revisit question="With two thirds of the neurons preferring one quarter of the circle, is the population vector pulled towards the crowded quarter?" />
+
+<Key title="Before you go">
+<ul>
+<li>The population vector is simple and works for evenly spread preferred directions; otherwise it is biased.</li>
+<li>Bayesian decoding with Poisson tuning curves uses every spike and every silence.</li>
+<li>Window length trades too few spikes against a moving target.</li>
+<li>A continuity prior carries information across windows and helps most when windows are short.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Zhang, Ginzburg, McNaughton and Sejnowski (1998), <em>Interpreting neuronal population activity by reconstruction: unified framework with application to hippocampal place cells</em>.</li>
+<li>Georgopoulos, Schwartz and Kettner (1986), <em>Neuronal population coding of movement direction</em>, Science 233(4771), 1416 to 1419.</li>
+<li>Dayan and Abbott (2001), <em>Theoretical Neuroscience</em>, MIT Press, chapter 3, on neural decoding.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Replay events last about 100 to 300 ms and can sweep the whole track in that time. Using today's results, explain what this means for the window length a replay decoder can use, and why a continuity prior tuned to running speed would be the wrong prior for detecting replay." />

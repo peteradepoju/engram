@@ -1,0 +1,218 @@
+export const meta = {
+  title: "Forge: Week 36 challenge, quiz and deep read",
+  intro: "This week turned encoding models around: the population vector and Bayesian decoding of place cells, Fisher information and the Cramér-Rao bound, the Kalman filter for movement, learned decoders, and brain-computer interfaces in closed loop. Today's challenge joins the two theoretical threads. You decode head direction from a simulated population of head-direction cells, check the decoder against the Cramér-Rao bound as the population grows, and then add two kinds of shared noise that look similar in a correlation matrix but behave very differently for decoding. Then the quiz, and a critique of Zhang and colleagues' framework for reconstruction from place cells.",
+  goals: [
+    "Compare a maximum-likelihood decoder with the Cramér-Rao bound across population sizes",
+    "Show that shared gain fluctuations barely limit decoding while shared input noise does",
+    "Connect the result to differential correlations",
+    "Critique Bayesian reconstruction as a model of what the brain does with place cells",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "zhang-1998",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. A population's Fisher information is 400 rad⁻² in a 100 ms window. What is the Cramér-Rao bound on the standard deviation, in degrees? What is it for a 400 ms window?
+2. Differential correlations of size ε = 0.01 are added to a population whose independent Fisher information is 300. What is the new information?
+3. A Kalman filter's prediction has variance 4 and the measurement has variance 1. What is the gain?
+
+<PyCell code={String.raw`
+  import numpy as np
+  print("1.", round(np.degrees(1 / np.sqrt(400)), 2), "deg;", round(np.degrees(1 / np.sqrt(1600)), 2), "deg with four times the window")
+  print("2.", round(300 / (1 + 0.01 * 300), 1), "(the limit is 1/ε = 100)")
+  print("3.", 4 / (4 + 1))
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: decoder against bound.** Head-direction cells, found in the rodent anterodorsal thalamus and elsewhere, each fire when the animal's head points in one direction, with sharp, roughly von Mises tuning. Simulate populations of 10 to 1,000 such cells with evenly spaced preferred directions, decode 100 ms windows by maximum likelihood on a 1° grid, and compare the root-mean-square error with the Cramér-Rao bound at each size.
+
+<PyCell id="partA" title="Part A: decoder and bound" tests={String.raw`
+  import numpy as np
+  def test_bound_fn():
+      "bound_deg(N) falls as one over the square root of N"
+      assert abs(bound_deg(400) / bound_deg(100) - 0.5) < 0.02
+
+  def test_efficient():
+      "for 30 or more cells, the decoder's error is within 15% of the bound"
+      for N in (30, 100, 300, 1000):
+          assert rmse["independent"][N] < 1.15 * bound[N]
+`} prompt="Write bound_deg(N): the Cramér-Rao standard deviation in degrees, 1 / sqrt(T Σ f'(θ)² / f(θ)), for a population built by pop(N), at θ = 0.3 (use a central difference for f'). The decoding loop is given."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(36)
+  grid = np.linspace(0, 2 * np.pi, 360, endpoint=False)
+  T, sizes = 0.1, (10, 30, 100, 300, 1000)
+
+  def pop(N, kappa=3.0, rmax=30.0, b=1.0):
+      pref = np.linspace(0, 2 * np.pi, N, endpoint=False)
+      return lambda th: b + rmax * np.exp(kappa * (np.cos(np.asarray(th)[..., None] - pref) - 1))
+
+  def bound_deg(N, th0=0.3, e=1e-5):
+      f = pop(N)
+      ...
+
+  def decode_rmse(N, mode, trials=1500):
+      f = pop(N); F = f(grid) * T; lF = np.log(F); S = F.sum(1); errs = []
+      for _ in range(trials):
+          th = r.uniform(0, 2 * np.pi); g, th_in = 1.0, th
+          if mode == "gain":
+              g = np.exp(0.4 * r.normal() - 0.08)
+          if mode == "jitter":
+              th_in = th + np.radians(3) * r.normal()
+          n = r.poisson(g * f(th_in) * T)
+          errs.append(np.angle(np.exp(1j * (grid[np.argmax(lF @ n - S)] - th))))
+      return np.degrees(np.sqrt(np.mean(np.square(errs))))
+
+  bound = {N: bound_deg(N) for N in sizes}
+  rmse = {"independent": {N: decode_rmse(N, "independent") for N in sizes}}
+  for N in sizes:
+      print(f"N = {N:4d}: bound {bound[N]:5.2f} deg, decoder {rmse['independent'][N]:5.2f} deg")
+`}
+hint="fp = (f(th0 + e) - f(th0 - e)) / (2 * e); return np.degrees(1 / np.sqrt(T * np.sum(fp ** 2 / f(th0))))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(36)
+  grid = np.linspace(0, 2 * np.pi, 360, endpoint=False)
+  T, sizes = 0.1, (10, 30, 100, 300, 1000)
+
+  def pop(N, kappa=3.0, rmax=30.0, b=1.0):
+      pref = np.linspace(0, 2 * np.pi, N, endpoint=False)
+      return lambda th: b + rmax * np.exp(kappa * (np.cos(np.asarray(th)[..., None] - pref) - 1))
+
+  def bound_deg(N, th0=0.3, e=1e-5):
+      f = pop(N)
+      fp = (f(th0 + e) - f(th0 - e)) / (2 * e)
+      return np.degrees(1 / np.sqrt(T * np.sum(fp ** 2 / f(th0))))
+
+  def decode_rmse(N, mode, trials=1500):
+      f = pop(N); F = f(grid) * T; lF = np.log(F); S = F.sum(1); errs = []
+      for _ in range(trials):
+          th = r.uniform(0, 2 * np.pi); g, th_in = 1.0, th
+          if mode == "gain":
+              g = np.exp(0.4 * r.normal() - 0.08)
+          if mode == "jitter":
+              th_in = th + np.radians(3) * r.normal()
+          n = r.poisson(g * f(th_in) * T)
+          errs.append(np.angle(np.exp(1j * (grid[np.argmax(lF @ n - S)] - th))))
+      return np.degrees(np.sqrt(np.mean(np.square(errs))))
+
+  bound = {N: bound_deg(N) for N in sizes}
+  rmse = {"independent": {N: decode_rmse(N, "independent") for N in sizes}}
+  for N in sizes:
+      print(f"N = {N:4d}: bound {bound[N]:5.2f} deg, decoder {rmse['independent'][N]:5.2f} deg")
+`} />
+
+The bound falls from about 15° with 10 cells to about 1.5° with 1,000, as one over the square root of the population size. With 10 cells the decoder is about 17% worse than the bound, because in 100 ms only a handful of spikes arrive and the likelihood is often flat or has two peaks; from 30 cells on, it is within a few percent, and at 300 and 1,000 cells it sits on the bound (small differences either side are sampling noise from 1,500 trials). Maximum likelihood is efficient for large populations, as Day 2 found.
+
+**Part B: two kinds of shared noise.** Now add shared variability of two kinds. In the **gain** condition, on each trial every cell's rate is multiplied by the same random factor (log-normal, about 40% spread), as happens with changes in arousal or attention. In the **jitter** condition, every cell responds to the same slightly wrong direction, the true one plus Gaussian noise of 3°, as would happen if noise entered upstream, in the signal all the cells receive. Both create positive noise correlations across the population. Which one limits decoding?
+
+<PyCell id="partB" title="Part B: gain against input noise" tests={String.raw`
+  import numpy as np
+  def test_gain():
+      "with 1,000 cells, shared gain noise raises the error by less than 30%"
+      assert rmse["gain"][1000] < 1.3 * rmse["independent"][1000]
+
+  def test_jitter():
+      "with 1,000 cells, input jitter at least doubles the error and leaves it above 2.5 degrees"
+      assert rmse["jitter"][1000] > 2 * rmse["independent"][1000] and rmse["jitter"][1000] > 2.5
+`} prompt="Fill in rmse['gain'] and rmse['jitter'] for every population size, using decode_rmse with the matching mode, and plot all three conditions against the bound on log-log axes."
+code={String.raw`
+  for mode in ("gain", "jitter"):
+      rmse[mode] = ...
+  for mode, v in rmse.items():
+      plt.loglog(sizes, [v[N] for N in sizes], "o-", label=mode)
+      print(mode, {N: round(float(v[N]), 2) for N in sizes})
+  plt.loglog(sizes, [bound[N] for N in sizes], "k--", label="bound, independent")
+  plt.axhline(3, color="gray", ls=":"); plt.xlabel("cells"); plt.ylabel("RMS error (deg)"); plt.legend(); plt.show()
+`}
+hint="rmse[mode] = {N: decode_rmse(N, mode) for N in sizes}."
+solution={String.raw`
+  for mode in ("gain", "jitter"):
+      rmse[mode] = {N: decode_rmse(N, mode) for N in sizes}
+  for mode, v in rmse.items():
+      plt.loglog(sizes, [v[N] for N in sizes], "o-", label=mode)
+      print(mode, {N: round(float(v[N]), 2) for N in sizes})
+  plt.loglog(sizes, [bound[N] for N in sizes], "k--", label="bound, independent")
+  plt.axhline(3, color="gray", ls=":"); plt.xlabel("cells"); plt.ylabel("RMS error (deg)"); plt.legend(); plt.show()
+`} />
+
+Shared gain fluctuations cost little: at 1,000 cells the error rises from about 1.5° to 1.6°, and it keeps falling with population size. Input jitter is different: the error falls at first but levels off at about 3.3° with 1,000 cells, more than twice the independent value and just above the 3° of the jitter itself, however many cells are added. The reason is the direction of the noise. A gain change scales every rate up or down together, which moves the population response along $\mathbf f$, a direction the decoder can tell apart from a change in head direction. Jitter moves it along $\mathbf f'$, exactly as a real change in direction would, so no decoder can separate the two: these are the differential correlations of Day 2, arising naturally from noise upstream.
+
+**Part C (written).** Answer in your journal. First, measure the noise correlations: for one population size, simulate many trials at a single direction in the gain and jitter conditions and compute the average pairwise correlation of the counts. Which condition has the larger correlations, and why does that not tell you which one limits decoding? Second, a head-direction system must keep track of direction between visual cues by integrating angular velocity. Using Day 3, describe how a Kalman-style filter would combine angular velocity input with the head-direction cells' activity, and which of today's two noise sources it could and could not remove.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The scalar Kalman update is a product of Gaussians" task="A prior $x \sim \mathcal N(\mu, p)$ is combined with a measurement $z = x + v$, $v \sim \mathcal N(0, q)$. Show that the posterior mean is $\mu + K(z - \mu)$ with $K = p/(p + q)$, and that the posterior variance is $(1 - K)p$.">
+
+The posterior is proportional to $\exp\left(-\frac{(x - \mu)^2}{2p} - \frac{(z - x)^2}{2q}\right)$, a Gaussian in $x$.
+
+Collecting the terms in $x^2$ and $x$, the precision is $\frac{1}{p} + \frac{1}{q} = \frac{p + q}{pq}$, so the posterior variance is $\frac{pq}{p + q} = \left(1 - \frac{p}{p + q}\right)p = (1 - K)p$.
+
+The mean is the variance times $\left(\frac{\mu}{p} + \frac{z}{q}\right)$: $\frac{q\mu + pz}{p + q} = \mu + \frac{p}{p + q}(z - \mu)$. The gain is the fraction of the total uncertainty that belongs to the prior, which is the matrix formula of Day 3 in one dimension.
+
+</Prove>
+
+<Prove title="2. Differential correlations cap information" task="With $\Sigma = \Sigma_0 + \varepsilon\,\mathbf f'\mathbf f'^\top$ and $J_0 = \mathbf f'^\top\Sigma_0^{-1}\mathbf f'$, show that $\mathbf f'^\top\Sigma^{-1}\mathbf f' = \frac{J_0}{1 + \varepsilon J_0}$.">
+
+By the Sherman-Morrison formula, $\Sigma^{-1} = \Sigma_0^{-1} - \frac{\varepsilon\,\Sigma_0^{-1}\mathbf f'\mathbf f'^\top\Sigma_0^{-1}}{1 + \varepsilon\,\mathbf f'^\top\Sigma_0^{-1}\mathbf f'}$.
+
+Multiplying by $\mathbf f'^\top$ on the left and $\mathbf f'$ on the right: $J = J_0 - \frac{\varepsilon J_0^2}{1 + \varepsilon J_0} = \frac{J_0}{1 + \varepsilon J_0}$.
+
+As the population grows, $J_0$ grows without bound and $J$ approaches $1/\varepsilon$. Part B's jitter is exactly this: input noise of variance $\sigma^2$ shifts every rate by $\mathbf f'\,\delta$, adding $\sigma^2\mathbf f'\mathbf f'^\top$ to the covariance, so the error can never fall below about $\sigma$, here 3°.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 36 quiz (15 questions)" questions={[
+  { q: "The population vector is biased when...", options: ["Preferred directions are unevenly spread", "Neurons are Poisson", "There are many neurons", "Windows are long"], answer: 0, explain: "Day 1." },
+  { q: "In the Poisson log posterior, a silent neuron...", options: ["Pushes the posterior away from its field", "Has no effect", "Adds log f", "Is excluded"], answer: 0, explain: "Through -τΣf_i(x). Day 1." },
+  { q: "A continuity prior helps most when...", options: ["Windows are short", "Windows are long", "There are many spikes", "The animal is still"], answer: 0, explain: "Day 1." },
+  { q: "Fisher information for independent Poisson neurons is...", options: ["τΣf_i'²/f_i", "τΣf_i", "Σf_i''", "1/τ"], answer: 0, explain: "Day 2." },
+  { q: "The most informative neurons for fine discrimination...", options: ["Have the steepest tuning slope at the stimulus", "Fire the most", "Prefer the stimulus", "Are untuned"], answer: 0, explain: "Day 2." },
+  { q: "Information-limiting correlations are...", options: ["Noise along f′", "Uniform correlations", "Negative correlations", "Zero correlations"], answer: 0, explain: "Day 2." },
+  { q: "The Kalman gain grows when...", options: ["The prediction is uncertain relative to the measurement", "The measurement is noisy", "A is the identity", "W is zero"], answer: 0, explain: "Day 3 and Derivation 1." },
+  { q: "The Kalman filter decodes position from velocity-tuned neurons by...", options: ["Integrating through its dynamics", "Ignoring velocity", "Using more neurons", "Nonlinear tuning"], answer: 0, explain: "Day 3." },
+  { q: "A linear decoder cannot use axially tuned neurons to find the sign of velocity because...", options: ["They respond the same to opposite directions", "They are noisy", "They are slow", "They are inhibitory"], answer: 0, explain: "Day 4." },
+  { q: "Early stopping uses...", options: ["A validation set", "The test set", "The training loss only", "No data"], answer: 0, explain: "Day 4." },
+  { q: "Time-series decoders should be tested on...", options: ["A contiguous held-out block", "Shuffled bins", "The training data", "Random noise"], answer: 0, explain: "Day 4." },
+  { q: "In closed loop, a rotated decoder...", options: ["Slows the user but targets are usually still reached", "Always fails", "Is unaffected", "Reverses direction"], answer: 0, explain: "Day 5." },
+  { q: "ReFIT labels closed-loop data with...", options: ["Velocities pointing at the target", "Decoded velocities", "Arm velocities", "Zero"], answer: 0, explain: "Day 5." },
+  { q: "Shared gain fluctuations in Part B...", options: ["Barely limited direction decoding", "Capped the error at 3°", "Made decoding impossible", "Improved decoding"], answer: 0, explain: "Gain noise lies mostly along f, not f′." },
+  { q: "Shared input jitter of 3° makes the error...", options: ["Level off near 3° however many cells are added", "Fall as one over root N", "Zero", "Grow with N"], answer: 0, explain: "Derivation 2." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Zhang, Ginzburg, McNaughton and Sejnowski (1998) its third pass and write your critique under the five headings. Focus on one question: **what does a reconstruction method tell us about the hippocampus, as opposed to about the experimenter's ability to read it?** Consider the comparison of methods they make (population vector, template matching, basis functions, Bayesian with and without continuity) and what assumptions each makes; the independence assumption of the Bayesian decoder and whether, after today, it matters; how place fields were estimated and what happens to decoding when fields change between sessions; how the decoder's time window compares with the time scales on which the hippocampus itself operates, such as the theta cycle; and whether any brain area could plausibly implement the two-step Bayesian method. End with an experiment that would test whether downstream neurons read place cells in a way that resembles Bayesian decoding.
+
+<Callout kind="research">
+
+Ganguli and Simoncelli (2014) asked how a population's tuning curves should be arranged to maximise Fisher information given a prior over the stimulus, and found that neurons should be denser, and tuning narrower, where the stimulus is common. Take Part A's population, draw head directions from a non-uniform prior (for example, a von Mises concentrated around 0), and compare the average decoding error of evenly spaced cells with a population whose preferred directions follow the prior's cumulative distribution. Does the prior-matched population do better on average, and where does it do worse?
+
+</Callout>
+
+<Key title="Week 36 review checklist">
+<ul>
+<li>I can compute a population vector and a Bayesian posterior from tuning curves, and use a continuity prior.</li>
+<li>I can compute Fisher information, the Cramér-Rao bound and which neurons carry it.</li>
+<li>I can explain how uniform, limited-range and differential correlations change information.</li>
+<li>I can fit and run a Kalman filter decoder and compare it with linear filters.</li>
+<li>I can train a network decoder with early stopping and explain when it beats linear decoders.</li>
+<li>I can explain why closed-loop BCI performance differs from offline accuracy.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then explain, in a paragraph you could give to a colleague, why the size of noise correlations in a recording does not by itself tell you whether they limit what the population can encode." />

@@ -1,0 +1,290 @@
+export const meta = {
+  title: "Brain-computer interfaces: decoding in closed loop",
+  intro: "Everything this week has been decoding offline: record, fit, test on held-out data. A brain-computer interface decodes online, and the decoded output changes what the user sees, which changes what the user does, which changes the neural activity. This loop forgives some errors that look serious offline and exposes others that offline tests never reveal. Today you simulate a cursor driven by a decoder in closed loop, see how the user's corrections absorb a miscalibrated decoder, retrain it the way the ReFIT method does, and finish with the idea behind Willett and colleagues' 2021 handwriting interface, which let a man with paralysis type at 90 characters per minute by imagining writing.",
+  goals: [
+    "Simulate closed-loop cursor control with a linear decoder and intention-driven neurons",
+    "Explain why closed-loop performance can differ sharply from offline accuracy",
+    "Recalibrate a decoder using intended rather than decoded velocities",
+    "Explain why complex, time-varying movements are easier to classify than straight ones",
+  ],
+  plan: [
+    { label: "Predict and the loop", minutes: 20 },
+    { label: "A cursor in closed loop", minutes: 30 },
+    { label: "Recalibration", minutes: 25 },
+    { label: "Handwriting and separability", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "willett-2021",
+};
+
+<Predict question="A cursor decoder is calibrated perfectly, but then the neurons' preferred directions all rotate by 30° (as might happen when a user switches from moving their arm to only imagining it). Offline, every decoded velocity is now 30° off. In closed loop, where the user sees the cursor and keeps aiming at the target, will the cursor still reach targets, and how much slower?" />
+
+<Step n={1} title="The loop" minutes={20} />
+
+In an intracortical brain-computer interface (BCI), an array of electrodes in motor cortex records a few dozen to a few hundred neurons. A decoder, often a Kalman filter or a linear filter, turns their activity every 15 to 50 ms into a cursor velocity or a robotic arm command. The user watches the result and adjusts what they intend. So the decoder's input depends on its own past output: the system is a feedback loop with the user inside it.
+
+Two consequences follow. First, a decoder with a consistent error, a rotation or a gain, can still work, because the user re-aims to compensate, just as you adapt within minutes to a computer mouse with an unusual speed. Second, the data used to fit a decoder matter: if it is fitted to activity recorded while the user watched a computer move the cursor, it may not match the activity the user produces when actually in control.
+
+<Video id="8QvJy0pCnUw" title="Helping humans (BCI applications)" by="Wulfram Gerstner (EPFL)" note="Wulfram Gerstner describes how decoding neural population activity is used in brain-computer interfaces to help people with paralysis, from the Neuronal Dynamics lectures." />
+
+<Step n={2} title="A cursor in closed loop" minutes={30} />
+
+Forty neurons are cosine tuned to the user's **intended** velocity. The user always intends to move straight towards the target at 8 cm/s, slowing within 3 cm of it. A linear decoder, fitted on calibration data in which the intended velocity was known, turns each 50 ms bin of spikes into a velocity, and the cursor moves by that velocity. A trial succeeds when the cursor comes within 1.5 cm of a target 10 cm away.
+
+<Figure caption="A cursor driven in closed loop by a linear decoder. Rotate the neurons' tuning relative to the decoder and add decoder noise, and watch the user's corrections bend the path." credit="Interactive figure by Engram.">
+  <ClosedLoop />
+</Figure>
+
+<PyCell id="loop" title="Rotation in closed loop" tests={String.raw`
+  import numpy as np
+  def test_all_reach():
+      "with rotations up to 60 degrees, every trial still reaches the target within 10 s"
+      assert all(fail[rot] == 0 for rot in fail)
+
+  def test_slower():
+      "a 60 degree rotation makes trials at least 50% slower than no rotation"
+      assert times[60] > 1.5 * times[0]
+`} prompt="Complete the loop inside run(): compute the intended velocity (8 cm/s towards the target, scaled by min(1, distance / 3)), generate spikes from the rotated intention, decode a velocity with the weights B (spikes plus a constant) and move the cursor by velocity times dt."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2021)
+  dt, N = 0.05, 40
+  pd = r.uniform(0, 2 * np.pi, N); base = r.uniform(5, 15, N); gain = r.uniform(0.5, 1.5, N)
+  U = np.c_[np.cos(pd), np.sin(pd)] * gain[:, None]
+  spikes = lambda v: r.poisson(np.maximum(base + v @ U.T, 0) * dt)
+
+  Vc = r.normal(0, 8, (3000, 2)); Zc = spikes(Vc)
+  fit = lambda Z, V: np.linalg.lstsq(np.c_[Z, np.ones(len(Z))], V, rcond=None)[0]
+  B = fit(Zc, Vc)
+
+  def run(B, trials=60, rot_deg=0, record=False):
+      a = np.radians(rot_deg); R = np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])
+      times, rec, paths = [], [], []
+      for _ in range(trials):
+          ang = r.uniform(0, 2 * np.pi); tgt = 10 * np.array([np.cos(ang), np.sin(ang)])
+          c, t, path = np.zeros(2), 0, [np.zeros(2)]
+          while t < 200:
+              d = tgt - c; dist = np.linalg.norm(d)
+              if dist < 1.5:
+                  break
+              ...
+              t += 1; path.append(c.copy())
+              if record:
+                  rec.append((z, 8 * d / dist))
+          times.append(t * dt); paths.append(np.array(path))
+      return np.array(times), rec, paths
+
+  times, fail = {}, {}
+  for rot in (0, 30, 60):
+      tm, _, paths = run(B, rot_deg=rot)
+      times[rot], fail[rot] = np.median(tm), np.mean(tm >= 10)
+      print(f"rotation {rot:2d} deg: median time {times[rot]:.2f} s, failures {fail[rot]:.0%}")
+      plt.plot(*paths[0].T, label=f"{rot} deg")
+  plt.axis("equal"); plt.legend(); plt.show()
+`}
+hint="vint = 8 * d / dist * min(1, dist / 3); z = spikes((R @ vint)[None])[0]; c = c + dt * (np.r_[z, 1] @ B)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2021)
+  dt, N = 0.05, 40
+  pd = r.uniform(0, 2 * np.pi, N); base = r.uniform(5, 15, N); gain = r.uniform(0.5, 1.5, N)
+  U = np.c_[np.cos(pd), np.sin(pd)] * gain[:, None]
+  spikes = lambda v: r.poisson(np.maximum(base + v @ U.T, 0) * dt)
+
+  Vc = r.normal(0, 8, (3000, 2)); Zc = spikes(Vc)
+  fit = lambda Z, V: np.linalg.lstsq(np.c_[Z, np.ones(len(Z))], V, rcond=None)[0]
+  B = fit(Zc, Vc)
+
+  def run(B, trials=60, rot_deg=0, record=False):
+      a = np.radians(rot_deg); R = np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])
+      times, rec, paths = [], [], []
+      for _ in range(trials):
+          ang = r.uniform(0, 2 * np.pi); tgt = 10 * np.array([np.cos(ang), np.sin(ang)])
+          c, t, path = np.zeros(2), 0, [np.zeros(2)]
+          while t < 200:
+              d = tgt - c; dist = np.linalg.norm(d)
+              if dist < 1.5:
+                  break
+              vint = 8 * d / dist * min(1, dist / 3)
+              z = spikes((R @ vint)[None])[0]
+              c = c + dt * (np.r_[z, 1] @ B)
+              t += 1; path.append(c.copy())
+              if record:
+                  rec.append((z, 8 * d / dist))
+          times.append(t * dt); paths.append(np.array(path))
+      return np.array(times), rec, paths
+
+  times, fail = {}, {}
+  for rot in (0, 30, 60):
+      tm, _, paths = run(B, rot_deg=rot)
+      times[rot], fail[rot] = np.median(tm), np.mean(tm >= 10)
+      print(f"rotation {rot:2d} deg: median time {times[rot]:.2f} s, failures {fail[rot]:.0%}")
+      plt.plot(*paths[0].T, label=f"{rot} deg")
+  plt.axis("equal"); plt.legend(); plt.show()
+`} />
+
+Every trial reaches its target, even with a 60° rotation. With no rotation the median trial takes about 1.25 s, close to the 10 cm at 8 cm/s that a perfect straight path would need plus the slowing near the target. A 30° rotation costs only about 0.2 s, and a 60° rotation about doubles the time, to 2.7 s. That answers the prediction: offline, a 30° error looks large, but in closed loop the cursor's heading error keeps changing the direction the user aims, and the path curves round onto the target. The simulated user here does not even learn; real users also adapt their neural activity over minutes to days, which helps further.
+
+<Step n={3} title="Recalibration" minutes={25} />
+
+If a decoder is wrong, refit it. But to what? During closed-loop use the user's true intention is unknown. Gilja and colleagues (2012), in the ReFIT method, made a simple assumption: at every moment, the user intends to move straight towards the target. They recorded neural activity during closed-loop use with the old decoder, replaced each decoded velocity with a vector of the same speed pointing at the target, and refitted the decoder to those intended velocities.
+
+<PyCell id="refit" title="Refitting to intention" tests={String.raw`
+  import numpy as np
+  def test_faster():
+      "after refitting, trials with a 45 degree rotation are at least 15% faster"
+      assert after < 0.85 * before
+`} prompt="Run 80 trials with the old decoder under a 45° rotation, recording each bin's spikes and the intended velocity (8 cm/s towards the target). Fit a new decoder to these pairs and measure the median trial time with it."
+code={String.raw`
+  tm, rec, _ = run(B, trials=80, rot_deg=45, record=True)
+  before = np.median(tm)
+  Zr = np.array([z for z, _ in rec]); Vr = np.array([v for _, v in rec])
+  B2 = ...
+  after = np.median(run(B2, rot_deg=45)[0])
+  print(f"45 deg rotation: median time {before:.2f} s before refitting, {after:.2f} s after ({len(rec)} bins of closed-loop data)")
+`}
+hint="B2 = fit(Zr, Vr)."
+solution={String.raw`
+  tm, rec, _ = run(B, trials=80, rot_deg=45, record=True)
+  before = np.median(tm)
+  Zr = np.array([z for z, _ in rec]); Vr = np.array([v for _, v in rec])
+  B2 = fit(Zr, Vr)
+  after = np.median(run(B2, rot_deg=45)[0])
+  print(f"45 deg rotation: median time {before:.2f} s before refitting, {after:.2f} s after ({len(rec)} bins of closed-loop data)")
+`} />
+
+Refitting on about 3,000 bins of closed-loop data, roughly 2.5 minutes, cuts the median trial time under the 45° rotation from about 1.8 s to about 1.45 s. The refit absorbs most of the rotation, because the decoder is now trained on the activity the user actually produces while in control, labelled with what the user was trying to do. It does not quite reach the unrotated 1.25 s, since the assumed intention is cruder than the real one (constant speed, even near the target). Gilja and colleagues combined this refitting with a second change, treating the cursor position as known to the user rather than estimated, and substantially outperformed the decoders that came before.
+
+<Step n={4} title="Handwriting and separability" minutes={30} />
+
+Willett, Avansino, Hochberg, Henderson and Shenoy (2021) recorded from two arrays in the hand area of motor cortex of a man paralysed below the neck, while he imagined writing letters by hand. A recurrent network decoded the characters from the neural activity, and he typed at about 90 characters per minute with high accuracy, roughly twice the speed of earlier point-and-click BCI typing. Part of the explanation is in the movements themselves. Straight movements to different targets differ only in direction, so the neural patterns they evoke are similar and easily confused under noise. Letters are drawn with curved paths that change direction over time, so the patterns they evoke differ in their whole time course and are much further apart.
+
+<PyCell id="letters" title="Straight lines against curves" tests={String.raw`
+  import numpy as np
+  def test_separable():
+      "curved trajectories are classified at least twice as accurately as straight ones"
+      assert acc["curved"] > 2 * acc["straight"]
+
+  def test_distance():
+      "the smallest distance between curved templates is at least 4 times that between straight ones"
+      assert dmin["curved"] > 4 * dmin["straight"]
+`} prompt="Write classify(templates): average 10 training trials per class to make a template of spike counts (20 bins by 40 neurons), then classify 10 new trials per class by the nearest template in squared distance, and return the fraction correct."
+code={String.raw`
+  S, K = 20, 26
+  t = np.linspace(0, 1, S)
+  straight = [np.outer(np.ones(S), [np.cos(a), np.sin(a)]) * 6 for a in np.linspace(0, 2 * np.pi, K, endpoint=False)]
+
+  def curvy():
+      c = r.normal(size=(4, 2))
+      v = sum(np.outer(np.sin((k + 1) * np.pi * t + r.uniform(0, np.pi)), c[k]) for k in range(4))
+      return 6 * v / np.sqrt((v ** 2).sum(1).mean())
+
+  curved = [curvy() for _ in range(K)]
+
+  def trial(v):
+      w = np.clip(t + r.normal(0, 0.12) * np.sin(np.pi * t), 0, 1)        # random time warping
+      vv = np.array([np.interp(w, t, v[:, i]) for i in range(2)]).T
+      return r.poisson(np.maximum(8 + vv @ U.T, 0) * dt)
+
+  def classify(templates):
+      ...
+
+  acc = {"straight": classify(straight), "curved": classify(curved)}
+  dmin = {}
+  for name, T_ in (("straight", straight), ("curved", curved)):
+      M = np.array([v.ravel() for v in T_]); Dm = ((M[:, None] - M[None]) ** 2).sum(-1); np.fill_diagonal(Dm, np.inf)
+      dmin[name] = Dm.min()
+  print({k: round(float(v), 2) for k, v in acc.items()}, "accuracy;  closest pair distance", {k: round(float(v)) for k, v in dmin.items()})
+`}
+hint="means = [np.mean([trial(v) for _ in range(10)], 0) for v in templates]; then for each class k and 10 new trials z, count np.argmin([((z - m) ** 2).sum() for m in means]) == k, and divide by len(templates) * 10."
+solution={String.raw`
+  S, K = 20, 26
+  t = np.linspace(0, 1, S)
+  straight = [np.outer(np.ones(S), [np.cos(a), np.sin(a)]) * 6 for a in np.linspace(0, 2 * np.pi, K, endpoint=False)]
+
+  def curvy():
+      c = r.normal(size=(4, 2))
+      v = sum(np.outer(np.sin((k + 1) * np.pi * t + r.uniform(0, np.pi)), c[k]) for k in range(4))
+      return 6 * v / np.sqrt((v ** 2).sum(1).mean())
+
+  curved = [curvy() for _ in range(K)]
+
+  def trial(v):
+      w = np.clip(t + r.normal(0, 0.12) * np.sin(np.pi * t), 0, 1)        # random time warping
+      vv = np.array([np.interp(w, t, v[:, i]) for i in range(2)]).T
+      return r.poisson(np.maximum(8 + vv @ U.T, 0) * dt)
+
+  def classify(templates):
+      means = [np.mean([trial(v) for _ in range(10)], 0) for v in templates]
+      ok = 0
+      for k, v in enumerate(templates):
+          for _ in range(10):
+              z = trial(v)
+              ok += np.argmin([((z - m) ** 2).sum() for m in means]) == k
+      return ok / (len(templates) * 10)
+
+  acc = {"straight": classify(straight), "curved": classify(curved)}
+  dmin = {}
+  for name, T_ in (("straight", straight), ("curved", curved)):
+      M = np.array([v.ravel() for v in T_]); Dm = ((M[:, None] - M[None]) ** 2).sum(-1); np.fill_diagonal(Dm, np.inf)
+      dmin[name] = Dm.min()
+  print({k: round(float(v), 2) for k, v in acc.items()}, "accuracy;  closest pair distance", {k: round(float(v)) for k, v in dmin.items()})
+`} />
+
+With 26 straight movements the nearest-template classifier is right only about 36% of the time; with 26 curved trajectories of the same average speed it is right about 73% of the time, from the same neurons, noise and timing jitter. The reason is in the distances: the closest pair of straight templates differ by about 42 in squared spike counts, the closest pair of curved ones by about 360. Willett and colleagues made the same argument with their participant's real neural data, showing that the patterns for handwritten letters were more widely separated than those for straight movements, and adding a recurrent network and a language model to correct the errors that remained.
+
+<Callout kind="note">
+
+The people who take part in BCI trials are volunteers living with paralysis from spinal cord injury, stroke or motor neuron disease, and their contributions are central to the field. Willett and colleagues' participant is known by his trial identifier, T5. Reading the papers, notice how much of the engineering is about daily use rather than peak accuracy: how often decoders must be recalibrated, how long a session can last, and whether the system works at home without an engineer present.
+
+</Callout>
+
+<Bridge title="Decoding with a person in the loop"
+  neuro="Closed-loop BCIs show that motor cortex is not a fixed encoder: users learn, their neural activity shifts towards patterns the decoder reads well, and the decoder and the brain adapt to each other. This co-adaptation is itself a window onto motor learning."
+  ai="A BCI is a two-agent learning system, a decoder trained by gradient descent and a brain trained by its own rules, coupled through a shared output. The same problems arise in human-in-the-loop machine learning and in reinforcement learning from human feedback: the data distribution depends on the current model, and naive retraining can chase its own tail.">
+
+The best decoder is the one that works with a learning user, not the one with the best offline score.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In closed-loop control, the decoder's input depends on...", options: ["Its own past output, through the user", "Nothing", "Only the target", "The offline test set"], answer: 0, explain: "A feedback loop." },
+  { q: "A 30° rotation in the decoder, in closed loop, mainly...", options: ["Bends paths and slows trials, but targets are still reached", "Makes every trial fail", "Has no effect at all", "Reverses the cursor"], answer: 0, explain: "The user corrects." },
+  { q: "ReFIT refits the decoder to...", options: ["Velocities pointing at the target, with the decoded speed", "Decoded velocities", "Random velocities", "Arm movements"], answer: 0, explain: "Gilja and colleagues (2012)." },
+  { q: "Offline accuracy can mislead about closed-loop performance because...", options: ["The user adapts and the neural activity during control differs from calibration", "Offline tests are always wrong", "Spikes change units", "Of overfitting only"], answer: 0, explain: "Closed loop changes the data." },
+  { q: "Willett and colleagues' participant typed by...", options: ["Imagining handwriting", "Moving a cursor to letters", "Speaking", "Eye tracking"], answer: 0, explain: "About 90 characters per minute." },
+  { q: "Curved, time-varying letter trajectories are easier to classify than straight movements because...", options: ["Their neural patterns differ over their whole time course and lie further apart", "They are slower", "They need fewer neurons", "They are linear"], answer: 0, explain: "Separability." },
+  { q: "Their decoder for characters was...", options: ["A recurrent neural network", "A population vector", "A Kalman filter only", "Nearest neighbour"], answer: 0, explain: "With a language model to correct errors." },
+  { q: "A practical BCI must also cope with...", options: ["Neural signals that change from day to day", "Fixed neurons forever", "No noise", "Unlimited calibration time"], answer: 0, explain: "Recalibration and drift." },
+]} />
+
+<Flashcards cards={[
+  { front: "Closed-loop decoding?", back: "The decoded output is shown to the user, who adjusts their intention; decoder errors are partly corrected by feedback." },
+  { front: "ReFIT?", back: "Refit the decoder on closed-loop data, replacing decoded velocities with vectors of the same speed pointing at the target." },
+  { front: "Why closed loop forgives rotations?", back: "The user keeps aiming at the target; the cursor curves but still arrives, more slowly." },
+  { front: "Willett and colleagues (2021)?", back: "Decoded imagined handwriting from motor cortex with a recurrent network; about 90 characters per minute." },
+  { front: "Why handwriting beats straight lines for typing?", back: "Time-varying trajectories produce neural patterns further apart, so they are less confusable under noise." },
+]} />
+
+<Predict revisit question="With every neuron's preferred direction rotated 30° from the decoder's assumption, does the cursor still reach targets in closed loop, and how much slower?" />
+
+<Key title="Before you go">
+<ul>
+<li>A BCI is a feedback loop: the user corrects consistent decoder errors.</li>
+<li>Closed-loop performance, not offline accuracy, is what matters for users.</li>
+<li>Refitting to inferred intention, as in ReFIT, straightens paths and speeds trials.</li>
+<li>Movements with rich time courses are more separable, which is why imagined handwriting is fast.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Willett, Avansino, Hochberg, Henderson and Shenoy (2021), <em>High-performance brain-to-text communication via handwriting</em>.</li>
+<li>Gilja and colleagues (2012), <em>A high-performance neural prosthesis enabled by control algorithm design</em>, Nature Neuroscience 15(12), 1752 to 1757.</li>
+<li>Hochberg and colleagues (2006), <em>Neuronal ensemble control of prosthetic devices by a human with tetraplegia</em>, Nature 442(7099), 164 to 171.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Willett and colleagues' system typed from imagined handwriting. Think of a person who never learned to write by hand, or who uses a different script. What would you change in the design, and what would today's separability argument predict about which imagined movements to use instead?" />

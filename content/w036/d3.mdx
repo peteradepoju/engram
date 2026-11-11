@@ -1,0 +1,272 @@
+export const meta = {
+  title: "The Kalman filter: decoding movement over time",
+  intro: "Yesterday's bounds treated each window on its own. A hand moving through space does not jump: where it is now says a great deal about where it will be 50 ms later. The Kalman filter puts that knowledge to work. It combines a model of how the hand moves with a model of how neurons fire given the hand's state, and alternates between predicting and correcting. Wu, Gao, Bienenstock, Donoghue and Black (2006) showed that this decoder, fitted to motor cortex recordings, reconstructed hand trajectories more accurately than the linear filters then in use, and it became the workhorse of the brain-computer interfaces you meet on Day 5.",
+  goals: [
+    "Write the linear Gaussian state-space model behind the Kalman filter",
+    "Fit its four matrices to training data by least squares",
+    "Implement the predict and update steps and decode held-out movements",
+    "Compare the Kalman filter with linear decoders that ignore or include history",
+  ],
+  plan: [
+    { label: "Predict and the state-space model", minutes: 20 },
+    { label: "Fitting the model", minutes: 25 },
+    { label: "Predict and update", minutes: 40 },
+    { label: "Against linear filters", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "wu-2006",
+};
+
+<Predict question="Forty motor cortex neurons are tuned mainly to hand velocity and only weakly to hand position. A linear decoder that reads the current 50 ms bin of spikes is used to estimate hand position. Will it decode position about as well as velocity, much worse, or better?" />
+
+<Step n={1} title="The state-space model" minutes={20} />
+
+The Kalman filter assumes two linear Gaussian models. The **state** $\mathbf x_t$, here the hand's position and velocity in two dimensions, evolves as
+
+$$
+\mathbf x_{t+1} = A\mathbf x_t + \mathbf w_t, \qquad \mathbf w_t \sim \mathcal N(0, W),
+$$
+
+and the **observations** $\mathbf z_t$, the spike counts of $N$ neurons in bin $t$, depend linearly on the current state:
+
+$$
+\mathbf z_t = H\mathbf x_t + \mathbf c + \mathbf q_t, \qquad \mathbf q_t \sim \mathcal N(0, Q).
+$$
+
+The first equation is a prior on movement, the second a linear encoding model, Week 35's tuning curves in their simplest form. Given both, the Kalman filter computes the exact posterior over $\mathbf x_t$ given all spikes so far, a Gaussian with mean $\hat{\mathbf x}_t$ and covariance $P_t$. Spike counts are not Gaussian, but in 50 to 100 ms bins with many neurons the approximation works well, which is part of what Wu and colleagues showed.
+
+<Video id="P1jFKXDzAYQ" title="Astrocat through time" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's tutorial video on tracking a hidden state through time with a linear dynamical system and the Kalman filter, illustrated with an astronaut cat drifting in space." />
+
+<Step n={2} title="Fitting the model" minutes={25} />
+
+Simulate 10 minutes of smooth, random reaching in 50 ms bins, and 40 neurons whose rates depend linearly on velocity (cosine tuning) and weakly on position. With the hand's state known during training, all four matrices are least-squares fits: $A$ by regressing each state on the previous one, $H$ and $\mathbf c$ by regressing counts on states, and $W$ and $Q$ as the covariances of the residuals.
+
+<PyCell id="fit" title="Fitting A, W, H and Q" tests={String.raw`
+  import numpy as np
+  def test_shapes():
+      "A is 4 by 4, H is 40 by 4 and Q is 40 by 40"
+      assert A.shape == (4, 4) and H.shape == (40, 4) and Q.shape == (40, 40)
+
+  def test_dynamics():
+      "A predicts the next state's velocity with R squared above 0.8 on the test set"
+      pred = X[te][:-1] @ A.T
+      assert r2(X[te][1:], pred)[2:].min() > 0.8
+`} prompt="Fit A by least squares so that X[t+1] is approximately A @ X[t] on the training data, then W as the covariance of the residuals. H, c and Q are fitted for you."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2006)
+  dt, T, N = 0.05, 12000, 40
+  X = np.zeros((T, 4))                           # x, y, vx, vy
+  for t in range(1, T):
+      p, v = X[t - 1, :2], X[t - 1, 2:]
+      v = v + dt * (-2.0 * v - 1.5 * p) + np.sqrt(dt) * 12 * r.normal(size=2)
+      X[t, :2] = p + dt * v; X[t, 2:] = v
+  pdirs = r.uniform(0, 2 * np.pi, N); gain = r.uniform(0.5, 1.5, N); base = r.uniform(5, 20, N)
+  pw = r.normal(0, 0.3, (N, 2))
+  rate = np.maximum(base + gain * (X[:, 2:3] * np.cos(pdirs) + X[:, 3:4] * np.sin(pdirs)) + X[:, :2] @ pw.T, 0)
+  Z = r.poisson(rate * dt).astype(float)
+  tr = np.arange(T) < 8000; te = ~tr
+  r2 = lambda a, b: 1 - ((a - b) ** 2).sum(0) / ((a - a.mean(0)) ** 2).sum(0)
+
+  Xtr = X[tr]
+  A = ...
+  W = ...
+  Hc = np.linalg.lstsq(np.c_[Xtr, np.ones(len(Xtr))], Z[tr], rcond=None)[0].T
+  H, c = Hc[:, :4], Hc[:, 4]
+  Q = np.cov((Z[tr] - np.c_[Xtr, np.ones(len(Xtr))] @ Hc.T).T)
+  print("A =\n", np.round(A, 3))
+`}
+hint="A = np.linalg.lstsq(Xtr[:-1], Xtr[1:], rcond=None)[0].T; W = np.cov((Xtr[1:] - Xtr[:-1] @ A.T).T)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2006)
+  dt, T, N = 0.05, 12000, 40
+  X = np.zeros((T, 4))                           # x, y, vx, vy
+  for t in range(1, T):
+      p, v = X[t - 1, :2], X[t - 1, 2:]
+      v = v + dt * (-2.0 * v - 1.5 * p) + np.sqrt(dt) * 12 * r.normal(size=2)
+      X[t, :2] = p + dt * v; X[t, 2:] = v
+  pdirs = r.uniform(0, 2 * np.pi, N); gain = r.uniform(0.5, 1.5, N); base = r.uniform(5, 20, N)
+  pw = r.normal(0, 0.3, (N, 2))
+  rate = np.maximum(base + gain * (X[:, 2:3] * np.cos(pdirs) + X[:, 3:4] * np.sin(pdirs)) + X[:, :2] @ pw.T, 0)
+  Z = r.poisson(rate * dt).astype(float)
+  tr = np.arange(T) < 8000; te = ~tr
+  r2 = lambda a, b: 1 - ((a - b) ** 2).sum(0) / ((a - a.mean(0)) ** 2).sum(0)
+
+  Xtr = X[tr]
+  A = np.linalg.lstsq(Xtr[:-1], Xtr[1:], rcond=None)[0].T
+  W = np.cov((Xtr[1:] - Xtr[:-1] @ A.T).T)
+  Hc = np.linalg.lstsq(np.c_[Xtr, np.ones(len(Xtr))], Z[tr], rcond=None)[0].T
+  H, c = Hc[:, :4], Hc[:, 4]
+  Q = np.cov((Z[tr] - np.c_[Xtr, np.ones(len(Xtr))] @ Hc.T).T)
+  print("A =\n", np.round(A, 3))
+`} />
+
+The fitted $A$ reads like the physics that generated the movement. Position carries over almost unchanged (0.996) and gains about 0.045 times the velocity per bin, close to the bin width of 0.05 s. Velocity decays by about 10% per bin (0.902, against $1 - 2\times 0.05 = 0.9$ in the simulation) and is pulled back towards the centre in proportion to position (about -0.08, against $-1.5 \times 0.05$). Nothing told the regression about physics; the structure is in the data.
+
+<Step n={3} title="Predict and update" minutes={40} />
+
+Each time step has two parts. **Predict**: push the previous estimate through the dynamics, $\hat{\mathbf x}^- = A\hat{\mathbf x}$, and grow its uncertainty, $P^- = AP A^\top + W$. **Update**: compare the spikes that arrived with those the prediction expected, and move the estimate by the **Kalman gain** times the difference:
+
+<Derivation>
+<div>
+
+$S = HP^-H^\top + Q$, the covariance of the predicted counts.
+
+</div>
+<div>
+
+$K = P^-H^\top S^{-1}$, the gain: large when the prediction is uncertain or the neurons are reliable.
+
+</div>
+<div>
+
+$\hat{\mathbf x} = \hat{\mathbf x}^- + K(\mathbf z - \mathbf c - H\hat{\mathbf x}^-)$ and $P = (I - KH)P^-$.
+
+</div>
+</Derivation>
+
+This is Bayes' rule for Gaussians, the same multiplication of prior and likelihood as Day 1's continuity prior, done in closed form.
+
+<Figure caption="A one-dimensional Kalman filter tracking a drifting state from noisy measurements. Change the measurement noise and see the gain adjust." credit="Interactive figure by Engram.">
+  <KalmanTrack />
+</Figure>
+
+<PyCell id="kalman" title="Decoding the test set" tests={String.raw`
+  import numpy as np
+  def test_velocity():
+      "the Kalman filter decodes velocity with R squared above 0.75"
+      assert R2["Kalman"][2:].min() > 0.75
+
+  def test_position():
+      "it decodes position with R squared above 0.85"
+      assert R2["Kalman"][:2].min() > 0.85
+`} prompt="Complete the update step of kalman(Zs): compute S, the gain K, the new estimate x and covariance P, following the three equations above."
+code={String.raw`
+  def kalman(Zs):
+      x, P, out = np.zeros(4), np.eye(4) * 10, []
+      for z in Zs:
+          x = A @ x
+          P = A @ P @ A.T + W
+          ...
+          out.append(x.copy())
+      return np.array(out)
+
+  Xk = kalman(Z[te])
+  R2 = {"Kalman": r2(X[te], Xk)}
+  print("Kalman R squared (x, y, vx, vy):", np.round(R2["Kalman"], 3))
+  plt.plot(X[te][:400, 0], "k", label="true x"); plt.plot(Xk[:400, 0], label="Kalman"); plt.legend(); plt.show()
+`}
+hint="S = H @ P @ H.T + Q; K = P @ H.T @ np.linalg.inv(S); x = x + K @ (z - c - H @ x); P = (np.eye(4) - K @ H) @ P."
+solution={String.raw`
+  def kalman(Zs):
+      x, P, out = np.zeros(4), np.eye(4) * 10, []
+      for z in Zs:
+          x = A @ x
+          P = A @ P @ A.T + W
+          S = H @ P @ H.T + Q
+          K = P @ H.T @ np.linalg.inv(S)
+          x = x + K @ (z - c - H @ x)
+          P = (np.eye(4) - K @ H) @ P
+          out.append(x.copy())
+      return np.array(out)
+
+  Xk = kalman(Z[te])
+  R2 = {"Kalman": r2(X[te], Xk)}
+  print("Kalman R squared (x, y, vx, vy):", np.round(R2["Kalman"], 3))
+  plt.plot(X[te][:400, 0], "k", label="true x"); plt.plot(Xk[:400, 0], label="Kalman"); plt.legend(); plt.show()
+`} />
+
+The Kalman filter decodes velocity with $R^2$ of about 0.80 and 0.88 for the two axes, and position with about 0.92 and 0.90, better than velocity, even though the neurons are tuned mainly to velocity. The dynamics do the work: each step adds the decoded velocity times the bin width to the position estimate, so position is effectively the integral of a whole history of spikes, and the integral averages away much of the noise.
+
+<Step n={4} title="Against linear filters" minutes={20} />
+
+Before the Kalman filter, motor decoding used linear regression from spike counts to kinematics: the **optimal linear estimator** reads only the current bin, and the **Wiener filter** reads several past bins at once (Week 10's filters, now from neurons to movement). Compare them with the Kalman filter on the same data.
+
+<PyCell id="compare" title="Three decoders" tests={String.raw`
+  import numpy as np
+  def test_ole_position():
+      "the current-bin linear decoder decodes position poorly (R squared below 0.4)"
+      assert R2["OLE"][:2].max() < 0.4
+
+  def test_order():
+      "the Kalman filter beats the Wiener filter on position by more than 0.1"
+      assert R2["Kalman"][:2].mean() > R2["Wiener"][:2].mean() + 0.1
+`} prompt="Fit the Wiener filter: build Zl, the counts at lags 0 to 9 side by side (rows before lag 10 set to zero), add a constant, fit ridge weights with penalty 1 on the training bins, and store the test R² in R2['Wiener']."
+code={String.raw`
+  Z1 = np.c_[Z, np.ones(T)]
+  B = np.linalg.lstsq(Z1[tr], X[tr], rcond=None)[0]
+  R2["OLE"] = r2(X[te], Z1[te] @ B)
+  Lg = 10
+  Zl = np.concatenate([np.roll(Z, k, 0) for k in range(Lg)], 1); Zl[:Lg] = 0
+  Zl1 = np.c_[Zl, np.ones(T)]
+  Bw = ...
+  R2["Wiener"] = r2(X[te], Zl1[te] @ Bw)
+  for k in ("OLE", "Wiener", "Kalman"):
+      print(f"{k:7s} position {R2[k][:2].mean():.2f}  velocity {R2[k][2:].mean():.2f}")
+`}
+hint="Bw = np.linalg.solve(Zl1[tr].T @ Zl1[tr] + np.eye(Zl1.shape[1]), Zl1[tr].T @ X[tr])."
+solution={String.raw`
+  Z1 = np.c_[Z, np.ones(T)]
+  B = np.linalg.lstsq(Z1[tr], X[tr], rcond=None)[0]
+  R2["OLE"] = r2(X[te], Z1[te] @ B)
+  Lg = 10
+  Zl = np.concatenate([np.roll(Z, k, 0) for k in range(Lg)], 1); Zl[:Lg] = 0
+  Zl1 = np.c_[Zl, np.ones(T)]
+  Bw = np.linalg.solve(Zl1[tr].T @ Zl1[tr] + np.eye(Zl1.shape[1]), Zl1[tr].T @ X[tr])
+  R2["Wiener"] = r2(X[te], Zl1[te] @ Bw)
+  for k in ("OLE", "Wiener", "Kalman"):
+      print(f"{k:7s} position {R2[k][:2].mean():.2f}  velocity {R2[k][2:].mean():.2f}")
+`} />
+
+The current-bin decoder reads velocity reasonably ($R^2$ about 0.75) but position poorly (about 0.23), which answers the prediction: the weak position tuning is almost all it has to go on. The Wiener filter, with 500 ms of history, recovers much of the position (0.74) because its lags let it integrate, and the Kalman filter does best on both (0.91 and 0.84), with only 40 neurons and far fewer parameters than the Wiener filter's 400 weights per output. Wu and colleagues found the same ordering with real motor cortex data, and a further advantage: the Kalman filter gives an uncertainty with every estimate.
+
+<Bridge title="Prediction and correction"
+  neuro="The Kalman filter's structure, a forward model that predicts the next state and a correction from sensory evidence, is also a leading account of how the brain itself estimates the body's state during movement, with the cerebellum often proposed as the forward model. You will meet this again in Week 41 on motor control."
+  ai="The Kalman filter is the linear Gaussian special case of recursive Bayesian filtering, and its structure reappears in state-space sequence models: a linear recurrence on a hidden state with a readout. Deep state-space models such as S4 and Mamba keep the linear recurrence but learn its matrices end to end.">
+
+When the variable moves smoothly, the past is the best prior for the present.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The Kalman filter's state equation models...", options: ["How spikes depend on the state", "How the state evolves over time", "The noise ceiling", "Neuron tuning"], answer: 1, explain: "x(t+1) = A x(t) + w." },
+  { q: "The observation equation in neural decoding is...", options: ["A linear encoding model of spike counts given the state", "A model of movement", "A prior", "A loss function"], answer: 0, explain: "z = Hx + c + q." },
+  { q: "The Kalman gain is large when...", options: ["The prediction is uncertain or observations are reliable", "The prediction is certain", "Q is large", "There are no neurons"], answer: 0, explain: "It weighs evidence against prediction." },
+  { q: "During training, A, W, H and Q are fitted by...", options: ["Least squares with the true states known", "Gradient descent on test data", "Guessing", "STC"], answer: 0, explain: "Supervised fitting." },
+  { q: "A current-bin linear decoder reads position poorly from velocity-tuned neurons because...", options: ["Position is the integral of velocity and is not in the current spikes", "Position is noisy", "There are too few neurons", "Position is nonlinear"], answer: 0, explain: "The Kalman filter integrates." },
+  { q: "The Wiener filter differs from the current-bin decoder by...", options: ["Using several past bins of spikes", "Using a prior", "Being nonlinear", "Using Poisson noise"], answer: 0, explain: "Lags as features." },
+  { q: "The update step of the Kalman filter is an instance of...", options: ["Bayes' rule for Gaussians", "Gradient descent", "Dropout", "Backpropagation"], answer: 0, explain: "Prior times likelihood, in closed form." },
+  { q: "Spike counts are not Gaussian, yet the Kalman filter works because...", options: ["With many neurons and 50 to 100 ms bins the approximation is good", "Spikes are Gaussian", "The gain fixes it", "It does not work"], answer: 0, explain: "Wu and colleagues' finding." },
+]} />
+
+<Flashcards cards={[
+  { front: "Kalman state-space model?", back: "$\\mathbf x_{t+1} = A\\mathbf x_t + \\mathbf w_t$, $\\mathbf z_t = H\\mathbf x_t + \\mathbf c + \\mathbf q_t$, Gaussian noise." },
+  { front: "Predict step?", back: "$\\hat{\\mathbf x}^- = A\\hat{\\mathbf x}$, $P^- = APA^\\top + W$." },
+  { front: "Update step?", back: "$K = P^-H^\\top(HP^-H^\\top + Q)^{-1}$; $\\hat{\\mathbf x} = \\hat{\\mathbf x}^- + K(\\mathbf z - \\mathbf c - H\\hat{\\mathbf x}^-)$; $P = (I - KH)P^-$." },
+  { front: "Why Kalman decodes position from velocity neurons?", back: "Its dynamics integrate velocity into position; a current-bin decoder cannot." },
+  { front: "Wu and colleagues (2006)?", back: "A Kalman filter fitted to motor cortex reconstructed hand trajectories better than linear filters and became a standard BCI decoder." },
+]} />
+
+<Predict revisit question="Can a decoder that reads only the current bin of velocity-tuned spikes estimate hand position as well as velocity?" />
+
+<Key title="Before you go">
+<ul>
+<li>The Kalman filter combines a movement model and a linear encoding model into an exact Gaussian posterior.</li>
+<li>All four matrices are fitted by least squares when the state is known in training.</li>
+<li>Predict, then correct by the gain times the surprise in the spikes.</li>
+<li>Dynamics let it estimate what the neurons barely encode, such as position from velocity.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Wu, Gao, Bienenstock, Donoghue and Black (2006), <em>Bayesian population decoding of motor cortical activity using a Kalman filter</em>.</li>
+<li>Kalman (1960), <em>A new approach to linear filtering and prediction problems</em>, Journal of Basic Engineering 82(1), 35 to 45.</li>
+<li>Welch and Bishop, <em>An introduction to the Kalman filter</em>, University of North Carolina technical report TR 95-041, a short and widely used tutorial.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="In a brain-computer interface, the user's intended movement, not a real hand, is the state. Which of the Kalman filter's four matrices could you still fit from data, which would you have to assume, and how might the user's own learning change them over days?" />

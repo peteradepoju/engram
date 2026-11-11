@@ -1,0 +1,280 @@
+export const meta = {
+  title: "Fisher information: how well could any decoder do?",
+  intro: "Yesterday's decoders were judged by their errors. Today asks a sharper question: given a population's tuning curves and noise, what is the smallest error that any unbiased decoder could achieve? The answer is the Cramér-Rao bound, the inverse of the Fisher information, and it can be computed directly from the encoding model without building a decoder at all. You will find that the neurons that matter most for fine discrimination are not the ones firing hardest, see the maximum-likelihood decoder reach the bound, and then follow Abbott and Dayan into the question that has occupied population coding ever since: do correlations between neurons destroy information, or can they leave it intact?",
+  goals: [
+    "Compute the Fisher information of a population of Poisson neurons from its tuning curves",
+    "Compare the maximum-likelihood decoder's variance with the Cramér-Rao bound",
+    "Explain why the most informative neurons are on the flanks of their tuning curves",
+    "Describe how uniform, limited-range and differential correlations change population information",
+  ],
+  plan: [
+    { label: "Predict and the bound", minutes: 20 },
+    { label: "Fisher information of a population", minutes: 35 },
+    { label: "Which neurons matter", minutes: 20 },
+    { label: "Correlations", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "abbott-dayan-1999",
+};
+
+<Predict question="A population of orientation-tuned neurons must tell 45° from 47°. Which neurons carry the most information for this task: those whose preferred orientation is 46°, those that prefer orientations about 20° to 30° away, or those that prefer 136°?" />
+
+<Step n={1} title="The Cramér-Rao bound" minutes={20} />
+
+For a parameter $\theta$ and data $\mathbf n$ with likelihood $P(\mathbf n \mid \theta)$, the **Fisher information** is the expected curvature of the log likelihood:
+
+$$
+I_F(\theta) = -\mathbb E\left[\frac{\partial^2}{\partial\theta^2}\log P(\mathbf n \mid \theta)\right].
+$$
+
+A sharply peaked likelihood means the data pin $\theta$ down. The **Cramér-Rao bound** says that any unbiased estimator has variance at least $1/I_F(\theta)$. For independent Poisson neurons with tuning curves $f_i(\theta)$, counted in a window $\tau$, the Fisher information has a closed form:
+
+<Derivation>
+<div>
+
+$\log P(\mathbf n \mid \theta) = \sum_i \left(n_i \log(\tau f_i) - \tau f_i\right) + \text{const}$.
+
+</div>
+<div>
+
+Differentiating twice: $\frac{\partial^2}{\partial\theta^2} \log P = \sum_i \left(n_i \frac{f_i'' f_i - f_i'^2}{f_i^2} - \tau f_i''\right)$.
+
+</div>
+<div>
+
+Taking the expectation with $\mathbb E[n_i] = \tau f_i$, the $f_i''$ terms cancel, leaving $I_F(\theta) = \tau \sum_i \frac{f_i'(\theta)^2}{f_i(\theta)}$.
+
+</div>
+</Derivation>
+
+Each neuron contributes the square of its tuning slope divided by its rate (its Poisson variance). Information adds across independent neurons and grows linearly with the counting window.
+
+<Video id="Yv8MDjdm1l4" title="Likelihood" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's tutorial video on likelihood functions and maximum-likelihood estimation, the foundation for today's Fisher information and Cramér-Rao bound." />
+
+<Step n={2} title="Fisher information of a population" minutes={35} />
+
+<PyCell id="fisher" title="The maximum-likelihood decoder and the bound" tests={String.raw`
+  import numpy as np
+  def test_formula():
+      "fisher(N) matches a numerical derivative of the tuning curves"
+      f, fp = pop(30); e = 1e-5
+      num = T * np.sum(((f(th0 + e) - f(th0 - e)) / (2 * e)) ** 2 / f(th0))
+      assert abs(fisher(30) - num) / num < 1e-4
+
+  def test_bound():
+      "for 20 or more neurons, the ML decoder's standard deviation is within 10% of the bound"
+      for N in (20, 50, 100):
+          assert 0.95 * cr[N] < ml_sd[N] < 1.1 * cr[N]
+`} prompt="Write fisher(N), returning T times the sum over neurons of f'(θ0)² / f(θ0) for a population of N von Mises neurons built by pop(N). The cell then compares the Cramér-Rao standard deviation with the spread of maximum-likelihood estimates."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1999)
+  T, th0 = 0.2, 0.3
+
+  def pop(N, kappa=2.0, rmax=20.0, b=1.0):
+      pref = np.linspace(-np.pi, np.pi, N, endpoint=False)
+      f = lambda th: b + rmax * np.exp(kappa * (np.cos(th - pref) - 1))
+      fp = lambda th: -rmax * kappa * np.sin(th - pref) * np.exp(kappa * (np.cos(th - pref) - 1))
+      return f, fp
+
+  def fisher(N):
+      f, fp = pop(N)
+      return ...
+
+  grid = np.linspace(-np.pi, np.pi, 2000, endpoint=False)
+  cr, ml_sd = {}, {}
+  for N in (10, 20, 50, 100):
+      f, fp = pop(N)
+      F = np.array([f(g) for g in grid]) * T; lF = np.log(F)
+      est = np.array([grid[np.argmax(lF @ r.poisson(f(th0) * T) - F.sum(1))] for _ in range(2000)])
+      cr[N] = np.degrees(1 / np.sqrt(fisher(N)))
+      ml_sd[N] = np.degrees(np.angle(np.exp(1j * (est - th0))).std())
+      print(f"N = {N:3d}: bound {cr[N]:5.2f} deg, ML decoder {ml_sd[N]:5.2f} deg")
+`}
+hint="return T * np.sum(fp(th0) ** 2 / f(th0))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1999)
+  T, th0 = 0.2, 0.3
+
+  def pop(N, kappa=2.0, rmax=20.0, b=1.0):
+      pref = np.linspace(-np.pi, np.pi, N, endpoint=False)
+      f = lambda th: b + rmax * np.exp(kappa * (np.cos(th - pref) - 1))
+      fp = lambda th: -rmax * kappa * np.sin(th - pref) * np.exp(kappa * (np.cos(th - pref) - 1))
+      return f, fp
+
+  def fisher(N):
+      f, fp = pop(N)
+      return T * np.sum(fp(th0) ** 2 / f(th0))
+
+  grid = np.linspace(-np.pi, np.pi, 2000, endpoint=False)
+  cr, ml_sd = {}, {}
+  for N in (10, 20, 50, 100):
+      f, fp = pop(N)
+      F = np.array([f(g) for g in grid]) * T; lF = np.log(F)
+      est = np.array([grid[np.argmax(lF @ r.poisson(f(th0) * T) - F.sum(1))] for _ in range(2000)])
+      cr[N] = np.degrees(1 / np.sqrt(fisher(N)))
+      ml_sd[N] = np.degrees(np.angle(np.exp(1j * (est - th0))).std())
+      print(f"N = {N:3d}: bound {cr[N]:5.2f} deg, ML decoder {ml_sd[N]:5.2f} deg")
+`} />
+
+The bound falls as one over the square root of the population size, from about 15° with 10 neurons to under 5° with 100, and the maximum-likelihood decoder tracks it closely: about 8% above the bound with 10 neurons, 2 to 5% above with 50 or 100. With few neurons and short windows the likelihood is often irregular and the decoder is slightly worse than the bound; as the population grows the likelihood becomes close to Gaussian and maximum likelihood becomes **efficient**, achieving the bound. That is why the Cramér-Rao bound is a useful benchmark: a good decoder gets there.
+
+<Step n={3} title="Which neurons matter" minutes={20} />
+
+<Figure caption="A population of tuning curves and each neuron's contribution to the Fisher information at the chosen stimulus. Move the stimulus and change the tuning width." credit="Interactive figure by Engram.">
+  <FisherInfo />
+</Figure>
+
+<PyCell id="flanks" title="Information lives on the flanks" tests={String.raw`
+  import numpy as np
+  def test_flank():
+      "the most informative neuron prefers an orientation between 20 and 80 degrees from the stimulus"
+      assert 20 < abs(best_offset) < 80
+
+  def test_peak_low():
+      "the neuron preferring the stimulus itself contributes less than 5% of the maximum"
+      assert contrib[np.argmin(np.abs(offsets))] < 0.05 * contrib.max()
+`} prompt="For a population of 72 neurons, compute each neuron's contribution T f'(θ0)² / f(θ0) and the offset of its preferred direction from θ0 in degrees; find the offset of the most informative neuron."
+code={String.raw`
+  f, fp = pop(72)
+  pref = np.linspace(-np.pi, np.pi, 72, endpoint=False)
+  contrib = ...
+  offsets = np.degrees(np.angle(np.exp(1j * (pref - th0))))
+  best_offset = offsets[np.argmax(contrib)]
+  print(f"most informative neuron prefers {best_offset:+.0f} deg from the stimulus")
+  o = np.argsort(offsets)
+  plt.plot(offsets[o], contrib[o], ".-"); plt.xlabel("preferred minus stimulus (deg)"); plt.ylabel("Fisher information contribution"); plt.show()
+`}
+hint="contrib = T * fp(th0) ** 2 / f(th0)."
+solution={String.raw`
+  f, fp = pop(72)
+  pref = np.linspace(-np.pi, np.pi, 72, endpoint=False)
+  contrib = T * fp(th0) ** 2 / f(th0)
+  offsets = np.degrees(np.angle(np.exp(1j * (pref - th0))))
+  best_offset = offsets[np.argmax(contrib)]
+  print(f"most informative neuron prefers {best_offset:+.0f} deg from the stimulus")
+  o = np.argsort(offsets)
+  plt.plot(offsets[o], contrib[o], ".-"); plt.xlabel("preferred minus stimulus (deg)"); plt.ylabel("Fisher information contribution"); plt.show()
+`} />
+
+The most informative neuron prefers a direction about 52° from the stimulus, on the steep flank of its tuning curve, and the neuron preferring the stimulus itself contributes almost nothing: at the peak of a tuning curve the slope is zero, so a small change in the stimulus barely changes the rate. Orientation is a doubled angle (it repeats every 180°), so 52° on this circle corresponds to about 26° in orientation, which answers the prediction: for telling 45° from 47°, the neurons that matter prefer orientations roughly 20° to 30° away. Schoups, Vogels, Qian and Orban (2001) found a trace of this in monkeys trained on fine orientation discrimination: training steepened the tuning slopes, at the trained orientation, of V1 neurons whose preferences lay near it but not at it.
+
+<Step n={4} title="Correlations" minutes={30} />
+
+Real neurons are not independent given the stimulus (Week 34, Day 4). For Gaussian noise with covariance $\Sigma$ the information available to a linear readout is the **linear Fisher information**
+
+$$
+I = \mathbf f'^\top \Sigma^{-1} \mathbf f',
+$$
+
+which reduces to the formula above when $\Sigma$ is diagonal with the Poisson variances. Abbott and Dayan (1999) asked how different correlation structures change it. Compare four: independent neurons; **uniform** correlations, every pair at 0.1; **limited-range** correlations, strongest between neurons with similar preferences (0.2 at the same preference, falling with distance); and **differential** correlations, noise along $\mathbf f'$ itself, $\Sigma = \Sigma_0 + \varepsilon\, \mathbf f' \mathbf f'^\top$, the kind Moreno-Bote and colleagues (2014) showed must limit information.
+
+<PyCell id="corr" title="Information as the population grows" tests={String.raw`
+  import numpy as np
+  def test_uniform():
+      "uniform correlations do not reduce information"
+      assert J[1000]["uniform"] >= 0.95 * J[1000]["independent"]
+
+  def test_limits():
+      "limited-range and differential correlations make information saturate"
+      assert J[1000]["limited"] < 0.1 * J[1000]["independent"]
+      assert J[1000]["differential"] < 1 / eps and J[1000]["differential"] < 1.5 * J[500]["differential"]
+`} prompt="Build the four covariance matrices for each population size and compute the linear Fisher information fp @ inv(C) @ fp for each (use np.linalg.solve). Counts are in a 0.2 s window, so the mean is f T, the slope f' T and the independent variance f T."
+code={String.raw`
+  eps = 1e-3
+  J = {}
+  for N in (10, 50, 100, 200, 500, 1000):
+      f, fp = pop(N)
+      pref = np.linspace(-np.pi, np.pi, N, endpoint=False)
+      d, var = fp(th0) * T, f(th0) * T
+      sd = np.sqrt(var)
+      C = {"independent": np.diag(var)}
+      U = 0.1 * np.outer(sd, sd); np.fill_diagonal(U, var); C["uniform"] = U
+      rho = 0.2 * np.exp(-np.abs(np.angle(np.exp(1j * (pref[:, None] - pref[None, :])))) / 0.5)
+      Lr = rho * np.outer(sd, sd); np.fill_diagonal(Lr, var); C["limited"] = Lr
+      C["differential"] = np.diag(var) + eps * np.outer(d, d)
+      J[N] = {k: ... for k, M in C.items()}
+      print(N, {k: round(float(v), 1) for k, v in J[N].items()})
+  for k in J[10]:
+      plt.loglog(list(J), [J[N][k] for N in J], "o-", label=k)
+  plt.axhline(1 / eps, color="gray", ls=":"); plt.xlabel("neurons"); plt.ylabel("linear Fisher information"); plt.legend(); plt.show()
+`}
+hint="J[N] = {k: d @ np.linalg.solve(M, d) for k, M in C.items()}."
+solution={String.raw`
+  eps = 1e-3
+  J = {}
+  for N in (10, 50, 100, 200, 500, 1000):
+      f, fp = pop(N)
+      pref = np.linspace(-np.pi, np.pi, N, endpoint=False)
+      d, var = fp(th0) * T, f(th0) * T
+      sd = np.sqrt(var)
+      C = {"independent": np.diag(var)}
+      U = 0.1 * np.outer(sd, sd); np.fill_diagonal(U, var); C["uniform"] = U
+      rho = 0.2 * np.exp(-np.abs(np.angle(np.exp(1j * (pref[:, None] - pref[None, :])))) / 0.5)
+      Lr = rho * np.outer(sd, sd); np.fill_diagonal(Lr, var); C["limited"] = Lr
+      C["differential"] = np.diag(var) + eps * np.outer(d, d)
+      J[N] = {k: d @ np.linalg.solve(M, d) for k, M in C.items()}
+      print(N, {k: round(float(v), 1) for k, v in J[N].items()})
+  for k in J[10]:
+      plt.loglog(list(J), [J[N][k] for N in J], "o-", label=k)
+  plt.axhline(1 / eps, color="gray", ls=":"); plt.xlabel("neurons"); plt.ylabel("linear Fisher information"); plt.legend(); plt.show()
+`} />
+
+With independent neurons, information grows in proportion to the population, about 1,445 at 1,000 neurons. Uniform correlations of 0.1 do not hurt: they slightly increase it, to about 1,605, because noise shared equally by all neurons can be subtracted out by comparing neurons with opposite slopes. This was Abbott and Dayan's central point: correlations need not limit a population code, and their effect depends on their structure. Limited-range correlations, by contrast, make information level off near 60 however many neurons are added. Differential correlations cap it at $1/\varepsilon = 1{,}000$: with 1,000 neurons the information is 591, and it can approach but never pass that limit, because noise along $\mathbf f'$ is indistinguishable from a real change in the stimulus.
+
+<Callout kind="note">
+
+The saturation with limited-range correlations here depends on their exact shape. Moreno-Bote and colleagues (2014) showed that, in a large population, only the component of the noise along $\mathbf f'$ (the differential part) limits information; other correlation structures saturate only to the extent that they contain such a component, as the smooth limited-range kernel here does. Measuring that component directly in data is hard, because it can be a tiny fraction of the total covariance and still dominate the information.
+
+</Callout>
+
+<Bridge title="Information without a decoder"
+  neuro="Fisher information lets an experimenter ask how much a population could support fine discrimination, and compare it with the animal's behaviour, without choosing a decoder. When behaviour falls short of the bound, either the brain's readout is suboptimal or the recorded neurons share noise that the bound has missed."
+  ai="The Fisher information matrix appears in machine learning as the curvature of the loss: natural gradient descent rescales updates by its inverse, and elastic weight consolidation uses it to decide which weights matter for an old task. It measures how sensitive a model's outputs are to its parameters, just as here it measures how sensitive a population's responses are to a stimulus.">
+
+The information in a population depends on tuning slopes, noise and the shape of the correlations, not on how hard neurons fire.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The Cramér-Rao bound says an unbiased estimator's variance is at least...", options: ["I_F", "1/I_F", "I_F²", "Zero"], answer: 1, explain: "Inverse Fisher information." },
+  { q: "For independent Poisson neurons, I_F equals...", options: ["τΣf_i", "τΣf_i'²/f_i", "Σf_i²", "τΣf_i''"], answer: 1, explain: "Slope squared over variance." },
+  { q: "The most informative neurons for fine discrimination are...", options: ["Those preferring the stimulus", "Those on the flanks of their tuning curves at the stimulus", "The least active", "Those preferring the opposite stimulus"], answer: 1, explain: "Where the slope is steepest." },
+  { q: "Fisher information grows with the counting window...", options: ["Linearly", "Not at all", "Exponentially", "As its square root"], answer: 0, explain: "For Poisson neurons." },
+  { q: "The ML decoder for a large population...", options: ["Approaches the Cramér-Rao bound", "Is always far from it", "Is biased", "Is the population vector"], answer: 0, explain: "Asymptotic efficiency." },
+  { q: "Uniform positive correlations, in the model you computed...", options: ["Did not reduce information", "Destroyed it", "Made it saturate at 10", "Made it negative"], answer: 0, explain: "Abbott and Dayan's point that correlations need not hurt." },
+  { q: "Differential correlations are...", options: ["Noise along f′", "Uniform correlations", "Negative correlations", "Zero"], answer: 0, explain: "Moreno-Bote and colleagues (2014)." },
+  { q: "With differential correlations of size ε, information saturates at...", options: ["ε", "1/ε", "N", "Zero"], answer: 1, explain: "Noise indistinguishable from a stimulus change." },
+]} />
+
+<Flashcards cards={[
+  { front: "Fisher information?", back: "$I_F(\\theta) = -\\mathbb E[\\partial_\\theta^2 \\log P(\\mathbf n\\mid\\theta)]$, the expected curvature of the log likelihood." },
+  { front: "Poisson population Fisher information?", back: "$I_F = \\tau\\sum_i f_i'(\\theta)^2/f_i(\\theta)$." },
+  { front: "Cramér-Rao bound?", back: "Any unbiased estimator has variance at least $1/I_F$." },
+  { front: "Linear Fisher information?", back: "$\\mathbf f'^\\top \\Sigma^{-1}\\mathbf f'$: the information available to a linear readout under covariance $\\Sigma$." },
+  { front: "Information-limiting correlations?", back: "Differential correlations, noise along $\\mathbf f'$; they cap information at $1/\\varepsilon$ however many neurons are added." },
+]} />
+
+<Predict revisit question="Which neurons carry most information for telling 45° from 47°: those preferring 46°, those 20° to 30° away, or those preferring 136°?" />
+
+<Key title="Before you go">
+<ul>
+<li>Fisher information bounds the precision of any unbiased decoder, and the ML decoder approaches it.</li>
+<li>Neurons contribute through the slope of their tuning curves, so the flanks carry fine discrimination.</li>
+<li>Correlations can leave information unchanged, increase it, or cap it, depending on their structure.</li>
+<li>Only noise that looks like a change in the stimulus fundamentally limits information.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Abbott and Dayan (1999), <em>The effect of correlated variability on the accuracy of a population code</em>.</li>
+<li>Moreno-Bote, Beck, Kanitscheider, Pitkow, Latham and Pouget (2014), <em>Information-limiting correlations</em>, Nature Neuroscience 17(10), 1410 to 1417.</li>
+<li>Seung and Sompolinsky (1993), <em>Simple models for reading neuronal population codes</em>, PNAS 90(22), 10749 to 10753.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="An experiment finds that pairwise noise correlations in a population are small, about 0.02 on average. A colleague concludes that the neurons are effectively independent and that information grows linearly with population size. Using today's results, explain why that conclusion does not follow, and what measurement would test it." />

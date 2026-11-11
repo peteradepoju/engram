@@ -1,0 +1,269 @@
+export const meta = {
+  title: "Machine learning for decoding",
+  intro: "The decoders so far were derived from models: Poisson tuning curves for Bayes, linear Gaussian dynamics for Kalman. When the encoding is more complicated than the model assumes, a decoder can instead be learned directly from data, with no encoding model at all. Glaser, Benjamin, Chowdhury, Perich, Miller and Kording (2020) compared Wiener and Kalman filters with modern machine-learning decoders on recordings from motor cortex, somatosensory cortex and hippocampus, and found that neural networks and gradient-boosted trees usually won, sometimes by a wide margin. Today you build a small neural-network decoder from scratch in NumPy, including its backward pass, and find out when its extra flexibility pays for itself.",
+  goals: [
+    "Fit a regularised Wiener filter as a linear baseline",
+    "Write the forward and backward pass of a one-hidden-layer network decoder",
+    "Use a validation set for early stopping",
+    "Explain how the advantage of a flexible decoder depends on tuning and on the amount of data",
+  ],
+  plan: [
+    { label: "Predict and the baseline", minutes: 25 },
+    { label: "A network decoder from scratch", minutes: 45 },
+    { label: "How much data?", minutes: 20 },
+    { label: "Practice and pitfalls", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "glaser-2020",
+};
+
+<Predict question="Thirty of forty neurons are tuned to the axis of movement, firing equally for leftward and rightward reaches, and ten have weak ordinary direction tuning. Will a linear decoder recover the sign of the velocity well, poorly, or not at all? Will a neural network do better?" />
+
+<Step n={1} title="A linear baseline" minutes={25} />
+
+Use the same smooth reaching movements as yesterday, but with a population whose tuning a linear decoder cannot fully exploit. Thirty neurons have **axial** tuning: their rate depends on $\cos 2(\theta - \theta_i)$, so they respond the same to opposite directions, and their modulation grows with speed. Ten neurons have weak ordinary cosine tuning. Many neurons in motor and sensory areas mix variables nonlinearly like this. The baseline is a Wiener filter: ridge regression from the counts in the last three 50 ms bins to the two components of velocity.
+
+<Video id="SlrbMvvBOzM" title="Decoding from neural data using feed-forward networks in pytorch" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's tutorial video on training a feed-forward network to decode a stimulus from a population's responses, the approach you build from scratch today." />
+
+<PyCell id="wiener" title="The Wiener filter" tests={String.raw`
+  import numpy as np
+  def test_wiener():
+      "the Wiener filter decodes velocity with mean R squared between 0.3 and 0.6"
+      assert 0.3 < r2_w.mean() < 0.6
+`} prompt="Standardise the lagged counts with the training mean and standard deviation (given), then fit ridge weights (penalty 1) from Zs plus a constant column to V on the training bins, and compute the test R² for both velocity components."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2020)
+  dt, T, N = 0.05, 12000, 40
+  X = np.zeros((T, 4))
+  for t in range(1, T):
+      p, v = X[t - 1, :2], X[t - 1, 2:]
+      v = v + dt * (-2.0 * v - 1.5 * p) + np.sqrt(dt) * 12 * r.normal(size=2)
+      X[t, :2] = p + dt * v; X[t, 2:] = v
+  V = X[:, 2:]
+  pd = r.uniform(0, 2 * np.pi, N); kap = r.uniform(1.5, 3, N); base = r.uniform(2, 10, N)
+  sp, th = np.hypot(V[:, 0], V[:, 1]), np.arctan2(V[:, 1], V[:, 0])
+  axial = np.arange(N) < 30
+  tun = np.where(axial, np.cos(2 * (th[:, None] - pd)), 0.4 * np.cos(th[:, None] - pd))
+  Z = r.poisson(base * np.exp(kap * tun * np.tanh(sp[:, None] / 6)) * dt).astype(float)
+  Lg = 3
+  Zl = np.concatenate([np.roll(Z, k, 0) for k in range(Lg)], 1); Zl[:Lg] = 0
+  tr, te = np.arange(T) < 8000, np.arange(T) >= 9000
+  mu, sd = Zl[tr].mean(0), Zl[tr].std(0) + 1e-9
+  Zs = (Zl - mu) / sd
+  r2 = lambda a, b: 1 - ((a - b) ** 2).sum(0) / ((a - a.mean(0)) ** 2).sum(0)
+
+  def wiener(ntr):
+      A = np.c_[Zs[:ntr], np.ones(ntr)]
+      B = ...
+      return np.c_[Zs, np.ones(T)] @ B
+
+  r2_w = r2(V[te], wiener(8000)[te])
+  print("Wiener filter R squared (vx, vy):", np.round(r2_w, 3))
+`}
+hint="B = np.linalg.solve(A.T @ A + np.eye(A.shape[1]), A.T @ V[:ntr])."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2020)
+  dt, T, N = 0.05, 12000, 40
+  X = np.zeros((T, 4))
+  for t in range(1, T):
+      p, v = X[t - 1, :2], X[t - 1, 2:]
+      v = v + dt * (-2.0 * v - 1.5 * p) + np.sqrt(dt) * 12 * r.normal(size=2)
+      X[t, :2] = p + dt * v; X[t, 2:] = v
+  V = X[:, 2:]
+  pd = r.uniform(0, 2 * np.pi, N); kap = r.uniform(1.5, 3, N); base = r.uniform(2, 10, N)
+  sp, th = np.hypot(V[:, 0], V[:, 1]), np.arctan2(V[:, 1], V[:, 0])
+  axial = np.arange(N) < 30
+  tun = np.where(axial, np.cos(2 * (th[:, None] - pd)), 0.4 * np.cos(th[:, None] - pd))
+  Z = r.poisson(base * np.exp(kap * tun * np.tanh(sp[:, None] / 6)) * dt).astype(float)
+  Lg = 3
+  Zl = np.concatenate([np.roll(Z, k, 0) for k in range(Lg)], 1); Zl[:Lg] = 0
+  tr, te = np.arange(T) < 8000, np.arange(T) >= 9000
+  mu, sd = Zl[tr].mean(0), Zl[tr].std(0) + 1e-9
+  Zs = (Zl - mu) / sd
+  r2 = lambda a, b: 1 - ((a - b) ** 2).sum(0) / ((a - a.mean(0)) ** 2).sum(0)
+
+  def wiener(ntr):
+      A = np.c_[Zs[:ntr], np.ones(ntr)]
+      B = np.linalg.solve(A.T @ A + np.eye(A.shape[1]), A.T @ V[:ntr])
+      return np.c_[Zs, np.ones(T)] @ B
+
+  r2_w = r2(V[te], wiener(8000)[te])
+  print("Wiener filter R squared (vx, vy):", np.round(r2_w, 3))
+`} />
+
+The Wiener filter reaches $R^2$ of about 0.53 for horizontal velocity and 0.40 for vertical. It is not useless, because the ten conventionally tuned neurons and the speed dependence carry some linear information, but the thirty axial neurons, three quarters of the population, contribute little: a rise in their rate means "along my axis", in either direction, and no weighted sum of rates can turn that into a signed velocity. That answers the first half of the prediction: poorly, though not at all would be too strong.
+
+<Step n={2} title="A network decoder from scratch" minutes={45} />
+
+A network with one hidden layer of 64 rectified units maps the same 120 inputs to the two velocity components:
+
+$$
+\mathbf h = \text{ReLU}(W_1^\top \mathbf z + \mathbf b_1), \qquad \hat{\mathbf v} = W_2^\top \mathbf h + \mathbf b_2.
+$$
+
+With squared error loss, backpropagation (Week 12) gives the gradients in four lines. If $\mathbf d = (\hat{\mathbf v} - \mathbf v)/B$ for a mini-batch of size $B$, then $\nabla W_2 = H^\top \mathbf d$, $\nabla \mathbf b_2 = \sum \mathbf d$, the error at the hidden layer is $\boldsymbol\delta = (\mathbf d W_2^\top) \odot [\mathbf h \gt 0]$, and $\nabla W_1 = Z^\top \boldsymbol\delta$, $\nabla \mathbf b_1 = \sum \boldsymbol\delta$. Training uses Adam with a little weight decay, and holds back the last fifth of the training data as a **validation set**: every 100 steps it checks the validation error and keeps the best weights, a simple form of early stopping.
+
+<PyCell id="mlp" title="Forward, backward, Adam" tests={String.raw`
+  import numpy as np
+  def test_beats_linear():
+      "with 8,000 training bins, the network beats the Wiener filter by more than 0.1 in mean R squared"
+      assert r2_m.mean() > r2_w.mean() + 0.1
+`} prompt="Complete the backward pass inside mlp(): given the batch inputs x, hidden activations h and output error d, compute dh (the error at the hidden layer) and the four gradients gW1, gb1, gW2, gb2 (add wd * W1 and wd * W2 to the weight gradients)."
+code={String.raw`
+  def mlp(ntr, H=64, steps=3000, lr=3e-3, seed=0, wd=1e-3):
+      g = np.random.default_rng(seed); D = Zs.shape[1]; nv = ntr // 5; nfit = ntr - nv
+      W1 = g.normal(0, 1 / np.sqrt(D), (D, H)); b1 = np.zeros(H)
+      W2 = g.normal(0, 1 / np.sqrt(H), (H, 2)); b2 = np.zeros(2)
+      ps = [W1, b1, W2, b2]; m = [np.zeros_like(p) for p in ps]; v = [np.zeros_like(p) for p in ps]
+      vs = V.std(0); best = (np.inf, None)
+      predict = lambda x: (np.maximum(0, x @ W1 + b1) @ W2 + b2) * vs
+      for k in range(1, steps + 1):
+          j = g.integers(0, nfit, 128); x = Zs[j]; y = V[j] / vs
+          h = np.maximum(0, x @ W1 + b1)
+          d = (h @ W2 + b2 - y) / len(j)
+          ...
+          for p, gr, mm, vv in zip(ps, [gW1, gb1, gW2, gb2], m, v):
+              mm *= 0.9; mm += 0.1 * gr; vv *= 0.999; vv += 0.001 * gr ** 2
+              p -= lr * (mm / (1 - 0.9 ** k)) / (np.sqrt(vv / (1 - 0.999 ** k)) + 1e-8)
+          if k % 100 == 0:
+              e = np.mean((predict(Zs[nfit:ntr]) - V[nfit:ntr]) ** 2)
+              if e < best[0]:
+                  best = (e, [p.copy() for p in ps])
+      W1, b1, W2, b2 = best[1]
+      return (np.maximum(0, Zs @ W1 + b1) @ W2 + b2) * vs
+
+  r2_m = r2(V[te], mlp(8000)[te])
+  print("network R squared (vx, vy):", np.round(r2_m, 3), "  Wiener:", np.round(r2_w, 3))
+`}
+hint="dh = (d @ W2.T) * (h > 0); gW2 = h.T @ d + wd * W2; gb2 = d.sum(0); gW1 = x.T @ dh + wd * W1; gb1 = dh.sum(0)."
+solution={String.raw`
+  def mlp(ntr, H=64, steps=3000, lr=3e-3, seed=0, wd=1e-3):
+      g = np.random.default_rng(seed); D = Zs.shape[1]; nv = ntr // 5; nfit = ntr - nv
+      W1 = g.normal(0, 1 / np.sqrt(D), (D, H)); b1 = np.zeros(H)
+      W2 = g.normal(0, 1 / np.sqrt(H), (H, 2)); b2 = np.zeros(2)
+      ps = [W1, b1, W2, b2]; m = [np.zeros_like(p) for p in ps]; v = [np.zeros_like(p) for p in ps]
+      vs = V.std(0); best = (np.inf, None)
+      predict = lambda x: (np.maximum(0, x @ W1 + b1) @ W2 + b2) * vs
+      for k in range(1, steps + 1):
+          j = g.integers(0, nfit, 128); x = Zs[j]; y = V[j] / vs
+          h = np.maximum(0, x @ W1 + b1)
+          d = (h @ W2 + b2 - y) / len(j)
+          dh = (d @ W2.T) * (h > 0)
+          gW2 = h.T @ d + wd * W2; gb2 = d.sum(0)
+          gW1 = x.T @ dh + wd * W1; gb1 = dh.sum(0)
+          for p, gr, mm, vv in zip(ps, [gW1, gb1, gW2, gb2], m, v):
+              mm *= 0.9; mm += 0.1 * gr; vv *= 0.999; vv += 0.001 * gr ** 2
+              p -= lr * (mm / (1 - 0.9 ** k)) / (np.sqrt(vv / (1 - 0.999 ** k)) + 1e-8)
+          if k % 100 == 0:
+              e = np.mean((predict(Zs[nfit:ntr]) - V[nfit:ntr]) ** 2)
+              if e < best[0]:
+                  best = (e, [p.copy() for p in ps])
+      W1, b1, W2, b2 = best[1]
+      return (np.maximum(0, Zs @ W1 + b1) @ W2 + b2) * vs
+
+  r2_m = r2(V[te], mlp(8000)[te])
+  print("network R squared (vx, vy):", np.round(r2_m, 3), "  Wiener:", np.round(r2_w, 3))
+`} />
+
+The network reaches about 0.69 and 0.63, an improvement of about 0.2 in $R^2$ over the Wiener filter from the same spikes. Its hidden units can combine an axial neuron with a weakly direction-tuned one, in effect using the weak neurons to resolve the sign and the strong axial neurons to sharpen the estimate, a conjunction no linear readout can form. Check the effect of early stopping yourself by setting steps to 10,000 and comparing the returned weights with the final ones.
+
+<Step n={3} title="How much data?" minutes={20} />
+
+<Figure caption="Decoding movement direction from axially tuned neurons with a linear decoder and a nearest-neighbour decoder, as the training set grows. Each dot is one test trial." credit="Interactive figure by Engram.">
+  <DecoderCapacity />
+</Figure>
+
+<PyCell id="curve" title="A learning curve" tests={String.raw`
+  import numpy as np
+  def test_growth():
+      "the network's advantage over the Wiener filter is larger with 8,000 training bins than with 1,000"
+      adv = {n: curve[n]["network"] - curve[n]["Wiener"] for n in curve}
+      assert adv[8000] > adv[1000]
+
+  def test_wiener_flat():
+      "the Wiener filter gains less than 0.12 from 1,000 to 8,000 bins"
+      assert curve[8000]["Wiener"] - curve[1000]["Wiener"] < 0.12
+`} prompt="For training sizes of 1,000, 2,000, 4,000 and 8,000 bins, compute the mean test R² of both decoders and store them in curve[n] = {'Wiener': ..., 'network': ...}. (This takes a few seconds per size.)"
+code={String.raw`
+  curve = {}
+  for n in (1000, 2000, 4000, 8000):
+      curve[n] = ...
+      print(n, {k: round(float(x), 3) for k, x in curve[n].items()})
+  plt.plot(list(curve), [c["Wiener"] for c in curve.values()], "o-", label="Wiener")
+  plt.plot(list(curve), [c["network"] for c in curve.values()], "o-", label="network")
+  plt.xscale("log"); plt.xlabel("training bins"); plt.ylabel("test R squared"); plt.legend(); plt.show()
+`}
+hint="curve[n] = {'Wiener': r2(V[te], wiener(n)[te]).mean(), 'network': r2(V[te], mlp(n)[te]).mean()}."
+solution={String.raw`
+  curve = {}
+  for n in (1000, 2000, 4000, 8000):
+      curve[n] = {"Wiener": r2(V[te], wiener(n)[te]).mean(), "network": r2(V[te], mlp(n)[te]).mean()}
+      print(n, {k: round(float(x), 3) for k, x in curve[n].items()})
+  plt.plot(list(curve), [c["Wiener"] for c in curve.values()], "o-", label="Wiener")
+  plt.plot(list(curve), [c["network"] for c in curve.values()], "o-", label="network")
+  plt.xscale("log"); plt.xlabel("training bins"); plt.ylabel("test R squared"); plt.legend(); plt.show()
+`} />
+
+The Wiener filter saturates early: from 1,000 to 8,000 training bins (50 seconds to 7 minutes of data) it improves only from about 0.38 to 0.47, because a linear model with 120 inputs is already well estimated. The network starts ahead even at 1,000 bins (0.48), thanks to early stopping, and keeps improving to about 0.66, so its lead grows from 0.1 to 0.19. Glaser and colleagues also tested their decoders with reduced amounts of training data; when you read the paper, compare their results with this curve and ask which features of the real recordings change the picture.
+
+<Step n={4} title="Practice and pitfalls" minutes={15} />
+
+Glaser and colleagues' comparison is careful in ways worth copying. Hyperparameters, such as the number of hidden units, the dropout rate and the number of lagged bins, were chosen by optimisation on validation data, never on the test set. The test set came from a later, contiguous block of the recording, not from bins shuffled across it, because neighbouring 50 ms bins are strongly correlated and shuffling would let a decoder be tested on near-copies of its training data. And they reported results for several datasets and amounts of data, since rankings changed between them.
+
+<Callout kind="warning">
+
+A better decoder is not a better explanation. A network that decodes velocity well tells you the information is present in the recorded neurons and can be extracted by some nonlinear function; it does not tell you how the brain reads it, or that the brain reads it at all. Glaser and colleagues made this point themselves: machine-learning decoders are tools for engineering (brain-computer interfaces) and for measuring information, while hypothesis-driven models remain the tool for asking how a code works.
+
+</Callout>
+
+<Bridge title="Model-based and model-free"
+  neuro="Decoders built from encoding models are interpretable and data-efficient but wrong when the model is wrong; learned decoders adapt to whatever the code is but need more data and say less about mechanism. Choosing between them is a question about the purpose of the decoding."
+  ai="The same trade-off runs through machine learning: hand-built inductive biases against learned flexibility, with the balance shifting towards learning as data grow. Today's learning curve is a small version of the scaling curves that guide how large models are trained.">
+
+Flexible decoders win when the code is nonlinear and the data are plentiful; with little data, the right assumptions win.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The Wiener filter is...", options: ["Linear regression from lagged spike counts", "A neural network", "A Kalman filter", "A Bayesian decoder"], answer: 0, explain: "Linear, with history." },
+  { q: "Axially tuned neurons are hard for a linear decoder because...", options: ["They respond the same to opposite directions", "They fire too much", "They are silent", "They are Poisson"], answer: 0, explain: "The sign is not linearly available." },
+  { q: "In backpropagation through a ReLU, the error at the hidden layer is...", options: ["(d W₂ᵀ) times the indicator h greater than 0", "d", "W₁ d", "h"], answer: 0, explain: "The ReLU's derivative is 0 or 1." },
+  { q: "Early stopping keeps the weights that...", options: ["Minimise the validation error", "Minimise the training error", "Are largest", "Come last"], answer: 0, explain: "A simple guard against overfitting." },
+  { q: "The test set for time series decoding should be...", options: ["A contiguous later block", "Randomly shuffled bins", "The training set", "Chosen by the decoder"], answer: 0, explain: "Neighbouring bins are correlated." },
+  { q: "Glaser and colleagues found that, on most datasets...", options: ["Modern machine-learning decoders beat Wiener and Kalman filters", "Wiener filters were best", "All decoders were equal", "Kalman filters always won"], answer: 0, explain: "Neural networks and boosted trees usually won." },
+  { q: "The network's advantage over the linear decoder...", options: ["Grew with the amount of training data", "Shrank with data", "Was constant", "Was negative at all sizes"], answer: 0, explain: "Flexibility needs data." },
+  { q: "A decoder that performs well shows...", options: ["That the information is present and extractable", "How the brain reads the code", "That the brain uses a network", "Nothing"], answer: 0, explain: "Decoding is not mechanism." },
+]} />
+
+<Flashcards cards={[
+  { front: "Wiener filter?", back: "Ridge or least-squares regression from spike counts in several past bins to the decoded variable." },
+  { front: "Backprop for one hidden layer?", back: "$\\nabla W_2 = H^\\top \\mathbf d$, $\\boldsymbol\\delta = (\\mathbf d W_2^\\top)\\odot[\\mathbf h\\gt 0]$, $\\nabla W_1 = Z^\\top\\boldsymbol\\delta$." },
+  { front: "Early stopping?", back: "Monitor validation error during training and keep the weights where it was lowest." },
+  { front: "Glaser and colleagues (2020)?", back: "Machine-learning decoders (networks, boosted trees) usually beat Wiener and Kalman filters on motor, somatosensory and hippocampal data." },
+  { front: "Contiguous test blocks?", back: "Needed because neighbouring time bins are correlated; shuffled splits overstate performance." },
+]} />
+
+<Predict revisit question="Can a linear decoder recover the sign of velocity from mostly axially tuned neurons, and does a network do better?" />
+
+<Key title="Before you go">
+<ul>
+<li>A linear decoder can only use what is linearly available; nonlinear mixing hides information from it.</li>
+<li>A one-hidden-layer network decoder is four lines of backpropagation plus an optimiser.</li>
+<li>Validation sets choose hyperparameters and stopping points; test sets are touched once.</li>
+<li>Flexible decoders need data, and their success says the information is there, not how it is used.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Glaser, Benjamin, Chowdhury, Perich, Miller and Kording (2020), <em>Machine learning for neural decoding</em>.</li>
+<li>The authors' Neural_Decoding package on GitHub (KordingLab/Neural_Decoding), with the decoders and example data used in the paper.</li>
+<li>Kriegeskorte and Douglas (2019), <em>Interpreting encoding and decoding models</em>, Current Opinion in Neurobiology 55, 167 to 179.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="You have 20 minutes of recording from 100 neurons and a network decoder that beats a Kalman filter by 0.1 in R squared offline. You are building a brain-computer interface that a patient will use daily for years. List the reasons you might still choose the Kalman filter." />

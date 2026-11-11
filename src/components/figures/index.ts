@@ -164,3 +164,8 @@ export { WhitenedSTA } from "./whitened-sta";
 export { STCSubspace } from "./stc-subspace";
 export { HistoryFilter } from "./history-filter";
 export { FeatureReadout } from "./feature-readout";
+export { BayesDecoder } from "./bayes-decoder";
+export { FisherInfo } from "./fisher-info";
+export { KalmanTrack } from "./kalman-track";
+export { DecoderCapacity } from "./decoder-capacity";
+export { ClosedLoop } from "./closed-loop";
