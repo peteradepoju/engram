@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { PARTS, WEEKS } from "@/lib/curriculum";
 import { AccountCta } from "@/components/account-cta";
+import { HeroFigure } from "@/components/hero-figure";
 
 const FEATURES = [
   { t: "A lesson every day", d: "Two hours of guided learning: interactive figures, step-by-step derivations, curated videos and Python that runs in your browser." },
@@ -15,10 +16,11 @@ export default function Home() {
   const teaching = WEEKS.filter((w) => w.kind !== "rest").length;
   return (
     <div>
-      <section className="mx-auto max-w-6xl px-4 pb-12 pt-14 md:pt-20">
+      <section className="mx-auto grid max-w-6xl items-center gap-12 px-4 pb-14 pt-14 md:grid-cols-[1.3fr_1fr] md:pt-20">
+        <div>
         <div className="eyebrow">A free course · 208 weeks · 3 hours a day</div>
         <h1 className="mt-4 max-w-3xl text-[2.5rem] font-semibold leading-[1.08] tracking-tight md:text-[3.6rem]" style={{ fontFamily: "var(--font-serif)" }}>
-          Learn how brains and machines learn.
+          Learn how <em className="hero-em">brains and machines</em> learn.
         </h1>
         <p className="mt-5 max-w-2xl text-lg text-ink-2">
           Engram takes you from the foundations to independent research in NeuroAI: neuroscience, machine learning and deep learning, taught side by side, one day at a time.
@@ -27,11 +29,16 @@ export default function Home() {
           <Link href="/learn/w001/d1" className="btn btn-primary !px-5 !py-3 !text-base">Start Day 1</Link>
           <Link href="/curriculum" className="btn !px-5 !py-3 !text-base">See the curriculum</Link>
         </div>
-        <div className="mt-10 grid max-w-2xl grid-cols-3 gap-3 text-center">
-          {[["8", "parts"], [String(teaching), "teaching weeks"], ["5", "papers a week"]].map(([n, l]) => (
-            <div key={l} className="card px-3 py-4"><div className="text-2xl font-semibold">{n}</div><div className="text-xs text-ink-3">{l}</div></div>
+        <dl className="hero-stats mt-12 flex max-w-2xl divide-x divide-line">
+          {[["8", "parts"], [String(teaching), "teaching weeks"], ["5", "papers a week"], ["0", "cost"]].map(([n, l]) => (
+            <div key={l} className="px-5 first:pl-0 sm:px-7">
+              <dt className="display text-[1.75rem] leading-none" style={{ fontFamily: "var(--font-serif)" }}>{n}</dt>
+              <dd className="mt-1.5 text-xs text-ink-3">{l}</dd>
+            </div>
           ))}
+        </dl>
         </div>
+        <HeroFigure />
       </section>
 
       <section className="border-y border-line bg-surface">
@@ -43,8 +50,8 @@ export default function Home() {
       </section>
 
       <section className="mx-auto max-w-6xl px-4 py-12">
-        <h2 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-serif)" }}>Eight parts, from first principles to your own research</h2>
-        <ol className="mt-6 grid gap-3 md:grid-cols-2">
+        <h2 className="display text-[1.9rem] font-semibold leading-tight" style={{ fontFamily: "var(--font-serif)" }}>Eight parts, from first principles to your own research</h2>
+        <ol className="hero-parts mt-6 grid gap-3 md:grid-cols-2">
           {PARTS.map((p) => (
             <li key={p.n}>
               <Link href={`/curriculum#part-${p.n}`} className="card flex h-full gap-4 p-4 hover:border-ink-3">

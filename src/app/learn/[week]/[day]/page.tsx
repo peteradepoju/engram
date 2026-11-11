@@ -74,7 +74,7 @@ export default async function LessonPage({ params }: { params: Promise<Params> }
 
         {lesson ? (
           <>
-            <p className="mt-4 text-[1.05rem] leading-relaxed text-ink-2 sm:mt-5 sm:text-lg">{lesson.meta.intro}</p>
+            <p className="lesson-intro mt-4 text-[1.05rem] leading-relaxed text-ink-2 sm:mt-5 sm:text-lg">{lesson.meta.intro}</p>
             <details className="card group mt-5 overflow-hidden sm:hidden">
               <summary className="tap flex cursor-pointer list-none items-center gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-soft font-mono text-xs font-bold text-accent">{Math.round(lesson.meta.plan.reduce((a, s) => a + s.minutes, 0) / 6) / 10}h</span>
@@ -92,7 +92,7 @@ export default async function LessonPage({ params }: { params: Promise<Params> }
                 </ul>
               </div>
             </details>
-            <div className="mt-6 hidden gap-4 sm:grid sm:grid-cols-2">
+            <div className="lesson-meta mt-6 hidden gap-4 sm:grid sm:grid-cols-2">
               <div className="card p-4">
                 <div className="eyebrow">By the end you can</div>
                 <ul className="mt-2 list-disc space-y-1 pl-5 text-[0.95rem]">{lesson.meta.goals.map((g) => <li key={g}>{g}</li>)}</ul>
