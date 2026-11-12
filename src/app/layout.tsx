@@ -5,25 +5,9 @@ import "@fontsource/cormorant-garamond/600.css";
 import "@fontsource/cormorant-garamond/500-italic.css";
 import "@fontsource-variable/jost";
 import "@fontsource-variable/jetbrains-mono";
-import "@fontsource-variable/geist";
-import "@fontsource-variable/geist-mono";
-import "@fontsource-variable/fraunces/full.css";
-import "@fontsource-variable/fraunces/full-italic.css";
-import "@fontsource-variable/source-serif-4";
-import "@fontsource-variable/manrope";
-import "@fontsource-variable/space-grotesk";
-import "@fontsource/ibm-plex-sans/400.css";
-import "@fontsource/ibm-plex-sans/500.css";
-import "@fontsource/ibm-plex-sans/600.css";
-import "@fontsource/ibm-plex-mono/400.css";
-import "@fontsource/ibm-plex-mono/500.css";
-import "@fontsource-variable/newsreader";
-import "@fontsource-variable/newsreader/wght-italic.css";
-import "@fontsource-variable/nunito-sans";
-import "./designs.css";
+import "./atlas.css";
 import { SiteHeader, BottomTabs } from "@/components/nav";
 import { ServiceWorker } from "@/components/service-worker";
-import { DesignSwitch } from "@/components/design-switch";
 
 export const metadata: Metadata = {
   title: { default: "Engram: learn NeuroAI from scratch", template: "%s | Engram" },
@@ -49,14 +33,12 @@ export const viewport: Viewport = {
   viewportFit: "cover",
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#f7f5f0" },
-    { media: "(prefers-color-scheme: dark)", color: "#111018" },
+    { media: "(prefers-color-scheme: dark)", color: "#0f1627" },
   ],
 };
 
 // Applies the saved theme before paint, so there is no flash.
-const themeScript = `try{var t=localStorage.getItem('engram-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}
-try{var ok=['atlas','quiet','journal','nocturne','sage','original'],q=new URLSearchParams(location.search).get('design'),d=null;try{d=localStorage.getItem('engram-design')}catch(e){}
-if(q&&ok.indexOf(q)>=0){d=q;try{localStorage.setItem('engram-design',q)}catch(e){}}if(d&&d!=='original'&&ok.indexOf(d)>=0)document.documentElement.dataset.design=d}catch(e){}`;
+const themeScript = `try{var t=localStorage.getItem('engram-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}`;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -69,7 +51,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <main className="pb-24 md:pb-10">{children}</main>
         <BottomTabs />
         <ServiceWorker />
-        <DesignSwitch />
       </body>
     </html>
   );
