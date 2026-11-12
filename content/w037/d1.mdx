@@ -1,0 +1,319 @@
+export const meta = {
+  title: "Neurodata Without Borders: how neural data are stored",
+  intro: "Until now every dataset in this course has been one you simulated. From this week, the data are real or shaped exactly like real data, and the first skill is simply opening them. Most public neurophysiology data are now shared in Neurodata Without Borders (NWB), a standard built on HDF5 and hosted in archives such as DANDI. Today you learn how an NWB file is organised (acquisition, processing, units, trials, metadata), build a small file with the same structure yourself, read spikes out of its ragged arrays and align them to trials, the steps behind every analysis that follows.",
+  goals: [
+    "Describe the hierarchy of groups, datasets and attributes in an HDF5 file",
+    "Name the main parts of an NWB file and what each holds",
+    "Read one unit's spikes from the ragged arrays NWB uses for spike times",
+    "Align spikes to the trials table to make rasters and PSTHs",
+  ],
+  plan: [
+    { label: "Predict and why a standard", minutes: 20 },
+    { label: "HDF5 from the inside", minutes: 30 },
+    { label: "Ragged arrays: units and spikes", minutes: 30 },
+    { label: "Trials and alignment", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "rubel-2022",
+};
+
+<Predict question="An NWB file stores the spike times of 500 units. Do you expect it to hold 500 separate arrays, one per unit, or something else? Why might the designers have chosen differently?" />
+
+<Step n={1} title="Why a standard" minutes={20} />
+
+Every laboratory used to store data its own way: MATLAB structures, custom binary files, folders of text. Reusing someone else's recording meant weeks of reverse engineering. **Neurodata Without Borders** (NWB) is a common format for neurophysiology, designed by a consortium of laboratories and the Allen Institute, and described by Rübel and colleagues (2022). An NWB file holds the raw and processed data together with the metadata needed to interpret them: the subject, the devices, the electrodes and their brain locations, the stimuli and the behaviour. The **DANDI Archive** hosts thousands of NWB datasets, with the code to read each.
+
+Under the hood, an NWB file is an **HDF5** file: a hierarchical container in which **groups** behave like folders, **datasets** are typed arrays, and **attributes** are small pieces of metadata attached to either. HDF5 can read a slice of a large dataset without loading the rest, which matters when a single file holds hours of recordings from hundreds of channels.
+
+<Video id="c8JCgX5JPBw" title="Observing" by="Marcus Ghosh (Neuroscience for Machine Learners)" note="Marcus Ghosh surveys how neural activity is recorded, from single electrodes to Neuropixels probes and calcium imaging, the sources of the data that NWB files store. From the Neuroscience for Machine Learners course by Dan Goodman and Marcus Ghosh." />
+
+<Step n={2} title="HDF5 from the inside" minutes={30} />
+
+The cell below writes a small file with the layout of an NWB file from an extracellular recording: session metadata, a trials table, a units table with spike times, and an electrodes table with brain areas. It is built with `h5py` directly so that nothing is hidden; with real files you would use the `pynwb` library, which reads the same structure.
+
+<Figure caption="The main parts of an NWB file from an extracellular recording. Select a part to see what it holds and how you would read it." credit="Interactive figure by Engram, after the NWB schema described by Rübel and colleagues (2022).">
+  <NWBTree />
+</Figure>
+
+<PyCell id="tree" title="Walking the file" tests={String.raw`
+  def test_tree():
+      "tree lists every dataset with its full path and shape"
+      assert tree["/units/spike_times"] == (len(f["/units/spike_times"]),)
+      assert tree["/intervals/trials/choice"] == (n_trials,)
+      assert all(isinstance(v, tuple) for v in tree.values())
+      assert len(tree) >= 12
+`} prompt="Complete visit(name, obj) so that, for every dataset in the file, tree maps its full path (with a leading slash) to its shape. f.visititems calls visit on every group and dataset below the root."
+code={String.raw`
+  import io
+  import numpy as np
+  import h5py
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2022)
+
+  # --- Simulate a session: 300 trials, 24 units in 3 brain areas ---
+  n_trials, n_units = 300, 24
+  starts = np.cumsum(r.uniform(2.5, 3.5, n_trials))
+  stops = starts + 2.0
+  contrast = r.choice([-1, -0.5, -0.25, 0, 0.25, 0.5, 1], n_trials)      # negative = left
+  choice = np.where(r.random(n_trials) < 1 / (1 + np.exp(-6 * contrast)), 1, -1)
+  areas = np.repeat(["VISp", "MOs", "CA1"], 8)
+  spike_lists = []
+  for u in range(n_units):
+      base = r.uniform(2, 10)
+      times = list(r.uniform(0, stops[-1] + 2, r.poisson(base * (stops[-1] + 2))))
+      for s, c, ch in zip(starts, contrast, choice):
+          if areas[u] == "VISp":                      # visual response 50 to 250 ms after onset
+              times += list(s + 0.5 + r.uniform(0.05, 0.25, r.poisson(4 * abs(c) + 0.2)))
+          if areas[u] == "MOs":                       # choice signal before the response
+              times += list(s + 0.8 + r.uniform(0, 0.4, r.poisson(3 if ch == 1 else 0.3)))
+      spike_lists.append(np.sort(np.array(times)))
+
+  # --- Write it with the layout of an NWB file ---
+  buf = io.BytesIO()
+  with h5py.File(buf, "w") as w:
+      w.attrs["session_description"] = "Simulated visual decision task"
+      w.attrs["identifier"] = "engram-w037-demo"
+      w.create_dataset("general/subject/species", data="Mus musculus")
+      w.create_dataset("general/subject/subject_id", data="mouse-01")
+      tr = w.create_group("intervals/trials")
+      tr.create_dataset("start_time", data=starts); tr.create_dataset("stop_time", data=stops)
+      tr.create_dataset("contrast", data=contrast); tr.create_dataset("choice", data=choice)
+      tr.create_dataset("stim_on_time", data=starts + 0.5)
+      el = w.create_group("general/extracellular_ephys/electrodes")
+      el.create_dataset("location", data=np.array(areas, dtype="S8"))
+      un = w.create_group("units")
+      un.create_dataset("spike_times", data=np.concatenate(spike_lists))
+      un.create_dataset("spike_times_index", data=np.cumsum([len(s) for s in spike_lists]))
+      un.create_dataset("electrodes", data=np.arange(n_units))
+      un.create_dataset("id", data=np.arange(n_units))
+  f = h5py.File(buf, "r")
+
+  tree = {}
+  def visit(name, obj):
+      ...
+  f.visititems(visit)
+  for k, v in sorted(tree.items()):
+      print(f"{k:45s} {v}")
+`}
+hint="if isinstance(obj, h5py.Dataset): tree['/' + name] = obj.shape."
+solution={String.raw`
+  import io
+  import numpy as np
+  import h5py
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2022)
+
+  # --- Simulate a session: 300 trials, 24 units in 3 brain areas ---
+  n_trials, n_units = 300, 24
+  starts = np.cumsum(r.uniform(2.5, 3.5, n_trials))
+  stops = starts + 2.0
+  contrast = r.choice([-1, -0.5, -0.25, 0, 0.25, 0.5, 1], n_trials)      # negative = left
+  choice = np.where(r.random(n_trials) < 1 / (1 + np.exp(-6 * contrast)), 1, -1)
+  areas = np.repeat(["VISp", "MOs", "CA1"], 8)
+  spike_lists = []
+  for u in range(n_units):
+      base = r.uniform(2, 10)
+      times = list(r.uniform(0, stops[-1] + 2, r.poisson(base * (stops[-1] + 2))))
+      for s, c, ch in zip(starts, contrast, choice):
+          if areas[u] == "VISp":                      # visual response 50 to 250 ms after onset
+              times += list(s + 0.5 + r.uniform(0.05, 0.25, r.poisson(4 * abs(c) + 0.2)))
+          if areas[u] == "MOs":                       # choice signal before the response
+              times += list(s + 0.8 + r.uniform(0, 0.4, r.poisson(3 if ch == 1 else 0.3)))
+      spike_lists.append(np.sort(np.array(times)))
+
+  # --- Write it with the layout of an NWB file ---
+  buf = io.BytesIO()
+  with h5py.File(buf, "w") as w:
+      w.attrs["session_description"] = "Simulated visual decision task"
+      w.attrs["identifier"] = "engram-w037-demo"
+      w.create_dataset("general/subject/species", data="Mus musculus")
+      w.create_dataset("general/subject/subject_id", data="mouse-01")
+      tr = w.create_group("intervals/trials")
+      tr.create_dataset("start_time", data=starts); tr.create_dataset("stop_time", data=stops)
+      tr.create_dataset("contrast", data=contrast); tr.create_dataset("choice", data=choice)
+      tr.create_dataset("stim_on_time", data=starts + 0.5)
+      el = w.create_group("general/extracellular_ephys/electrodes")
+      el.create_dataset("location", data=np.array(areas, dtype="S8"))
+      un = w.create_group("units")
+      un.create_dataset("spike_times", data=np.concatenate(spike_lists))
+      un.create_dataset("spike_times_index", data=np.cumsum([len(s) for s in spike_lists]))
+      un.create_dataset("electrodes", data=np.arange(n_units))
+      un.create_dataset("id", data=np.arange(n_units))
+  f = h5py.File(buf, "r")
+
+  tree = {}
+  def visit(name, obj):
+      if isinstance(obj, h5py.Dataset):
+          tree["/" + name] = obj.shape
+  f.visititems(visit)
+  for k, v in sorted(tree.items()):
+      print(f"{k:45s} {v}")
+`} />
+
+The file holds twelve datasets in a tree: subject metadata under `general`, five columns of the trials table under `intervals/trials`, the electrodes table, and four datasets for the units. Notice that the 24 units' spike times are a single dataset of about 140,000 numbers, not 24 arrays, which answers the prediction. Real NWB files follow the same plan with many more parts: raw voltage traces in `acquisition`, derived signals such as LFP or calcium traces in `processing`, and stimulus presentations in `stimulus`.
+
+<Step n={3} title="Ragged arrays: units and spikes" minutes={30} />
+
+Units fire different numbers of spikes, so their spike times do not fit in a rectangular array. NWB stores them as a **ragged array**: one long dataset, `spike_times`, holding every unit's spikes end to end, and an index, `spike_times_index`, giving the position where each unit's spikes end. Unit $k$'s spikes run from `index[k-1]` (or 0 for the first unit) up to `index[k]`. One array plus one index is far faster to write and read than thousands of small arrays, and HDF5 can read any one unit's slice without touching the others.
+
+<PyCell id="ragged" title="Reading one unit" tests={String.raw`
+  import numpy as np
+  def test_first():
+      "unit 0 is read correctly"
+      assert np.allclose(spikes_of(f, 0), spike_lists[0])
+
+  def test_all():
+      "every unit is read correctly"
+      assert all(np.allclose(spikes_of(f, k), spike_lists[k]) for k in range(n_units))
+`} prompt="Write spikes_of(f, k), returning unit k's spike times by slicing f['/units/spike_times'] with the boundaries in f['/units/spike_times_index']. Read only the slice you need."
+code={String.raw`
+  def spikes_of(f, k):
+      idx = f["/units/spike_times_index"]
+      start = ...
+      stop = ...
+      return f["/units/spike_times"][start:stop]
+
+  loc = [s.decode() for s in f["/general/extracellular_ephys/electrodes/location"][:]]
+  for k in (0, 8, 16):
+      s = spikes_of(f, k)
+      print(f"unit {k:2d} in {loc[k]}: {len(s)} spikes, {len(s) / s[-1]:.1f} Hz")
+`}
+hint="start = 0 if k == 0 else int(idx[k - 1]); stop = int(idx[k])."
+solution={String.raw`
+  def spikes_of(f, k):
+      idx = f["/units/spike_times_index"]
+      start = 0 if k == 0 else int(idx[k - 1])
+      stop = int(idx[k])
+      return f["/units/spike_times"][start:stop]
+
+  loc = [s.decode() for s in f["/general/extracellular_ephys/electrodes/location"][:]]
+  for k in (0, 8, 16):
+      s = spikes_of(f, k)
+      print(f"unit {k:2d} in {loc[k]}: {len(s)} spikes, {len(s) / s[-1]:.1f} Hz")
+`} />
+
+Unit 0, in VISp, fired about 4,700 spikes; units 8 and 16 a little over 3,000 and 2,800. Each was read with one slice of one dataset. The same pattern appears throughout NWB wherever rows have different lengths: spike waveforms, electrodes per unit, and the timestamps of events within trials. When you see a dataset ending in `_index`, it is the boundary list for a ragged column.
+
+<Step n={4} title="Trials and alignment" minutes={25} />
+
+The trials table is a set of columns of equal length, one row per trial: start and stop times, the stimulus, the animal's choice and anything else the experimenter recorded. Almost every analysis starts by aligning spikes to an event in this table, here stimulus onset, and counting them in small bins.
+
+<PyCell id="align" title="PSTHs by area and choice" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "psth returns one rate per bin"
+      assert psth(spikes_of(f, 0), f["/intervals/trials/stim_on_time"][:]).shape == (len(edges) - 1,)
+
+  def test_visual():
+      "VISp units respond after stimulus onset: the rate 50 to 250 ms after onset exceeds the rate before it"
+      on = f["/intervals/trials/stim_on_time"][:]
+      p = np.mean([psth(spikes_of(f, k), on) for k in range(8)], 0)
+      assert p[(centres > 0.05) & (centres < 0.25)].mean() > 1.5 * p[centres < 0].mean()
+
+  def test_choice():
+      "MOs units fire at least 1.5 times as fast before rightward choices as before leftward ones"
+      assert mos[1][(centres > 0.3) & (centres < 0.7)].mean() > 1.5 * mos[-1][(centres > 0.3) & (centres < 0.7)].mean()
+`} prompt="Write psth(spikes, events): for each event, count the spikes in the bins given by edges relative to the event, then return the mean count per trial divided by the bin width (a rate in Hz). Then compute the MOs population PSTH separately for rightward (1) and leftward (-1) choices."
+code={String.raw`
+  edges = np.arange(-0.5, 1.0001, 0.025); centres = (edges[:-1] + edges[1:]) / 2
+
+  def psth(spikes, events):
+      counts = ...
+      return counts.mean(0) / np.diff(edges)
+
+  on = f["/intervals/trials/stim_on_time"][:]
+  ch = f["/intervals/trials/choice"][:]
+  mos = {c: np.mean([psth(spikes_of(f, k), on[ch == c]) for k in range(8, 16)], 0) for c in (1, -1)}
+  vis = np.mean([psth(spikes_of(f, k), on) for k in range(8)], 0)
+  plt.plot(centres, vis, label="VISp, all trials")
+  plt.plot(centres, mos[1], label="MOs, right choices"); plt.plot(centres, mos[-1], label="MOs, left choices")
+  plt.axvline(0, color="gray", lw=0.5); plt.xlabel("time from stimulus onset (s)"); plt.ylabel("rate (Hz)"); plt.legend(); plt.show()
+`}
+hint="counts = np.array([np.histogram(spikes - e, edges)[0] for e in events])."
+solution={String.raw`
+  edges = np.arange(-0.5, 1.0001, 0.025); centres = (edges[:-1] + edges[1:]) / 2
+
+  def psth(spikes, events):
+      counts = np.array([np.histogram(spikes - e, edges)[0] for e in events])
+      return counts.mean(0) / np.diff(edges)
+
+  on = f["/intervals/trials/stim_on_time"][:]
+  ch = f["/intervals/trials/choice"][:]
+  mos = {c: np.mean([psth(spikes_of(f, k), on[ch == c]) for k in range(8, 16)], 0) for c in (1, -1)}
+  vis = np.mean([psth(spikes_of(f, k), on) for k in range(8)], 0)
+  plt.plot(centres, vis, label="VISp, all trials")
+  plt.plot(centres, mos[1], label="MOs, right choices"); plt.plot(centres, mos[-1], label="MOs, left choices")
+  plt.axvline(0, color="gray", lw=0.5); plt.xlabel("time from stimulus onset (s)"); plt.ylabel("rate (Hz)"); plt.legend(); plt.show()
+`} />
+
+The VISp units nearly triple their firing rate 50 to 250 ms after the stimulus, from about 6 Hz to 17 Hz, the visual response written into the simulation. The MOs units fire about twice as fast before rightward choices as before leftward ones, from about 300 ms after onset: a choice signal, which in a real recording you would next test against the stimulus (rightward choices usually follow rightward stimuli, so the two must be separated, as Day 5 and the Forge will do).
+
+<Callout kind="note">
+
+With a real dataset, the same steps use `pynwb` and `dandi`, which you can run in the Colab notebook for today (they need network access, which the in-page Python does not have). For example, to stream one session of the IBL Brain Wide Map without downloading it all:
+
+```python
+from dandi.dandiapi import DandiAPIClient
+from pynwb import NWBHDF5IO
+import remfile, h5py
+
+with DandiAPIClient() as client:
+    asset = client.get_dandiset("000409").get_assets_by_glob("*.nwb").__next__()
+    url = asset.get_content_url(follow_redirects=1, strip_query=True)
+io = NWBHDF5IO(file=h5py.File(remfile.File(url), "r"), load_namespaces=True)
+nwb = io.read()
+print(nwb.trials.to_dataframe().head())
+print(nwb.units.to_dataframe()[["spike_times"]].head())
+```
+
+The DANDI identifier and file layout differ from dataset to dataset, so check each dataset's page on dandiarchive.org for its own example code.
+
+</Callout>
+
+<Bridge title="Data as a shared resource"
+  neuro="Shared formats and archives have turned single-laboratory recordings into community resources: the Allen Brain Observatory, the IBL Brain Wide Map and many DANDI datasets are reanalysed by people who never saw the experiments, which is how most of the analyses in the rest of this course can be done at all."
+  ai="Machine learning was transformed by shared benchmark datasets with standard formats, from MNIST to ImageNet. Neuroscience's standards play the same role, and large models trained across many NWB recordings, so-called neural foundation models, are only possible because the data share a format.">
+
+A standard format is what lets data outlive the experiment that produced it.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In HDF5, a group is like...", options: ["A folder", "An array", "A number", "A plot"], answer: 0, explain: "Datasets are the arrays; attributes the metadata." },
+  { q: "NWB files are built on...", options: ["HDF5", "CSV", "JSON", "MATLAB only"], answer: 0, explain: "With a schema on top." },
+  { q: "The DANDI Archive...", options: ["Hosts NWB datasets", "Is a spike sorter", "Is a microscope", "Is a decoder"], answer: 0, explain: "A public archive for neurophysiology." },
+  { q: "Spike times of many units are stored as...", options: ["A ragged array with an index", "One file per unit", "A square matrix", "Text"], answer: 0, explain: "spike_times and spike_times_index." },
+  { q: "Unit k's spikes run from...", options: ["index[k-1] to index[k]", "0 to index[k]", "k to k+1", "index[k] to the end"], answer: 0, explain: "With index[-1] taken as 0 for the first unit." },
+  { q: "The trials table holds...", options: ["One row per trial with events and conditions", "Raw voltage", "Spike waveforms", "Electrode positions"], answer: 0, explain: "In /intervals/trials." },
+  { q: "HDF5's ability to read a slice matters because...", options: ["Files can be far larger than memory", "It compresses text", "It sorts spikes", "It is required by Python"], answer: 0, explain: "Read only what you need." },
+  { q: "Electrode locations are stored in...", options: ["The electrodes table in the metadata", "The trials table", "The spike times", "Attributes of the root"], answer: 0, explain: "So units can be assigned to brain areas." },
+]} />
+
+<Flashcards cards={[
+  { front: "HDF5 groups, datasets, attributes?", back: "Folders, typed arrays, and small metadata attached to either." },
+  { front: "NWB?", back: "Neurodata Without Borders: a standard schema on HDF5 for neurophysiology data and metadata." },
+  { front: "Ragged array?", back: "All units' values in one array plus an index of end positions; unit k is data[index[k-1]:index[k]]." },
+  { front: "Main parts of an NWB file?", back: "acquisition (raw), processing (derived), units, intervals/trials, stimulus, general (metadata: subject, devices, electrodes)." },
+  { front: "DANDI?", back: "A public archive of NWB datasets, with an API to stream files without downloading them whole." },
+]} />
+
+<Predict revisit question="Does an NWB file store 500 units' spike times as 500 separate arrays?" />
+
+<Key title="Before you go">
+<ul>
+<li>NWB is a schema on HDF5: groups, datasets and attributes, with standard names.</li>
+<li>Spike times are a ragged array plus an index; read one unit by slicing.</li>
+<li>The trials table drives alignment: every PSTH starts from it.</li>
+<li>Real NWB data are read with pynwb and streamed from DANDI.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Rübel and colleagues (2022), <em>The Neurodata Without Borders ecosystem for neurophysiological data science</em>.</li>
+<li>The NWB documentation and tutorials at nwb.org, and the pynwb documentation.</li>
+<li>The DANDI Archive at dandiarchive.org, and its documentation on streaming data.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Pick one dataset on the DANDI Archive related to a topic you care about. From its page alone, write down what you can learn about the subjects, the recording method, the brain areas and the behaviour, and what you would still need to ask the authors." />

@@ -1,0 +1,301 @@
+export const meta = {
+  title: "Neuropixels units: quality metrics and a visual hierarchy",
+  intro: "A Neuropixels probe records hundreds of neurons across several brain areas at once, and spike sorting turns its voltage traces into units. Not every unit is a single, well-isolated neuron: some mix spikes from several cells, some drift out of range during the session. Before any analysis, units are screened with quality metrics. Siegle and colleagues recorded from six visual cortical areas and two thalamic nuclei in each mouse with up to six probes at once, and found that response latency and other properties ordered the areas into a functional hierarchy that matched the one traced anatomically. Today you compute the standard quality metrics, filter a units table, and recover a hierarchy from response latencies.",
+  goals: [
+    "Explain why sorted units need quality control, and what refractory-period violations measure",
+    "Estimate contamination from ISI violations and know where the estimate breaks down",
+    "Filter a units table by ISI violations, presence ratio and firing rate",
+    "Measure response latency from a PSTH and order areas by it",
+  ],
+  plan: [
+    { label: "Predict and spike sorting", minutes: 20 },
+    { label: "Refractory violations", minutes: 30 },
+    { label: "A units table", minutes: 25 },
+    { label: "Latency and hierarchy", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "siegle-2021",
+};
+
+<Predict question="A unit fires at 10 Hz, and 20% of its spikes actually come from a second, nearby neuron. A real neuron cannot fire twice within about 1.5 ms. Roughly what fraction of this unit's interspike intervals will be shorter than 1.5 ms: about 20%, about 2%, or well under 1%?" />
+
+<Step n={1} title="Spike sorting" minutes={20} />
+
+Each Neuropixels probe has nearly a thousand recording sites along a 1 cm shank, of which 384 are recorded at once (Jun and colleagues, 2017, from Week 2). A spike from one neuron appears on several neighbouring sites with a characteristic shape. **Spike sorting** finds these shapes, assigns each detected spike to a template, and calls each template a **unit**. Kilosort, the most widely used sorter, does this by template matching with drift correction. The result is a units table with spike times, templates, depths and, after alignment with histology, brain areas.
+
+Sorting makes mistakes in both directions: two neurons with similar waveforms may be merged into one unit (contamination), and one neuron may be split into several, or lost for part of the session as the probe drifts. Quality metrics measure these failures from the data themselves.
+
+<Video id="DHhM80MOTe8" title="ISI distribution" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's tutorial video on the interspike interval distribution of neurons recorded with Neuropixels in the Steinmetz dataset, including the near absence of very short intervals." />
+
+<Step n={2} title="Refractory violations" minutes={30} />
+
+A neuron cannot fire again within its refractory period, so intervals shorter than about 1.5 ms in a unit's spike train must involve spikes from another source. Hill, Mehta and Kleinfeld (2011) turned the count of such **ISI violations** into an estimate of contamination. If a fraction $f$ of $N$ spikes in a recording of length $T$ come from an unrelated source firing independently, the expected number of violations within a window $t_r$ is about $2 t_r f N^2 / T$. The Allen Brain Observatory reports the observed violations divided by $2 t_r N^2/T$. Counting the pairs of spikes that can fall within $t_r$ of each other (contaminant with neuron, and contaminant with contaminant) shows that this metric is
+
+$$
+m = f - \tfrac{1}{2}f^2,
+$$
+
+close to $f$ when contamination is small but reaching only 0.5 for a unit made entirely of unrelated spikes. Inverting it gives an estimate of the contamination itself: $\hat f = 1 - \sqrt{1 - 2m}$.
+
+<Figure caption="The interspike interval distribution near zero for a unit with contamination from a second neuron, with the refractory window shaded. Change the contamination and the firing rate." credit="Interactive figure by Engram, after Hill, Mehta and Kleinfeld (2011).">
+  <ISIViolations />
+</Figure>
+
+<PyCell id="isi" title="Contamination from violations" tests={String.raw`
+  import numpy as np
+  def test_clean():
+      "a clean unit has an estimate of zero"
+      assert est[0.0] == 0
+
+  def test_order():
+      "the inverted estimate rises with true contamination and is within 0.06 of it at every level"
+      v = [est[c] for c in sorted(est)]
+      assert all(a < b for a, b in zip(v, v[1:]))
+      assert all(abs(est[c] - c) < 0.06 for c in est)
+
+  def test_metric():
+      "the raw metric of a fully random unit is close to 0.5"
+      st = np.sort(r.uniform(0, T, int(10 * T)))
+      assert abs(isi_violation_rate(st, T) - 0.5) < 0.05
+`} prompt="Write isi_violation_rate(st, T, tr=0.0015): the number of intervals shorter than tr divided by 2 tr N² / T, with N the number of spikes. Then turn the metric m into a contamination estimate, 1 - sqrt(1 - 2m), clipping m just below 0.5."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2011)
+
+  def make_unit(rate, T, contam, ref=0.002):
+      """A refractory neuron firing at rate (1 - contam), plus Poisson spikes from another source at rate contam."""
+      isi = r.exponential(1 / (rate * (1 - contam) + 1e-12), int(rate * T * 1.5)) + ref
+      own = np.cumsum(isi); own = own[own < T]
+      other = r.uniform(0, T, r.poisson(rate * contam * T))
+      return np.sort(np.r_[own, other])
+
+  def isi_violation_rate(st, T, tr=0.0015):
+      ...
+
+  T = 1800.0
+  est = {}
+  for c in (0.0, 0.05, 0.1, 0.2, 0.4):
+      st = make_unit(10, T, c)
+      m = isi_violation_rate(st, T)
+      est[c] = 1 - np.sqrt(1 - 2 * min(m, 0.4999))
+      print(f"true contamination {c:.2f}: violations {np.mean(np.diff(st) < 0.0015):.4f} of intervals, metric {m:.3f}, estimate {est[c]:.3f}")
+`}
+hint="N = len(st); v = np.sum(np.diff(st) < tr); return v / (2 * tr * N ** 2 / T)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2011)
+
+  def make_unit(rate, T, contam, ref=0.002):
+      """A refractory neuron firing at rate (1 - contam), plus Poisson spikes from another source at rate contam."""
+      isi = r.exponential(1 / (rate * (1 - contam) + 1e-12), int(rate * T * 1.5)) + ref
+      own = np.cumsum(isi); own = own[own < T]
+      other = r.uniform(0, T, r.poisson(rate * contam * T))
+      return np.sort(np.r_[own, other])
+
+  def isi_violation_rate(st, T, tr=0.0015):
+      N = len(st)
+      v = np.sum(np.diff(st) < tr)
+      return v / (2 * tr * N ** 2 / T)
+
+  T = 1800.0
+  est = {}
+  for c in (0.0, 0.05, 0.1, 0.2, 0.4):
+      st = make_unit(10, T, c)
+      m = isi_violation_rate(st, T)
+      est[c] = 1 - np.sqrt(1 - 2 * min(m, 0.4999))
+      print(f"true contamination {c:.2f}: violations {np.mean(np.diff(st) < 0.0015):.4f} of intervals, metric {m:.3f}, estimate {est[c]:.3f}")
+`} />
+
+Even a unit with 20% contamination has only about 0.6% of its intervals under 1.5 ms, which answers the prediction: well under 1%. Violations are rare because the contaminating spikes must land within 1.5 ms of another spike, and at 10 Hz that happens about 1.5% of the time for each unrelated spike. The raw metric tracks contamination at 5% and 10% but falls behind at higher levels (0.30 for 40%), as $m = f - f^2/2$ predicts; the inverted estimate recovers about 0.24 and 0.36, within sampling noise of the truth for 30 minutes of data. With fewer spikes, a low-rate unit gives a noisy metric, so the same threshold means less for it.
+
+<Step n={3} title="A units table" minutes={25} />
+
+The other common metrics catch other failures. The **presence ratio** is the fraction of one-minute blocks of the session in which the unit fired at all; a unit that drifts out of range for half the session scores about 0.5. The **amplitude cutoff** estimates the fraction of spikes lost below the detection threshold from the shape of the amplitude distribution. The AllenSDK's default filters keep units with ISI violations below 0.5, presence ratio above 0.9 and amplitude cutoff below 0.1. A metric of 0.5 is what a completely random spike train produces, so that default removes only units that are almost entirely contamination; many studies use stricter thresholds. Simulate a table of 80 units with a range of contamination and drift, and filter on estimated contamination below 0.2 and presence ratio above 0.9.
+
+<PyCell id="table" title="Filtering units" tests={String.raw`
+  import numpy as np
+  def test_presence():
+      "presence ratio is 1 for a unit that fires all session and about 0.5 for one present half the time"
+      assert presence_ratio(make_unit(5, T, 0), T) == 1.0
+      half = make_unit(5, T, 0); half = half[half < T / 2]
+      assert 0.45 < presence_ratio(half, T) < 0.55
+
+  def test_filter():
+      "the filter keeps most good units and removes most bad ones"
+      assert keep[good].mean() > 0.9 and keep[~good].mean() < 0.2
+`} prompt="Write presence_ratio(st, T): split the session into 60 s blocks and return the fraction of blocks containing at least one spike. Then keep units with estimated contamination below 0.2 and presence ratio above 0.9."
+code={String.raw`
+  def presence_ratio(st, T, block=60.0):
+      ...
+
+  n_units = 80
+  contam = np.where(r.random(n_units) < 0.25, r.uniform(0.6, 1.0, n_units), r.uniform(0, 0.15, n_units))
+  lost = np.where(r.random(n_units) < 0.2, r.uniform(0.3, 0.7, n_units), 0.0)     # fraction of session missing
+  rates = r.lognormal(1.2, 0.8, n_units)
+  units = []
+  for i in range(n_units):
+      st = make_unit(rates[i], T, contam[i])
+      if lost[i] > 0:
+          st = st[st < T * (1 - lost[i])]
+      units.append(st)
+  viol = np.array([isi_violation_rate(st, T) for st in units])
+  fhat = 1 - np.sqrt(1 - 2 * np.minimum(viol, 0.4999))
+  pres = np.array([presence_ratio(st, T) for st in units])
+  keep = (fhat < 0.2) & (pres > 0.9)
+  good = (contam < 0.2) & (lost == 0)
+  print(f"kept {keep.sum()} of {n_units} units; {keep[good].mean():.0%} of good units kept, {keep[~good].mean():.0%} of bad units kept")
+`}
+hint="nb = int(np.ceil(T / block)); counts = np.histogram(st, np.arange(nb + 1) * block)[0]; return np.mean(counts > 0)."
+solution={String.raw`
+  def presence_ratio(st, T, block=60.0):
+      nb = int(np.ceil(T / block))
+      counts = np.histogram(st, np.arange(nb + 1) * block)[0]
+      return np.mean(counts > 0)
+
+  n_units = 80
+  contam = np.where(r.random(n_units) < 0.25, r.uniform(0.6, 1.0, n_units), r.uniform(0, 0.15, n_units))
+  lost = np.where(r.random(n_units) < 0.2, r.uniform(0.3, 0.7, n_units), 0.0)     # fraction of session missing
+  rates = r.lognormal(1.2, 0.8, n_units)
+  units = []
+  for i in range(n_units):
+      st = make_unit(rates[i], T, contam[i])
+      if lost[i] > 0:
+          st = st[st < T * (1 - lost[i])]
+      units.append(st)
+  viol = np.array([isi_violation_rate(st, T) for st in units])
+  fhat = 1 - np.sqrt(1 - 2 * np.minimum(viol, 0.4999))
+  pres = np.array([presence_ratio(st, T) for st in units])
+  keep = (fhat < 0.2) & (pres > 0.9)
+  good = (contam < 0.2) & (lost == 0)
+  print(f"kept {keep.sum()} of {n_units} units; {keep[good].mean():.0%} of good units kept, {keep[~good].mean():.0%} of bad units kept")
+`} />
+
+The two filters keep 93% of the good units and remove all but 3% of the bad ones, 39 units of 80. The presence ratio catches the units that vanished part way through, which the contamination estimate cannot see, and the contamination estimate catches the merged units, which fire throughout. Note how much the choice of threshold matters: with the permissive default metric of 0.5, most of the heavily contaminated units here would have been kept.
+
+<Step n={4} title="Latency and hierarchy" minutes={30} />
+
+Siegle and colleagues showed full-field flashes, gratings and natural stimuli while recording from the dorsal lateral geniculate nucleus (LGd) and six visual cortical areas: primary visual cortex (VISp) and the higher areas VISl, VISrl, VISal, VISpm and VISam. Among the properties that varied systematically across areas was **response latency**, the time from stimulus onset to the first reliable rise in firing. Simulate 10 units in each area responding to 150 flashes, with latencies that increase along a hierarchy similar to the one they reported, and recover the ordering from the data.
+
+<PyCell id="latency" title="Ordering areas by latency" tests={String.raw`
+  import numpy as np
+  from scipy.stats import spearmanr
+  def test_latency():
+      "latency(rate) finds a response that starts 40 ms after onset to within 5 ms"
+      fake = np.where((centres > 0.040) & (centres < 0.08), 60.0, 5.0)
+      assert abs(latency(fake) - 0.040) < 0.005
+
+  def test_order():
+      "the median latencies recover the simulated ordering of areas (Spearman correlation above 0.9)"
+      assert spearmanr(lat_mu, [area_lat[a] for a in areas]).correlation > 0.9
+`} prompt="Write latency(rate): with the baseline taken from bins before onset, return the centre of the first bin after onset at which the rate exceeds the baseline mean plus 4 standard deviations in two consecutive bins (nan if never)."
+code={String.raw`
+  from scipy.stats import spearmanr
+  areas = ["LGd", "VISp", "VISl", "VISrl", "VISal", "VISpm", "VISam"]
+  lat_mu = [0.034, 0.045, 0.052, 0.050, 0.056, 0.063, 0.068]          # simulated means, seconds
+  edges = np.arange(-0.1, 0.25001, 0.002); centres = (edges[:-1] + edges[1:]) / 2
+
+  def latency(rate):
+      b = rate[centres < 0]
+      above = ...
+      idx = np.where(above[:-1] & above[1:])[0]
+      return centres[idx[0]] if len(idx) else np.nan
+
+  area_lat = {}
+  for a, mu in zip(areas, lat_mu):
+      lats = []
+      for u in range(10):
+          lat = max(0.02, r.normal(mu, 0.006)); base = r.uniform(3, 12); gain = r.uniform(20, 60)
+          counts = np.zeros(len(centres))
+          for k in range(150):
+              sp = list(r.uniform(-0.1, 0.25, r.poisson(base * 0.35))) + list(lat + r.exponential(0.015, r.poisson(gain * 0.03)))
+              counts += np.histogram(sp, edges)[0]
+          lats.append(latency(counts / 150 / 0.002))
+      area_lat[a] = np.nanmedian(lats)
+  print({a: f"{1000 * v:.0f} ms" for a, v in area_lat.items()})
+  plt.bar(areas, [1000 * area_lat[a] for a in areas]); plt.ylabel("median latency (ms)"); plt.show()
+`}
+hint="above = (rate > b.mean() + 4 * b.std()) & (centres > 0)."
+solution={String.raw`
+  from scipy.stats import spearmanr
+  areas = ["LGd", "VISp", "VISl", "VISrl", "VISal", "VISpm", "VISam"]
+  lat_mu = [0.034, 0.045, 0.052, 0.050, 0.056, 0.063, 0.068]          # simulated means, seconds
+  edges = np.arange(-0.1, 0.25001, 0.002); centres = (edges[:-1] + edges[1:]) / 2
+
+  def latency(rate):
+      b = rate[centres < 0]
+      above = (rate > b.mean() + 4 * b.std()) & (centres > 0)
+      idx = np.where(above[:-1] & above[1:])[0]
+      return centres[idx[0]] if len(idx) else np.nan
+
+  area_lat = {}
+  for a, mu in zip(areas, lat_mu):
+      lats = []
+      for u in range(10):
+          lat = max(0.02, r.normal(mu, 0.006)); base = r.uniform(3, 12); gain = r.uniform(20, 60)
+          counts = np.zeros(len(centres))
+          for k in range(150):
+              sp = list(r.uniform(-0.1, 0.25, r.poisson(base * 0.35))) + list(lat + r.exponential(0.015, r.poisson(gain * 0.03)))
+              counts += np.histogram(sp, edges)[0]
+          lats.append(latency(counts / 150 / 0.002))
+      area_lat[a] = np.nanmedian(lats)
+  print({a: f"{1000 * v:.0f} ms" for a, v in area_lat.items()})
+  plt.bar(areas, [1000 * area_lat[a] for a in areas]); plt.ylabel("median latency (ms)"); plt.show()
+`} />
+
+The median latencies rise from about 39 ms in LGd to 48 ms in VISp, around 51 to 59 ms in the lateral and anterior areas, and 62 to 72 ms in VISpm and VISam, recovering the simulated order almost exactly. Single units vary by several milliseconds, so ten per area and medians are needed; real recordings, with hundreds of units per area, give tighter estimates but also bring differences in layer and cell type that a careful analysis must account for.
+
+<Callout kind="note">
+
+The latencies here are made up to resemble a hierarchy; read Siegle and colleagues for the real values and for how they combined latency with other measures, such as receptive field size, preference for stimulus speed and the time scale of responses, into a single hierarchy score, which they compared with the anatomical hierarchy derived from connectivity data by Harris and colleagues (2019).
+
+</Callout>
+
+<Bridge title="Quality before quantity"
+  neuro="Large recordings make it tempting to analyse every unit. Quality metrics, applied before looking at the results, protect against the commonest errors: contamination that mixes two neurons' tuning, and drift that makes a unit appear to change its firing over a session. Siegle and colleagues published their metrics with the data so that others could choose their own thresholds."
+  ai="Machine learning has the same discipline under the name of data cleaning and dataset documentation: label noise and distribution shift are the counterparts of contamination and drift, and datasheets for datasets serve the same purpose as published quality metrics.">
+
+Decide your inclusion criteria before you see whether the result you want depends on them.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A unit in a sorted recording is...", options: ["A cluster of spikes assigned to one template", "Always one neuron", "A recording site", "A brain area"], answer: 0, explain: "Ideally one neuron, but not always." },
+  { q: "ISI violations indicate...", options: ["Spikes from another source mixed into the unit", "High firing rates only", "Drift", "Bursting"], answer: 0, explain: "A real neuron is refractory." },
+  { q: "A unit made entirely of random, unrelated spikes has a violation metric of about...", options: ["0.5", "1", "0", "2"], answer: 0, explain: "m = f - f²/2 with f = 1." },
+  { q: "Presence ratio measures...", options: ["The fraction of the session in which the unit fired", "Spike amplitude", "Contamination", "Latency"], answer: 0, explain: "Catches drift." },
+  { q: "The amplitude cutoff estimates...", options: ["Spikes lost below the detection threshold", "Contamination", "Firing rate", "Depth"], answer: 0, explain: "From the amplitude distribution." },
+  { q: "Response latency is...", options: ["The time to the first reliable rise in firing after onset", "The peak rate", "The ISI", "The trial length"], answer: 0, explain: "Measured against baseline." },
+  { q: "Siegle and colleagues found visual areas...", options: ["Ordered in a functional hierarchy that matched anatomy", "All identical", "Randomly ordered", "Without responses"], answer: 0, explain: "With LGd and VISp first." },
+  { q: "Inclusion criteria should be fixed...", options: ["Before looking at the results they affect", "After", "Never", "By the result"], answer: 0, explain: "To avoid tuning the analysis to the answer." },
+]} />
+
+<Flashcards cards={[
+  { front: "Spike sorting?", back: "Assigning detected spikes to waveform templates (units); Kilosort is the standard for Neuropixels." },
+  { front: "ISI violation metric?", back: "Violations within $t_r$ divided by $2 t_r N^2/T$; it equals $f - f^2/2$ for contamination $f$, so $\\hat f = 1 - \\sqrt{1 - 2m}$." },
+  { front: "Presence ratio?", back: "Fraction of one-minute blocks with at least one spike; low values mean the unit drifted in or out." },
+  { front: "AllenSDK default unit filters?", back: "ISI violations below 0.5, presence ratio above 0.9, amplitude cutoff below 0.1." },
+  { front: "Siegle and colleagues (2021)?", back: "Simultaneous Neuropixels recordings across mouse visual thalamus and cortex revealed a functional hierarchy, including increasing response latency, matching the anatomical one." },
+]} />
+
+<Predict revisit question="With 20% contamination at 10 Hz, what fraction of intervals fall under 1.5 ms?" />
+
+<Key title="Before you go">
+<ul>
+<li>Sorted units can be contaminated, split or lost; quality metrics detect each.</li>
+<li>The violation metric saturates at 0.5; invert it to estimate contamination.</li>
+<li>Filter on pre-registered thresholds; report how results change with them.</li>
+<li>Response latency orders visual areas into a hierarchy.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Siegle and colleagues (2021), <em>Survey of spiking in the mouse visual system reveals functional hierarchy</em>.</li>
+<li>Hill, Mehta and Kleinfeld (2011), <em>Quality metrics to accompany spike sorting of extracellular signals</em>, Journal of Neuroscience 31(24), 8699 to 8705.</li>
+<li>Harris and colleagues (2019), <em>Hierarchical organization of cortical and thalamic connectivity</em>, Nature 575(7781), 195 to 202.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Pick one result you might want to report from a Neuropixels dataset, such as the fraction of tuned units in an area. Write down your unit inclusion criteria now, and how you would show that the result does not depend on the exact thresholds." />

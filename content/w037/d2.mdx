@@ -1,0 +1,283 @@
+export const meta = {
+  title: "Calcium imaging: from fluorescence to responses",
+  intro: "Two-photon calcium imaging records hundreds or thousands of neurons at once, at the price of an indirect signal: fluorescence that rises when calcium enters a neuron after spikes and decays slowly afterwards, contaminated by the glow of surrounding tissue. The Allen Brain Observatory imaged tens of thousands of neurons in mouse visual cortex under a fixed protocol and shared everything, and de Vries and colleagues used it to ask how visual responses are organised across areas, layers and cell types. Today you take a fluorescence trace through the standard steps: neuropil correction, baseline and ΔF/F, event detection, and finally tuning to drifting gratings with a test of whether each cell responds at all.",
+  goals: [
+    "Explain how calcium fluorescence relates to spiking, and its time scales",
+    "Correct for neuropil contamination and compute ΔF/F with a running baseline",
+    "Recover spike-related events by simple deconvolution",
+    "Measure direction tuning and decide which cells respond reliably",
+  ],
+  plan: [
+    { label: "Predict and the signal", minutes: 20 },
+    { label: "Neuropil and ΔF/F", minutes: 30 },
+    { label: "From fluorescence to events", minutes: 25 },
+    { label: "Tuning and reliability", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "de-vries-2020",
+};
+
+<Predict question="A neuron's calcium indicator decays with a time constant of about 0.7 s, and the microscope samples at 30 Hz. If the neuron fires two spikes 100 ms apart, will the fluorescence trace show two separate bumps, one bump about twice the size, or one bump the same size as for a single spike?" />
+
+<Step n={1} title="The signal" minutes={20} />
+
+A genetically encoded calcium indicator such as GCaMP6 fluoresces more brightly when it binds calcium. Each action potential lets calcium into the cell body, the indicator's fluorescence jumps within tens of milliseconds, and it decays over hundreds of milliseconds as calcium is pumped out. A fluorescence trace is therefore roughly the spike train convolved with a fast rise and a slow exponential decay, scaled, plus noise. Because the decay is slow, spikes close together sum into one larger transient, and single spikes in a busy neuron are hard to see.
+
+Two further problems come from the tissue. The light collected from a neuron's region of interest includes light from the **neuropil**, the tangle of axons and dendrites around it, which carries its own fluctuating signal. And the baseline drifts with bleaching, movement and changes in focus. The standard pipeline, used by the Allen Brain Observatory and by tools such as Suite2p, deals with each in turn.
+
+<Video id="d52akMqjNLg" title="Introduction to filtering" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's introduction to filtering time series, the operations behind baseline estimation, smoothing and deconvolution of calcium traces." />
+
+<Step n={2} title="Neuropil and ΔF/F" minutes={30} />
+
+<Figure caption="A simulated two-photon recording: spikes, the raw fluorescence with neuropil contamination, and ΔF/F after correction. Change the indicator's decay time and the neuropil contamination." credit="Interactive figure by Engram.">
+  <CalciumTrace />
+</Figure>
+
+<PyCell id="dff" title="Correcting the trace" tests={String.raw`
+  import numpy as np
+  def test_dff():
+      "ΔF/F after neuropil correction correlates with the true calcium above 0.95"
+      assert np.corrcoef(dff, calcium)[0, 1] > 0.95
+
+  def test_better():
+      "neuropil correction improves the correlation by more than 0.1"
+      assert np.corrcoef(dff, calcium)[0, 1] > np.corrcoef(dff_raw, calcium)[0, 1] + 0.1
+`} prompt="Write delta_f(F_trace): estimate the baseline F0 as a running 10th percentile over 60 s windows (percentile_filter), and return (F_trace - F0) / F0. Apply it to the neuropil-corrected trace F - 0.7 Fneu, and to the raw F for comparison."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.ndimage import percentile_filter, gaussian_filter1d
+  r = np.random.default_rng(2020)
+  fs = 30.0; T = int(600 * fs); t = np.arange(T) / fs
+  g = np.exp(-1 / (fs * 0.7))                       # decay per frame, tau = 0.7 s
+  spikes = r.poisson(0.5 / fs, T)
+  calcium = np.zeros(T)
+  for i in range(1, T):
+      calcium[i] = g * calcium[i - 1] + spikes[i]
+  drift = 1 + 0.2 * np.sin(2 * np.pi * t / 300)
+  neuropil = 0.6 + 0.25 * np.sin(2 * np.pi * t / 41) + 0.15 * np.sin(2 * np.pi * t / 7.3) + 0.05 * r.normal(size=T)
+  F = 100 * drift * (1 + 0.5 * calcium) + 70 * neuropil + 3 * r.normal(size=T)
+  Fneu = 100 * neuropil + 3 * r.normal(size=T)
+
+  def delta_f(F_trace, window_s=60):
+      F0 = ...
+      return ...
+
+  dff = delta_f(F - 0.7 * Fneu)
+  dff_raw = delta_f(F)
+  print(f"correlation with calcium: corrected {np.corrcoef(dff, calcium)[0, 1]:.3f}, raw {np.corrcoef(dff_raw, calcium)[0, 1]:.3f}")
+  sl = slice(0, int(60 * fs))
+  plt.plot(t[sl], dff_raw[sl], lw=0.7, label="raw ΔF/F"); plt.plot(t[sl], dff[sl], lw=0.7, label="corrected ΔF/F")
+  plt.plot(t[sl][spikes[sl] > 0], np.full((spikes[sl] > 0).sum(), -0.3), "|k", label="spikes"); plt.xlabel("s"); plt.legend(); plt.show()
+`}
+hint="F0 = percentile_filter(F_trace, 10, size=int(window_s * fs)); return (F_trace - F0) / F0."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.ndimage import percentile_filter, gaussian_filter1d
+  r = np.random.default_rng(2020)
+  fs = 30.0; T = int(600 * fs); t = np.arange(T) / fs
+  g = np.exp(-1 / (fs * 0.7))                       # decay per frame, tau = 0.7 s
+  spikes = r.poisson(0.5 / fs, T)
+  calcium = np.zeros(T)
+  for i in range(1, T):
+      calcium[i] = g * calcium[i - 1] + spikes[i]
+  drift = 1 + 0.2 * np.sin(2 * np.pi * t / 300)
+  neuropil = 0.6 + 0.25 * np.sin(2 * np.pi * t / 41) + 0.15 * np.sin(2 * np.pi * t / 7.3) + 0.05 * r.normal(size=T)
+  F = 100 * drift * (1 + 0.5 * calcium) + 70 * neuropil + 3 * r.normal(size=T)
+  Fneu = 100 * neuropil + 3 * r.normal(size=T)
+
+  def delta_f(F_trace, window_s=60):
+      F0 = percentile_filter(F_trace, 10, size=int(window_s * fs))
+      return (F_trace - F0) / F0
+
+  dff = delta_f(F - 0.7 * Fneu)
+  dff_raw = delta_f(F)
+  print(f"correlation with calcium: corrected {np.corrcoef(dff, calcium)[0, 1]:.3f}, raw {np.corrcoef(dff_raw, calcium)[0, 1]:.3f}")
+  sl = slice(0, int(60 * fs))
+  plt.plot(t[sl], dff_raw[sl], lw=0.7, label="raw ΔF/F"); plt.plot(t[sl], dff[sl], lw=0.7, label="corrected ΔF/F")
+  plt.plot(t[sl][spikes[sl] > 0], np.full((spikes[sl] > 0).sum(), -0.3), "|k", label="spikes"); plt.xlabel("s"); plt.legend(); plt.show()
+`} />
+
+After neuropil correction, ΔF/F correlates with the true calcium at about 0.97; without it, at about 0.79. The uncorrected trace carries the slow neuropil oscillations, which look like long, shallow responses and would be read as activity of the cell. The factor 0.7 is a convention (the Allen pipeline estimates a factor for each cell instead), and the running 10th percentile assumes the cell is quiet most of the time, which fails for very active cells, a reason to check the baseline by eye on a few traces before trusting it.
+
+<Step n={3} title="From fluorescence to events" minutes={25} />
+
+If calcium follows $c_t = \gamma c_{t-1} + s_t$, the spikes can be recovered by inverting the recursion: $\hat s_t = c_t - \gamma c_{t-1}$. With noise this produces negative values and jitter, so practical methods add constraints. Clipping at zero is the simplest; OASIS (Friedrich, Zhou and Paninski, 2017), used in Suite2p and CaImAn, solves the non-negative problem exactly and quickly. The Allen Brain Observatory reports such **events** alongside ΔF/F. Events are not spikes: their size reflects how many spikes arrived, and isolated single spikes are often missed.
+
+<PyCell id="events" title="Simple deconvolution" tests={String.raw`
+  import numpy as np
+  def test_events():
+      "smoothed events correlate with smoothed spikes above 0.85"
+      assert np.corrcoef(gaussian_filter1d(ev, 3), gaussian_filter1d(spikes[1:].astype(float), 3))[0, 1] > 0.85
+
+  def test_vs_dff():
+      "events track spike timing better than ΔF/F itself does"
+      a = np.corrcoef(gaussian_filter1d(ev, 3), gaussian_filter1d(spikes[1:].astype(float), 3))[0, 1]
+      b = np.corrcoef(gaussian_filter1d(dff[1:], 3), gaussian_filter1d(spikes[1:].astype(float), 3))[0, 1]
+      assert a > b + 0.2
+`} prompt="Compute ev, the non-negative part of dff[t] - g * dff[t - 1] for t from 1 to the end. Compare its smoothed correlation with the true spikes against that of ΔF/F."
+code={String.raw`
+  ev = ...
+  sm = lambda x: gaussian_filter1d(np.asarray(x, float), 3)
+  print(f"correlation with spikes (smoothed 100 ms): events {np.corrcoef(sm(ev), sm(spikes[1:]))[0, 1]:.2f}, ΔF/F {np.corrcoef(sm(dff[1:]), sm(spikes[1:]))[0, 1]:.2f}")
+  sl = slice(0, int(20 * fs))
+  plt.plot(t[1:][sl], ev[sl], label="events"); plt.plot(t[1:][sl], spikes[1:][sl] * 0.5, "|k", ms=12, label="spikes"); plt.legend(); plt.show()
+`}
+hint="ev = np.maximum(0, dff[1:] - g * dff[:-1])."
+solution={String.raw`
+  ev = np.maximum(0, dff[1:] - g * dff[:-1])
+  sm = lambda x: gaussian_filter1d(np.asarray(x, float), 3)
+  print(f"correlation with spikes (smoothed 100 ms): events {np.corrcoef(sm(ev), sm(spikes[1:]))[0, 1]:.2f}, ΔF/F {np.corrcoef(sm(dff[1:]), sm(spikes[1:]))[0, 1]:.2f}")
+  sl = slice(0, int(20 * fs))
+  plt.plot(t[1:][sl], ev[sl], label="events"); plt.plot(t[1:][sl], spikes[1:][sl] * 0.5, "|k", ms=12, label="spikes"); plt.legend(); plt.show()
+`} />
+
+Smoothed to about 100 ms, the events correlate with the true spikes at about 0.95, against 0.50 for ΔF/F itself, whose slow decay smears each spike over a second or more. That also answers the prediction: two spikes 100 ms apart produce one transient about twice the height, because the first has barely decayed when the second arrives; deconvolution separates them only if the noise is low and the sampling fast. Real data are harder than this simulation, since the indicator's rise time, saturation and nonlinearity all vary between cells.
+
+<Step n={4} title="Tuning and reliability" minutes={30} />
+
+The Allen Brain Observatory showed every mouse the same stimuli, including drifting gratings in eight directions. Simulate a field of view of 40 neurons: 24 direction tuned with a range of preferred directions and response strengths, and 16 that do not respond to gratings. Each grating is shown for 2 s, followed by 1 s of grey, 15 times per direction in random order. For each cell, compute the mean ΔF/F during each grating, its preferred direction and **direction selectivity index**, and decide whether it responds at all, using a test against the grey periods.
+
+<PyCell id="tuning" title="Which cells respond?" tests={String.raw`
+  import numpy as np
+  def test_found():
+      "at least 20 of the 24 tuned cells are called responsive, and at most 2 of the 16 untuned cells"
+      assert responsive[:24].sum() >= 20 and responsive[24:].sum() <= 2
+
+  def test_pref():
+      "for responsive tuned cells, the preferred direction is within 45 degrees of the true one in at least 80% of cases"
+      ok = [abs(((pref_est[i] - pref_true[i] + 180) % 360) - 180) <= 45 for i in range(24) if responsive[i]]
+      assert np.mean(ok) >= 0.8
+`} prompt="resp[i, d, k] holds the mean ΔF/F of cell i on the k-th trial of direction d, and base[i, j] the mean ΔF/F in the grey period before trial j. For each cell, find the preferred direction (largest mean response) and call the cell responsive if a one-sided Welch t-test of its preferred-direction responses against all its grey periods gives p below 0.001."
+code={String.raw`
+  from scipy.stats import ttest_ind
+  dirs = np.arange(0, 360, 45); nrep, ncell = 15, 40
+  order = r.permutation(np.repeat(np.arange(8), nrep))
+  fs2 = 30.0; on, off = int(2 * fs2), int(1 * fs2)
+  Tt = len(order) * (on + off)
+  pref_true = r.uniform(0, 360, ncell); amp = np.r_[r.uniform(1, 5, 24), np.zeros(16)]
+  stim = np.full(Tt, -1)
+  for j, d in enumerate(order):
+      stim[j * (on + off) + off: (j + 1) * (on + off)] = d
+  traces = np.zeros((ncell, Tt))
+  gg = np.exp(-1 / (fs2 * 0.7))
+  for i in range(ncell):
+      ang = np.deg2rad(dirs[np.maximum(stim, 0)] - pref_true[i])
+      rate = 0.3 + np.where(stim >= 0, amp[i] * np.exp(2 * (np.cos(ang) - 1)) + 0.3 * amp[i] * np.exp(2 * (np.cos(ang + np.pi) - 1)), 0)
+      s = r.poisson(rate / fs2)
+      c = np.zeros(Tt)
+      for k in range(1, Tt):
+          c[k] = gg * c[k - 1] + s[k]
+      traces[i] = 0.25 * c + 0.08 * r.normal(size=Tt)
+  resp = np.zeros((ncell, 8, nrep)); base = np.zeros((ncell, len(order))); seen = np.zeros(8, int)
+  for j, d in enumerate(order):
+      a = j * (on + off)
+      base[:, j] = traces[:, a: a + off].mean(1)
+      resp[:, d, seen[d]] = traces[:, a + off: a + off + on].mean(1); seen[d] += 1
+
+  mean_resp = resp.mean(2)
+  pref_idx = mean_resp.argmax(1)
+  pref_est = dirs[pref_idx]
+  responsive = np.zeros(ncell, bool)
+  for i in range(ncell):
+      responsive[i] = ...
+  null = mean_resp[np.arange(ncell), (pref_idx + 4) % 8]
+  dsi = (mean_resp.max(1) - null) / (mean_resp.max(1) + np.abs(null))
+  print(f"responsive: {responsive[:24].sum()} of 24 tuned cells, {responsive[24:].sum()} of 16 untuned cells")
+  print("median DSI of responsive cells:", round(float(np.median(dsi[responsive])), 2))
+`}
+hint="responsive[i] = ttest_ind(resp[i, pref_idx[i]], base[i], equal_var=False, alternative='greater').pvalue < 0.001."
+solution={String.raw`
+  from scipy.stats import ttest_ind
+  dirs = np.arange(0, 360, 45); nrep, ncell = 15, 40
+  order = r.permutation(np.repeat(np.arange(8), nrep))
+  fs2 = 30.0; on, off = int(2 * fs2), int(1 * fs2)
+  Tt = len(order) * (on + off)
+  pref_true = r.uniform(0, 360, ncell); amp = np.r_[r.uniform(1, 5, 24), np.zeros(16)]
+  stim = np.full(Tt, -1)
+  for j, d in enumerate(order):
+      stim[j * (on + off) + off: (j + 1) * (on + off)] = d
+  traces = np.zeros((ncell, Tt))
+  gg = np.exp(-1 / (fs2 * 0.7))
+  for i in range(ncell):
+      ang = np.deg2rad(dirs[np.maximum(stim, 0)] - pref_true[i])
+      rate = 0.3 + np.where(stim >= 0, amp[i] * np.exp(2 * (np.cos(ang) - 1)) + 0.3 * amp[i] * np.exp(2 * (np.cos(ang + np.pi) - 1)), 0)
+      s = r.poisson(rate / fs2)
+      c = np.zeros(Tt)
+      for k in range(1, Tt):
+          c[k] = gg * c[k - 1] + s[k]
+      traces[i] = 0.25 * c + 0.08 * r.normal(size=Tt)
+  resp = np.zeros((ncell, 8, nrep)); base = np.zeros((ncell, len(order))); seen = np.zeros(8, int)
+  for j, d in enumerate(order):
+      a = j * (on + off)
+      base[:, j] = traces[:, a: a + off].mean(1)
+      resp[:, d, seen[d]] = traces[:, a + off: a + off + on].mean(1); seen[d] += 1
+
+  mean_resp = resp.mean(2)
+  pref_idx = mean_resp.argmax(1)
+  pref_est = dirs[pref_idx]
+  responsive = np.zeros(ncell, bool)
+  for i in range(ncell):
+      responsive[i] = ttest_ind(resp[i, pref_idx[i]], base[i], equal_var=False, alternative="greater").pvalue < 0.001
+  null = mean_resp[np.arange(ncell), (pref_idx + 4) % 8]
+  dsi = (mean_resp.max(1) - null) / (mean_resp.max(1) + np.abs(null))
+  print(f"responsive: {responsive[:24].sum()} of 24 tuned cells, {responsive[24:].sum()} of 16 untuned cells")
+  print("median DSI of responsive cells:", round(float(np.median(dsi[responsive])), 2))
+`} />
+
+The test finds 21 of the 24 tuned cells and none of the 16 untuned ones; the three it misses have the weakest responses, a reminder that "not responsive" means "not detectably responsive with these trials". The median direction selectivity index of responsive cells is about 0.4, moderate selectivity with some response to the opposite direction, as the simulation intended. de Vries and colleagues found that response reliability, not just tuning, varied enormously across mouse visual cortex, and that many neurons responded only to some stimulus classes, which is why they defined responsiveness separately for each.
+
+<Callout kind="warning">
+
+Choosing the preferred direction from the same trials that are then tested against baseline biases the test: with eight directions to pick from, the best of eight noisy means is above baseline by chance more often than one fixed direction would be. Here the threshold is strict enough that untuned cells rarely pass, but the clean fix is to choose the preferred direction on half the trials and test on the other half, the cross-validation habit from Week 17 applied to a selection step.
+
+</Callout>
+
+<Bridge title="Indirect measurements"
+  neuro="Calcium imaging trades temporal precision for numbers and identity: thousands of neurons, tracked across days, with cell types known from genetics. Every result built on it depends on the steps you took today, and de Vries and colleagues report that a large fraction of imaged neurons in mouse visual cortex did not respond reliably to any of their stimuli, which only a standardised, shared survey could establish."
+  ai="Inferring spikes from fluorescence is a deconvolution problem, and modern methods use neural networks trained on recordings where both signals were measured at once, an inverse problem solved by supervised learning, much as image deblurring is.">
+
+Know what each step of preprocessing does to the signal before you interpret what comes out.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Calcium fluorescence is roughly...", options: ["Spikes convolved with a fast rise and slow decay", "The membrane voltage", "The spike times exactly", "The LFP"], answer: 0, explain: "Slow decay sums nearby spikes." },
+  { q: "Neuropil contamination is...", options: ["Light from surrounding axons and dendrites", "Shot noise", "Bleaching", "Movement"], answer: 0, explain: "Corrected by subtracting a scaled surround signal." },
+  { q: "ΔF/F divides by...", options: ["A baseline F0, here a running low percentile", "The maximum", "The neuropil", "The spike count"], answer: 0, explain: "A relative change." },
+  { q: "Inverting c_t = γ c_{t-1} + s_t gives...", options: ["s_t = c_t - γ c_{t-1}", "s_t = c_t", "s_t = γ c_t", "s_t = c_{t-1}"], answer: 0, explain: "Clip at zero for a simple estimate." },
+  { q: "Detected events differ from spikes because...", options: ["Single spikes are often missed and sizes reflect several spikes", "They are always identical", "Events are faster", "They have no timing"], answer: 0, explain: "Fluorescence is indirect." },
+  { q: "The direction selectivity index compares...", options: ["Responses to the preferred and opposite directions", "Two orientations 90° apart", "Baseline and peak", "Two cells"], answer: 0, explain: "DSI." },
+  { q: "Choosing the preferred direction and testing it on the same trials...", options: ["Biases the test upwards", "Is unbiased", "Lowers false positives", "Is required"], answer: 0, explain: "Select on one half, test on the other." },
+  { q: "The Allen Brain Observatory's strength is...", options: ["A fixed protocol across many mice, areas and cell types, openly shared", "The fastest imaging", "Single-cell patching", "Human data"], answer: 0, explain: "Standardisation at scale." },
+]} />
+
+<Flashcards cards={[
+  { front: "ΔF/F?", back: "$(F - F_0)/F_0$ with $F_0$ a running baseline, after subtracting about 0.7 times the neuropil signal." },
+  { front: "Neuropil correction?", back: "Subtract a scaled trace from the region around each cell to remove light from surrounding processes." },
+  { front: "AR(1) deconvolution?", back: "$\\hat s_t = \\max(0, c_t - \\gamma c_{t-1})$ with $\\gamma = e^{-\\Delta t/\\tau}$; OASIS solves the constrained version exactly." },
+  { front: "Responsive cell?", back: "A cell whose responses to its best stimulus exceed baseline by a test, ideally with the best stimulus chosen on separate trials." },
+  { front: "de Vries and colleagues (2020)?", back: "A standardised survey of mouse visual cortex with two-photon imaging across areas, layers and Cre lines, shared as the Allen Brain Observatory." },
+]} />
+
+<Predict revisit question="Two spikes 100 ms apart, with a 0.7 s indicator decay: two bumps, one double bump, or one single-sized bump?" />
+
+<Key title="Before you go">
+<ul>
+<li>Fluorescence is a slow, indirect, contaminated view of spiking.</li>
+<li>Neuropil correction, a running baseline and ΔF/F come first; events come from deconvolution.</li>
+<li>Tuning and responsiveness need tests, and selection steps need held-out trials.</li>
+<li>Standardised surveys such as the Allen Brain Observatory make claims about whole areas possible.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: de Vries and colleagues (2020), <em>A large-scale standardized physiological survey reveals functional organization of the mouse visual cortex</em>.</li>
+<li>Friedrich, Zhou and Paninski (2017), <em>Fast online deconvolution of calcium imaging data</em>, PLoS Computational Biology 13(3), e1005423.</li>
+<li>Pachitariu and colleagues (2017), <em>Suite2p: beyond 10,000 neurons with standard two-photon microscopy</em>, bioRxiv 061507.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Write down every choice you made today that could change which cells are called responsive: the neuropil factor, the baseline window and percentile, the deconvolution, the test and its threshold. For each, say how you would check that your conclusion does not depend on it." />

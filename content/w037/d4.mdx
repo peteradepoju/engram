@@ -1,0 +1,253 @@
+export const meta = {
+  title: "Behaviour as data: psychometric curves, lapses and priors",
+  intro: "Neural recordings mean little without the behaviour they accompany, and behaviour is data with its own analysis. The International Brain Laboratory trained mice in many laboratories on one standardised visual decision task, so that behaviour, and the brain activity behind it, could be compared across sites. Its central measurement is the psychometric curve: the probability of a choice as a function of stimulus strength. Today you fit psychometric functions by maximum likelihood, see why ignoring lapses distorts the estimate of sensitivity, put a confidence interval on it by bootstrap, and measure how a prior over the likely side shifts choices, the ingredients of Wichmann and Hill's classic method.",
+  goals: [
+    "Write a psychometric function with bias, slope and lapse rates",
+    "Fit it by maximum likelihood and explain how lapses bias the slope if ignored",
+    "Put a bootstrap confidence interval on a psychometric parameter",
+    "Measure how a block prior shifts the psychometric curve",
+  ],
+  plan: [
+    { label: "Predict and the task", minutes: 20 },
+    { label: "Fitting a psychometric curve", minutes: 35 },
+    { label: "How sure are we?", minutes: 20 },
+    { label: "Priors and blocks", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "wichmann-hill-2001",
+};
+
+<Predict question="A mouse is very sensitive to contrast, but on 10% of trials it is not paying attention and chooses at random. If you fit a psychometric curve without lapse terms, will the fitted curve look steeper than the truth, about right, or shallower?" />
+
+<Step n={1} title="The task" minutes={20} />
+
+In the IBL task, a mouse sees a grating on the left or right of a screen and turns a wheel to bring it to the centre, earning water for a correct choice. Contrasts range from 100% down to 0%, where there is nothing to see and the mouse must guess. Signed contrast (negative on the left, positive on the right) runs along the horizontal axis of the psychometric curve, and the vertical axis is the probability of choosing right.
+
+A standard form for the curve has four parameters:
+
+$$
+P(\text{right} \mid c) = \gamma_L + (1 - \gamma_L - \gamma_R)\, \Phi\!\left(\frac{c - \mu}{\sigma}\right),
+$$
+
+where $\Phi$ is the cumulative Gaussian, $\mu$ the **bias** (the contrast at which the core function crosses one half), $\sigma$ the **threshold** or inverse slope, and $\gamma_L$ and $\gamma_R$ the **lapse rates**, the probabilities of choosing left or right regardless of the stimulus, from inattention, impulsivity or motor error. Wichmann and Hill (2001) showed that leaving lapses out of the model biases the other parameters, even when lapses are rare.
+
+<Video id="n_05hOV2hS0" title="Decision making" by="Dan Goodman (Neuroscience for Machine Learners)" note="Dan Goodman introduces how decisions are studied in neuroscience, from psychophysics and psychometric curves to models of evidence accumulation, from the Neuroscience for Machine Learners course." />
+
+<Step n={2} title="Fitting a psychometric curve" minutes={35} />
+
+<Figure caption="A psychometric function with bias, threshold and lapses, and simulated choice proportions from 60 trials at each IBL contrast." credit="Interactive figure by Engram, after Wichmann and Hill (2001).">
+  <PsychometricLapses />
+</Figure>
+
+<PyCell id="fit" title="Maximum likelihood with lapses" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "the fit with lapses recovers the threshold to within 0.05 and both lapse rates to within 0.05"
+      assert abs(sig_fit - 0.12) < 0.05 and abs(p_fit[2] - 0.08) < 0.05 and abs(p_fit[3] - 0.05) < 0.05
+
+  def test_no_lapse():
+      "ignoring lapses at least doubles the fitted threshold"
+      assert sig_nolapse > 2 * sig_fit
+`} prompt="Write nll(p, c, y), the negative log-likelihood of binary choices y (1 = right) at signed contrasts c for parameters p = (mu, log sigma, gamma_L, gamma_R), returning a large number if a lapse rate leaves [0, 0.5). The fit with lapses and the fit with lapses fixed at zero are run for you."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  from scipy.special import erf
+  r = np.random.default_rng(2001)
+  cons = np.array([-1, -0.25, -0.125, -0.0625, 0, 0.0625, 0.125, 0.25, 1])
+
+  def p_right(c, mu, sigma, gl, gr):
+      return gl + (1 - gl - gr) * 0.5 * (1 + erf((c - mu) / (np.sqrt(2) * sigma)))
+
+  c = np.repeat(cons, 100)
+  y = (r.random(len(c)) < p_right(c, 0.02, 0.12, 0.08, 0.05)).astype(float)
+
+  def nll(p, c, y):
+      mu, log_sigma, gl, gr = p
+      ...
+
+  def fit(c, y, start=(0, np.log(0.2), 0.05, 0.05)):
+      return minimize(nll, start, args=(c, y), method="Nelder-Mead", options={"maxiter": 3000, "xatol": 1e-5, "fatol": 1e-6}).x
+
+  p_fit = fit(c, y); sig_fit = np.exp(p_fit[1])
+  p0 = minimize(lambda q: nll([q[0], q[1], 0, 0], c, y), [0, np.log(0.2)], method="Nelder-Mead").x
+  sig_nolapse = np.exp(p0[1])
+  print(f"with lapses: bias {p_fit[0]:+.3f}, threshold {sig_fit:.3f}, lapses {p_fit[2]:.3f} / {p_fit[3]:.3f}")
+  print(f"without lapses: threshold {sig_nolapse:.3f}")
+  cc = np.linspace(-1, 1, 400)
+  plt.plot(cons, [y[c == k].mean() for k in cons], "ok", label="data")
+  plt.plot(cc, p_right(cc, p_fit[0], sig_fit, p_fit[2], p_fit[3]), label="with lapses")
+  plt.plot(cc, p_right(cc, p0[0], sig_nolapse, 0, 0), "--", label="without lapses")
+  plt.xlabel("signed contrast"); plt.ylabel("P(right)"); plt.legend(); plt.show()
+`}
+hint="if not (0 <= gl < 0.5 and 0 <= gr < 0.5): return 1e9; q = np.clip(p_right(c, mu, np.exp(log_sigma), gl, gr), 1e-9, 1 - 1e-9); return -np.sum(y * np.log(q) + (1 - y) * np.log(1 - q))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  from scipy.special import erf
+  r = np.random.default_rng(2001)
+  cons = np.array([-1, -0.25, -0.125, -0.0625, 0, 0.0625, 0.125, 0.25, 1])
+
+  def p_right(c, mu, sigma, gl, gr):
+      return gl + (1 - gl - gr) * 0.5 * (1 + erf((c - mu) / (np.sqrt(2) * sigma)))
+
+  c = np.repeat(cons, 100)
+  y = (r.random(len(c)) < p_right(c, 0.02, 0.12, 0.08, 0.05)).astype(float)
+
+  def nll(p, c, y):
+      mu, log_sigma, gl, gr = p
+      if not (0 <= gl < 0.5 and 0 <= gr < 0.5):
+          return 1e9
+      q = np.clip(p_right(c, mu, np.exp(log_sigma), gl, gr), 1e-9, 1 - 1e-9)
+      return -np.sum(y * np.log(q) + (1 - y) * np.log(1 - q))
+
+  def fit(c, y, start=(0, np.log(0.2), 0.05, 0.05)):
+      return minimize(nll, start, args=(c, y), method="Nelder-Mead", options={"maxiter": 3000, "xatol": 1e-5, "fatol": 1e-6}).x
+
+  p_fit = fit(c, y); sig_fit = np.exp(p_fit[1])
+  p0 = minimize(lambda q: nll([q[0], q[1], 0, 0], c, y), [0, np.log(0.2)], method="Nelder-Mead").x
+  sig_nolapse = np.exp(p0[1])
+  print(f"with lapses: bias {p_fit[0]:+.3f}, threshold {sig_fit:.3f}, lapses {p_fit[2]:.3f} / {p_fit[3]:.3f}")
+  print(f"without lapses: threshold {sig_nolapse:.3f}")
+  cc = np.linspace(-1, 1, 400)
+  plt.plot(cons, [y[c == k].mean() for k in cons], "ok", label="data")
+  plt.plot(cc, p_right(cc, p_fit[0], sig_fit, p_fit[2], p_fit[3]), label="with lapses")
+  plt.plot(cc, p_right(cc, p0[0], sig_nolapse, 0, 0), "--", label="without lapses")
+  plt.xlabel("signed contrast"); plt.ylabel("P(right)"); plt.legend(); plt.show()
+`} />
+
+With lapses in the model, the fit recovers a threshold of about 0.10 (true 0.12) and lapse rates of about 0.07 on each side (true 0.08 and 0.05). Without them, the threshold comes out at about 0.45, nearly five times too large, which answers the prediction: shallower. The model without lapses has only one way to explain wrong choices at 100% contrast, a curve that has not yet reached 0 or 1 there, so it flattens the whole curve. A mouse that is highly sensitive but sometimes inattentive would be reported as insensitive.
+
+<Step n={3} title="How sure are we?" minutes={20} />
+
+A threshold of 0.12 from 900 trials is an estimate. The **bootstrap** (Week 18) gives its uncertainty without further assumptions: resample trials with replacement within each contrast, refit, and repeat. The spread of the refitted thresholds approximates the sampling distribution. Wichmann and Hill's second paper on the psychometric function is devoted to doing this well.
+
+<PyCell id="boot" title="A bootstrap interval for the threshold" tests={String.raw`
+  import numpy as np
+  def test_ci():
+      "the 95% interval contains the true threshold 0.12 and is narrower than 0.12"
+      assert ci[0] < 0.12 < ci[1] and ci[1] - ci[0] < 0.12
+`} prompt="Repeat 100 times: resample 100 trials with replacement within each contrast (keeping contrasts fixed), refit with fit(), and store the threshold. Set ci to the 2.5th and 97.5th percentiles. (This takes a few seconds.)"
+code={String.raw`
+  boot = []
+  for b in range(100):
+      idx = ...
+      boot.append(np.exp(fit(c[idx], y[idx], start=p_fit)[1]))
+  ci = np.percentile(boot, [2.5, 97.5])
+  print(f"threshold {sig_fit:.3f}, 95% bootstrap interval {ci[0]:.3f} to {ci[1]:.3f}")
+  plt.hist(boot, 20); plt.axvline(0.12, color="k", ls="--"); plt.xlabel("bootstrap threshold"); plt.show()
+`}
+hint="idx = np.concatenate([r.choice(np.where(c == k)[0], 100) for k in cons])."
+solution={String.raw`
+  boot = []
+  for b in range(100):
+      idx = np.concatenate([r.choice(np.where(c == k)[0], 100) for k in cons])
+      boot.append(np.exp(fit(c[idx], y[idx], start=p_fit)[1]))
+  ci = np.percentile(boot, [2.5, 97.5])
+  print(f"threshold {sig_fit:.3f}, 95% bootstrap interval {ci[0]:.3f} to {ci[1]:.3f}")
+  plt.hist(boot, 20); plt.axvline(0.12, color="k", ls="--"); plt.xlabel("bootstrap threshold"); plt.show()
+`} />
+
+The 95% interval runs from about 0.074 to 0.126 and contains the true value. It is asymmetric, wider above the estimate than below, because the threshold is a scale parameter and its sampling distribution is skewed; the bootstrap captures this without any formula. Most of the information about the threshold comes from the few contrasts near it (6.25% to 25%), so adding trials there would narrow the interval more than adding trials at 0% or 100%.
+
+<Step n={4} title="Priors and blocks" minutes={30} />
+
+Once trained, IBL mice face blocks of trials in which the stimulus appears on the right 80% of the time, alternating unpredictably with blocks where it appears on the left 80% of the time. A Bayesian observer should then lean towards the likely side when the stimulus is weak, and hardly at all when it is strong. Fit the curve separately in each block and measure the shift.
+
+<PyCell id="blocks" title="The prior shifts the curve" tests={String.raw`
+  import numpy as np
+  def test_shift():
+      "the bias in right blocks is below the bias in left blocks by at least 0.08"
+      assert fit_l[0] - fit_r[0] > 0.08
+
+  def test_zero():
+      "at zero contrast, P(right) is at least 0.25 higher in right blocks"
+      assert at_zero["right"] - at_zero["left"] > 0.25
+`} prompt="Fit each block's data with fit(), then compute P(right) at zero contrast from each fit, storing them in at_zero['right'] and at_zero['left']."
+code={String.raw`
+  cb = np.repeat(cons, 80)
+  y_rb = (r.random(len(cb)) < p_right(cb, -0.08, 0.12, 0.06, 0.06)).astype(float)    # right-biased blocks
+  y_lb = (r.random(len(cb)) < p_right(cb, 0.08, 0.12, 0.06, 0.06)).astype(float)     # left-biased blocks
+  fit_r = ...
+  fit_l = ...
+  at_zero = {"right": p_right(0, fit_r[0], np.exp(fit_r[1]), fit_r[2], fit_r[3]),
+             "left": p_right(0, fit_l[0], np.exp(fit_l[1]), fit_l[2], fit_l[3])}
+  print(f"bias: right blocks {fit_r[0]:+.3f}, left blocks {fit_l[0]:+.3f}")
+  print(f"P(right) at zero contrast: right blocks {at_zero['right']:.2f}, left blocks {at_zero['left']:.2f}")
+  for name, f_ in (("right blocks", fit_r), ("left blocks", fit_l)):
+      plt.plot(cc, p_right(cc, f_[0], np.exp(f_[1]), f_[2], f_[3]), label=name)
+  plt.xlabel("signed contrast"); plt.ylabel("P(right)"); plt.legend(); plt.show()
+`}
+hint="fit_r = fit(cb, y_rb); fit_l = fit(cb, y_lb)."
+solution={String.raw`
+  cb = np.repeat(cons, 80)
+  y_rb = (r.random(len(cb)) < p_right(cb, -0.08, 0.12, 0.06, 0.06)).astype(float)    # right-biased blocks
+  y_lb = (r.random(len(cb)) < p_right(cb, 0.08, 0.12, 0.06, 0.06)).astype(float)     # left-biased blocks
+  fit_r = fit(cb, y_rb)
+  fit_l = fit(cb, y_lb)
+  at_zero = {"right": p_right(0, fit_r[0], np.exp(fit_r[1]), fit_r[2], fit_r[3]),
+             "left": p_right(0, fit_l[0], np.exp(fit_l[1]), fit_l[2], fit_l[3])}
+  print(f"bias: right blocks {fit_r[0]:+.3f}, left blocks {fit_l[0]:+.3f}")
+  print(f"P(right) at zero contrast: right blocks {at_zero['right']:.2f}, left blocks {at_zero['left']:.2f}")
+  for name, f_ in (("right blocks", fit_r), ("left blocks", fit_l)):
+      plt.plot(cc, p_right(cc, f_[0], np.exp(f_[1]), f_[2], f_[3]), label=name)
+  plt.xlabel("signed contrast"); plt.ylabel("P(right)"); plt.legend(); plt.show()
+`} />
+
+The bias moves from about +0.06 in left blocks to about -0.06 in right blocks, and at zero contrast the mouse chooses right 73% of the time in right blocks against 31% in left blocks. At 100% contrast the two curves nearly coincide: when the evidence is strong, the prior barely matters. The International Brain Laboratory found shifts of this kind in its mice, and used them as a behavioural readout of a prior that its Brain Wide Map then searched for in neural activity.
+
+<Callout kind="think">
+
+A shift in bias between blocks shows that the mouse uses the block, but not how it knows which block it is in. It could track the true block, as a Bayesian observer would, or simply repeat recent rewarded choices. These make different predictions just after a block switch: the Bayesian observer adapts over several trials as evidence accumulates, while a choice-history strategy also responds to unrewarded trials in ways the prior alone does not. Separating them needs trial-by-trial models, which you will build in later weeks on decision making.
+
+</Callout>
+
+<Bridge title="Behaviour as a measurement"
+  neuro="Psychometric parameters summarise what an animal can perceive (threshold), what it expects (bias) and how often it disengages (lapses). The IBL showed that with a standardised protocol these parameters were reproducible across laboratories on three continents, which made it possible to pool neural recordings from all of them."
+  ai="The same curve describes classifier behaviour: accuracy as a function of signal strength, with a floor of errors that no amount of signal removes. Calibration analysis of a model's confidence is a psychometric curve in disguise.">
+
+Fit the lapses, or they will be absorbed into everything else.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The bias μ of a psychometric curve is...", options: ["The contrast at which the core function crosses one half", "The lapse rate", "The slope", "The accuracy"], answer: 0, explain: "A shift left or right." },
+  { q: "Lapse rates are...", options: ["Probabilities of a choice regardless of the stimulus", "Reaction times", "Thresholds", "Biases"], answer: 0, explain: "Floors and ceilings of the curve." },
+  { q: "Ignoring lapses in the fit makes the threshold...", options: ["Too large (a shallower curve)", "Too small", "Unchanged", "Negative"], answer: 0, explain: "Wichmann and Hill's warning." },
+  { q: "A bootstrap for psychometric data resamples...", options: ["Trials within each contrast", "Contrasts", "Parameters", "Mice only"], answer: 0, explain: "Keeping the design fixed." },
+  { q: "In right-biased blocks, the curve shifts...", options: ["Left (more right choices at low contrast)", "Right", "Up only", "Not at all"], answer: 0, explain: "μ becomes negative." },
+  { q: "A Bayesian observer uses the prior most when...", options: ["The stimulus is weak", "The stimulus is strong", "Always equally", "Never"], answer: 0, explain: "Evidence dominates at high contrast." },
+  { q: "The IBL's standardised task was designed to...", options: ["Make behaviour and recordings comparable across laboratories", "Train mice faster", "Avoid statistics", "Use primates"], answer: 0, explain: "Reproducibility." },
+  { q: "Nelder-Mead is used here because...", options: ["It needs no gradients and handles the bounded lapse terms simply", "It is the fastest method", "It is exact", "It is linear"], answer: 0, explain: "With a penalty outside the bounds." },
+]} />
+
+<Flashcards cards={[
+  { front: "Psychometric function with lapses?", back: "$\\gamma_L + (1 - \\gamma_L - \\gamma_R)\\,\\Phi((c - \\mu)/\\sigma)$." },
+  { front: "Why fit lapses?", back: "Otherwise errors at high contrast are explained by a shallower slope, inflating the threshold." },
+  { front: "Bootstrap for a threshold?", back: "Resample trials within each condition, refit, repeat; percentiles of the refits give an interval." },
+  { front: "Block prior effect?", back: "The curve shifts towards the likely side, mostly at low contrast, as a Bayesian observer predicts." },
+  { front: "Wichmann and Hill (2001)?", back: "The standard method for fitting psychometric functions by maximum likelihood, with lapses, and assessing goodness of fit." },
+]} />
+
+<Predict revisit question="Fitting without lapses for a mouse that lapses on 10% of trials: steeper, about right, or shallower?" />
+
+<Key title="Before you go">
+<ul>
+<li>A psychometric curve has bias, threshold and two lapse rates.</li>
+<li>Fit by maximum likelihood, with lapses, or the threshold is inflated.</li>
+<li>Bootstrap within conditions for intervals.</li>
+<li>Priors shift the curve most where the evidence is weakest.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Wichmann and Hill (2001), <em>The psychometric function: I. Fitting, sampling, and goodness of fit</em>.</li>
+<li>Wichmann and Hill (2001), <em>The psychometric function: II. Bootstrap-based confidence intervals and sampling</em>, Perception and Psychophysics 63(8), 1314 to 1329.</li>
+<li>The International Brain Laboratory and colleagues (2021), <em>Standardized and reproducible measurement of decision-making in mice</em>, eLife 10, e63711 (Week 3's deep read).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Your mouse's lapse rate rises from 5% to 20% late in each session. List two explanations and an analysis of the existing data that could tell them apart, before you change the experiment." />

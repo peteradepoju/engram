@@ -169,3 +169,8 @@ export { FisherInfo } from "./fisher-info";
 export { KalmanTrack } from "./kalman-track";
 export { DecoderCapacity } from "./decoder-capacity";
 export { ClosedLoop } from "./closed-loop";
+export { NWBTree } from "./nwb-tree";
+export { CalciumTrace } from "./calcium-trace";
+export { ISIViolations } from "./isi-violations";
+export { PsychometricLapses } from "./psychometric-lapses";
+export { Pseudoreplication } from "./pseudoreplication";

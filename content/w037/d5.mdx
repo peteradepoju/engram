@@ -1,0 +1,260 @@
+export const meta = {
+  title: "Nested data: neurons, sessions and animals",
+  intro: "A dataset with 2,000 neurons from 10 mice does not contain 2,000 independent observations. Neurons recorded in the same animal share its genetics, its training history and its arousal on the day; neurons from the same session share the probe placement and the state of the brain that hour. Treating them as independent, pseudoreplication, makes small or absent effects look highly significant. Aarts and colleagues showed how common this error was in neuroscience and how multilevel analysis avoids it. Today you measure the damage by simulation, quantify the nesting with the intraclass correlation, and test at the right level with an exact permutation test.",
+  goals: [
+    "Explain why neurons from the same animal are not independent observations",
+    "Show by simulation how pseudoreplication inflates false positives",
+    "Compute the intraclass correlation and the effective sample size",
+    "Test a group difference at the animal level with a permutation test",
+  ],
+  plan: [
+    { label: "Predict and the structure of data", minutes: 20 },
+    { label: "Pseudoreplication by simulation", minutes: 30 },
+    { label: "How much information is there?", minutes: 25 },
+    { label: "Testing at the right level", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "aarts-2014",
+};
+
+<Predict question="Two groups of five mice each, with 120 neurons recorded per mouse, and no true difference between the groups. Mice differ from each other a little in average firing. A t-test across all 1,200 neurons gives p below 0.05 in what fraction of such experiments: about 5%, about 20%, or more than half?" />
+
+<Step n={1} title="The structure of data" minutes={20} />
+
+Most neuroscience datasets are **nested**: trials within neurons, neurons within sessions, sessions within animals, animals within groups. Each level adds its own variability. A treatment that is applied to whole animals, such as a genetic manipulation or a drug, can only be compared between animals; the number of independent observations for that comparison is the number of animals, however many neurons each one contributes.
+
+The Steinmetz dataset you met in Week 2 has exactly this structure: 39 sessions from 10 mice, with hundreds of neurons per session across dozens of brain areas. So does the IBL Brain Wide Map, on a larger scale. A claim about an area needs to hold across animals, not just across the neurons of one or two.
+
+<Video id="oHwYWUI_o1U" title="Exploring the dataset" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's tutorial video introducing the Steinmetz Neuropixels dataset: its sessions, mice, brain areas and trials, the kind of nested data this lesson is about." />
+
+<Step n={2} title="Pseudoreplication by simulation" minutes={30} />
+
+<Figure caption="The false positive rate of a t-test across neurons when the real unit of comparison is the animal, as the number of neurons per animal and the variability between animals change." credit="Interactive figure by Engram, after Aarts, Verhage, Veenvliet, Dolan and van der Sluis (2014).">
+  <Pseudoreplication />
+</Figure>
+
+<PyCell id="pseudo" title="False positives by the hundred" tests={String.raw`
+  import numpy as np
+  def test_naive():
+      "a t-test across neurons gives false positives in more than 30% of experiments"
+      assert fpr["neurons"] > 0.3
+
+  def test_mouse():
+      "a t-test on mouse means keeps the false positive rate below 10%"
+      assert fpr["mice"] < 0.1
+`} prompt="Write experiment(), returning the two p-values (naive across neurons, and across mouse means) for one simulated experiment with no true group difference. Mouse means vary with standard deviation 0.3, sessions within a mouse with 0.2, neurons within a session with 1."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.stats import ttest_ind
+  r = np.random.default_rng(2014)
+  n_mice, n_sess, n_neur = 5, 4, 30             # per group: 5 mice x 4 sessions x 30 neurons = 600 neurons
+
+  def simulate_group():
+      vals, mouse = [], []
+      for m in range(n_mice):
+          mu_m = r.normal(0, 0.3)
+          for s in range(n_sess):
+              mu_s = mu_m + r.normal(0, 0.2)
+              vals += list(mu_s + r.normal(0, 1, n_neur)); mouse += [m] * n_neur
+      return np.array(vals), np.array(mouse)
+
+  def experiment():
+      a, ma = simulate_group(); b, mb = simulate_group()
+      p_neurons = ...
+      p_mice = ...
+      return p_neurons, p_mice
+
+  ps = np.array([experiment() for _ in range(300)])
+  fpr = {"neurons": np.mean(ps[:, 0] < 0.05), "mice": np.mean(ps[:, 1] < 0.05)}
+  print(f"false positive rate: across neurons {fpr['neurons']:.0%}, across mouse means {fpr['mice']:.0%}")
+`}
+hint="p_neurons = ttest_ind(a, b).pvalue; p_mice = ttest_ind([a[ma == k].mean() for k in range(n_mice)], [b[mb == k].mean() for k in range(n_mice)]).pvalue."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.stats import ttest_ind
+  r = np.random.default_rng(2014)
+  n_mice, n_sess, n_neur = 5, 4, 30             # per group: 5 mice x 4 sessions x 30 neurons = 600 neurons
+
+  def simulate_group():
+      vals, mouse = [], []
+      for m in range(n_mice):
+          mu_m = r.normal(0, 0.3)
+          for s in range(n_sess):
+              mu_s = mu_m + r.normal(0, 0.2)
+              vals += list(mu_s + r.normal(0, 1, n_neur)); mouse += [m] * n_neur
+      return np.array(vals), np.array(mouse)
+
+  def experiment():
+      a, ma = simulate_group(); b, mb = simulate_group()
+      p_neurons = ttest_ind(a, b).pvalue
+      p_mice = ttest_ind([a[ma == k].mean() for k in range(n_mice)], [b[mb == k].mean() for k in range(n_mice)]).pvalue
+      return p_neurons, p_mice
+
+  ps = np.array([experiment() for _ in range(300)])
+  fpr = {"neurons": np.mean(ps[:, 0] < 0.05), "mice": np.mean(ps[:, 1] < 0.05)}
+  print(f"false positive rate: across neurons {fpr['neurons']:.0%}, across mouse means {fpr['mice']:.0%}")
+`} />
+
+Across 300 experiments with no true difference, the t-test across 1,200 neurons gives p below 0.05 in about 58% of them, which answers the prediction: more than half. The test on mouse means stays near the nominal 5% (7% here, within sampling error of 300 experiments). The between-mouse standard deviation of 0.3 is modest beside the neuron-to-neuron spread of 1, but every neuron from a mouse carries that mouse's offset, and the naive test counts it 120 times.
+
+<Step n={3} title="How much information is there?" minutes={25} />
+
+The **intraclass correlation** (ICC) is the fraction of the total variance that lies between clusters, here between mice: $\rho = \sigma^2_{mouse} / (\sigma^2_{mouse} + \sigma^2_{within})$. With $m$ neurons per mouse, the variance of a mouse's mean is inflated relative to independent neurons by the **design effect** $1 + (m - 1)\rho$, and the **effective sample size** of $N$ neurons is $N / (1 + (m - 1)\rho)$. Even a small ICC matters when $m$ is large.
+
+<PyCell id="icc" title="Intraclass correlation and effective sample size" tests={String.raw`
+  import numpy as np
+  def test_icc():
+      "the estimated ICC is within 0.05 of the true value"
+      assert abs(icc_hat - icc_true) < 0.05
+
+  def test_neff():
+      "600 neurons from 5 mice are worth fewer than 100 independent neurons"
+      assert n_eff < 100
+`} prompt="Estimate the ICC from many mice by the method of moments: the variance of the mouse means minus the within-mouse variance divided by m gives the between-mouse variance. Then compute the effective sample size of 600 neurons from 5 mice of 120 neurons each."
+code={String.raw`
+  var_between = 0.3 ** 2 + 0.2 ** 2 / n_sess                   # mouse plus averaged session variance
+  var_within = 1.0 + 0.2 ** 2 * (1 - 1 / n_sess)                # approximately, ignoring small terms
+  icc_true = var_between / (var_between + var_within)
+  vals, mouse = [], []
+  for _ in range(40):                                           # 40 groups of 5 mice, to estimate well
+      v, m = simulate_group(); vals.append(v); mouse.append(m + 5 * len(mouse))
+  vals, mouse = np.concatenate(vals), np.concatenate(mouse)
+  m_per = n_sess * n_neur
+  means = np.array([vals[mouse == k].mean() for k in np.unique(mouse)])
+  within = np.mean([vals[mouse == k].var(ddof=1) for k in np.unique(mouse)])
+  sb2 = ...
+  icc_hat = sb2 / (sb2 + within)
+  n_eff = ...
+  print(f"ICC: true {icc_true:.3f}, estimated {icc_hat:.3f}; 600 neurons from 5 mice are worth {n_eff:.1f} independent neurons")
+`}
+hint="sb2 = means.var(ddof=1) - within / m_per; n_eff = 600 / (1 + (m_per - 1) * icc_hat)."
+solution={String.raw`
+  var_between = 0.3 ** 2 + 0.2 ** 2 / n_sess                   # mouse plus averaged session variance
+  var_within = 1.0 + 0.2 ** 2 * (1 - 1 / n_sess)                # approximately, ignoring small terms
+  icc_true = var_between / (var_between + var_within)
+  vals, mouse = [], []
+  for _ in range(40):                                           # 40 groups of 5 mice, to estimate well
+      v, m = simulate_group(); vals.append(v); mouse.append(m + 5 * len(mouse))
+  vals, mouse = np.concatenate(vals), np.concatenate(mouse)
+  m_per = n_sess * n_neur
+  means = np.array([vals[mouse == k].mean() for k in np.unique(mouse)])
+  within = np.mean([vals[mouse == k].var(ddof=1) for k in np.unique(mouse)])
+  sb2 = means.var(ddof=1) - within / m_per
+  icc_hat = sb2 / (sb2 + within)
+  n_eff = 600 / (1 + (m_per - 1) * icc_hat)
+  print(f"ICC: true {icc_true:.3f}, estimated {icc_hat:.3f}; 600 neurons from 5 mice are worth {n_eff:.1f} independent neurons")
+`} />
+
+The intraclass correlation is only about 0.08 (estimated 0.079 against a true 0.088): mice explain less than a tenth of the variance. Yet with 120 neurons per mouse the design effect is about 10, so 600 neurons carry roughly the information of 58 independent ones about the overall mean, and for a comparison between groups of mice the information is limited further by the five mice themselves. Report the ICC when you analyse nested data; it tells readers how much the nesting matters.
+
+<Step n={4} title="Testing at the right level" minutes={30} />
+
+With ten animals, the cleanest test of a group difference is a **permutation test** on animal means: compute the difference between groups, then recompute it for every way of splitting the ten animals into two groups of five (there are 252), and ask what fraction is at least as extreme. It makes no assumption about distributions, and it respects the nesting by construction, because whole animals move between groups. Multilevel (mixed-effects) models do the same job with more flexibility, using every neuron while estimating the variance at each level; in Python, `statsmodels`' `MixedLM` fits them, and the Colab notebook for today shows how.
+
+<PyCell id="perm" title="An exact permutation test on animals" tests={String.raw`
+  import numpy as np
+  def test_exact():
+      "the null distribution has one value for each of the 252 splits"
+      assert len(null) == 252
+
+  def test_p():
+      "the real effect is detected (p below 0.05) and the null data are not"
+      assert p_effect < 0.05 and p_null > 0.05
+`} prompt="Write perm_test(means_a, means_b): pool the ten animal means, compute the difference of group means for every way of choosing five animals as group A (itertools.combinations), and return the observed difference, the list of null differences, and the two-sided p-value (the fraction of null differences at least as large in absolute value as the observed one)."
+code={String.raw`
+  from itertools import combinations
+
+  def perm_test(means_a, means_b):
+      pooled = np.r_[means_a, means_b]; n = len(means_a)
+      obs = np.mean(means_a) - np.mean(means_b)
+      null = ...
+      p = ...
+      return obs, null, p
+
+  def group_means(shift):
+      v, m = simulate_group()
+      return np.array([v[m == k].mean() for k in range(n_mice)]) + shift
+
+  obs, null, p_effect = perm_test(group_means(1.0), group_means(0.0))
+  _, _, p_null = perm_test(group_means(0.0), group_means(0.0))
+  print(f"with a true difference of 1.0: observed {obs:.2f}, p = {p_effect:.3f};  with none: p = {p_null:.3f}")
+  plt.hist(null, 30); plt.axvline(obs, color="k"); plt.xlabel("difference of group means under relabelling"); plt.show()
+`}
+hint="null = [pooled[list(ix)].mean() - np.delete(pooled, list(ix)).mean() for ix in combinations(range(2 * n), n)]; p = np.mean(np.abs(null) >= abs(obs) - 1e-12)."
+solution={String.raw`
+  from itertools import combinations
+
+  def perm_test(means_a, means_b):
+      pooled = np.r_[means_a, means_b]; n = len(means_a)
+      obs = np.mean(means_a) - np.mean(means_b)
+      null = [pooled[list(ix)].mean() - np.delete(pooled, list(ix)).mean() for ix in combinations(range(2 * n), n)]
+      p = np.mean(np.abs(null) >= abs(obs) - 1e-12)
+      return obs, null, p
+
+  def group_means(shift):
+      v, m = simulate_group()
+      return np.array([v[m == k].mean() for k in range(n_mice)]) + shift
+
+  obs, null, p_effect = perm_test(group_means(1.0), group_means(0.0))
+  _, _, p_null = perm_test(group_means(0.0), group_means(0.0))
+  print(f"with a true difference of 1.0: observed {obs:.2f}, p = {p_effect:.3f};  with none: p = {p_null:.3f}")
+  plt.hist(null, 30); plt.axvline(obs, color="k"); plt.xlabel("difference of group means under relabelling"); plt.show()
+`} />
+
+With a true difference of 1.0 between groups, the permutation test gives p of about 0.03; with no difference, about 0.96. Only 252 relabellings exist, so the p-value moves in steps of 1/252, and the test is exact: under the null hypothesis that group labels do not matter, every relabelling is equally likely, and no assumption of normality or equal variance is needed.
+
+<Callout kind="note">
+
+With five animals per group, the smallest possible two-sided p-value of an exact permutation test is 2/252, about 0.008, whatever the data. Small numbers of animals limit what any test can show. This is not a reason to analyse neurons as if they were animals; it is a reason to plan the number of animals before the experiment, with a power analysis at the animal level.
+
+</Callout>
+
+<Bridge title="Independence is an assumption"
+  neuro="Pseudoreplication is one of the commonest statistical errors in neuroscience: Aarts and colleagues found that a majority of the studies they surveyed with nested data analysed it as if every cell were independent. Large datasets make the problem worse, not better, because the inflated sample size makes every small between-animal difference significant."
+  ai="Machine learning meets the same trap as data leakage: splitting trials or images at random between training and test sets when they come from the same subjects or sessions lets a model learn the subject rather than the task. The fix is the same, split and evaluate at the level of the independent unit.">
+
+Count your independent units before you count your data points.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Pseudoreplication is...", options: ["Treating non-independent observations as independent", "Repeating an experiment", "Replicating in another lab", "Using too few neurons"], answer: 0, explain: "Inflates false positives." },
+  { q: "For a treatment applied to whole mice, the number of independent observations is...", options: ["The number of mice", "The number of neurons", "The number of trials", "The number of spikes"], answer: 0, explain: "The unit of randomisation." },
+  { q: "The intraclass correlation is...", options: ["Between-cluster variance over total variance", "The correlation of two neurons", "The noise correlation", "A p-value"], answer: 0, explain: "The fraction of variance due to clusters." },
+  { q: "The design effect with m per cluster is...", options: ["1 + (m - 1)ρ", "m", "ρ", "1/m"], answer: 0, explain: "Variance inflation of a cluster mean." },
+  { q: "A small ICC can still matter because...", options: ["It is multiplied by the number of neurons per animal", "It is always large", "It changes the mean", "It is a p-value"], answer: 0, explain: "With m = 120, ρ = 0.1 inflates variance thirteenfold." },
+  { q: "An exact permutation test on 5 + 5 animals uses...", options: ["All 252 ways of splitting them", "Random neurons", "1,000 random shuffles of neurons", "One split"], answer: 0, explain: "C(10, 5) = 252." },
+  { q: "Mixed-effects models...", options: ["Use all data while estimating variance at each level", "Ignore animals", "Require one neuron per animal", "Are always invalid"], answer: 0, explain: "Multilevel analysis." },
+  { q: "In machine learning, the analogue of pseudoreplication is...", options: ["Data leakage across subjects between train and test sets", "Dropout", "Batch normalisation", "Overparameterisation"], answer: 0, explain: "Split by independent unit." },
+]} />
+
+<Flashcards cards={[
+  { front: "Pseudoreplication?", back: "Analysing nested observations (neurons within animals) as independent, inflating false positives." },
+  { front: "Intraclass correlation?", back: "$\\rho = \\sigma^2_{between}/(\\sigma^2_{between} + \\sigma^2_{within})$." },
+  { front: "Effective sample size?", back: "$N/(1 + (m-1)\\rho)$ for $N$ observations in clusters of size $m$." },
+  { front: "Exact permutation test on animals?", back: "Recompute the group difference for every split of animals into groups; p is the fraction at least as extreme." },
+  { front: "Aarts and colleagues (2014)?", back: "Showed nested data are often analysed as independent in neuroscience, inflating false positives, and advocated multilevel analysis." },
+]} />
+
+<Predict revisit question="Five mice per group, 120 neurons each, no true difference: how often does a t-test across neurons give p below 0.05?" />
+
+<Key title="Before you go">
+<ul>
+<li>Neurons within an animal share variance; they are not independent for comparisons between animals.</li>
+<li>The ICC and design effect say how much information nested data hold.</li>
+<li>Test at the level of the independent unit: animal means, permutation over animals, or mixed models.</li>
+<li>Plan the number of animals, not just the number of neurons.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Aarts, Verhage, Veenvliet, Dolan and van der Sluis (2014), <em>A solution to dependency: using multilevel analysis to accommodate nested data</em>.</li>
+<li>Lazic (2010), <em>The problem of pseudoreplication in neuroscientific studies: is it affecting your analysis?</em>, BMC Neuroscience 11, 5.</li>
+<li>Button and colleagues (2013), <em>Power failure: why small sample size undermines the reliability of neuroscience</em> (Week 18's deep read).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Take one dataset you might analyse (Steinmetz, IBL or the Allen Brain Observatory). Draw its nesting from trials up to animals, mark which level a question you care about must be tested at, and estimate how many independent units you actually have." />

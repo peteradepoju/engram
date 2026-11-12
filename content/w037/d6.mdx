@@ -1,0 +1,334 @@
+export const meta = {
+  title: "Forge: Week 37 challenge, quiz and deep read",
+  intro: "This week was about data as they come: NWB files and their ragged arrays, calcium traces that need correcting before they mean anything, sorted units that need screening, behaviour with lapses and priors, and the nesting that decides how many independent observations a dataset really holds. Today's challenge puts it all in one pipeline. Six mice, one session each, arrive as six HDF5 files with spike times, brain areas and trials. You screen the units, decode the animal's choice from each area on trials where the stimulus gives no information, and test the result across mice rather than across neurons. Then the quiz, and a critique of Siegle and colleagues' survey of the mouse visual system.",
+  goals: [
+    "Run a complete analysis from raw files to a statistical conclusion",
+    "Apply quality metrics consistently across sessions",
+    "Decode a behavioural variable while controlling for a stimulus confound",
+    "Test an effect at the level of animals with an exact sign-flip test",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "siegle-2021",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. A unit's violation metric is 0.3. What contamination does it imply?
+2. Ten neurons per mouse and an intraclass correlation of 0.2: what is the design effect?
+3. With six mice, what is the smallest one-sided p-value an exact sign-flip test can give?
+
+<PyCell code={String.raw`
+  import numpy as np
+  print("1.", round(1 - np.sqrt(1 - 2 * 0.3), 3))
+  print("2.", 1 + (10 - 1) * 0.2)
+  print("3.", 1 / 2 ** 6)
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: from files to clean units.** Each session file has the layout from Day 1: `units/spike_times` with its index, `units/location`, and a trials table with stimulus onset, signed contrast and choice. Each session has 10 units in each of VISp, MOs and CA1, but some units are contaminated by a second neuron and some drift away part way through. Write `clean_units(f, T)`, returning the indices of units with estimated contamination below 0.2 and presence ratio above 0.9.
+
+<PyCell id="partA" title="Part A: screening units across sessions" tests={String.raw`
+  import numpy as np
+  def test_counts():
+      "between 14 and 26 units survive in every session"
+      assert all(14 <= len(k) <= 26 for k in kept)
+
+  def test_bad_removed():
+      "no unit with contamination of 50% or more survives"
+      assert all(truth[i][0][k] < 0.5 for i, ks in enumerate(kept) for k in ks)
+`} prompt="Using the helpers spikes_of, contamination and presence_ratio (given), write clean_units(f, T) returning a list of the indices of units that pass both criteria."
+code={String.raw`
+  import io
+  import itertools
+  import numpy as np
+  import h5py
+  import matplotlib.pyplot as plt
+
+  def make_session(seed):
+      g = np.random.default_rng(seed); ntr = 300
+      starts = np.cumsum(g.uniform(2.5, 3.5, ntr)); on = starts + 0.5
+      con = g.choice([-1, -0.25, -0.0625, 0, 0, 0, 0.0625, 0.25, 1], ntr)
+      choice = np.where(g.random(ntr) < 0.06 + 0.88 / (1 + np.exp(-8 * con)), 1, -1)
+      areas = np.repeat(["VISp", "MOs", "CA1"], 10); T = starts[-1] + 3
+      spikes, contam, lost = [], [], []
+      for u in range(30):
+          base = g.uniform(2, 8); a = areas[u]; w = g.uniform(0.5, 1.5)
+          own = np.cumsum(g.exponential(1 / base, int(base * T * 1.3)) + 0.002); own = own[own < T]
+          extra = []
+          for o, c, ch in zip(on, con, choice):
+              if a == "VISp":
+                  extra += list(o + g.uniform(0.05, 0.25, g.poisson(w * 3 * max(c, 0) + 0.2)))
+              if a == "MOs":
+                  extra += list(o + g.uniform(0.3, 0.7, g.poisson(w * (2.0 if ch == 1 else 0.4))))
+          st = np.sort(np.r_[own, np.array(extra)])
+          cf = g.uniform(0.5, 1.0) if g.random() < 0.2 else 0.0
+          if cf > 0:
+              st = np.sort(np.r_[st, g.uniform(0, T, int(cf * len(st)))])
+          lf = g.uniform(0.3, 0.6) if g.random() < 0.15 else 0.0
+          if lf > 0:
+              st = st[st < T * (1 - lf)]
+          spikes.append(st); contam.append(cf); lost.append(lf)
+      buf = io.BytesIO()
+      with h5py.File(buf, "w") as w:
+          w.attrs["subject_id"] = f"mouse-{seed}"
+          tr = w.create_group("intervals/trials")
+          tr["stim_on_time"] = on; tr["contrast"] = con; tr["choice"] = choice; tr["start_time"] = starts
+          w.create_dataset("units/spike_times", data=np.concatenate(spikes))
+          w.create_dataset("units/spike_times_index", data=np.cumsum([len(s) for s in spikes]))
+          w.create_dataset("units/location", data=np.array(areas, dtype="S4"))
+      return h5py.File(buf, "r"), T, (np.array(contam), np.array(lost))
+
+  sessions = [make_session(s) for s in range(101, 107)]
+  truth = [s[2] for s in sessions]
+
+  def spikes_of(f, k):
+      idx = f["units/spike_times_index"]
+      return f["units/spike_times"][0 if k == 0 else int(idx[k - 1]): int(idx[k])]
+
+  def contamination(st, T, tr=0.0015):
+      m = np.sum(np.diff(st) < tr) / (2 * tr * len(st) ** 2 / T)
+      return 1 - np.sqrt(1 - 2 * min(m, 0.4999))
+
+  def presence_ratio(st, T, block=60.0):
+      nb = int(np.ceil(T / block))
+      return np.mean(np.histogram(st, np.arange(nb + 1) * block)[0] > 0)
+
+  def clean_units(f, T):
+      ...
+
+  kept = [clean_units(f, T) for f, T, _ in sessions]
+  for i, ks in enumerate(kept):
+      loc = [s.decode() for s in sessions[i][0]["units/location"][:]]
+      print(f"mouse {i + 1}: kept {len(ks)} of 30 units ({', '.join(f'{a} {sum(loc[k] == a for k in ks)}' for a in ('VISp', 'MOs', 'CA1'))})")
+`}
+hint="Loop k over range(len(f['units/location'])), take st = spikes_of(f, k), and keep k if contamination(st, T) < 0.2 and presence_ratio(st, T) > 0.9."
+solution={String.raw`
+  import io
+  import itertools
+  import numpy as np
+  import h5py
+  import matplotlib.pyplot as plt
+
+  def make_session(seed):
+      g = np.random.default_rng(seed); ntr = 300
+      starts = np.cumsum(g.uniform(2.5, 3.5, ntr)); on = starts + 0.5
+      con = g.choice([-1, -0.25, -0.0625, 0, 0, 0, 0.0625, 0.25, 1], ntr)
+      choice = np.where(g.random(ntr) < 0.06 + 0.88 / (1 + np.exp(-8 * con)), 1, -1)
+      areas = np.repeat(["VISp", "MOs", "CA1"], 10); T = starts[-1] + 3
+      spikes, contam, lost = [], [], []
+      for u in range(30):
+          base = g.uniform(2, 8); a = areas[u]; w = g.uniform(0.5, 1.5)
+          own = np.cumsum(g.exponential(1 / base, int(base * T * 1.3)) + 0.002); own = own[own < T]
+          extra = []
+          for o, c, ch in zip(on, con, choice):
+              if a == "VISp":
+                  extra += list(o + g.uniform(0.05, 0.25, g.poisson(w * 3 * max(c, 0) + 0.2)))
+              if a == "MOs":
+                  extra += list(o + g.uniform(0.3, 0.7, g.poisson(w * (2.0 if ch == 1 else 0.4))))
+          st = np.sort(np.r_[own, np.array(extra)])
+          cf = g.uniform(0.5, 1.0) if g.random() < 0.2 else 0.0
+          if cf > 0:
+              st = np.sort(np.r_[st, g.uniform(0, T, int(cf * len(st)))])
+          lf = g.uniform(0.3, 0.6) if g.random() < 0.15 else 0.0
+          if lf > 0:
+              st = st[st < T * (1 - lf)]
+          spikes.append(st); contam.append(cf); lost.append(lf)
+      buf = io.BytesIO()
+      with h5py.File(buf, "w") as w:
+          w.attrs["subject_id"] = f"mouse-{seed}"
+          tr = w.create_group("intervals/trials")
+          tr["stim_on_time"] = on; tr["contrast"] = con; tr["choice"] = choice; tr["start_time"] = starts
+          w.create_dataset("units/spike_times", data=np.concatenate(spikes))
+          w.create_dataset("units/spike_times_index", data=np.cumsum([len(s) for s in spikes]))
+          w.create_dataset("units/location", data=np.array(areas, dtype="S4"))
+      return h5py.File(buf, "r"), T, (np.array(contam), np.array(lost))
+
+  sessions = [make_session(s) for s in range(101, 107)]
+  truth = [s[2] for s in sessions]
+
+  def spikes_of(f, k):
+      idx = f["units/spike_times_index"]
+      return f["units/spike_times"][0 if k == 0 else int(idx[k - 1]): int(idx[k])]
+
+  def contamination(st, T, tr=0.0015):
+      m = np.sum(np.diff(st) < tr) / (2 * tr * len(st) ** 2 / T)
+      return 1 - np.sqrt(1 - 2 * min(m, 0.4999))
+
+  def presence_ratio(st, T, block=60.0):
+      nb = int(np.ceil(T / block))
+      return np.mean(np.histogram(st, np.arange(nb + 1) * block)[0] > 0)
+
+  def clean_units(f, T):
+      keep = []
+      for k in range(len(f["units/location"])):
+          st = spikes_of(f, k)
+          if contamination(st, T) < 0.2 and presence_ratio(st, T) > 0.9:
+              keep.append(k)
+      return keep
+
+  kept = [clean_units(f, T) for f, T, _ in sessions]
+  for i, ks in enumerate(kept):
+      loc = [s.decode() for s in sessions[i][0]["units/location"][:]]
+      print(f"mouse {i + 1}: kept {len(ks)} of 30 units ({', '.join(f'{a} {sum(loc[k] == a for k in ks)}' for a in ('VISp', 'MOs', 'CA1'))})")
+`} />
+
+Between 15 and 22 of the 30 units survive in each mouse, and every heavily contaminated unit is removed. The losses are uneven: mouse 5 keeps only 3 MOs units and mouse 6 only 3 VISp units, so the decoders in Part B work with different numbers of units in different mice. That is normal in real data, and it is one reason to compare areas within mice and to test across mice rather than pooling units.
+
+**Part B: decoding choice, controlling for the stimulus.** Choices follow stimuli, so a visual area that responds to rightward stimuli will predict rightward choices without carrying any choice signal of its own. To isolate choice, decode it only on trials with **zero contrast**, where the stimulus carries no information and the mouse's choices vary from trial to trial. For each mouse and area, count each clean unit's spikes 300 to 700 ms after stimulus onset on those trials and decode the choice with five-fold cross-validated logistic regression (given). Then test each area across the six mice with an exact sign-flip test of the accuracies against 0.5.
+
+<PyCell id="partB" title="Part B: choice signals across mice" tests={String.raw`
+  import numpy as np
+  def test_mos():
+      "MOs decodes choice above 70% on average and is significant across mice (p below 0.05)"
+      assert np.mean(acc["MOs"]) > 0.7 and pvals["MOs"] < 0.05
+
+  def test_others():
+      "VISp and CA1 stay below 60% on average and are not significant"
+      assert np.mean(acc["VISp"]) < 0.6 and np.mean(acc["CA1"]) < 0.6
+      assert pvals["VISp"] > 0.05 and pvals["CA1"] > 0.05
+`} prompt="Complete count_matrix (spike counts of the given units in the window after each onset, trials by units) and signflip_p (the one-sided exact p-value: the fraction of the 2^n sign patterns applied to accuracy minus 0.5 whose mean is at least the observed mean)."
+code={String.raw`
+  def logreg_cv(X, y, k=5, lam=1.0, seed=0):
+      g = np.random.default_rng(seed); idx = g.permutation(len(y)); correct = 0
+      for fold in np.array_split(idx, k):
+          trn = np.setdiff1d(idx, fold); mu, sd = X[trn].mean(0), X[trn].std(0) + 1e-9
+          A = np.c_[(X[trn] - mu) / sd, np.ones(len(trn))]; w = np.zeros(A.shape[1]); yy = (y[trn] > 0).astype(float)
+          for _ in range(25):
+              p = 1 / (1 + np.exp(-A @ w))
+              w += np.linalg.solve((A * (p * (1 - p))[:, None]).T @ A + lam * np.eye(len(w)), A.T @ (yy - p) - lam * w)
+          B = np.c_[(X[fold] - mu) / sd, np.ones(len(fold))]
+          correct += np.sum(((B @ w) > 0) == (y[fold] > 0))
+      return correct / len(y)
+
+  def count_matrix(spike_lists, onsets, t0=0.3, t1=0.7):
+      ...
+
+  def signflip_p(accs):
+      d = np.asarray(accs) - 0.5
+      ...
+
+  acc = {"VISp": [], "MOs": [], "CA1": []}
+  for (f, T, _), ks in zip(sessions, kept):
+      loc = [s.decode() for s in f["units/location"][:]]
+      on = f["intervals/trials/stim_on_time"][:]; con = f["intervals/trials/contrast"][:]; ch = f["intervals/trials/choice"][:]
+      zero = con == 0
+      for a in acc:
+          units = [spikes_of(f, k) for k in ks if loc[k] == a]
+          acc[a].append(logreg_cv(count_matrix(units, on[zero]), ch[zero]))
+  pvals = {a: signflip_p(v) for a, v in acc.items()}
+  for a in acc:
+      print(f"{a:5s} accuracy by mouse {np.round(acc[a], 2)}, mean {np.mean(acc[a]):.2f}, sign-flip p = {pvals[a]:.3f}")
+  plt.boxplot([acc[a] for a in acc]); plt.xticks([1, 2, 3], list(acc)); plt.axhline(0.5, ls="--", color="gray"); plt.ylabel("choice decoding (zero contrast)"); plt.show()
+`}
+hint="count_matrix: np.array([[np.sum((s > o + t0) & (s < o + t1)) for s in spike_lists] for o in onsets]). signflip_p: null = [np.mean(d * np.array(sg)) for sg in itertools.product([1, -1], repeat=len(d))]; return np.mean(np.array(null) >= d.mean() - 1e-12)."
+solution={String.raw`
+  def logreg_cv(X, y, k=5, lam=1.0, seed=0):
+      g = np.random.default_rng(seed); idx = g.permutation(len(y)); correct = 0
+      for fold in np.array_split(idx, k):
+          trn = np.setdiff1d(idx, fold); mu, sd = X[trn].mean(0), X[trn].std(0) + 1e-9
+          A = np.c_[(X[trn] - mu) / sd, np.ones(len(trn))]; w = np.zeros(A.shape[1]); yy = (y[trn] > 0).astype(float)
+          for _ in range(25):
+              p = 1 / (1 + np.exp(-A @ w))
+              w += np.linalg.solve((A * (p * (1 - p))[:, None]).T @ A + lam * np.eye(len(w)), A.T @ (yy - p) - lam * w)
+          B = np.c_[(X[fold] - mu) / sd, np.ones(len(fold))]
+          correct += np.sum(((B @ w) > 0) == (y[fold] > 0))
+      return correct / len(y)
+
+  def count_matrix(spike_lists, onsets, t0=0.3, t1=0.7):
+      return np.array([[np.sum((s > o + t0) & (s < o + t1)) for s in spike_lists] for o in onsets])
+
+  def signflip_p(accs):
+      d = np.asarray(accs) - 0.5
+      null = [np.mean(d * np.array(sg)) for sg in itertools.product([1, -1], repeat=len(d))]
+      return np.mean(np.array(null) >= d.mean() - 1e-12)
+
+  acc = {"VISp": [], "MOs": [], "CA1": []}
+  for (f, T, _), ks in zip(sessions, kept):
+      loc = [s.decode() for s in f["units/location"][:]]
+      on = f["intervals/trials/stim_on_time"][:]; con = f["intervals/trials/contrast"][:]; ch = f["intervals/trials/choice"][:]
+      zero = con == 0
+      for a in acc:
+          units = [spikes_of(f, k) for k in ks if loc[k] == a]
+          acc[a].append(logreg_cv(count_matrix(units, on[zero]), ch[zero]))
+  pvals = {a: signflip_p(v) for a, v in acc.items()}
+  for a in acc:
+      print(f"{a:5s} accuracy by mouse {np.round(acc[a], 2)}, mean {np.mean(acc[a]):.2f}, sign-flip p = {pvals[a]:.3f}")
+  plt.boxplot([acc[a] for a in acc]); plt.xticks([1, 2, 3], list(acc)); plt.axhline(0.5, ls="--", color="gray"); plt.ylabel("choice decoding (zero contrast)"); plt.show()
+`} />
+
+On zero-contrast trials, MOs predicts the choice in every mouse, with accuracies from 76% to 93% and a mean of 85%; the sign-flip test gives p = 0.016, the smallest value six mice allow. VISp and CA1 sit at chance (means of 0.50 and 0.47, p of 0.44 and 0.98). Steinmetz and colleagues reported choice-related activity in many regions, frontal motor areas among them, and used similar care, including trials where the stimulus could not explain the choice, before attributing a signal to the choice itself.
+
+**Part C (written).** Answer in your journal. First, rerun Part B decoding choice from all trials rather than zero-contrast trials only, and explain what happens to VISp and why that result would be misleading. Second, MOs is significant at p of about 0.016 with six mice, the smallest value the test allows. What would you need to claim that the choice signal in MOs is stronger than in another area, and how many mice would you plan for?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The design effect" task="Neurons $j = 1, \dots, m$ in one animal have values $x_j = a + e_j$, with a shared animal effect $a$ of variance $\sigma_a^2$ and independent $e_j$ of variance $\sigma_e^2$. Show that the variance of their mean is $\frac{\sigma_a^2 + \sigma_e^2}{m}\left(1 + (m - 1)\rho\right)$, with $\rho = \sigma_a^2/(\sigma_a^2 + \sigma_e^2)$.">
+
+The mean is $\bar x = a + \frac{1}{m}\sum_j e_j$, and the two parts are independent, so $\text{Var}(\bar x) = \sigma_a^2 + \sigma_e^2/m$.
+
+Write $\sigma^2 = \sigma_a^2 + \sigma_e^2$, so that $\sigma_a^2 = \rho\sigma^2$ and $\sigma_e^2 = (1 - \rho)\sigma^2$. Then $\text{Var}(\bar x) = \rho\sigma^2 + (1 - \rho)\sigma^2/m = \frac{\sigma^2}{m}\left(m\rho + 1 - \rho\right)$.
+
+That is $\frac{\sigma^2}{m}(1 + (m - 1)\rho)$: the variance of a mean of $m$ independent values times the design effect. As $m$ grows it tends to $\rho\sigma^2$, the animal's own variance, which no number of neurons can average away.
+
+</Prove>
+
+<Prove title="2. The violation metric" task="A unit's $N$ spikes in time $T$ are a refractory neuron's (fraction $1 - f$) plus unrelated Poisson spikes (fraction $f$). Ignoring edge effects and assuming $t_r$ is short, show that violations within $t_r$ number about $\frac{t_r N^2}{T}(2f - f^2)$, so that $m = \text{violations}/(2 t_r N^2/T) = f - f^2/2$.">
+
+A violation needs two spikes within $t_r$ of each other, and two of the neuron's own spikes never are. For two independent processes with rates $\lambda_1$ and $\lambda_2$, the expected number of pairs within $t_r$ is $2 t_r \lambda_1 \lambda_2 T$, and for one Poisson process with itself it is $t_r \lambda^2 T$.
+
+With $\lambda = N/T$, contaminant with neuron gives $2 t_r f(1 - f)\lambda^2 T$, and contaminant with contaminant gives $t_r f^2 \lambda^2 T$. The total is $t_r \lambda^2 T (2f - 2f^2 + f^2) = \frac{t_r N^2}{T}(2f - f^2)$.
+
+Dividing by $2 t_r N^2/T$ gives $m = f - f^2/2$, which is 0.5 when $f = 1$. Solving the quadratic for the root below 1 gives $f = 1 - \sqrt{1 - 2m}$.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 37 quiz (15 questions)" questions={[
+  { q: "An NWB file is built on...", options: ["HDF5", "CSV", "SQL", "JSON"], answer: 0, explain: "Day 1." },
+  { q: "Unit k's spikes are read from spike_times between...", options: ["index[k-1] and index[k]", "k and k+1", "0 and k", "index[0] and index[k]"], answer: 0, explain: "Day 1." },
+  { q: "The trials table lives in...", options: ["intervals/trials", "acquisition", "units", "general"], answer: 0, explain: "Day 1." },
+  { q: "Neuropil correction subtracts...", options: ["About 0.7 times the surrounding signal", "The baseline", "The maximum", "Spikes"], answer: 0, explain: "Day 2." },
+  { q: "ΔF/F divides by...", options: ["A running baseline F0", "The neuropil", "The peak", "The noise"], answer: 0, explain: "Day 2." },
+  { q: "Simple deconvolution computes...", options: ["max(0, c_t - γ c_{t-1})", "c_t squared", "The derivative of F0", "A Fourier transform"], answer: 0, explain: "Day 2." },
+  { q: "The violation metric of a fully random unit is about...", options: ["0.5", "1", "0", "0.1"], answer: 0, explain: "Day 3 and Derivation 2." },
+  { q: "Presence ratio detects...", options: ["Units that drift in or out", "Contamination", "Latency", "Bursting"], answer: 0, explain: "Day 3." },
+  { q: "Siegle and colleagues found visual areas...", options: ["Formed a functional hierarchy matching anatomy", "Were identical", "Had no latency differences", "Lacked responses"], answer: 0, explain: "Day 3." },
+  { q: "Ignoring lapses makes a psychometric threshold...", options: ["Too large", "Too small", "Exact", "Negative"], answer: 0, explain: "Day 4." },
+  { q: "A block prior shifts the psychometric curve most...", options: ["At low contrast", "At high contrast", "Equally everywhere", "Never"], answer: 0, explain: "Day 4." },
+  { q: "Pseudoreplication inflates...", options: ["False positives", "Effect sizes only", "Power honestly", "Nothing"], answer: 0, explain: "Day 5." },
+  { q: "The design effect is...", options: ["1 + (m - 1)ρ", "mρ", "1/m", "ρ²"], answer: 0, explain: "Day 5 and Derivation 1." },
+  { q: "Choice was decoded on zero-contrast trials to...", options: ["Remove the stimulus as a confound", "Get more trials", "Raise accuracy", "Avoid lapses"], answer: 0, explain: "Part B." },
+  { q: "With six mice, the smallest one-sided sign-flip p-value is...", options: ["1/64", "1/6", "0.05", "0"], answer: 0, explain: "2^6 sign patterns." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Siegle and colleagues (2021) its third pass and write your critique under the five headings. Focus on one question: **how much of the hierarchy is in the brain, and how much in the choices made to measure it?** Consider how units were included (their quality metrics and thresholds) and whether different thresholds could reorder areas; how brain areas were assigned to units from histology and the uncertainty at area boundaries; the stimuli used, which were passive and visual, and whether a hierarchy measured this way would hold during a task; how the hierarchy score combines different measures and how robust it is to the choice of measures; and the nesting of units within probes, sessions and mice in their statistics. End with one analysis of the public dataset that would test the claim you find weakest.
+
+<Callout kind="research">
+
+The Allen Brain Observatory's Visual Coding Neuropixels data and the IBL Brain Wide Map are both public in NWB on DANDI. In the Colab notebook, stream one session of either, apply this week's unit filters at three different thresholds, and measure how one result (the fraction of responsive units per area, or response latency per area) changes with the threshold. Is the ordering of areas stable? Write up the result as a one-paragraph robustness check of the kind reviewers ask for.
+
+</Callout>
+
+<Key title="Week 37 review checklist">
+<ul>
+<li>I can open an HDF5 or NWB file, walk its structure, read ragged spike arrays and align them to trials.</li>
+<li>I can turn fluorescence into ΔF/F and events, and test cells for reliable responses.</li>
+<li>I can compute and invert ISI violation metrics, and filter units by quality.</li>
+<li>I can fit psychometric curves with lapses, bootstrap their parameters and measure prior effects.</li>
+<li>I can recognise nested data, compute the design effect and test at the level of animals.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then write the analysis plan you would register before opening a new public dataset: the files and fields you will use, unit and trial inclusion criteria, the confounds you will control, and the level and test for each claim." />
