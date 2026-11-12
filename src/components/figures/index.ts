@@ -189,3 +189,8 @@ export { SignalDependentNoise } from "./signal-dependent-noise";
 export { ForwardModel } from "./forward-model";
 export { MinimalIntervention } from "./minimal-intervention";
 export { TwoRateAdaptation } from "./two-rate-adaptation";
+export { OcularDominance } from "./ocular-dominance";
+export { STDPWindow } from "./stdp-window";
+export { BCMRule } from "./bcm-rule";
+export { SynapticScaling } from "./synaptic-scaling";
+export { EligibilityTrace } from "./eligibility-trace";

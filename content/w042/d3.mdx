@@ -1,0 +1,247 @@
+export const meta = {
+  title: "The BCM rule: a sliding threshold for selectivity",
+  intro: "Hebbian learning with normalisation makes neurons pick out correlations; it does not by itself make them selective for one pattern among several. In 1982 Bienenstock, Cooper and Munro proposed a rule that does. Strong postsynaptic activity potentiates active synapses and weak activity depresses them, with the dividing line, the modification threshold, sliding up when the neuron has been very active and down when it has been quiet. The sliding threshold makes learning stable without any explicit normalisation and drives the neuron to respond strongly to one input pattern and weakly to the others. Today you implement the BCM rule, see what goes wrong when the threshold is fixed, and test its prediction that the history of activity changes the sign of plasticity.",
+  goals: [
+    "Write the BCM rule and explain the role of the modification threshold",
+    "Show that a fixed threshold is unstable and a sliding one is stable",
+    "Demonstrate that BCM learning makes a neuron selective for one pattern",
+    "Explain metaplasticity: how recent activity changes later plasticity",
+  ],
+  plan: [
+    { label: "Predict and the BCM rule", minutes: 20 },
+    { label: "Fixed against sliding threshold", minutes: 25 },
+    { label: "Learning to be selective", minutes: 35 },
+    { label: "Metaplasticity", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "bienenstock-1982",
+};
+
+<Predict question="A neuron sees two input patterns, equally often, and learns by the BCM rule. Will it end up responding about equally to both, strongly to one and weakly to the other, or to neither?" />
+
+<Step n={1} title="The BCM rule" minutes={20} />
+
+Bienenstock, Cooper and Munro (1982) wrote the change in each weight as the presynaptic activity times a function of the postsynaptic activity:
+
+$$
+\Delta w_i = \eta\, x_i\, \phi(y, \theta), \qquad \phi(y, \theta) = y\,(y - \theta).
+$$
+
+For $y$ below the **modification threshold** $\theta$, $\phi$ is negative and active synapses are depressed; above it, they are potentiated. The key is that $\theta$ is not fixed. It tracks the recent average of $y^2$:
+
+$$
+\tau_\theta\,\dot\theta = \frac{y^2}{y_0} - \theta.
+$$
+
+If the neuron has been very active, $\theta$ rises and potentiation becomes harder; if quiet, $\theta$ falls and potentiation becomes easier. Because $\theta$ grows faster than $y$ (as $y^2$), runaway activity always catches up with itself. Dudek and Bear (1992) later found the predicted pattern in hippocampus: low-frequency stimulation produced long-term depression, high-frequency stimulation potentiation, with a crossover in between.
+
+<Video id="UIPn7COOYcg" title="Rate-based models" by="Dan Goodman (Neuroscience for Machine Learners)" note="Dan Goodman covers rate-based plasticity models from the simplest Hebbian rule through Oja's rule to the BCM rule and its sliding threshold." />
+
+<Step n={2} title="Fixed against sliding threshold" minutes={25} />
+
+Two input patterns, each over four synapses, overlap a little: $\mathbf x_1 = (1, 0.8, 0.2, 0.1)$ and $\mathbf x_2 = (0.1, 0.2, 0.8, 1)$. The neuron's response is $y = \max(0, \mathbf w\cdot\mathbf x)$, and the weights start equal.
+
+<Figure caption="The BCM function φ(y) = y(y − θ) and the effect of the sliding threshold. Change θ and see which activity levels potentiate and which depress." credit="Interactive figure by Engram, after Bienenstock, Cooper and Munro (1982).">
+  <BCMRule />
+</Figure>
+
+<PyCell id="fixed" title="A fixed threshold fails" tests={String.raw`
+  import numpy as np
+  def test_low():
+      "with a fixed threshold of 0.4, the weights blow up"
+      assert np.linalg.norm(w_low) > 50
+
+  def test_high():
+      "with a fixed threshold of 1.0, the weights collapse to near zero"
+      assert np.linalg.norm(w_high) < 0.05
+`} prompt="Write bcm_fixed(theta, steps=4000): present x1 or x2 at random on each step, compute y, update the weights by eta x y (y - theta) and keep them non-negative; stop early if the weight norm exceeds 100. Run it with theta 0.4 and 1.0."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1982)
+  x1 = np.array([1.0, 0.8, 0.2, 0.1]); x2 = np.array([0.1, 0.2, 0.8, 1.0])
+  eta = 0.005
+
+  def bcm_fixed(theta, steps=4000):
+      w = np.full(4, 0.3)
+      for t in range(steps):
+          x = x1 if r.random() < 0.5 else x2
+          y = max(0.0, w @ x)
+          ...
+          if np.linalg.norm(w) > 100:
+              break
+      return w
+
+  w_low, w_high = bcm_fixed(0.4), bcm_fixed(1.0)
+  print(f"theta 0.4: |w| = {np.linalg.norm(w_low):.3g};  theta 1.0: |w| = {np.linalg.norm(w_high):.3g}  (initial response about {0.3 * x1.sum():.2f})")
+`}
+hint="w = np.maximum(0, w + eta * x * y * (y - theta))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1982)
+  x1 = np.array([1.0, 0.8, 0.2, 0.1]); x2 = np.array([0.1, 0.2, 0.8, 1.0])
+  eta = 0.005
+
+  def bcm_fixed(theta, steps=4000):
+      w = np.full(4, 0.3)
+      for t in range(steps):
+          x = x1 if r.random() < 0.5 else x2
+          y = max(0.0, w @ x)
+          w = np.maximum(0, w + eta * x * y * (y - theta))
+          if np.linalg.norm(w) > 100:
+              break
+      return w
+
+  w_low, w_high = bcm_fixed(0.4), bcm_fixed(1.0)
+  print(f"theta 0.4: |w| = {np.linalg.norm(w_low):.3g};  theta 1.0: |w| = {np.linalg.norm(w_high):.3g}  (initial response about {0.3 * x1.sum():.2f})")
+`} />
+
+The initial response is about 0.6 for either pattern. With the threshold at 0.4 that response lies above it, so every presentation potentiates, the response grows, $y(y-\theta)$ grows with it, and the weights run away (the loop stops them at a norm of 100). With the threshold at 1.0 the response lies below it, every presentation depresses, and the weights decay towards zero. A fixed threshold has only these two fates, and which one you get depends on where the neuron happens to start.
+
+<Step n={3} title="Learning to be selective" minutes={35} />
+
+Now let the threshold slide, with $\tau_\theta = 50$ steps and $y_0 = 1$, over 20,000 presentations.
+
+<PyCell id="sliding" title="Selectivity from a sliding threshold" tests={String.raw`
+  import numpy as np
+  def test_selective():
+      "the neuron responds at least five times more to one pattern than to the other"
+      a, b = max(0, w_s @ x1), max(0, w_s @ x2)
+      assert max(a, b) > 5 * min(a, b)
+
+  def test_stable():
+      "the threshold settles near the mean of y squared"
+      m = 0.5 * (max(0, w_s @ x1) ** 2 + max(0, w_s @ x2) ** 2)
+      assert abs(theta_s - m) < 0.25 * m
+`} prompt="Write bcm_sliding(steps=20000): as before, but update theta after each step by (y² / y0 - theta) / tau_theta, starting from theta = 0.5. Return the weights, the final theta and the history of the two responses (every 100 steps)."
+code={String.raw`
+  def bcm_sliding(steps=20000, tau_theta=50.0, y0=1.0):
+      w = np.full(4, 0.3); theta = 0.5; hist = []
+      for t in range(steps):
+          x = x1 if r.random() < 0.5 else x2
+          y = max(0.0, w @ x)
+          ...
+          if t % 100 == 0:
+              hist.append([max(0, w @ x1), max(0, w @ x2), theta])
+      return w, theta, np.array(hist)
+
+  w_s, theta_s, hist = bcm_sliding()
+  print(f"weights {np.round(w_s, 2)}; response to x1 {max(0, w_s @ x1):.2f}, to x2 {max(0, w_s @ x2):.2f}; theta {theta_s:.2f}")
+  plt.plot(hist[:, 0], label="response to x1"); plt.plot(hist[:, 1], label="response to x2"); plt.plot(hist[:, 2], "k:", label="theta")
+  plt.xlabel("hundreds of presentations"); plt.legend(); plt.show()
+`}
+hint="w = np.maximum(0, w + eta * x * y * (y - theta)); theta += (y * y / y0 - theta) / tau_theta."
+solution={String.raw`
+  def bcm_sliding(steps=20000, tau_theta=50.0, y0=1.0):
+      w = np.full(4, 0.3); theta = 0.5; hist = []
+      for t in range(steps):
+          x = x1 if r.random() < 0.5 else x2
+          y = max(0.0, w @ x)
+          w = np.maximum(0, w + eta * x * y * (y - theta))
+          theta += (y * y / y0 - theta) / tau_theta
+          if t % 100 == 0:
+              hist.append([max(0, w @ x1), max(0, w @ x2), theta])
+      return w, theta, np.array(hist)
+
+  w_s, theta_s, hist = bcm_sliding()
+  print(f"weights {np.round(w_s, 2)}; response to x1 {max(0, w_s @ x1):.2f}, to x2 {max(0, w_s @ x2):.2f}; theta {theta_s:.2f}")
+  plt.plot(hist[:, 0], label="response to x1"); plt.plot(hist[:, 1], label="response to x2"); plt.plot(hist[:, 2], "k:", label="theta")
+  plt.xlabel("hundreds of presentations"); plt.legend(); plt.show()
+`} />
+
+The neuron ends up responding about 2.0 to one pattern and about 0.2 to the other, with the weights concentrated on the synapses that carry the winning pattern. Nothing in the rule chose which pattern; a small random excess early on decided it, and the sliding threshold then turned the advantage into selectivity. Once the threshold sits near the mean of $y^2$, the strong response is above it and the weak one below, so each presentation of the winner potentiates and each presentation of the loser depresses, until the two effects balance. Run the cell with a different seed and the neuron may choose the other pattern.
+
+<Step n={4} title="Metaplasticity" minutes={25} />
+
+The sliding threshold predicts **metaplasticity**: the same stimulus can potentiate or depress a synapse depending on the neuron's recent history. After a long period of high activity, $\theta$ is high and a moderate response falls below it; after a quiet period, $\theta$ is low and the same response lies above it. Kirkwood, Rioult and Bear (1996) found the corresponding effect in visual cortex: in animals reared in the dark, the crossover between depression and potentiation shifted to lower stimulation frequencies, and light exposure shifted it back.
+
+<PyCell id="meta" title="History changes the sign of plasticity" tests={String.raw`
+  import numpy as np
+  def test_sign():
+      "the same test response potentiates after quiet history and depresses after active history"
+      assert dw_quiet > 0 > dw_active
+`} prompt="Let theta settle under 500 steps of constant activity y = 1.5 (an active history) or y = 0.3 (a quiet history), using the theta update alone. Then compute the change in a synapse with x = 1 for a test response y = 0.8 under each threshold."
+code={String.raw`
+  def settle_theta(y_hist, steps=500, tau_theta=50.0, theta=0.5):
+      for _ in range(steps):
+          theta += (y_hist ** 2 - theta) / tau_theta
+      return theta
+
+  theta_active, theta_quiet = settle_theta(1.5), settle_theta(0.3)
+  y_test = 0.8
+  dw_active = ...
+  dw_quiet = ...
+  print(f"theta after an active history {theta_active:.2f}, after a quiet one {theta_quiet:.2f}")
+  print(f"change for the same test response: {dw_active:+.4f} (active history), {dw_quiet:+.4f} (quiet history)")
+`}
+hint="dw_active = eta * 1.0 * y_test * (y_test - theta_active); dw_quiet = eta * 1.0 * y_test * (y_test - theta_quiet)."
+solution={String.raw`
+  def settle_theta(y_hist, steps=500, tau_theta=50.0, theta=0.5):
+      for _ in range(steps):
+          theta += (y_hist ** 2 - theta) / tau_theta
+      return theta
+
+  theta_active, theta_quiet = settle_theta(1.5), settle_theta(0.3)
+  y_test = 0.8
+  dw_active = eta * 1.0 * y_test * (y_test - theta_active)
+  dw_quiet = eta * 1.0 * y_test * (y_test - theta_quiet)
+  print(f"theta after an active history {theta_active:.2f}, after a quiet one {theta_quiet:.2f}")
+  print(f"change for the same test response: {dw_active:+.4f} (active history), {dw_quiet:+.4f} (quiet history)")
+`} />
+
+After the active history the threshold sits at about 2.25, so a test response of 0.8 depresses the synapse; after the quiet history it sits at about 0.09 and the same response potentiates. This is the BCM account of monocular deprivation: inputs from a closed eye still produce weak, uncorrelated activity, which falls below a threshold set by the open eye's strong drive, and so the closed eye's synapses weaken.
+
+<Callout kind="think">
+
+The BCM rule is a rate rule, but it can be derived from spike-based plasticity. Izhikevich and Desai (2003) and Pfister and Gerstner (2006) showed that a triplet STDP rule, averaged over Poisson spike trains, gives a BCM-like dependence on postsynaptic rate, with the threshold set by the rate of a slower process. The rules of Day 1, Day 2 and today are different views of one underlying synaptic machinery seen at different time scales.
+
+</Callout>
+
+<Bridge title="Stability without normalisation"
+  neuro="The sliding threshold explains why neurons become selective during development, why deprivation of one eye makes its inputs weaken while the other eye's strengthen, and why the threshold for potentiation depends on recent experience. It ties plasticity to the neuron's own activity level."
+  ai="Adaptive thresholds and running statistics are common in learning systems: batch normalisation tracks running means and variances, and competitive learning algorithms adjust thresholds so that every unit wins some of the time. BCM is also related to projection pursuit: its stable states maximise a measure of non-Gaussianity of the neuron's output.">
+
+A threshold that slides with activity turns Hebbian learning into stable selectivity.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In the BCM rule, activity below the threshold θ causes...", options: ["Depression of active synapses", "Potentiation", "No change", "Runaway growth"], answer: 0, explain: "φ(y, θ) < 0 for 0 < y < θ." },
+  { q: "The modification threshold slides with...", options: ["The recent average of y²", "The input", "Time only", "The weights"], answer: 0, explain: "Grows faster than y, ensuring stability." },
+  { q: "With a fixed threshold, BCM learning is...", options: ["Unstable: weights grow without bound or collapse", "Always stable", "Selective", "Unchanged"], answer: 0, explain: "Depends on where the initial response lies." },
+  { q: "With two patterns, a BCM neuron typically becomes...", options: ["Selective for one of them", "Equally responsive to both", "Silent", "Random"], answer: 0, explain: "Its stable states are selective." },
+  { q: "Dudek and Bear (1992) found that low-frequency stimulation produces...", options: ["Long-term depression", "Long-term potentiation", "No change", "Seizures"], answer: 0, explain: "With LTP at high frequency." },
+  { q: "Metaplasticity means...", options: ["Recent activity changes the rules of later plasticity", "Plasticity of metabolism", "Fast synaptic change", "Structural plasticity only"], answer: 0, explain: "The sliding threshold." },
+  { q: "Dark rearing shifts the LTD/LTP crossover...", options: ["Towards lower frequencies, making potentiation easier", "Towards higher frequencies", "Not at all", "Removes LTP"], answer: 0, explain: "Kirkwood, Rioult and Bear (1996)." },
+  { q: "BCM-like behaviour can be derived from...", options: ["Triplet STDP averaged over Poisson spikes", "Oja's rule", "Backpropagation", "Short-term depression"], answer: 0, explain: "Pfister and Gerstner (2006)." },
+]} />
+
+<Flashcards cards={[
+  { front: "BCM rule?", back: "$\\Delta w_i = \\eta x_i y(y - \\theta)$, with $\\tau_\\theta\\dot\\theta = y^2/y_0 - \\theta$." },
+  { front: "Why the threshold must slide?", back: "A fixed threshold makes weights explode if the response starts above it and collapse if below; a sliding one stabilises learning." },
+  { front: "BCM selectivity?", back: "The stable fixed points respond strongly to one input pattern and weakly to the others." },
+  { front: "Metaplasticity?", back: "The same stimulus causes LTP after a quiet history and LTD after an active one, because the threshold has moved." },
+  { front: "Evidence for a sliding threshold?", back: "Frequency dependence of LTD and LTP (Dudek and Bear, 1992) and its shift with dark rearing (Kirkwood, Rioult and Bear, 1996)." },
+]} />
+
+<Predict revisit question="Two patterns, equally often, BCM learning: equal responses, one strong and one weak, or neither?" />
+
+<Key title="Before you go">
+<ul>
+<li>BCM potentiates above a threshold and depresses below it.</li>
+<li>A fixed threshold is unstable; one that tracks recent y² is stable.</li>
+<li>BCM learning makes neurons selective for one input pattern.</li>
+<li>The threshold's history dependence predicts metaplasticity.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Bienenstock, Cooper and Munro (1982), <em>Theory for the development of neuron selectivity: orientation specificity and binocular interaction in visual cortex</em>.</li>
+<li>Dudek and Bear (1992), <em>Homosynaptic long-term depression in area CA1 of hippocampus and effects of N-methyl-D-aspartate receptor blockade</em>, PNAS 89(10), 4363 to 4367.</li>
+<li>Kirkwood, Rioult and Bear (1996), <em>Experience-dependent modification of synaptic plasticity in visual cortex</em>, Nature 381(6582), 526 to 528.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If one eye is closed early in life, BCM predicts that the closed eye's synapses weaken even though the eye still produces some noisy activity. Explain why using the sliding threshold, and contrast the prediction with what plain Hebbian learning with subtractive normalisation (Day 1) would say." />

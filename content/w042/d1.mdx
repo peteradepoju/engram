@@ -1,0 +1,221 @@
+export const meta = {
+  title: "Hebbian learning: correlations, competition and ocular dominance",
+  intro: "This week turns from what neurons compute to how their connections change. In 1949 Donald Hebb proposed that when one cell repeatedly helps to fire another, the connection between them grows: cells that fire together wire together. The idea is simple and its consequences are not. Plain Hebbian growth runs away, so something must limit it, and the way it is limited decides what the neuron learns. Miller, Keller and Stryker showed in 1989 that Hebbian learning with a fixed total of synaptic strength can explain how neurons in visual cortex come to prefer one eye. Today you build their model in miniature, compare two ways of keeping Hebbian learning stable, and see one produce competition and the other a compromise.",
+  goals: [
+    "Write the Hebbian and covariance rules and show why plain Hebbian growth is unstable",
+    "Express average Hebbian learning in terms of the input correlation matrix",
+    "Compare subtractive and multiplicative normalisation and the receptive fields each produces",
+    "Explain how ocular dominance can develop from correlated activity within each eye",
+  ],
+  plan: [
+    { label: "Predict and Hebb's postulate", minutes: 20 },
+    { label: "Runaway growth", minutes: 20 },
+    { label: "Competition by normalisation", minutes: 40 },
+    { label: "From averages to samples", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "miller-1989",
+};
+
+<Predict question="A model neuron receives ten inputs from each eye. Inputs from the same eye are more correlated with each other than with inputs from the other eye. Its weights grow by a Hebbian rule, but the total weight is held fixed. Will it end up driven by both eyes equally, by one eye, or by a random mixture?" />
+
+<Step n={1} title="Hebb's postulate" minutes={20} />
+
+Hebb (1949) wrote that when an axon of cell A "repeatedly or persistently takes part in firing" cell B, "some growth process or metabolic change takes place" so that A's efficiency in firing B increases. In a rate model with inputs $\mathbf x$ and output $y = \mathbf w\cdot\mathbf x$, the simplest version is
+
+$$
+\Delta \mathbf w = \eta\, y\,\mathbf x.
+$$
+
+Averaged over many inputs, $\langle y\mathbf x\rangle = \langle \mathbf x\mathbf x^\top\rangle\mathbf w = C\mathbf w$, where $C$ is the input correlation matrix. So, on average, $\dot{\mathbf w} = \eta C\mathbf w$: a linear system (Week 21) whose solution grows along the eigenvector of $C$ with the largest eigenvalue, without limit. A **covariance rule**, $\Delta\mathbf w = \eta (y - \bar y)(\mathbf x - \bar{\mathbf x})$ (Sejnowski, 1977), replaces correlations with covariances and allows depression as well as potentiation, but it is just as unstable.
+
+Week 9 met one fix, Oja's rule, which keeps the weight vector at unit length and turns the neuron into a principal component analyser. Today compares it with another fix, **subtractive normalisation**, which keeps the sum of the weights fixed, and finds that the choice decides whether inputs cooperate or compete.
+
+<Video id="IQUtzeotabc" title="Models of Long-Term Plasticity: Hebbian Learning and BCM Rule" by="Wulfram Gerstner (EPFL)" note="Wulfram Gerstner introduces rate-based models of long-term plasticity, from Hebbian rules to the BCM rule, from his Neuronal Dynamics lectures." />
+
+<Step n={2} title="Runaway growth" minutes={20} />
+
+Set up the miniature ocular dominance problem: 20 inputs, the first 10 from the left eye and the last 10 from the right. Within an eye the inputs are correlated (0.5), because neighbouring retinal cells see similar things and spontaneous retinal waves drive them together; between eyes the correlation is lower (0.2). Start all weights near 0.5.
+
+<PyCell id="runaway" title="Plain Hebb explodes" tests={String.raw`
+  import numpy as np
+  def test_explode():
+      "the weight norm grows by more than a factor of 1000"
+      assert norms[-1] / norms[0] > 1e3
+
+  def test_direction():
+      "the weights align with the top eigenvector of C"
+      ev, E = np.linalg.eigh(C)
+      top = E[:, -1]
+      assert abs(np.dot(w_hebb, top)) / np.linalg.norm(w_hebb) > 0.999
+`} prompt="Simulate the averaged plain Hebbian rule, w += eta C w, for 2,000 steps from w0, recording the norm of w at each step."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1989); n = 10
+  C = np.full((2 * n, 2 * n), 0.2); C[:n, :n] = 0.5; C[n:, n:] = 0.5; np.fill_diagonal(C, 1.0)
+  w0 = 0.5 + 0.05 * r.normal(size=2 * n)
+  eta = 0.01
+
+  w_hebb = w0.copy(); norms = []
+  for _ in range(2000):
+      ...
+      norms.append(np.linalg.norm(w_hebb))
+  print(f"weight norm: {norms[0]:.2f} at the start, {norms[-1]:.3g} after 2,000 steps")
+  plt.semilogy(norms); plt.xlabel("step"); plt.ylabel("|w|"); plt.show()
+`}
+hint="w_hebb = w_hebb + eta * C @ w_hebb."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1989); n = 10
+  C = np.full((2 * n, 2 * n), 0.2); C[:n, :n] = 0.5; C[n:, n:] = 0.5; np.fill_diagonal(C, 1.0)
+  w0 = 0.5 + 0.05 * r.normal(size=2 * n)
+  eta = 0.01
+
+  w_hebb = w0.copy(); norms = []
+  for _ in range(2000):
+      w_hebb = w_hebb + eta * C @ w_hebb
+      norms.append(np.linalg.norm(w_hebb))
+  print(f"weight norm: {norms[0]:.2f} at the start, {norms[-1]:.3g} after 2,000 steps")
+  plt.semilogy(norms); plt.xlabel("step"); plt.ylabel("|w|"); plt.show()
+`} />
+
+After 2,000 small steps the weight vector is more than $10^{62}$ times longer than it started, and it points along the top eigenvector of $C$, the uniform direction in which every input from both eyes has the same weight. Plain Hebbian learning finds the dominant correlation, which is useful, but it never stops growing, which is not: real synapses have limited resources, and something must trade one synapse's gain against another's loss.
+
+<Step n={3} title="Competition by normalisation" minutes={40} />
+
+Two ways to stop the growth. **Multiplicative** normalisation scales all weights together; Oja's rule, $\Delta\mathbf w = \eta(y\mathbf x - y^2\mathbf w)$, does this implicitly and, on average, converges to the top eigenvector of $C$. **Subtractive** normalisation subtracts the same amount from every weight's change, so the sum of weights stays fixed, and clips each weight between 0 and a maximum: $\Delta\mathbf w = \eta\,(C\mathbf w - \overline{C\mathbf w})$, then $\mathbf w \leftarrow \text{clip}(\mathbf w, 0, 1)$. Miller and MacKay (1994) showed that the two are not equivalent: subtractive normalisation makes inputs compete, so that groups of correlated inputs win or lose together.
+
+<Figure caption="Weights of a neuron with inputs from two eyes, learning by Hebbian plasticity under subtractive or multiplicative normalisation. Change the correlation within and between the eyes." credit="Interactive figure by Engram, after Miller, Keller and Stryker (1989) and Miller and MacKay (1994).">
+  <OcularDominance />
+</Figure>
+
+<PyCell id="normalise" title="Subtractive against multiplicative" tests={String.raw`
+  import numpy as np
+  def test_subtractive():
+      "subtractive normalisation drives one eye's weights to 1 and the other's to 0"
+      a, b = w_sub[:n].mean(), w_sub[n:].mean()
+      assert max(a, b) > 0.95 and min(a, b) < 0.05
+
+  def test_oja():
+      "Oja's rule leaves the two eyes with equal weights"
+      assert abs(w_oja[:n].mean() - w_oja[n:].mean()) < 0.01
+`} prompt="Implement both rules in their averaged forms, each for 3,000 steps from w0: subtractive (dw = C w minus its mean, then clip to [0, 1]) and Oja (dw = C w - (wᵀ C w) w)."
+code={String.raw`
+  w_sub = w0.copy(); w_oja = w0.copy()
+  for _ in range(3000):
+      ...
+  print(f"subtractive: left eye {w_sub[:n].mean():.2f}, right eye {w_sub[n:].mean():.2f}")
+  print(f"Oja:         left eye {w_oja[:n].mean():.2f}, right eye {w_oja[n:].mean():.2f}")
+  plt.bar(np.arange(2 * n) - 0.2, w_sub, 0.4, label="subtractive"); plt.bar(np.arange(2 * n) + 0.2, w_oja, 0.4, label="Oja")
+  plt.axvline(n - 0.5, color="k", lw=0.5); plt.xlabel("input (left eye | right eye)"); plt.ylabel("weight"); plt.legend(); plt.show()
+`}
+hint="dw = C @ w_sub; w_sub = np.clip(w_sub + eta * (dw - dw.mean()), 0, 1); w_oja = w_oja + eta * (C @ w_oja - (w_oja @ C @ w_oja) * w_oja)."
+solution={String.raw`
+  w_sub = w0.copy(); w_oja = w0.copy()
+  for _ in range(3000):
+      dw = C @ w_sub
+      w_sub = np.clip(w_sub + eta * (dw - dw.mean()), 0, 1)
+      w_oja = w_oja + eta * (C @ w_oja - (w_oja @ C @ w_oja) * w_oja)
+  print(f"subtractive: left eye {w_sub[:n].mean():.2f}, right eye {w_sub[n:].mean():.2f}")
+  print(f"Oja:         left eye {w_oja[:n].mean():.2f}, right eye {w_oja[n:].mean():.2f}")
+  plt.bar(np.arange(2 * n) - 0.2, w_sub, 0.4, label="subtractive"); plt.bar(np.arange(2 * n) + 0.2, w_oja, 0.4, label="Oja")
+  plt.axvline(n - 0.5, color="k", lw=0.5); plt.xlabel("input (left eye | right eye)"); plt.ylabel("weight"); plt.legend(); plt.show()
+`} />
+
+The two constraints give opposite answers from the same correlations. Under subtractive normalisation the right eye's weights all reach the maximum of 1 and the left eye's all fall to 0: the eye that happened to start slightly ahead takes everything, which answers the prediction. Under Oja's rule both eyes keep equal weights of about 0.22, the principal component of a matrix in which the two eyes are symmetric. Which eye wins under subtractive normalisation depends on the tiny random differences in the starting weights, which is why neighbouring cortical neurons can end up preferring different eyes.
+
+<Step n={4} title="From averages to samples" minutes={25} />
+
+The averaged rules assume the neuron sees the input statistics all at once. A real synapse sees one input pattern at a time. Draw inputs with covariance $C$, one per step, and apply the subtractive rule to each sample with a small learning rate: does the same competition emerge from noisy, sample-by-sample updates?
+
+<PyCell id="samples" title="Learning from single patterns" tests={String.raw`
+  import numpy as np
+  def test_segregates():
+      "sample-by-sample learning also gives one eye weights above 0.9 and the other below 0.1"
+      a, b = w_s[:n].mean(), w_s[n:].mean()
+      assert max(a, b) > 0.9 and min(a, b) < 0.1
+`} prompt="Draw x = L z with z standard normal and L the Cholesky factor of C, compute y = w·x, and apply dw = y x minus its mean, then clip, for 20,000 samples with eta = 0.002."
+code={String.raw`
+  L = np.linalg.cholesky(C)
+  w_s = w0.copy(); history = []
+  for t in range(20000):
+      ...
+      if t % 200 == 0:
+          history.append([w_s[:n].mean(), w_s[n:].mean()])
+  history = np.array(history)
+  print(f"after 20,000 samples: left eye {w_s[:n].mean():.2f}, right eye {w_s[n:].mean():.2f}")
+  plt.plot(np.arange(len(history)) * 200, history); plt.legend(["left eye", "right eye"]); plt.xlabel("sample"); plt.ylabel("mean weight"); plt.show()
+`}
+hint="x = L @ r.normal(size=2 * n); y = w_s @ x; dw = y * x; w_s = np.clip(w_s + 0.002 * (dw - dw.mean()), 0, 1)."
+solution={String.raw`
+  L = np.linalg.cholesky(C)
+  w_s = w0.copy(); history = []
+  for t in range(20000):
+      x = L @ r.normal(size=2 * n)
+      y = w_s @ x
+      dw = y * x
+      w_s = np.clip(w_s + 0.002 * (dw - dw.mean()), 0, 1)
+      if t % 200 == 0:
+          history.append([w_s[:n].mean(), w_s[n:].mean()])
+  history = np.array(history)
+  print(f"after 20,000 samples: left eye {w_s[:n].mean():.2f}, right eye {w_s[n:].mean():.2f}")
+  plt.plot(np.arange(len(history)) * 200, history); plt.legend(["left eye", "right eye"]); plt.xlabel("sample"); plt.ylabel("mean weight"); plt.show()
+`} />
+
+Learning from one noisy pattern at a time gives the same outcome: after 20,000 samples one eye's weights are near 1 and the other's near 0. The averaged equation describes the slow drift of the weights when the learning rate is small, while individual updates jitter around it. This is the same separation of time scales that lets stochastic gradient descent follow the gradient of the average loss.
+
+<Callout kind="history">
+
+Hubel and Wiesel found that closing one eye of a kitten during a critical period in early life shifts the ocular dominance of cortical neurons towards the open eye, and that artificially making both eyes' inputs uncorrelated (by inducing a squint) produces neurons driven almost entirely by one eye or the other. Both results follow from competitive Hebbian learning: deprivation gives the open eye's inputs more correlated drive, and decorrelating the eyes removes the common drive that would otherwise keep both. Miller, Keller and Stryker's model added lateral interactions in cortex and produced realistic stripes of ocular dominance columns.
+
+</Callout>
+
+<Bridge title="What the learning rule's constraint decides"
+  neuro="The same correlation-based learning produces either binocular neurons or segregated, monocular ones, depending on how the total synaptic strength is constrained. Development uses such rules, guided by patterned spontaneous activity before eye opening, to wire the visual system."
+  ai="Competitive learning, winner-take-all and normalisation constraints in unsupervised learning (from Kohonen maps to the normalisation layers of deep networks) play the same role: without a constraint, Hebbian-style growth is unstable, and the form of the constraint determines what features are learned.">
+
+Hebbian learning finds correlations; the constraint on it decides whether inputs cooperate or compete.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The averaged plain Hebbian rule is...", options: ["dw/dt = η C w", "dw/dt = -η w", "dw/dt = η", "dw/dt = η w²"], answer: 0, explain: "With C the input correlation matrix." },
+  { q: "Plain Hebbian learning is unstable because...", options: ["Weights grow without limit along the top eigenvector", "Weights decay", "It oscillates", "It ignores inputs"], answer: 0, explain: "Positive feedback." },
+  { q: "The covariance rule differs from plain Hebb by...", options: ["Subtracting means, allowing depression", "Being stable", "Ignoring the output", "Using spikes"], answer: 0, explain: "Sejnowski (1977)." },
+  { q: "Oja's rule converges to...", options: ["The top eigenvector of C, with unit length", "One eye", "Zero", "Random weights"], answer: 0, explain: "Multiplicative normalisation." },
+  { q: "Subtractive normalisation keeps fixed...", options: ["The sum of the weights", "The length of w", "Each weight", "The output"], answer: 0, explain: "And clips weights to bounds." },
+  { q: "With subtractive normalisation, correlated groups of inputs...", options: ["Compete, so one group wins", "Share equally", "Both decay", "Oscillate"], answer: 0, explain: "Miller and MacKay (1994)." },
+  { q: "Ocular dominance can develop from...", options: ["Stronger correlations within each eye than between eyes", "Random wiring alone", "Visual objects", "Feedback from motor cortex"], answer: 0, explain: "Competitive Hebbian learning." },
+  { q: "Making the two eyes' inputs uncorrelated (a squint) produces...", options: ["More monocular neurons", "More binocular neurons", "No change", "Blindness"], answer: 0, explain: "No common drive to share." },
+]} />
+
+<Flashcards cards={[
+  { front: "Hebb's rule?", back: "$\\Delta\\mathbf w = \\eta y\\mathbf x$; averaged, $\\dot{\\mathbf w} = \\eta C\\mathbf w$, which grows without bound." },
+  { front: "Covariance rule?", back: "$\\Delta\\mathbf w = \\eta(y - \\bar y)(\\mathbf x - \\bar{\\mathbf x})$: potentiation for correlated deviations, depression for anticorrelated." },
+  { front: "Subtractive versus multiplicative normalisation?", back: "Subtractive (fixed sum, clipped) makes correlated groups compete; multiplicative (fixed length, Oja) gives the principal component." },
+  { front: "Ocular dominance model?", back: "Hebbian learning with stronger within-eye correlations and subtractive normalisation leaves each neuron driven by one eye (Miller, Keller and Stryker, 1989)." },
+  { front: "Critical period result?", back: "Closing one eye early in life shifts cortical neurons towards the open eye: competition for synaptic strength." },
+]} />
+
+<Predict revisit question="Ten inputs per eye, correlated within each eye, Hebbian growth with a fixed total weight: both eyes, one eye, or a mixture?" />
+
+<Key title="Before you go">
+<ul>
+<li>Hebbian learning follows input correlations and, unchecked, grows without limit.</li>
+<li>Multiplicative normalisation (Oja) finds the principal component; inputs cooperate.</li>
+<li>Subtractive normalisation makes correlated groups compete; one wins.</li>
+<li>Competitive Hebbian learning explains ocular dominance and its plasticity in development.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Miller, Keller and Stryker (1989), <em>Ocular dominance column development: analysis and simulation</em>.</li>
+<li>Miller and MacKay (1994), <em>The role of constraints in Hebbian learning</em>, Neural Computation 6(1), 100 to 126.</li>
+<li>Dayan and Abbott (2001), <em>Theoretical Neuroscience</em>, MIT Press, chapter 8, on plasticity and learning.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Hebb's postulate is about cause (A takes part in firing B), but the rate rule only uses correlation. Describe a situation in which two neurons are correlated without one causing the other to fire, and say what a purely correlational rule would wrongly learn there. Which rule from this week fixes it?" />

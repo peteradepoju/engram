@@ -1,0 +1,282 @@
+export const meta = {
+  title: "Homeostatic plasticity and synaptic scaling",
+  intro: "Hebbian plasticity is positive feedback: synapses that drive a neuron get stronger and drive it more. Something must hold activity in a working range. In 1998 Turrigiano and colleagues blocked activity in cultured cortical neurons for two days and found that every excitatory synapse had grown stronger by the same factor; when they raised activity, every synapse weakened by a common factor. This synaptic scaling restores a neuron's firing rate while preserving the relative strengths that Hebbian learning wrote into its synapses. Today you simulate scaling, learn the rank-order method that showed it is multiplicative, and meet the puzzle of time scales that makes homeostasis alone too slow to tame Hebbian runaway.",
+  goals: [
+    "Describe the synaptic scaling experiments and what they showed",
+    "Implement multiplicative scaling to a target rate",
+    "Use the rank-order method to tell multiplicative from additive scaling",
+    "Explain the temporal paradox of Hebbian and homeostatic plasticity",
+  ],
+  plan: [
+    { label: "Predict and the experiment", minutes: 20 },
+    { label: "Scaling to a set point", minutes: 25 },
+    { label: "Multiplicative or additive?", minutes: 25 },
+    { label: "Hebb with homeostasis", minutes: 35 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "turrigiano-1998",
+};
+
+<Predict question="Hebbian learning raises a neuron's rate from 5 Hz to 20 Hz within minutes. A homeostatic process pulls the rate back to 5 Hz, but acts over hours. Will homeostasis keep the neuron's rate near 5 Hz while learning goes on?" />
+
+<Step n={1} title="Activity sets the gain of every synapse" minutes={20} />
+
+Turrigiano, Leslie, Desai, Rutherford and Nelson (1998) grew rat visual cortical neurons in culture and changed their activity for 48 hours. Tetrodotoxin (TTX), which blocks sodium channels and so silences firing, made the miniature excitatory postsynaptic currents (mEPSCs, the response to single vesicles) larger. Bicuculline, which blocks inhibition and raises firing, made them smaller. Firing rates, measured after the drug was washed out, had moved back towards their original level.
+
+The striking result was the shape of the change. The whole distribution of mEPSC amplitudes was stretched by a single factor, as if each synapse's strength had been multiplied by the same number. This matters because a multiplicative change preserves the ratios between synapses, and so preserves the information stored in their relative strengths, while it rescales the total drive.
+
+$$
+w_i \leftarrow w_i \left(1 + \frac{r_\text{target} - \bar r}{r_\text{target}\,\tau_s}\right),
+$$
+
+where $\bar r$ is a running average of the neuron's rate and $\tau_s$ sets how fast scaling acts. Later work found the sensors: neurons track their own activity through calcium and change the number of AMPA receptors at every synapse (Turrigiano, 2008).
+
+<Video id="YM3eUm36cIA" title="Synaptic Plasticity: Motivation and Aims" by="Wulfram Gerstner (EPFL, Neuronal Dynamics)" note="A short opening to the plasticity chapter of Neuronal Dynamics: what models of synaptic change need to explain and why stability is part of the problem." />
+
+<Step n={2} title="Scaling to a set point" minutes={25} />
+
+<Figure caption="Synaptic scaling. Cut the input drive, as TTX does, and the rate drops; slow multiplicative scaling of every weight brings it back. The weight ratios, shown as bars, do not change." credit="Interactive figure by Engram, after Turrigiano et al. (1998).">
+  <SynapticScaling />
+</Figure>
+
+<PyCell id="scaling" title="Restoring the rate" tests={String.raw`
+  import numpy as np
+  def test_restored():
+      "after the input drop the rate returns to within 2% of the 5 Hz target"
+      assert abs(h2[-1] - 5) < 0.1 and h2[0] < 2
+
+  def test_ratios():
+      "every weight was multiplied by the same factor"
+      ratio = W2 / W1
+      assert np.std(ratio) / np.mean(ratio) < 1e-6 and np.mean(ratio) > 2
+`} prompt="Write run(W, x, steps): on each step compute the 50 rates y = max(0, W x), update a running average a by (y - a)/20, and multiply each neuron's row of weights by 1 + (target - a)/(target tau). Run to steady state, then cut the input to 30% (TTX) and run again."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1998)
+  N, M = 50, 100
+  W0 = r.uniform(0, 0.1, (N, M))
+  x = r.uniform(0, 10, M)
+
+  def run(W, x, steps, target=5.0, tau=200.0):
+      a = np.zeros(N); hist = []
+      for t in range(steps):
+          y = np.maximum(0, W @ x)
+          a += (y - a) / 20
+          ...
+          hist.append(y.mean())
+      return W, np.array(hist)
+
+  W1, h1 = run(W0, x, 3000)
+  W2, h2 = run(W1, 0.3 * x, 3000)
+  print(f"before TTX {h1[-1]:.2f} Hz; just after {h2[0]:.2f} Hz; after scaling {h2[-1]:.2f} Hz; weights multiplied by {np.mean(W2 / W1):.2f}")
+  plt.plot(np.r_[h1, h2]); plt.axvline(3000, color="k", ls=":"); plt.xlabel("step"); plt.ylabel("mean rate (Hz)"); plt.show()
+`}
+hint="W = W * (1 + (target - a)[:, None] / (target * tau)), one factor per row."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1998)
+  N, M = 50, 100
+  W0 = r.uniform(0, 0.1, (N, M))
+  x = r.uniform(0, 10, M)
+
+  def run(W, x, steps, target=5.0, tau=200.0):
+      a = np.zeros(N); hist = []
+      for t in range(steps):
+          y = np.maximum(0, W @ x)
+          a += (y - a) / 20
+          W = W * (1 + (target - a)[:, None] / (target * tau))
+          hist.append(y.mean())
+      return W, np.array(hist)
+
+  W1, h1 = run(W0, x, 3000)
+  W2, h2 = run(W1, 0.3 * x, 3000)
+  print(f"before TTX {h1[-1]:.2f} Hz; just after {h2[0]:.2f} Hz; after scaling {h2[-1]:.2f} Hz; weights multiplied by {np.mean(W2 / W1):.2f}")
+  plt.plot(np.r_[h1, h2]); plt.axvline(3000, color="k", ls=":"); plt.xlabel("step"); plt.ylabel("mean rate (Hz)"); plt.show()
+`} />
+
+Cutting the input to 30% drops the mean rate from 5 Hz to 1.5 Hz. Scaling then multiplies every weight by about 3.3, exactly the factor that undoes the cut, and the rate returns to 5 Hz. Because one factor is applied to each neuron's whole row, the ratios between its weights are untouched: the neuron is as selective as before, only louder. Note that the scaling stops by itself, because the factor is 1 once the running rate reaches the target.
+
+<Step n={3} title="Multiplicative or additive?" minutes={25} />
+
+How did Turrigiano and colleagues know the change was multiplicative? They could not follow single synapses. Instead they recorded a few hundred mEPSCs in control and treated cells, sorted each set, and plotted the treated amplitudes against the control amplitudes of the same rank. If each synapse had been multiplied by $a$, the points fall on a line through the origin with slope $a$; if each had gained a fixed amount $b$, they fall on a line of slope 1 offset by $b$.
+
+<PyCell id="rank" title="The rank-order test" tests={String.raw`
+  import numpy as np
+  def test_slope():
+      "the fitted scaling factor is close to the true 1.5"
+      assert abs(a_fit - 1.5) < 0.1
+
+  def test_better():
+      "the multiplicative fit leaves less than half the error of the additive one"
+      assert rms_mult < 0.5 * rms_add
+`} prompt="Sort 400 control and 400 TTX amplitudes. Fit t = a c through the origin (a = c·t / c·c) and t = c + b (b = mean of t - c). Report both RMS errors."
+code={String.raw`
+  r2 = np.random.default_rng(36103)
+  ctrl = r2.lognormal(np.log(14), 0.35, 400)        # pA
+  ttx = 1.5 * r2.lognormal(np.log(14), 0.35, 400)   # an independent sample, scaled by 1.5
+
+  c, t = np.sort(ctrl), np.sort(ttx)
+  a_fit = ...
+  b_fit = ...
+  rms_mult = np.sqrt(np.mean((t - a_fit * c) ** 2))
+  rms_add = np.sqrt(np.mean((t - c - b_fit) ** 2))
+  print(f"multiplicative: slope {a_fit:.2f}, RMS error {rms_mult:.2f} pA;  additive: offset {b_fit:.1f} pA, RMS error {rms_add:.2f} pA")
+  plt.plot(c, t, ".", ms=3); plt.plot(c, a_fit * c, label="multiplicative"); plt.plot(c, c + b_fit, label="additive")
+  plt.xlabel("control amplitude (pA), ranked"); plt.ylabel("TTX amplitude (pA), ranked"); plt.legend(); plt.show()
+`}
+hint="a_fit = (c @ t) / (c @ c); b_fit = np.mean(t - c)."
+solution={String.raw`
+  r2 = np.random.default_rng(36103)
+  ctrl = r2.lognormal(np.log(14), 0.35, 400)        # pA
+  ttx = 1.5 * r2.lognormal(np.log(14), 0.35, 400)   # an independent sample, scaled by 1.5
+
+  c, t = np.sort(ctrl), np.sort(ttx)
+  a_fit = (c @ t) / (c @ c)
+  b_fit = np.mean(t - c)
+  rms_mult = np.sqrt(np.mean((t - a_fit * c) ** 2))
+  rms_add = np.sqrt(np.mean((t - c - b_fit) ** 2))
+  print(f"multiplicative: slope {a_fit:.2f}, RMS error {rms_mult:.2f} pA;  additive: offset {b_fit:.1f} pA, RMS error {rms_add:.2f} pA")
+  plt.plot(c, t, ".", ms=3); plt.plot(c, a_fit * c, label="multiplicative"); plt.plot(c, c + b_fit, label="additive")
+  plt.xlabel("control amplitude (pA), ranked"); plt.ylabel("TTX amplitude (pA), ranked"); plt.legend(); plt.show()
+`} />
+
+The multiplicative line fits the ranked points with an error of about 1.1 pA and recovers a slope of about 1.54, close to the true 1.5. The additive line, with its best offset of 8 pA, misses badly at both ends: it is too high for small events and too low for large ones, because a common multiplication stretches large synapses by more picoamperes than small ones. This is the shape Turrigiano and colleagues saw in their data.
+
+<Callout kind="warning">
+
+The rank-order method assumes every synapse changes in the same way. Kim, Tsien and Alger (2012) pointed out that small mEPSCs below the detection threshold distort the ranked plot and proposed a corrected test, and Hanes and colleagues (2020) found that the ratio of treated to control amplitudes changes across the distribution, so the scaling factor is not the same for every synapse. Treat "multiplicative" as a good first approximation, not a law.
+
+</Callout>
+
+<Step n={4} title="Hebb with homeostasis" minutes={35} />
+
+Now put the two together. A neuron with 20 inputs learns by a covariance Hebbian rule, $\Delta w_i = \eta (x_i - \bar x_i) y$; the first ten inputs share a common signal. On its own the rule runs away. Add scaling, and vary its time constant.
+
+<PyCell id="paradox" title="How fast must homeostasis be?" tests={String.raw`
+  import numpy as np
+  def test_runaway():
+      "Hebbian learning alone runs away"
+      assert res[None][1] > 1000
+
+  def test_slow():
+      "slow scaling (tau 1000) leaves the rate far above the target"
+      assert res[1000][1] > 15
+
+  def test_fast():
+      "fast scaling (tau 5) holds the rate near 5 Hz and keeps the correlated inputs stronger"
+      w, a, _ = res[5]
+      assert abs(a - 5) < 1 and w[:10].mean() > 5 * w[10:].mean()
+`} prompt="Complete hebb(tau): after the Hebbian step, update the running rate a by (y - a)/10 and, if tau is not None, multiply all weights by 1 + (target - a)/(target tau). Run it for tau None, 1000, 20 and 5."
+code={String.raw`
+  r3 = np.random.default_rng(7)
+  M3 = 20
+  xbar = np.r_[np.full(10, 2.02), np.full(10, 2.02)]   # mean input rates
+
+  def sample():
+      c = r3.normal(); x = np.empty(M3)
+      x[:10] = np.maximum(0, 2 + 1.0 * c + 0.5 * r3.normal(size=10))   # correlated group
+      x[10:] = np.maximum(0, 2 + 1.1 * r3.normal(size=10))             # independent group
+      return x
+
+  def hebb(tau, steps=20000, eta=5e-4, target=5.0):
+      w = np.full(M3, 0.12); a = w @ np.full(M3, 2.0)
+      for t in range(steps):
+          x = sample(); y = max(0, w @ x)
+          w = w + eta * (x - xbar) * y
+          ...
+          w = np.maximum(w, 0)
+          if y > 1e4:
+              return w, y, t
+      return w, a, steps
+
+  res = {tau: hebb(tau) for tau in [None, 1000, 20, 5]}
+  for tau, (w, a, t) in res.items():
+      print(f"tau {str(tau):>4}: rate {a:9.1f} Hz after {t} steps; mean weight correlated {w[:10].mean():.3f}, independent {w[10:].mean():.3f}")
+`}
+hint="a += (y - a) / 10, then if tau: w = w * (1 + (target - a) / (target * tau))."
+solution={String.raw`
+  r3 = np.random.default_rng(7)
+  M3 = 20
+  xbar = np.r_[np.full(10, 2.02), np.full(10, 2.02)]   # mean input rates
+
+  def sample():
+      c = r3.normal(); x = np.empty(M3)
+      x[:10] = np.maximum(0, 2 + 1.0 * c + 0.5 * r3.normal(size=10))   # correlated group
+      x[10:] = np.maximum(0, 2 + 1.1 * r3.normal(size=10))             # independent group
+      return x
+
+  def hebb(tau, steps=20000, eta=5e-4, target=5.0):
+      w = np.full(M3, 0.12); a = w @ np.full(M3, 2.0)
+      for t in range(steps):
+          x = sample(); y = max(0, w @ x)
+          w = w + eta * (x - xbar) * y
+          a += (y - a) / 10
+          if tau:
+              w = w * (1 + (target - a) / (target * tau))
+          w = np.maximum(w, 0)
+          if y > 1e4:
+              return w, y, t
+      return w, a, steps
+
+  res = {tau: hebb(tau) for tau in [None, 1000, 20, 5]}
+  for tau, (w, a, t) in res.items():
+      print(f"tau {str(tau):>4}: rate {a:9.1f} Hz after {t} steps; mean weight correlated {w[:10].mean():.3f}, independent {w[10:].mean():.3f}")
+`} />
+
+Without homeostasis the rate passes 10,000 Hz within about 1,800 presentations. With slow scaling ($\tau_s = 1000$) the neuron survives, but its rate sits near 26 Hz, about five times the target, because Hebbian growth keeps outrunning the correction. Only when scaling acts within a few presentations ($\tau_s$ of 20 or 5) does the rate stay near 5 Hz. In every stable case the correlated inputs end up about ten times stronger than the independent ones: scaling did not undo learning, it only fixed the overall level.
+
+<Callout kind="research">
+
+Zenke, Gerstner and Ganguli (2017) called this the temporal paradox of Hebbian learning and homeostatic plasticity. In models, homeostasis must act within seconds to minutes to stabilise Hebbian learning, yet synaptic scaling in experiments takes hours to days. Their proposed resolution is that fast compensatory processes, such as heterosynaptic plasticity and the rate dependence built into triplet STDP or BCM, do the moment-to-moment stabilising, while slow scaling sets the long-run operating point. Which fast processes actually do this in cortex is still open.
+
+</Callout>
+
+<Bridge title="Keeping activity in range"
+  neuro="Synaptic scaling, intrinsic plasticity of excitability and inhibitory plasticity all pull a neuron's activity towards a set point. Failures of homeostasis have been proposed as contributors to epilepsy and to some developmental disorders."
+  ai="Deep networks have their own homeostasis: weight decay, normalisation layers and careful initialisation keep activations in a working range. Layer normalisation in particular rescales a unit's inputs by a common factor, much like scaling, and leaves their ratios untouched.">
+
+Hebbian learning writes the pattern; homeostasis sets the volume.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Blocking activity with TTX for 48 hours made mEPSCs...", options: ["Larger", "Smaller", "Unchanged", "Disappear"], answer: 0, explain: "Turrigiano et al. (1998)." },
+  { q: "Raising activity with bicuculline made mEPSCs...", options: ["Smaller", "Larger", "Unchanged", "Faster"], answer: 0, explain: "Scaling goes both ways." },
+  { q: "Multiplicative scaling preserves...", options: ["The ratios between synaptic strengths", "The differences between them", "The total weight", "Nothing"], answer: 0, explain: "Each weight is multiplied by the same factor." },
+  { q: "In the rank-order test, multiplicative scaling gives...", options: ["A line through the origin with slope above 1", "A line of slope 1 with an offset", "A curve", "No relation"], answer: 0, explain: "Treated = a × control at each rank." },
+  { q: "Scaling is thought to sense activity through...", options: ["Calcium", "Glucose", "Potassium only", "Light"], answer: 0, explain: "Calcium-dependent signalling, changing AMPA receptor numbers." },
+  { q: "In the simulation, slow scaling with Hebbian learning...", options: ["Leaves the rate far above target", "Holds it at target", "Silences the neuron", "Reverses learning"], answer: 0, explain: "It cannot keep up with fast Hebbian growth." },
+  { q: "The temporal paradox is that...", options: ["Homeostasis in experiments is much slower than models need", "Hebbian learning is too slow", "STDP is too fast", "Both are the same speed"], answer: 0, explain: "Zenke, Gerstner and Ganguli (2017)." },
+  { q: "An AI analogue of synaptic scaling is...", options: ["Normalisation that rescales inputs by a common factor", "Dropout", "Max pooling", "Tokenisation"], answer: 0, explain: "Layer normalisation is the closest." },
+]} />
+
+<Flashcards cards={[
+  { front: "Synaptic scaling?", back: "Chronic changes in activity multiply all of a neuron's excitatory synaptic strengths by a common factor, moving the rate back towards a set point." },
+  { front: "Scaling rule?", back: "$w_i \\leftarrow w_i(1 + (r_\\text{target} - \\bar r)/(r_\\text{target}\\tau_s))$." },
+  { front: "Rank-order method?", back: "Plot sorted treated amplitudes against sorted control amplitudes; a line through the origin indicates multiplicative scaling." },
+  { front: "Temporal paradox?", back: "Hebbian runaway takes seconds to minutes, scaling takes hours to days; fast compensatory processes are needed as well." },
+  { front: "Why multiplicative matters?", back: "It changes total drive without erasing the relative strengths written by Hebbian learning." },
+]} />
+
+<Predict revisit question="Hebbian learning acts in minutes, homeostasis in hours. Will homeostasis hold the rate near target?" />
+
+<Key title="Before you go">
+<ul>
+<li>Activity blockade scales synapses up and excess activity scales them down.</li>
+<li>Multiplicative scaling restores the rate and preserves weight ratios.</li>
+<li>The rank-order plot tests whether scaling is multiplicative.</li>
+<li>Homeostasis must be fast enough to keep pace with Hebbian learning, and experimental scaling is not.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Turrigiano, Leslie, Desai, Rutherford and Nelson (1998), <em>Activity-dependent scaling of quantal amplitude in neocortical neurons</em>.</li>
+<li>Turrigiano (2008), <em>The self-tuning neuron: synaptic scaling of excitatory synapses</em>, Cell 135(3), 422 to 435.</li>
+<li>Zenke, Gerstner and Ganguli (2017), <em>The temporal paradox of Hebbian learning and homeostatic plasticity</em>, Current Opinion in Neurobiology 43, 166 to 176.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Scaling restores a neuron's rate after its input is cut, but a sensory neuron whose input has genuinely become weaker might be better off staying quiet. When is homeostasis helpful and when might it erase a real signal? Think of a case from the senses (Week 39) or from disease." />

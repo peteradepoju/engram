@@ -1,0 +1,259 @@
+export const meta = {
+  title: "Spike-timing-dependent plasticity",
+  intro: "Hebb's postulate was about causation: A takes part in firing B. Rate rules only see correlation. In the 1990s, recordings from pairs of connected neurons showed that synapses are sensitive to the precise order of spikes: a presynaptic spike a few milliseconds before a postsynaptic one strengthens the connection, and one a few milliseconds after weakens it. Bi and Poo mapped this window in cultured hippocampal neurons in 1998. Today you write the pair-based STDP rule, show that a neuron learning with it picks out a group of correlated inputs from noise, as Song, Miller and Abbott found, and that it learns to fire earlier and earlier in a repeated sequence.",
+  goals: [
+    "Describe the STDP window measured by Bi and Poo",
+    "Implement pair-based STDP with exponential traces",
+    "Show that STDP selects correlated inputs and makes weights bimodal",
+    "Explain latency reduction and its link to prediction",
+  ],
+  plan: [
+    { label: "Predict and timing", minutes: 20 },
+    { label: "The STDP window", minutes: 25 },
+    { label: "Selecting correlated inputs", minutes: 40 },
+    { label: "Firing earlier", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "bi-poo-1998",
+};
+
+<Predict question="A neuron receives the same sequence of 20 input spikes, one every 2 ms, again and again. It fires when enough inputs have arrived. Under STDP, will its spike move earlier in the sequence, later, or stay where it is?" />
+
+<Step n={1} title="Timing matters" minutes={20} />
+
+Markram, Lübke, Frotscher and Sakmann (1997) paired spikes in connected cortical neurons and found that potentiation required the presynaptic spike to come first. Bi and Poo (1998) mapped the dependence on timing in detail in cultured hippocampal neurons: with $\Delta t = t_{post} - t_{pre}$, the change in synaptic strength is positive and largest for small positive $\Delta t$, negative for small negative $\Delta t$, and decays to nothing beyond about 40 ms on either side. A standard model is the exponential **STDP window**:
+
+$$
+\Delta w(\Delta t) =
+\begin{cases}
+A_+ e^{-\Delta t/\tau_+}, & \Delta t \gt 0,\\
+-A_- e^{\Delta t/\tau_-}, & \Delta t \lt 0,
+\end{cases}
+$$
+
+with $\tau_\pm \approx 20$ ms. If presynaptic and postsynaptic spikes were unrelated, the average change would be proportional to the window's total area, $A_+\tau_+ - A_-\tau_-$; making this slightly negative, so that depression wins for random timing, keeps the rule stable.
+
+<Video id="fvzzwHKlMzk" title="STDP" by="Dan Goodman (Neuroscience for Machine Learners)" note="Dan Goodman introduces spike-timing-dependent plasticity: the experimental measurements, how it is modelled, and what it learns, including latency reduction and correlated groups." />
+
+<Step n={2} title="The STDP window" minutes={25} />
+
+<Figure caption="The pair-based STDP window. Change the amplitudes and time constants of potentiation and depression and see the window's area, which sets the average change for uncorrelated spikes." credit="Interactive figure by Engram, after Bi and Poo (1998) and Song, Miller and Abbott (2000).">
+  <STDPWindow />
+</Figure>
+
+<PyCell id="window" title="The window and its area" tests={String.raw`
+  import numpy as np
+  def test_window():
+      "the window is positive for pre-before-post and negative for post-before-pre"
+      assert stdp(10.0) > 0 and stdp(-10.0) < 0 and abs(stdp(10.0) - 0.005 * np.exp(-0.5)) < 1e-9
+
+  def test_area():
+      "the numerical area matches A+ tau+ - A- tau- and is negative"
+      assert abs(area - (Ap * tp - Am * tm)) < 1e-4 and area < 0
+`} prompt="Write stdp(dt_ms) returning the weight change for a timing difference in milliseconds, and compute the window's area numerically over -200 to 200 ms."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  Ap, Am, tp, tm = 0.005, 0.0065, 20.0, 20.0           # amplitudes and time constants (ms)
+
+  def stdp(dt_ms):
+      ...
+
+  grid = np.linspace(-200, 200, 40001)
+  vals = np.array([stdp(d) for d in grid])
+  area = np.sum(vals) * (grid[1] - grid[0])
+  print(f"area {area:.4f} (A+ tau+ - A- tau- = {Ap * tp - Am * tm:.4f})")
+  plt.plot(grid, vals); plt.axhline(0, color="gray", lw=0.5); plt.xlim(-100, 100); plt.xlabel("t_post - t_pre (ms)"); plt.ylabel("weight change"); plt.show()
+`}
+hint="return Ap * np.exp(-dt_ms / tp) if dt_ms > 0 else -Am * np.exp(dt_ms / tm)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  Ap, Am, tp, tm = 0.005, 0.0065, 20.0, 20.0           # amplitudes and time constants (ms)
+
+  def stdp(dt_ms):
+      return Ap * np.exp(-dt_ms / tp) if dt_ms > 0 else -Am * np.exp(dt_ms / tm)
+
+  grid = np.linspace(-200, 200, 40001)
+  vals = np.array([stdp(d) for d in grid])
+  area = np.sum(vals) * (grid[1] - grid[0])
+  print(f"area {area:.4f} (A+ tau+ - A- tau- = {Ap * tp - Am * tm:.4f})")
+  plt.plot(grid, vals); plt.axhline(0, color="gray", lw=0.5); plt.xlim(-100, 100); plt.xlabel("t_post - t_pre (ms)"); plt.ylabel("weight change"); plt.show()
+`} />
+
+The window is positive for pre-before-post timing and negative for the reverse, and its area is -0.030 by numerical integration, matching $A_+\tau_+ - A_-\tau_-$. With depression 30% stronger than potentiation, a synapse whose input fires independently of the neuron loses strength on average, so only inputs that help cause the neuron's spikes can grow. Bi and Poo also found that the size of the change depended on the synapse's initial strength, weak synapses potentiating more, an effect this additive rule ignores.
+
+<Step n={3} title="Selecting correlated inputs" minutes={40} />
+
+Song, Miller and Abbott (2000) gave a leaky integrate-and-fire neuron many Poisson inputs and let STDP act on all of them. Inputs that tend to fire together drive the neuron more reliably, so their spikes more often precede its spikes and are potentiated, while the rest are depressed. Implement STDP efficiently with **traces**: each input keeps a trace that jumps by 1 at each of its spikes and decays with $\tau_+$; the neuron keeps one that decays with $\tau_-$. At a postsynaptic spike every weight grows by $A_+$ times its input's trace; at a presynaptic spike that weight shrinks by $A_-$ times the postsynaptic trace.
+
+<PyCell id="song" title="Correlated inputs win" tests={String.raw`
+  import numpy as np
+  def test_select():
+      "the correlated group ends above 0.9 and the uncorrelated group below 0.3"
+      assert w[corr].mean() > 0.9 and w[~corr].mean() < 0.3
+
+  def test_rate():
+      "the output rate settles between 5 and 40 Hz"
+      assert 5 < rate_out < 40
+`} prompt="Complete the plasticity updates inside the loop: when inputs spike, depress their weights by Am times the postsynaptic trace (clipped at 0) and increase their traces by 1; when the neuron spikes, potentiate all weights by Ap times their traces (clipped at 1) and increase the postsynaptic trace by 1. (This simulates 100 s and takes a few seconds.)"
+code={String.raw`
+  r = np.random.default_rng(2000)
+  dt, T, N, rate = 1e-3, 100.0, 100, 10.0
+  tau_m, V_th, V_reset, E_l, g = 0.02, -54e-3, -60e-3, -74e-3, 0.0016
+  w = np.full(N, 0.5); corr = np.arange(N) < 50
+  x_pre, x_post, V, n_spikes = np.zeros(N), 0.0, E_l, 0
+  decay_p, decay_m = np.exp(-1e3 * dt / tp), np.exp(-1e3 * dt / tm)
+  for k in range(int(T / dt)):
+      common = r.random() < rate * dt                        # shared events for the correlated group
+      pre = r.random(N) < rate * dt * 0.8
+      pre[corr] |= common & (r.random(50) < 0.2)
+      x_pre *= decay_p; x_post *= decay_m
+      V += dt / tau_m * (E_l - V) + g * np.sum(w[pre])
+      if pre.any():
+          ...
+      if V > V_th:
+          V = V_reset; n_spikes += 1
+          ...
+  rate_out = n_spikes / T
+  print(f"output {rate_out:.1f} Hz; correlated group {w[corr].mean():.2f}, uncorrelated group {w[~corr].mean():.2f}")
+  plt.hist([w[corr], w[~corr]], 20, label=["correlated", "uncorrelated"]); plt.xlabel("final weight"); plt.legend(); plt.show()
+`}
+hint="On input spikes: w[pre] = np.clip(w[pre] - Am * x_post, 0, 1); x_pre[pre] += 1. On an output spike: w = np.clip(w + Ap * x_pre, 0, 1); x_post += 1."
+solution={String.raw`
+  r = np.random.default_rng(2000)
+  dt, T, N, rate = 1e-3, 100.0, 100, 10.0
+  tau_m, V_th, V_reset, E_l, g = 0.02, -54e-3, -60e-3, -74e-3, 0.0016
+  w = np.full(N, 0.5); corr = np.arange(N) < 50
+  x_pre, x_post, V, n_spikes = np.zeros(N), 0.0, E_l, 0
+  decay_p, decay_m = np.exp(-1e3 * dt / tp), np.exp(-1e3 * dt / tm)
+  for k in range(int(T / dt)):
+      common = r.random() < rate * dt                        # shared events for the correlated group
+      pre = r.random(N) < rate * dt * 0.8
+      pre[corr] |= common & (r.random(50) < 0.2)
+      x_pre *= decay_p; x_post *= decay_m
+      V += dt / tau_m * (E_l - V) + g * np.sum(w[pre])
+      if pre.any():
+          w[pre] = np.clip(w[pre] - Am * x_post, 0, 1)
+          x_pre[pre] += 1
+      if V > V_th:
+          V = V_reset; n_spikes += 1
+          w = np.clip(w + Ap * x_pre, 0, 1)
+          x_post += 1
+  rate_out = n_spikes / T
+  print(f"output {rate_out:.1f} Hz; correlated group {w[corr].mean():.2f}, uncorrelated group {w[~corr].mean():.2f}")
+  plt.hist([w[corr], w[~corr]], 20, label=["correlated", "uncorrelated"]); plt.xlabel("final weight"); plt.legend(); plt.show()
+`} />
+
+After 100 seconds, the 50 inputs that share common events have weights near the maximum (about 0.99) and the 50 independent ones have fallen to about 0.27, many near zero: the neuron has picked out the correlated group from equally active noise. Its output rate settles near 19 Hz, regulated by the depression-dominated window: if the neuron fires too much, more random input spikes fall after its spikes and are depressed. Song, Miller and Abbott emphasised this self-stabilising competition, which needs no separate normalisation step.
+
+<Step n={4} title="Firing earlier" minutes={20} />
+
+When the same sequence of inputs repeats, STDP strengthens the inputs that arrive before the neuron fires and weakens those after. The neuron then reaches threshold sooner, which strengthens still earlier inputs: its spike moves forward until it sits near the start of the sequence. The neuron has learned to anticipate the pattern from its first few inputs, a simple form of prediction.
+
+<PyCell id="latency" title="Latency reduction" tests={String.raw`
+  import numpy as np
+  def test_earlier():
+      "the output spike moves at least 15 ms earlier over 150 repetitions"
+      assert lat[0] - lat[-1] >= 15
+
+  def test_early_inputs():
+      "the first five inputs end stronger than the last five"
+      assert w_seq[:5].mean() > w_seq[-5:].mean() + 0.5
+`} prompt="For each repetition, integrate the 20 inputs in order (leaky, 20 ms membrane time constant) until the potential reaches the threshold of 4, record the spike time, and apply the STDP window to every input using its timing relative to the spike."
+code={String.raw`
+  times = np.arange(20) * 2.0                                  # ms
+  w_seq = np.full(20, 0.5); thr = 4.0; lat = []
+  A_lat_p, A_lat_m = 0.03, 0.035
+  for rep in range(150):
+      V, t_spk = 0.0, None
+      for i, t in enumerate(times):
+          if i > 0:
+              V *= np.exp(-(t - times[i - 1]) / 20.0)
+          V += w_seq[i]
+          if V >= thr:
+              t_spk = t; break
+      lat.append(t_spk)
+      if t_spk is not None:
+          d = t_spk - times
+          ...
+  print(f"first spike at {lat[0]:.0f} ms; after 20 repetitions {lat[20]:.0f} ms; after 150 {lat[-1]:.0f} ms")
+  plt.plot(lat); plt.xlabel("repetition"); plt.ylabel("spike time in the sequence (ms)"); plt.show()
+`}
+hint="dw = np.where(d >= 0, A_lat_p * np.exp(-d / 20.0), -A_lat_m * np.exp(d / 20.0)); w_seq = np.clip(w_seq + dw, 0, 1)."
+solution={String.raw`
+  times = np.arange(20) * 2.0                                  # ms
+  w_seq = np.full(20, 0.5); thr = 4.0; lat = []
+  A_lat_p, A_lat_m = 0.03, 0.035
+  for rep in range(150):
+      V, t_spk = 0.0, None
+      for i, t in enumerate(times):
+          if i > 0:
+              V *= np.exp(-(t - times[i - 1]) / 20.0)
+          V += w_seq[i]
+          if V >= thr:
+              t_spk = t; break
+      lat.append(t_spk)
+      if t_spk is not None:
+          d = t_spk - times
+          dw = np.where(d >= 0, A_lat_p * np.exp(-d / 20.0), -A_lat_m * np.exp(d / 20.0))
+          w_seq = np.clip(w_seq + dw, 0, 1)
+  print(f"first spike at {lat[0]:.0f} ms; after 20 repetitions {lat[20]:.0f} ms; after 150 {lat[-1]:.0f} ms")
+  plt.plot(lat); plt.xlabel("repetition"); plt.ylabel("spike time in the sequence (ms)"); plt.show()
+`} />
+
+The neuron first fires 28 ms into the sequence; after 20 repetitions it fires at 10 ms and settles at 8 ms, which answers the prediction: earlier. The first five inputs have reached the maximum weight and the later ones have been depressed to zero: the neuron now responds as soon as the sequence begins. Mehta, Quirk and Wilson (2000) reported that hippocampal place fields shift backwards along a familiar route with experience, as this mechanism predicts.
+
+<Callout kind="note">
+
+Pair-based STDP is a simplification. Real plasticity depends on firing rate (at high rates, post-before-pre pairings can potentiate), on dendritic location, on the voltage and calcium at the synapse, and on spike triplets rather than pairs. Pfister and Gerstner's triplet rule (2006) and Clopath and colleagues' voltage-based rule (2010) reproduce much more of the data, and both connect STDP back to the BCM rule of tomorrow.
+
+</Callout>
+
+<Bridge title="Learning from causal order"
+  neuro="STDP lets a neuron learn which inputs predict its own firing, select correlated groups out of noise, and shift its responses earlier in repeated sequences, which may underlie the anticipatory firing of place cells along familiar routes."
+  ai="Spiking neural networks use STDP for unsupervised feature learning on neuromorphic hardware, and its asymmetry, credit for causes but not effects, echoes the temporal credit assignment of temporal difference learning in Week 44.">
+
+Strengthen what comes before, weaken what comes after: STDP learns from causal order.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In the STDP window, a presynaptic spike shortly before a postsynaptic spike...", options: ["Strengthens the synapse", "Weakens it", "Has no effect", "Silences the neuron"], answer: 0, explain: "Causal order is rewarded." },
+  { q: "The STDP window's time constants are about...", options: ["20 ms", "2 s", "0.2 ms", "200 ms"], answer: 0, explain: "Bi and Poo (1998)." },
+  { q: "A slightly negative window area means...", options: ["Random, uncorrelated spike pairs cause net depression", "All synapses grow", "Nothing is learned", "Weights oscillate"], answer: 0, explain: "Stabilises the rule." },
+  { q: "Traces make STDP efficient because...", options: ["They sum the effects of all past spikes without storing spike lists", "They remove noise", "They are exact for triplets", "They speed up neurons"], answer: 0, explain: "Online implementation." },
+  { q: "Song, Miller and Abbott found that STDP...", options: ["Potentiates correlated inputs and makes weights bimodal", "Makes all weights equal", "Is unstable", "Ignores correlations"], answer: 0, explain: "Competitive Hebbian learning." },
+  { q: "With a repeated input sequence, STDP makes the neuron...", options: ["Fire earlier in the sequence", "Fire later", "Stop firing", "Fire randomly"], answer: 0, explain: "Latency reduction." },
+  { q: "Pair-based STDP fails to explain...", options: ["Potentiation by post-before-pre pairs at high rates", "Depression for post-before-pre", "Potentiation for pre-before-post", "The 20 ms time constant"], answer: 0, explain: "Triplet and voltage rules do better." },
+  { q: "STDP's timing asymmetry relates to Hebb's postulate because...", options: ["It rewards inputs that could have caused the spike", "It rewards all correlations", "It is symmetric", "It depends on rates only"], answer: 0, explain: "Causation, not mere correlation." },
+]} />
+
+<Flashcards cards={[
+  { front: "STDP window?", back: "$\\Delta w = A_+e^{-\\Delta t/\\tau_+}$ for $\\Delta t = t_{post} - t_{pre} \\gt 0$, $-A_-e^{\\Delta t/\\tau_-}$ for $\\Delta t \\lt 0$, with $\\tau \\approx 20$ ms." },
+  { front: "Why depression-dominated?", back: "With $A_-\\tau_- \\gt A_+\\tau_+$, uncorrelated firing gives net depression, keeping weights and rates in check." },
+  { front: "Trace implementation?", back: "Pre traces jump at input spikes and are read at output spikes (potentiation); a post trace jumps at output spikes and is read at input spikes (depression)." },
+  { front: "Song, Miller and Abbott (2000)?", back: "STDP in a LIF neuron with many inputs selects correlated groups and produces bimodal weights with stable output rates." },
+  { front: "Latency reduction?", back: "With a repeated sequence, STDP moves the output spike earlier, towards the first predictive inputs." },
+]} />
+
+<Predict revisit question="With the same input sequence repeated under STDP, does the neuron's spike move earlier, later, or stay put?" />
+
+<Key title="Before you go">
+<ul>
+<li>STDP depends on the order and timing of spikes within about 20 ms.</li>
+<li>Traces implement it online; depression slightly outweighing potentiation keeps it stable.</li>
+<li>STDP selects correlated inputs and makes weights bimodal.</li>
+<li>Repeated sequences make the neuron fire earlier: it learns to predict.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Bi and Poo (1998), <em>Synaptic modifications in cultured hippocampal neurons: dependence on spike timing, synaptic strength, and postsynaptic cell type</em>.</li>
+<li>Song, Miller and Abbott (2000), <em>Competitive Hebbian learning through spike-timing-dependent synaptic plasticity</em>, Nature Neuroscience 3(9), 919 to 926.</li>
+<li>Markram, Lübke, Frotscher and Sakmann (1997), <em>Regulation of synaptic efficacy by coincidence of postsynaptic APs and EPSPs</em>, Science 275(5297), 213 to 215.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Place cells fire in sequence as a rat runs along a track. Using today's latency result, predict what STDP between place cells would do to their fields after many runs in the same direction, and how you would test the prediction in recordings." />

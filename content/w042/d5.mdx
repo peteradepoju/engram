@@ -1,0 +1,256 @@
+export const meta = {
+  title: "Three-factor rules: eligibility traces and neuromodulators",
+  intro: "Hebbian rules and STDP learn correlations, but they cannot tell good from bad. To learn from consequences, a synapse needs a third signal that says whether the recent past went well. Three-factor learning rules combine the two local factors, presynaptic and postsynaptic activity, with a global neuromodulatory signal such as dopamine. The trouble is timing: the reward arrives seconds after the spikes that earned it. The answer is an eligibility trace, a slowly decaying tag left at each synapse by Hebbian coincidences, which the neuromodulator later converts into a weight change. Today you build eligibility traces, solve the distal reward problem in simulation and derive a reward-modulated Hebbian rule that performs gradient ascent on expected reward.",
+  goals: [
+    "Write a three-factor learning rule with an eligibility trace",
+    "Explain the distal reward problem and how traces solve it",
+    "Show that reward-modulated Hebbian learning follows the reward gradient",
+    "Explain why subtracting a baseline from the reward matters",
+  ],
+  plan: [
+    { label: "Predict and the third factor", minutes: 20 },
+    { label: "The distal reward problem", minutes: 35 },
+    { label: "Learning from perturbation", minutes: 35 },
+    { label: "Links to reinforcement learning", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "fremaux-gerstner-2016",
+};
+
+<Predict question="Among 100 synapses, each fires coincident pre and post spikes at random. Only coincidences at synapse 0 are followed, one to two seconds later, by a burst of dopamine. Can a rule that uses only local activity and the dopamine signal find synapse 0?" />
+
+<Step n={1} title="The third factor" minutes={20} />
+
+A three-factor rule has the form
+
+$$
+\dot w_{ij} = \eta\, M(t)\, e_{ij}(t), \qquad \tau_e\,\dot e_{ij} = -e_{ij} + H(\text{pre}_j, \text{post}_i),
+$$
+
+where $H$ is a Hebbian or STDP term built from the two local factors and $M$ is the third factor, a signal broadcast to many synapses. The eligibility trace $e_{ij}$ remembers recent coincidences for a time $\tau_e$; nothing changes until $M$ arrives. Frémaux and Gerstner (2016) review the candidates for $M$: dopamine for reward and reward prediction error, acetylcholine and noradrenaline for novelty and surprise, and serotonin.
+
+The evidence for traces is now direct. In striatal spines, Yagishita and colleagues (2014) paired glutamate uncaging with action potentials and then released dopamine. The spines enlarged only when dopamine arrived between about 0.3 and 2 seconds after the pairing, which is the window an eligibility trace predicts. He and colleagues (2015) found similar traces in visual cortex, where noradrenaline converted a trace into potentiation and serotonin into depression.
+
+<Video id="MuNw-ZlS6_4" title="Classification of Plasticity" by="Wulfram Gerstner (EPFL, Neuronal Dynamics)" note="Gerstner sorts plasticity rules into unsupervised, reward-based and supervised families, which is the frame for today's three-factor rules." />
+
+<Step n={2} title="The distal reward problem" minutes={35} />
+
+<Figure caption="An eligibility trace. A Hebbian coincidence tags the synapse; a dopamine pulse arriving later turns whatever is left of the tag into a weight change. Move the reward delay and the trace time constant." credit="Interactive figure by Engram, after Izhikevich (2007) and Frémaux and Gerstner (2016).">
+  <EligibilityTrace />
+</Figure>
+
+Izhikevich (2007) posed the problem sharply. If a reward follows the activity that caused it by a second or more, many unrelated synapses will have been active in between. How does the right one get the credit? His answer was that unrelated coincidences are as likely to be followed by reward as not, so their changes average to nothing, while the causal synapse is reliably followed by reward. Let us check.
+
+<PyCell id="distal" title="Finding the synapse that earned the reward" tests={String.raw`
+  import numpy as np
+  def test_found():
+      "with a 200-step trace, synapse 0 ends up far above every other synapse"
+      assert w_long[0] > 2 * w_long[1:].max()
+
+  def test_short():
+      "with a 10-step trace, synapse 0 is not singled out"
+      assert w_short[0] < w_short[1:].max()
+`} prompt="Complete distal(tau_e): each step, decay the traces by exp(-1/tau_e) and add 1 where a coincidence happened; deliver dopamine 100 to 200 steps after each coincidence at synapse 0; change the weights by eta (DA - DAbar) e and clip them to [0, 10]."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def distal(tau_e, eta=0.002, T=50000, seed=2007):
+      r = np.random.default_rng(seed)
+      N, delay = 100, 100
+      w = np.full(N, 1.0); e = np.zeros(N); pending = []; DA = 0.0; DAbar = 0.1
+      for t in range(T):
+          pairs = r.random(N) < 0.005                  # random coincidences
+          ...                                          # update the traces
+          if pairs[0]:
+              pending.append(t + delay + int(r.integers(0, 100)))
+          DA *= np.exp(-1 / 20)
+          while pending and pending[0] <= t:
+              DA += 1; pending.pop(0)
+          DAbar += (DA - DAbar) / 5000                 # slow running mean of dopamine
+          w = ...
+      return w
+
+  w_long, w_short = distal(200), distal(10)
+  print(f"trace 200 steps: synapse 0 {w_long[0]:.2f}, others mean {w_long[1:].mean():.2f}, max {w_long[1:].max():.2f}")
+  print(f"trace 10 steps:  synapse 0 {w_short[0]:.2f}, others mean {w_short[1:].mean():.2f}, max {w_short[1:].max():.2f}")
+  plt.bar(range(100), w_long); plt.xlabel("synapse"); plt.ylabel("final weight"); plt.show()
+`}
+hint="e *= np.exp(-1 / tau_e); e[pairs] += 1; then w = np.clip(w + eta * (DA - DAbar) * e, 0, 10)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def distal(tau_e, eta=0.002, T=50000, seed=2007):
+      r = np.random.default_rng(seed)
+      N, delay = 100, 100
+      w = np.full(N, 1.0); e = np.zeros(N); pending = []; DA = 0.0; DAbar = 0.1
+      for t in range(T):
+          pairs = r.random(N) < 0.005                  # random coincidences
+          e *= np.exp(-1 / tau_e); e[pairs] += 1       # update the traces
+          if pairs[0]:
+              pending.append(t + delay + int(r.integers(0, 100)))
+          DA *= np.exp(-1 / 20)
+          while pending and pending[0] <= t:
+              DA += 1; pending.pop(0)
+          DAbar += (DA - DAbar) / 5000                 # slow running mean of dopamine
+          w = np.clip(w + eta * (DA - DAbar) * e, 0, 10)
+      return w
+
+  w_long, w_short = distal(200), distal(10)
+  print(f"trace 200 steps: synapse 0 {w_long[0]:.2f}, others mean {w_long[1:].mean():.2f}, max {w_long[1:].max():.2f}")
+  print(f"trace 10 steps:  synapse 0 {w_short[0]:.2f}, others mean {w_short[1:].mean():.2f}, max {w_short[1:].max():.2f}")
+  plt.bar(range(100), w_long); plt.xlabel("synapse"); plt.ylabel("final weight"); plt.show()
+`} />
+
+With a trace that lasts about as long as the reward delay, synapse 0 grows to about 4.9 while the other 99 synapses stay near 1, none above 1.9. Every synapse was tagged equally often; only synapse 0's tags were reliably still present when dopamine arrived. Subtracting the running mean of dopamine is what keeps the unrelated synapses still: for them, dopamine above and below its mean is equally likely while a tag is present, and the changes cancel. With a 10-step trace the tag has gone long before the reward, and synapse 0 is no different from the rest.
+
+<Step n={3} title="Learning from perturbation" minutes={35} />
+
+Can a three-factor rule do more than credit one synapse? Consider a neuron whose output is $y = \mathbf w\cdot\mathbf x + \xi$, where $\xi$ is a little random noise, the neuron's own exploration. After each trial a reward $R$ is broadcast. The rule
+
+$$
+\Delta\mathbf w = \eta\,(R - \bar R)\,\xi\,\mathbf x
+$$
+
+has a Hebbian part, $\xi\mathbf x$, the correlation between input and the neuron's deviation from its usual output, and a third factor $R - \bar R$. It is node perturbation, and it is a version of the REINFORCE algorithm (Williams, 1992).
+
+<Derivation>
+<div>
+
+The reward depends on the weights through the noisy output. Write the expected reward as $J(\mathbf w) = \mathbb E[R(y)]$ with $y = \mathbf w\cdot\mathbf x + \xi$ and $\xi \sim \mathcal N(0, \sigma^2)$.
+
+</div>
+<div>
+
+For small $\sigma$, expand $R(y) \approx R(\mathbf w\cdot\mathbf x) + R'(\mathbf w\cdot\mathbf x)\,\xi$. Then $\mathbb E[R\,\xi\,\mathbf x] \approx R'\,\mathbb E[\xi^2]\,\mathbf x = \sigma^2 R'\,\mathbf x$, because $\mathbb E[\xi] = 0$.
+
+</div>
+<div>
+
+The gradient of the reward with respect to the weights is $\partial R/\partial\mathbf w = R'\,\mathbf x$. So $\mathbb E[\Delta\mathbf w] \approx \eta\sigma^2\,\partial J/\partial\mathbf w$: on average the rule climbs the reward gradient.
+
+</div>
+<div>
+
+Subtracting any $\bar R$ that does not depend on $\xi$ leaves the mean unchanged, since $\mathbb E[\bar R\,\xi\,\mathbf x] = 0$, but it can greatly reduce the variance of each update.
+
+</div>
+</Derivation>
+
+<PyCell id="perturb" title="Reward-modulated Hebbian learning" tests={String.raw`
+  import numpy as np
+  def test_learns():
+      "with a baseline the weights converge close to the target"
+      assert np.mean(err_b[-200:]) < 0.1
+
+  def test_baseline():
+      "without a baseline the final error is at least ten times larger"
+      assert np.mean(err_nb[-200:]) > 10 * np.mean(err_b[-200:])
+`} prompt="Complete rm_hebb(baseline): on each trial draw x and exploration noise xi, compute y and the reward R = 20 - (y - w* x)², form the third factor M = R - Rbar (or R alone without a baseline), update w by eta M xi x and the running baseline Rbar by 0.05 (R - Rbar)."
+code={String.raw`
+  r = np.random.default_rng(2016)
+  D = 10
+  w_star = r.normal(size=D)
+
+  def rm_hebb(baseline=True, trials=3000, eta=0.002, sig=0.5):
+      w = np.zeros(D); Rbar = 0.0; errs = []
+      for k in range(trials):
+          x = r.normal(size=D); xi = sig * r.normal()
+          y = w @ x + xi
+          R = 20.0 - (y - w_star @ x) ** 2
+          ...
+          errs.append(np.sum((w - w_star) ** 2))
+      return w, np.array(errs)
+
+  _, err_b = rm_hebb(True)
+  _, err_nb = rm_hebb(False)
+  print(f"squared weight error after learning: with baseline {np.mean(err_b[-200:]):.3f}, without {np.mean(err_nb[-200:]):.3f}")
+  plt.semilogy(err_b, label="R minus baseline"); plt.semilogy(err_nb, label="raw R"); plt.xlabel("trial"); plt.ylabel("|w - w*|²"); plt.legend(); plt.show()
+`}
+hint="M = R - Rbar if baseline else R; w += eta * M * xi * x; Rbar += 0.05 * (R - Rbar)."
+solution={String.raw`
+  r = np.random.default_rng(2016)
+  D = 10
+  w_star = r.normal(size=D)
+
+  def rm_hebb(baseline=True, trials=3000, eta=0.002, sig=0.5):
+      w = np.zeros(D); Rbar = 0.0; errs = []
+      for k in range(trials):
+          x = r.normal(size=D); xi = sig * r.normal()
+          y = w @ x + xi
+          R = 20.0 - (y - w_star @ x) ** 2
+          M = R - Rbar if baseline else R
+          w += eta * M * xi * x
+          Rbar += 0.05 * (R - Rbar)
+          errs.append(np.sum((w - w_star) ** 2))
+      return w, np.array(errs)
+
+  _, err_b = rm_hebb(True)
+  _, err_nb = rm_hebb(False)
+  print(f"squared weight error after learning: with baseline {np.mean(err_b[-200:]):.3f}, without {np.mean(err_nb[-200:]):.3f}")
+  plt.semilogy(err_b, label="R minus baseline"); plt.semilogy(err_nb, label="raw R"); plt.xlabel("trial"); plt.ylabel("|w - w*|²"); plt.legend(); plt.show()
+`} />
+
+With a baseline the squared weight error falls from about 7 to about 0.02: a neuron that only ever hears one number per trial has learned all ten weights. Without a baseline the mean update is the same but every update is multiplied by a reward of about 20, so the noise is huge and the weights jitter around the target with an error near 2. The reward was offset by 20 on purpose: real rewards have no natural zero, and a rule that depends on where zero is would be fragile.
+
+<Step n={4} title="Links to reinforcement learning" minutes={15} />
+
+The baseline in the last cell is a prediction of reward, and $R - \bar R$ is a reward prediction error. That is precisely the signal Schultz, Dayan and Montague (1997) found in midbrain dopamine neurons, which you will study in Week 44. Three-factor rules are therefore the synaptic half of a theory of reinforcement learning in the brain: dopamine supplies the error, eligibility traces supply the memory of which synapses were involved.
+
+The same logic appears in modern machine learning. Policy-gradient methods use REINFORCE with a learned baseline, and recent biologically motivated alternatives to backpropagation, such as e-prop (Bellec and colleagues, 2020), combine local eligibility traces with a broadcast learning signal to train recurrent spiking networks.
+
+<Callout kind="think">
+
+Node perturbation works, but its updates are noisy, and the noise grows with the number of neurons sharing one reward signal. With a million neurons and one scalar reward, how long would learning take? This scaling problem is one reason researchers look for richer third factors, such as signals that differ across neuron groups or carry vector errors.
+
+</Callout>
+
+<Bridge title="Learning from consequences"
+  neuro="Dopamine and other neuromodulators gate plasticity at synapses tagged by recent activity, with traces lasting about a second. This gives the brain a way to link actions to outcomes that arrive later."
+  ai="REINFORCE, policy-gradient methods and eligibility traces in temporal-difference learning, TD(λ), solve the same credit assignment problem in time. Baselines reduce variance in both brains and algorithms.">
+
+A Hebbian tag plus a delayed global signal gives credit to the synapses that earned it.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The third factor in a three-factor rule is...", options: ["A neuromodulatory signal broadcast to many synapses", "The presynaptic rate", "The postsynaptic voltage", "The weight"], answer: 0, explain: "Such as dopamine." },
+  { q: "An eligibility trace...", options: ["Remembers a recent Hebbian coincidence until the third factor arrives", "Is the weight", "Is the reward", "Lasts years"], answer: 0, explain: "Decays with τe." },
+  { q: "Yagishita et al. (2014) found dopamine enlarged spines when it arrived...", options: ["About 0.3 to 2 s after the pairing", "Before the pairing", "Only simultaneously", "Hours later"], answer: 0, explain: "The window of an eligibility trace." },
+  { q: "With a trace much shorter than the reward delay...", options: ["The causal synapse is not found", "Learning is faster", "All synapses grow", "Nothing changes in the rule"], answer: 0, explain: "The tag has gone before dopamine arrives." },
+  { q: "Node perturbation correlates the reward with...", options: ["The neuron's own exploratory noise times its input", "The target output", "The weight", "Time"], answer: 0, explain: "Δw = η(R − R̄)ξx." },
+  { q: "On average, node perturbation...", options: ["Follows the gradient of expected reward", "Is random", "Minimises activity", "Maximises noise"], answer: 0, explain: "E[Δw] ∝ σ² ∂J/∂w." },
+  { q: "Subtracting a baseline from the reward...", options: ["Leaves the mean update unchanged and reduces its variance", "Changes the gradient", "Stops learning", "Doubles the reward"], answer: 0, explain: "E[R̄ξx] = 0." },
+  { q: "R − R̄ corresponds in the brain to...", options: ["A reward prediction error carried by dopamine", "Acetylcholine release", "Synaptic scaling", "Spike timing"], answer: 0, explain: "Schultz, Dayan and Montague (1997)." },
+]} />
+
+<Flashcards cards={[
+  { front: "Three-factor rule?", back: "$\\dot w = \\eta M(t) e(t)$, where $e$ is a trace of Hebbian coincidences and $M$ a neuromodulator." },
+  { front: "Distal reward problem?", back: "Reward arrives seconds after the activity that caused it, while many unrelated synapses were active; eligibility traces and averaging solve it." },
+  { front: "Node perturbation?", back: "$\\Delta\\mathbf w = \\eta(R - \\bar R)\\xi\\mathbf x$, a REINFORCE rule that climbs the expected reward gradient." },
+  { front: "Why a baseline?", back: "It does not bias the gradient but reduces update variance; it is a reward prediction." },
+  { front: "Evidence for eligibility traces?", back: "Yagishita et al. (2014) in striatum and He et al. (2015) in cortex: neuromodulators converted earlier pairings into plasticity within about a second." },
+]} />
+
+<Predict revisit question="Can a rule using only local activity and delayed dopamine find the one synapse whose coincidences earn reward?" />
+
+<Key title="Before you go">
+<ul>
+<li>Three-factor rules gate Hebbian change by a broadcast neuromodulator.</li>
+<li>Eligibility traces bridge the delay between activity and reward.</li>
+<li>Reward-modulated Hebbian learning follows the reward gradient on average.</li>
+<li>A baseline, a reward prediction, cuts the variance and links the rule to dopamine.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Frémaux and Gerstner (2016), <em>Neuromodulated spike-timing-dependent plasticity, and theory of three-factor learning rules</em>.</li>
+<li>Izhikevich (2007), <em>Solving the distal reward problem through linkage of STDP and dopamine signaling</em>, Cerebral Cortex 17(10), 2443 to 2452.</li>
+<li>Yagishita et al. (2014), <em>A critical time window for dopamine actions on the structural plasticity of dendritic spines</em>, Science 345(6204), 1616 to 1620.</li>
+<li>Williams (1992), <em>Simple statistical gradient-following algorithms for connectionist reinforcement learning</em>, Machine Learning 8, 229 to 256.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A single dopamine signal reaches millions of synapses. Write down what information it can and cannot carry, and propose one way the brain might give different neurons different learning signals. What experiment would test your idea?" />

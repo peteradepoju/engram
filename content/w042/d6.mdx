@@ -1,0 +1,216 @@
+export const meta = {
+  title: "Forge: Week 42 challenge, quiz and deep read",
+  intro: "This week followed one question through five rules: how can a synapse that sees only its own two neurons learn something useful? Averaged Hebbian learning picks out correlations and, with normalisation, splits inputs into competing groups. STDP makes the timing of spikes decide the sign of change and lets causal inputs win. BCM's sliding threshold yields stable selectivity. Synaptic scaling keeps activity in range while preserving what was learned. Three-factor rules add a neuromodulator, so synapses can learn from consequences. Today's challenge first shows that Hebbian learning can do principal component analysis, then uses BCM to reproduce the classic effect of closing one eye. Then the quiz, and a critique of Bi and Poo's measurement of the STDP window.",
+  goals: [
+    "Show that Oja's rule and Sanger's rule extract principal components",
+    "Reproduce monocular deprivation with the BCM rule",
+    "Connect the week's rules by their stability mechanisms",
+    "Critique the experimental basis of the STDP window",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "bi-poo-1998",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. A pair-based STDP window has $A_+ = 0.005$, $A_- = 0.006$ and both time constants 20 ms. Is its area positive or negative?
+2. In the BCM rule with $\theta = 1$, does a response of $y = 0.5$ potentiate or depress?
+3. Scaling multiplies weights of 0.2 and 0.6 by 1.5. What is their ratio afterwards?
+
+<PyCell code={String.raw`
+  print("1.", 0.005 * 20 - 0.006 * 20, "(negative: net depression)")
+  print("2.", 0.5 * (0.5 - 1), "(negative: depression)")
+  print("3.", round((0.6 * 1.5) / (0.2 * 1.5), 3), "(unchanged)")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: Hebbian PCA.** Oja (1982) showed that his normalised Hebbian rule, $\Delta\mathbf w = \eta y(\mathbf x - y\mathbf w)$, converges to the unit-length principal eigenvector of the input covariance. Sanger (1989) extended it to several outputs: with $\mathbf y = W\mathbf x$, the generalised Hebbian algorithm
+
+$$
+\Delta W = \eta\left(\mathbf y\mathbf x^\top - \operatorname{LT}(\mathbf y\mathbf y^\top)\,W\right),
+$$
+
+where $\operatorname{LT}$ keeps the lower triangle including the diagonal, makes output $k$ learn the $k$-th principal component. Train both on 20,000 samples from a three-dimensional Gaussian and compare with the eigenvectors.
+
+<PyCell id="partA" title="Part A: principal components by Hebbian learning" tests={String.raw`
+  import numpy as np
+  def test_oja():
+      "Oja's rule finds the first principal component with unit length"
+      assert abs(w_oja @ V[:, -1]) / np.linalg.norm(w_oja) > 0.99 and abs(np.linalg.norm(w_oja) - 1) < 0.05
+
+  def test_sanger():
+      "Sanger's rule finds the first two principal components in order"
+      M = np.abs(W_gha @ V[:, ::-1][:, :2])
+      assert M[0, 0] > 0.97 and M[1, 1] > 0.97 and M[0, 1] < 0.1 and M[1, 0] < 0.1
+`} prompt="Complete the two loops: Oja updates w by eta y (x - y w); Sanger updates W by eta (outer(y, x) - tril(outer(y, y)) W)."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(42)
+  C = np.array([[3, 1.5, 0.5], [1.5, 2, 0.3], [0.5, 0.3, 1]])
+  X = (np.linalg.cholesky(C) @ r.normal(size=(3, 20000))).T
+  evals, V = np.linalg.eigh(C)          # ascending order: V[:, -1] is the first PC
+
+  w_oja = 0.1 * r.normal(size=3)
+  for x in X:
+      y = w_oja @ x
+      ...
+
+  W_gha = 0.1 * r.normal(size=(2, 3))
+  for x in X:
+      y = W_gha @ x
+      ...
+
+  print("Oja: |cos| with PC1 =", round(abs(w_oja @ V[:, -1]) / np.linalg.norm(w_oja), 4), " |w| =", round(np.linalg.norm(w_oja), 3))
+  print("Sanger: |overlaps| of the two outputs with PC1 and PC2:\n", np.round(np.abs(W_gha @ V[:, ::-1][:, :2]), 3))
+`}
+hint="w_oja += 0.002 * y * (x - y * w_oja); W_gha += 0.002 * (np.outer(y, x) - np.tril(np.outer(y, y)) @ W_gha)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(42)
+  C = np.array([[3, 1.5, 0.5], [1.5, 2, 0.3], [0.5, 0.3, 1]])
+  X = (np.linalg.cholesky(C) @ r.normal(size=(3, 20000))).T
+  evals, V = np.linalg.eigh(C)          # ascending order: V[:, -1] is the first PC
+
+  w_oja = 0.1 * r.normal(size=3)
+  for x in X:
+      y = w_oja @ x
+      w_oja += 0.002 * y * (x - y * w_oja)
+
+  W_gha = 0.1 * r.normal(size=(2, 3))
+  for x in X:
+      y = W_gha @ x
+      W_gha += 0.002 * (np.outer(y, x) - np.tril(np.outer(y, y)) @ W_gha)
+
+  print("Oja: |cos| with PC1 =", round(abs(w_oja @ V[:, -1]) / np.linalg.norm(w_oja), 4), " |w| =", round(np.linalg.norm(w_oja), 3))
+  print("Sanger: |overlaps| of the two outputs with PC1 and PC2:\n", np.round(np.abs(W_gha @ V[:, ::-1][:, :2]), 3))
+`} />
+
+Oja's neuron ends with a weight vector of length 1.00 whose direction matches the first principal component to four decimal places. Sanger's two outputs line up with the first and second components, with cross-overlaps of about 0.02. The lower-triangular term is what orders them: each output subtracts what the earlier outputs already explain, so output 2 learns the leading component of what is left. A purely local rule, one neuron at a time, has performed an eigendecomposition.
+
+**Part B: monocular deprivation.** A neuron receives four synapses from each eye. During normal rearing both eyes see the same pattern, $\mathbf x_1$ or $\mathbf x_2$ from Day 3. Train with BCM for 20,000 presentations, then close the left eye: its inputs become weak noise, uniform between 0 and 0.1, while the right eye still sees the patterns. Train for 20,000 more and compare the total weight from each eye.
+
+<PyCell id="partB" title="Part B: closing one eye" tests={String.raw`
+  import numpy as np
+  def test_binocular():
+      "after normal rearing the two eyes have equal weights"
+      assert abs(w_norm[:4].sum() - w_norm[4:].sum()) < 0.05
+
+  def test_md():
+      "after deprivation the closed eye's total weight has fallen by more than half and the open eye's has risen"
+      assert w_md[:4].sum() < 0.5 * w_norm[:4].sum() and w_md[4:].sum() > w_norm[4:].sum()
+`} prompt="Complete run(): build the eight inputs as [left, right], where left is the pattern during normal rearing and 0.1 times uniform noise during deprivation; then apply the BCM weight and threshold updates."
+code={String.raw`
+  x1 = np.array([1.0, 0.8, 0.2, 0.1]); x2 = x1[::-1].copy()
+
+  def run(w, theta, steps, md=False, eta=0.005, tau=50):
+      for t in range(steps):
+          p = x1 if r.random() < 0.5 else x2
+          left = ...
+          x = np.r_[left, p]
+          y = max(0, w @ x)
+          ...
+      return w, theta
+
+  w_norm, th = run(np.full(8, 0.15), 0.5, 20000)
+  w_md, _ = run(w_norm, th, 20000, md=True)
+  print("normal rearing:", np.round(w_norm, 2), " left", round(w_norm[:4].sum(), 2), "right", round(w_norm[4:].sum(), 2))
+  print("after deprivation:", np.round(w_md, 2), " left", round(w_md[:4].sum(), 2), "right", round(w_md[4:].sum(), 2))
+`}
+hint="left = 0.1 * r.random(4) if md else p; then w = np.maximum(0, w + eta * x * y * (y - theta)); theta += (y * y - theta) / tau."
+solution={String.raw`
+  x1 = np.array([1.0, 0.8, 0.2, 0.1]); x2 = x1[::-1].copy()
+
+  def run(w, theta, steps, md=False, eta=0.005, tau=50):
+      for t in range(steps):
+          p = x1 if r.random() < 0.5 else x2
+          left = 0.1 * r.random(4) if md else p
+          x = np.r_[left, p]
+          y = max(0, w @ x)
+          w = np.maximum(0, w + eta * x * y * (y - theta))
+          theta += (y * y - theta) / tau
+      return w, theta
+
+  w_norm, th = run(np.full(8, 0.15), 0.5, 20000)
+  w_md, _ = run(w_norm, th, 20000, md=True)
+  print("normal rearing:", np.round(w_norm, 2), " left", round(w_norm[:4].sum(), 2), "right", round(w_norm[4:].sum(), 2))
+  print("after deprivation:", np.round(w_md, 2), " left", round(w_md[:4].sum(), 2), "right", round(w_md[4:].sum(), 2))
+`} />
+
+After normal rearing the neuron is selective for $\mathbf x_2$ and perfectly binocular: each eye contributes a total weight of 1.25, concentrated on the same synapses. After deprivation the closed eye's total falls to about 0.18 and the open eye's rises to about 2.1. The closed eye's noise still drives the neuron a little, but those weak responses fall below a threshold set by the open eye's strong drive, so they cause depression; the open eye then takes over to keep the response at the level the threshold demands. This is the ocular dominance shift Wiesel and Hubel found after lid suture, produced by a rule with no explicit competition between the eyes.
+
+**Part C (written).** Answer in your journal. First, in Part B the closed eye's inputs were weak noise. Rittenhouse, Shouval, Paradiso and Bear (1999) tested what happens if the eye is instead silenced completely with TTX: BCM predicts that the deprived eye's synapses should then weaken less than with lid closure. Explain why from the rule, and say why this was a strong test of the theory. Second, Sanger's rule needs each output to know the activity of the earlier outputs. Which biological mechanism could supply that, and what would a network that lacked it learn instead?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. Oja's rule converges to a unit vector" task="For Oja's rule averaged over inputs, $\dot{\mathbf w} = C\mathbf w - (\mathbf w^\top C\mathbf w)\mathbf w$, show that $\frac{d}{dt}|\mathbf w|^2 = 2(\mathbf w^\top C\mathbf w)(1 - |\mathbf w|^2)$ and conclude that the length tends to 1.">
+
+$\frac{d}{dt}|\mathbf w|^2 = 2\mathbf w^\top\dot{\mathbf w} = 2\mathbf w^\top C\mathbf w - 2(\mathbf w^\top C\mathbf w)|\mathbf w|^2 = 2(\mathbf w^\top C\mathbf w)(1 - |\mathbf w|^2)$.
+
+For positive definite $C$, $\mathbf w^\top C\mathbf w \gt 0$ whenever $\mathbf w \neq 0$. So $|\mathbf w|^2$ increases when it is below 1 and decreases when above 1: the unit sphere is attracting.
+
+On the sphere the rule is $\dot{\mathbf w} = C\mathbf w - (\mathbf w^\top C\mathbf w)\mathbf w$, which is zero only at eigenvectors; a linear stability analysis shows only the eigenvector with the largest eigenvalue is stable. The neuron's output variance $\mathbf w^\top C\mathbf w$ is then maximised: Hebbian learning with this normalisation is PCA.
+
+</Prove>
+
+<Prove title="2. The fixed points of one-pattern BCM" task="For a single input pattern presented repeatedly, with $y = \mathbf w\cdot\mathbf x$ and $\theta = y^2$ at equilibrium (taking $y_0 = 1$), find the non-zero fixed point of $\dot{\mathbf w} = \eta\mathbf x y(y - \theta)$ and show it is stable.">
+
+A fixed point needs $y(y - \theta) = 0$. With $\theta = y^2$, this is $y(y - y^2) = y^2(1 - y) = 0$, so $y = 0$ or $y = 1$.
+
+Near $y = 1$, with the threshold at equilibrium, $\dot y = \mathbf x\cdot\dot{\mathbf w} = \eta|\mathbf x|^2 y^2(1 - y)$. If $y$ is slightly above 1, $\dot y \lt 0$; slightly below, $\dot y \gt 0$. So $y = 1$ is stable.
+
+The response settles at a level set by $y_0$, not by the input's size, which is the sense in which the sliding threshold normalises without any explicit constraint on the weights. With several patterns the same argument, applied pattern by pattern, gives the selective fixed points of Day 3.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 42 quiz (15 questions)" questions={[
+  { q: "Averaged plain Hebbian learning makes weights...", options: ["Grow without bound along the leading eigenvector", "Stay fixed", "Shrink to zero", "Oscillate"], answer: 0, explain: "Day 1." },
+  { q: "Subtractive normalisation, unlike Oja's rule, produces...", options: ["Competition: one group of inputs wins", "PCA", "Uniform weights", "No learning"], answer: 0, explain: "Day 1." },
+  { q: "Miller, Keller and Stryker modelled...", options: ["Ocular dominance columns", "Place cells", "Grid cells", "Dopamine"], answer: 0, explain: "Day 1." },
+  { q: "In Bi and Poo's window, pre before post produces...", options: ["Potentiation", "Depression", "No change", "Both"], answer: 0, explain: "Day 2." },
+  { q: "A negative window area means uncorrelated inputs...", options: ["Weaken", "Strengthen", "Do not change", "Fire more"], answer: 0, explain: "Day 2." },
+  { q: "STDP with a repeated input sequence makes the neuron fire...", options: ["Earlier in the sequence", "Later", "Never", "Randomly"], answer: 0, explain: "Day 2." },
+  { q: "In BCM, the threshold tracks...", options: ["The recent mean of y²", "The input", "The weights", "Time"], answer: 0, explain: "Day 3." },
+  { q: "A fixed BCM threshold leads to...", options: ["Runaway or collapse", "Selectivity", "Stability", "PCA"], answer: 0, explain: "Day 3." },
+  { q: "Metaplasticity means...", options: ["History changes later plasticity", "Fast plasticity", "Structural change", "Scaling"], answer: 0, explain: "Day 3." },
+  { q: "TTX for two days makes mEPSCs...", options: ["Larger", "Smaller", "Unchanged", "Faster"], answer: 0, explain: "Day 4." },
+  { q: "The rank-order test for multiplicative scaling expects...", options: ["A line through the origin", "A line of slope 1 with offset", "A curve", "A step"], answer: 0, explain: "Day 4." },
+  { q: "The temporal paradox concerns...", options: ["Homeostasis being slower than models need", "STDP being too fast", "Dopamine delays", "Spike timing"], answer: 0, explain: "Day 4." },
+  { q: "An eligibility trace bridges...", options: ["The delay between activity and reward", "Two neurons", "Two eyes", "Pre and post spikes only"], answer: 0, explain: "Day 5." },
+  { q: "Node perturbation is a form of...", options: ["REINFORCE", "Backpropagation", "PCA", "Scaling"], answer: 0, explain: "Day 5." },
+  { q: "Sanger's rule makes output k learn...", options: ["The k-th principal component", "The first component only", "Random directions", "Independent components"], answer: 0, explain: "Part A." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Bi and Poo (1998) its third pass and write your critique under the five headings. Focus on one question: **how general is the STDP window they measured?** Consider the preparation (dissociated hippocampal cultures, pairs of connected neurons, 60 pairings at 1 Hz) and what it leaves out; how the window depends on pairing frequency, on dendritic location and on the number of spikes, as later triplet and frequency experiments showed; the scatter of the individual data points around the fitted exponentials; whether the dependence of potentiation on the initial synaptic size is a confound or a finding; and what the window predicts for natural, irregular spike trains, where many pairs overlap. End with one experiment that would test whether the pair rule describes plasticity in an awake animal.
+
+<Callout kind="research">
+
+Combine the week's rules into one neuron: STDP for the timing of inputs, synaptic scaling for the rate, and a dopamine-like third factor that gates STDP. Give the neuron two input groups, one of which predicts a delayed reward. Does the combined rule learn to favour the predictive group, and what happens to the rate during learning when scaling is fast and when it is slow? Write down which rule does which job.
+
+</Callout>
+
+<Key title="Week 42 review checklist">
+<ul>
+<li>I can analyse averaged Hebbian learning and explain why normalisation changes its outcome.</li>
+<li>I can simulate pair-based STDP and explain competition and latency reduction.</li>
+<li>I can implement the BCM rule and explain its sliding threshold and metaplasticity.</li>
+<li>I can simulate synaptic scaling and test whether it is multiplicative.</li>
+<li>I can write a three-factor rule with an eligibility trace and relate it to REINFORCE.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then make a table of this week's five rules with three columns: what it learns, what keeps it stable, and the best experimental evidence for it. Which rule would you most want to see tested in a behaving animal, and how?" />
