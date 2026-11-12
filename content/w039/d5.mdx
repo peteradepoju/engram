@@ -1,0 +1,313 @@
+export const meta = {
+  title: "Efficient coding of natural sounds",
+  intro: "Yesterday's whitening removed the pairwise correlations in images and produced centre-surround filters. Going further, to filters whose outputs are as independent as possible, produces the oriented, localised receptive fields of V1 when applied to images. In 2002 Michael Lewicki asked what the same method produces when applied to sounds. The answer depended on the sounds: animal vocalisations gave long, Fourier-like filters; environmental transients gave short, wavelet-like ones; speech gave a mixture whose bandwidths matched the auditory nerve's. Today you implement independent component analysis and repeat the logic of his experiment with two families of synthetic sounds.",
+  goals: [
+    "Explain independent component analysis (ICA) and its link to efficient coding",
+    "Whiten data by principal components as a first step",
+    "Implement the FastICA fixed-point algorithm",
+    "Show that the learned filters depend on the statistics of the sounds",
+  ],
+  plan: [
+    { label: "Predict and beyond whitening", minutes: 20 },
+    { label: "Whitening sound snippets", minutes: 25 },
+    { label: "FastICA", minutes: 35 },
+    { label: "Filters depend on the sounds", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "lewicki-2002",
+};
+
+<Predict question="ICA is trained on short snippets of two kinds of sound: steady tones that fill the whole snippet, and brief clicks that ring for a fraction of a millisecond. For which kind will the learned filters be short in time and broad in frequency, like wavelets?" />
+
+<Step n={1} title="Beyond whitening" minutes={20} />
+
+Whitening (Day 4) makes the outputs of a filter bank uncorrelated, but uncorrelated is not independent: two signals can have zero correlation and still be strongly related, for example when large values of one tend to coincide with large values of the other. Natural signals are full of such higher-order structure. **Independent component analysis** looks for a linear transform whose outputs are as statistically independent as possible. By the central limit theorem, mixtures of independent signals look more Gaussian than the signals themselves, so ICA can find the independent components by finding projections that are as **non-Gaussian** as possible, usually as sparse or heavy-tailed as possible.
+
+Bell and Sejnowski (1997) applied ICA to natural images and found Gabor-like filters, as Olshausen and Field had found with sparse coding (Week 13). Lewicki (2002) applied it to sounds, in three classes: environmental sounds (rustling, crunching, snapping), animal vocalisations, and human speech.
+
+<Video id="lctcs7Xp5HM" title="Wavelets" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's tutorial video on wavelets, short localised oscillations that trade frequency resolution for time resolution, the kind of filter ICA learns from transient sounds." />
+
+<Step n={2} title="Whitening sound snippets" minutes={25} />
+
+Build two datasets of 6,000 snippets, each 64 samples at 16 kHz (4 ms). **Tonal** snippets contain three sinusoids at random frequencies and phases lasting the whole snippet, standing in for harmonic animal calls. **Transient** snippets contain two brief damped resonances starting at random times, standing in for environmental sounds such as twigs snapping. First, whiten each dataset: project onto the top principal components and scale each to unit variance.
+
+<PyCell id="whiten" title="Principal component whitening" tests={String.raw`
+  import numpy as np
+  def test_identity():
+      "the whitened data have covariance close to the identity"
+      Z, V = whiten(X_tone, 32)
+      C = Z @ Z.T / Z.shape[1]
+      assert np.allclose(C, np.eye(32), atol=1e-6)
+`} prompt="Write whiten(X, k): with X of shape (64, N) and mean already removed, compute the covariance, its eigenvectors E and eigenvalues ev, keep the k largest, and return Z = V @ X with V = diag(1 / sqrt(ev)) @ E.T, together with V."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2002)
+  fs, L, N = 16000, 64, 6000
+  t = np.arange(L) / fs
+
+  def tonal():
+      x = np.zeros(L)
+      for _ in range(3):
+          f = r.uniform(300, 6000); x += r.normal() * np.sin(2 * np.pi * f * t + r.uniform(0, 2 * np.pi))
+      return x
+
+  def transient():
+      x = np.zeros(L)
+      for _ in range(2):
+          t0 = r.integers(0, L); f = r.uniform(300, 6000); tau = r.uniform(0.0002, 0.0008); tt = (np.arange(L) - t0) / fs
+          x += r.normal() * np.where(tt >= 0, np.exp(-np.maximum(tt, 0) / tau) * np.sin(2 * np.pi * f * tt), 0)
+      return x
+
+  def dataset(gen):
+      X = np.array([gen() for _ in range(N)]).T
+      return X - X.mean(1, keepdims=True)
+
+  X_tone, X_trans = dataset(tonal), dataset(transient)
+
+  def whiten(X, k):
+      C = X @ X.T / X.shape[1]
+      ev, E = np.linalg.eigh(C)
+      idx = np.argsort(ev)[::-1][:k]
+      V = ...
+      return V @ X, V
+
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  for a, X, name in zip(ax, (X_tone, X_trans), ("tonal", "transient")):
+      for j in range(3): a.plot(t * 1000, X[:, j] + 3 * j)
+      a.set_title(name); a.set_xlabel("ms")
+  plt.show()
+`}
+hint="V = np.diag(1 / np.sqrt(ev[idx])) @ E[:, idx].T."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2002)
+  fs, L, N = 16000, 64, 6000
+  t = np.arange(L) / fs
+
+  def tonal():
+      x = np.zeros(L)
+      for _ in range(3):
+          f = r.uniform(300, 6000); x += r.normal() * np.sin(2 * np.pi * f * t + r.uniform(0, 2 * np.pi))
+      return x
+
+  def transient():
+      x = np.zeros(L)
+      for _ in range(2):
+          t0 = r.integers(0, L); f = r.uniform(300, 6000); tau = r.uniform(0.0002, 0.0008); tt = (np.arange(L) - t0) / fs
+          x += r.normal() * np.where(tt >= 0, np.exp(-np.maximum(tt, 0) / tau) * np.sin(2 * np.pi * f * tt), 0)
+      return x
+
+  def dataset(gen):
+      X = np.array([gen() for _ in range(N)]).T
+      return X - X.mean(1, keepdims=True)
+
+  X_tone, X_trans = dataset(tonal), dataset(transient)
+
+  def whiten(X, k):
+      C = X @ X.T / X.shape[1]
+      ev, E = np.linalg.eigh(C)
+      idx = np.argsort(ev)[::-1][:k]
+      V = np.diag(1 / np.sqrt(ev[idx])) @ E[:, idx].T
+      return V @ X, V
+
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  for a, X, name in zip(ax, (X_tone, X_trans), ("tonal", "transient")):
+      for j in range(3): a.plot(t * 1000, X[:, j] + 3 * j)
+      a.set_title(name); a.set_xlabel("ms")
+  plt.show()
+`} />
+
+The tonal snippets look like smooth, beating waves that fill all 4 ms; the transient ones are mostly flat with brief bursts. After whitening to 32 dimensions, each dataset's covariance is the identity: every remaining direction has equal variance and no correlation with any other. From here on, whatever structure ICA finds must be higher-order, invisible to the covariance.
+
+<Step n={3} title="FastICA" minutes={35} />
+
+On whitened data $Z$, FastICA (Hyvärinen, 1999) looks for an orthogonal matrix $W$ whose rows give maximally non-Gaussian outputs $Y = WZ$. With the nonlinearity $g = \tanh$, each iteration updates all rows at once,
+
+$$
+W \leftarrow \frac{1}{N} g(Y) Z^\top - \text{diag}\!\left(\overline{g'(Y)}\right) W, \qquad g'(y) = 1 - \tanh^2 y,
+$$
+
+then makes the rows orthonormal again by symmetric decorrelation, $W \leftarrow (WW^\top)^{-1/2} W$, computed with the singular value decomposition. The learned **basis functions**, the waveforms that the independent components multiply to rebuild a sound, are the columns of $(WV)^{-1}$.
+
+<Figure caption="Basis functions learned by ICA from tonal and from transient sounds, shown as waveforms. Compare their lengths." credit="Interactive figure by Engram, after Lewicki (2002).">
+  <SoundBasis />
+</Figure>
+
+<PyCell id="ica" title="FastICA from scratch" tests={String.raw`
+  import numpy as np
+  def test_orthonormal():
+      "the learned W is orthonormal"
+      W, _ = fastica(Z_t, 32, iters=20)
+      assert np.allclose(W @ W.T, np.eye(32), atol=1e-6)
+
+  def test_sparser():
+      "ICA components are heavier-tailed than principal components (mean excess kurtosis at least 1 higher)"
+      assert kurt_ica > kurt_pca + 1
+`} prompt="Complete the FastICA update inside the loop: compute Y = W @ Z, gY = tanh(Y), the new W from the formula, then symmetric decorrelation with the SVD (U @ Vt from np.linalg.svd(W_new))."
+code={String.raw`
+  from scipy.stats import kurtosis
+
+  def fastica(Z, k, iters=200, seed=0):
+      g = np.random.default_rng(seed)
+      W = np.linalg.qr(g.normal(size=(k, k)))[0]
+      for it in range(iters):
+          ...
+          if np.max(np.abs(np.abs(np.diag(W_new @ W.T)) - 1)) < 1e-6:
+              return W_new, it
+          W = W_new
+      return W, iters
+
+  Z_t, V_t = whiten(X_trans, 32)
+  W_t, n_it = fastica(Z_t, 32)
+  kurt_ica = np.mean(kurtosis(W_t @ Z_t, axis=1))
+  kurt_pca = np.mean(kurtosis(Z_t, axis=1))
+  print(f"converged after {n_it} iterations; mean excess kurtosis: PCA components {kurt_pca:.2f}, ICA components {kurt_ica:.2f}")
+`}
+hint="Y = W @ Z; gY = np.tanh(Y); W_new = gY @ Z.T / Z.shape[1] - np.diag((1 - gY ** 2).mean(1)) @ W; U, S, Vt = np.linalg.svd(W_new); W_new = U @ Vt."
+solution={String.raw`
+  from scipy.stats import kurtosis
+
+  def fastica(Z, k, iters=200, seed=0):
+      g = np.random.default_rng(seed)
+      W = np.linalg.qr(g.normal(size=(k, k)))[0]
+      for it in range(iters):
+          Y = W @ Z
+          gY = np.tanh(Y)
+          W_new = gY @ Z.T / Z.shape[1] - np.diag((1 - gY ** 2).mean(1)) @ W
+          U, S, Vt = np.linalg.svd(W_new)
+          W_new = U @ Vt
+          if np.max(np.abs(np.abs(np.diag(W_new @ W.T)) - 1)) < 1e-6:
+              return W_new, it
+          W = W_new
+      return W, iters
+
+  Z_t, V_t = whiten(X_trans, 32)
+  W_t, n_it = fastica(Z_t, 32)
+  kurt_ica = np.mean(kurtosis(W_t @ Z_t, axis=1))
+  kurt_pca = np.mean(kurtosis(Z_t, axis=1))
+  print(f"converged after {n_it} iterations; mean excess kurtosis: PCA components {kurt_pca:.2f}, ICA components {kurt_ica:.2f}")
+`} />
+
+FastICA converges in under two hundred iterations, and its components are far heavier-tailed than the principal components (mean excess kurtosis about 24 against about 6): each component is near zero most of the time and large occasionally, the signature of a sparse, independent source. For the transient sounds, each component has learned to respond to a brief ringing at one frequency, wherever it falls.
+
+<Step n={4} title="Filters depend on the sounds" minutes={25} />
+
+Now learn basis functions from each class and measure how long they are: the **temporal spread** of a waveform, the standard deviation of time weighted by its squared amplitude. A waveform spread evenly over 64 samples has a spread of about 18 samples; a brief click, a few.
+
+<PyCell id="classes" title="Fourier-like and wavelet-like" tests={String.raw`
+  import numpy as np
+  def test_spread():
+      "tonal basis functions are at least twice as spread out in time as transient ones"
+      assert spread_med["tonal"] > 2 * spread_med["transient"]
+
+  def test_mixture():
+      "an equal-power mixture gives some short and some long basis functions, and an intermediate median spread"
+      assert 0 < frac_short["mixed"] < 1 and spread_med["transient"] < spread_med["mixed"] < spread_med["tonal"] - 2
+`} prompt="Write basis(X): whiten to 32 dimensions, run fastica, and return the basis functions as the columns of the pseudo-inverse of W @ V. Write spread(a) as described. Then compute the median spread for tonal, transient and an equal-power 50:50 mixed dataset, and the fraction of basis functions shorter than 10 samples."
+code={String.raw`
+  def basis(X, k=32):
+      ...
+
+  def spread(a):
+      p = a ** 2 / np.sum(a ** 2)
+      m = np.sum(p * np.arange(L))
+      return ...
+
+  X_mix = np.concatenate([X_tone[:, : N // 2] / X_tone.std(), X_trans[:, : N // 2] / X_trans.std()], axis=1)   # equal power
+  spread_med, frac_short, bases = {}, {}, {}
+  for name, X in (("tonal", X_tone), ("transient", X_trans), ("mixed", X_mix)):
+      bases[name] = basis(X)
+      sp = np.array([spread(bases[name][:, j]) for j in range(bases[name].shape[1])])
+      spread_med[name], frac_short[name] = np.median(sp), np.mean(sp < 10)
+  print({k: round(float(v), 1) for k, v in spread_med.items()}, "samples (median temporal spread)")
+  print({k: f"{v:.0%}" for k, v in frac_short.items()}, "of basis functions shorter than 10 samples")
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  for a, name in zip(ax, ("tonal", "transient")):
+      for j in range(4): a.plot(t * 1000, bases[name][:, j] / np.abs(bases[name][:, j]).max() + 2.2 * j)
+      a.set_title(name); a.set_xlabel("ms")
+  plt.show()
+`}
+hint="Z, V = whiten(X, k); W, _ = fastica(Z, k); return np.linalg.pinv(W @ V). For spread: np.sqrt(np.sum(p * (np.arange(L) - m) ** 2))."
+solution={String.raw`
+  def basis(X, k=32):
+      Z, V = whiten(X, k)
+      W, _ = fastica(Z, k)
+      return np.linalg.pinv(W @ V)
+
+  def spread(a):
+      p = a ** 2 / np.sum(a ** 2)
+      m = np.sum(p * np.arange(L))
+      return np.sqrt(np.sum(p * (np.arange(L) - m) ** 2))
+
+  X_mix = np.concatenate([X_tone[:, : N // 2] / X_tone.std(), X_trans[:, : N // 2] / X_trans.std()], axis=1)   # equal power
+  spread_med, frac_short, bases = {}, {}, {}
+  for name, X in (("tonal", X_tone), ("transient", X_trans), ("mixed", X_mix)):
+      bases[name] = basis(X)
+      sp = np.array([spread(bases[name][:, j]) for j in range(bases[name].shape[1])])
+      spread_med[name], frac_short[name] = np.median(sp), np.mean(sp < 10)
+  print({k: round(float(v), 1) for k, v in spread_med.items()}, "samples (median temporal spread)")
+  print({k: f"{v:.0%}" for k, v in frac_short.items()}, "of basis functions shorter than 10 samples")
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  for a, name in zip(ax, ("tonal", "transient")):
+      for j in range(4): a.plot(t * 1000, bases[name][:, j] / np.abs(bases[name][:, j]).max() + 2.2 * j)
+      a.set_title(name); a.set_xlabel("ms")
+  plt.show()
+`} />
+
+Tonal sounds give basis functions that fill the whole snippet (median spread 17.5 samples, almost all of the 4 ms), like Fourier components: narrow in frequency, long in time. Transient sounds give brief wavelets (median 4.9 samples, about 0.3 ms), which answers the prediction. An equal-power mixture gives something in between: mostly longer functions, with a minority of short ones and a median of about 13 samples. Lewicki found that speech, which mixes harmonic vowels with transient consonants, gave filters between the two extremes whose bandwidth grew with frequency much as the auditory nerve's does.
+
+<Callout kind="research">
+
+Smith and Lewicki (2006) extended this idea to a spike-like code: representing sounds as sparse sets of time-shifted kernels, learned from natural sounds, which came out remarkably similar to the impulse responses of cat auditory nerve fibres. Using today's code, train ICA on a recording of speech you make yourself (read a paragraph aloud and save it at 16 kHz in the Colab notebook), measure each basis function's centre frequency and bandwidth, and plot bandwidth against frequency on log-log axes. Does the relation have the slope of the ERB curve from Day 1?
+
+</Callout>
+
+<Bridge title="Learning the ear from sounds"
+  neuro="Efficient coding of natural sounds predicts both the shape of cochlear filters and how their bandwidth grows with frequency, because speech and many natural sounds mix steady harmonic components with transients. The auditory system may be tuned to the statistics of the sounds animals evolved with."
+  ai="Audio models that learn their front end from raw waveforms, such as learned filter banks and convolutional front ends trained on speech, tend to learn band-pass filters with bandwidths that grow with frequency, a learned cochlea. ICA itself remains a standard tool for separating mixed signals, from cocktail-party audio to EEG artefacts.">
+
+Train an efficient code on the sounds of the world, and something like an ear comes out.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "ICA seeks a linear transform whose outputs are...", options: ["As statistically independent as possible", "Uncorrelated only", "Gaussian", "Ordered by variance"], answer: 0, explain: "Beyond whitening." },
+  { q: "ICA finds independent components by maximising...", options: ["Non-Gaussianity", "Variance", "Correlation", "Smoothness"], answer: 0, explain: "Mixtures look more Gaussian." },
+  { q: "Before FastICA, the data are...", options: ["Whitened", "Sorted", "Squared", "Thresholded"], answer: 0, explain: "So W can be orthogonal." },
+  { q: "Symmetric decorrelation keeps W...", options: ["Orthonormal", "Sparse", "Diagonal", "Positive"], answer: 0, explain: "(WWᵀ)^(-1/2) W." },
+  { q: "ICA on steady tonal sounds learns...", options: ["Long, Fourier-like basis functions", "Short clicks", "Random noise", "Gabors in space"], answer: 0, explain: "Narrow in frequency." },
+  { q: "ICA on transient sounds learns...", options: ["Short, wavelet-like basis functions", "Long sinusoids", "Constant functions", "Step functions"], answer: 0, explain: "Localised in time." },
+  { q: "Lewicki found that speech gave filters whose bandwidths...", options: ["Matched those of auditory nerve fibres", "Were all equal", "Were random", "Were zero"], answer: 0, explain: "Between Fourier and wavelet." },
+  { q: "ICA on natural images gives...", options: ["Gabor-like oriented filters", "Centre-surround only", "Colour filters only", "Pixels"], answer: 0, explain: "Bell and Sejnowski (1997)." },
+]} />
+
+<Flashcards cards={[
+  { front: "ICA?", back: "Independent component analysis: a linear transform making outputs as independent as possible, by maximising non-Gaussianity." },
+  { front: "FastICA update?", back: "$W \\leftarrow \\frac{1}{N}g(Y)Z^\\top - \\text{diag}(\\overline{g'(Y)})W$, then symmetric orthonormalisation." },
+  { front: "Uncorrelated versus independent?", back: "Whitening removes correlations (second-order); ICA also removes higher-order dependence." },
+  { front: "Lewicki (2002)?", back: "ICA on natural sounds: vocalisations gave Fourier-like filters, environmental sounds wavelet-like, speech filters matching the auditory nerve." },
+  { front: "Temporal spread?", back: "Standard deviation of time weighted by squared amplitude: a measure of how long a waveform lasts." },
+]} />
+
+<Predict revisit question="Which sounds, steady tones or brief clicks, give short, wavelet-like ICA filters?" />
+
+<Key title="Before you go">
+<ul>
+<li>ICA goes beyond whitening by maximising non-Gaussianity.</li>
+<li>FastICA alternates a fixed-point update with orthonormalisation.</li>
+<li>Learned filters reflect the sound statistics: tones give long filters, transients short ones.</li>
+<li>Mixtures like speech give intermediate filters resembling the cochlea's.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Lewicki (2002), <em>Efficient coding of natural sounds</em>.</li>
+<li>Bell and Sejnowski (1997), <em>The "independent components" of natural scenes are edge filters</em>, Vision Research 37(23), 3327 to 3338.</li>
+<li>Hyvärinen (1999), <em>Fast and robust fixed-point algorithms for independent component analysis</em>, IEEE Transactions on Neural Networks 10(3), 626 to 634.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If the auditory system is tuned to the statistics of natural sounds, what would you predict about hearing in animals whose acoustic world is very different, such as echolocating bats or birds with complex songs? Write one prediction and how you would test it." />

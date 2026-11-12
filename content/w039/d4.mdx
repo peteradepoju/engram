@@ -1,0 +1,247 @@
+export const meta = {
+  title: "Efficient coding in space: why the retina has a surround",
+  intro: "Week 38 described the retina's centre-surround receptive fields; today asks why they have that shape. Natural images are highly redundant: neighbouring points are almost always similar, so their power falls with spatial frequency roughly as one over frequency squared. Barlow's efficient coding hypothesis says a sensory system should remove such redundancy before sending signals down a limited channel. Atick and Redlich worked this out for the retina in 1992: the optimal filter whitens the image where the signal is strong and smooths it where noise dominates, and the result is a centre-surround receptive field that loses its surround in dim light, just as real ganglion cells do. Today you derive and test that prediction.",
+  goals: [
+    "Measure the power spectrum of natural-like images and its 1/f² fall-off",
+    "Explain whitening as redundancy reduction and why noise limits it",
+    "Build the Atick and Redlich filter and see centre-surround emerge",
+    "Show how the optimal receptive field changes with the signal-to-noise ratio",
+  ],
+  plan: [
+    { label: "Predict and redundancy", minutes: 20 },
+    { label: "The spectrum of natural images", minutes: 25 },
+    { label: "Whitening with noise", minutes: 35 },
+    { label: "Decorrelation", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "atick-redlich-1992",
+};
+
+<Predict question="In bright light, a retinal ganglion cell has a strong antagonistic surround. If efficient coding is right, what should happen to the surround in very dim light, when photoreceptor noise is large: get stronger, stay the same, or weaken?" />
+
+<Step n={1} title="Redundancy" minutes={20} />
+
+Barlow (1961) proposed that sensory neurons should transmit information efficiently, removing the redundancy of their inputs, so that each spike says something new (Week 20). For images, the main redundancy is spatial correlation: knowing one pixel tells you a lot about its neighbours. In frequency terms, correlation means power concentrated at low spatial frequencies. Field (1987) and others measured the power spectrum of natural images and found it falls as roughly $1/f^2$: an image of a forest and an image of a city both have far more power in broad, slow variations than in fine detail.
+
+A filter that **whitens** the image, multiplying each frequency's amplitude by $f$ to flatten the spectrum, removes the correlations: its outputs at different positions are uncorrelated. Whitening boosts high frequencies, which in space means emphasising differences between neighbours, a centre minus a surround. But high frequencies are also where noise dominates, because the signal there is weak. Boosting them blindly would amplify noise. The optimal filter must trade the two.
+
+<Video id="NMFKSLRucCE" title="Building complex signals from sine waves" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's tutorial video on building signals from sums of sine waves, the frequency-domain view needed to understand image power spectra and whitening filters." />
+
+<Step n={2} title="The spectrum of natural images" minutes={25} />
+
+Real photographs are the best test, but an image with the same second-order statistics is easy to make: white noise whose Fourier amplitudes are divided by frequency. Its power spectrum falls as $1/f^2$ by construction, and it looks like a cloudy texture. Verify the slope by computing the radially averaged power spectrum and fitting a line in log-log coordinates, the same measurement you would make on a photograph.
+
+<PyCell id="spectrum" title="The 1/f² spectrum" tests={String.raw`
+  import numpy as np
+  def test_slope():
+      "the fitted log-log slope is between -2.2 and -1.8"
+      assert -2.2 < slope < -1.8
+`} prompt="Write radial_power(img): the 2D power spectrum |FFT|², averaged within logarithmically spaced rings of radial frequency (bins given), returning the ring centres and mean powers. Then fit the slope of log power against log frequency."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1992); n = 128
+  fx = np.fft.fftfreq(n); FX, FY = np.meshgrid(fx, fx)
+  F = np.hypot(FX, FY); F[0, 0] = 1 / n
+  img = np.real(np.fft.ifft2(np.fft.fft2(r.normal(size=(n, n))) / F))     # 1/f amplitude, 1/f^2 power
+  bins = np.logspace(np.log10(2 / n), np.log10(0.5), 20)
+
+  def radial_power(img):
+      P = np.abs(np.fft.fft2(img)) ** 2
+      idx = np.digitize(F.ravel(), bins)
+      power = ...
+      centres = np.sqrt(bins[:-1] * bins[1:])
+      return centres, power
+
+  fc, pr = radial_power(img)
+  slope = np.polyfit(np.log(fc), np.log(pr), 1)[0]
+  print(f"power spectrum slope {slope:.2f}")
+  fig, ax = plt.subplots(1, 2, figsize=(8, 3.5))
+  ax[0].imshow(img, cmap="gray"); ax[0].axis("off")
+  ax[1].loglog(fc, pr, "o-"); ax[1].set_xlabel("spatial frequency (cycles/pixel)"); ax[1].set_ylabel("power"); plt.show()
+`}
+hint="power = np.array([P.ravel()[idx == k].mean() for k in range(1, len(bins))])."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1992); n = 128
+  fx = np.fft.fftfreq(n); FX, FY = np.meshgrid(fx, fx)
+  F = np.hypot(FX, FY); F[0, 0] = 1 / n
+  img = np.real(np.fft.ifft2(np.fft.fft2(r.normal(size=(n, n))) / F))     # 1/f amplitude, 1/f^2 power
+  bins = np.logspace(np.log10(2 / n), np.log10(0.5), 20)
+
+  def radial_power(img):
+      P = np.abs(np.fft.fft2(img)) ** 2
+      idx = np.digitize(F.ravel(), bins)
+      power = np.array([P.ravel()[idx == k].mean() for k in range(1, len(bins))])
+      centres = np.sqrt(bins[:-1] * bins[1:])
+      return centres, power
+
+  fc, pr = radial_power(img)
+  slope = np.polyfit(np.log(fc), np.log(pr), 1)[0]
+  print(f"power spectrum slope {slope:.2f}")
+  fig, ax = plt.subplots(1, 2, figsize=(8, 3.5))
+  ax[0].imshow(img, cmap="gray"); ax[0].axis("off")
+  ax[1].loglog(fc, pr, "o-"); ax[1].set_xlabel("spatial frequency (cycles/pixel)"); ax[1].set_ylabel("power"); plt.show()
+`} />
+
+The fitted slope is about -1.93, close to the -2 built into the image, and the image looks like a natural texture of soft clouds without any objects: second-order statistics alone already capture the look of much of the natural world. Photographs give slopes between about -1.6 and -2.4, depending on the scene and the camera; the spectrum is a property of the world, not of the eye, which is what allows efficient coding to make predictions.
+
+<Step n={3} title="Whitening with noise" minutes={35} />
+
+Atick and Redlich (1992) asked for the linear filter that transmits the most information about images with spectrum $S(f)$ through a channel with input noise of power $N$ (from photoreceptors) and a limit on output power. Their solution has two factors. A **Wiener filter**, $S/(S + N)$, first suppresses frequencies where noise outweighs signal. Then a **whitening** factor, $1/\sqrt{S + N}$, flattens what is left:
+
+$$
+K(f) = \frac{S(f)}{S(f) + N}\cdot\frac{1}{\sqrt{S(f) + N}}.
+$$
+
+Where signal is strong ($S \gg N$), $K \approx S^{-1/2} \propto f$: whitening, which boosts high frequencies. Where noise is strong ($S \ll N$), $K \approx S/N^{3/2}$, which falls with frequency: smoothing. The filter is band-pass, rising and then falling, and the frequency at which it turns over moves lower as noise rises.
+
+<Figure caption="The Atick and Redlich filter for a 1/f² image spectrum: its gain at each spatial frequency and the resulting receptive field profile in space. Change the signal-to-noise ratio, from starlight to daylight." credit="Interactive figure by Engram, after Atick and Redlich (1992).">
+  <WhiteningFilter />
+</Figure>
+
+<PyCell id="filter" title="Centre-surround from efficiency" tests={String.raw`
+  import numpy as np
+  def test_bright():
+      "at high signal-to-noise ratio the receptive field has a surround below -10% of the centre's peak"
+      assert surround[100] < -0.1
+
+  def test_dim():
+      "at very low signal-to-noise ratio the surround is weaker than -3% and the centre is at least twice as wide"
+      assert surround[1e-4] > -0.03 and width[1e-4] >= 2 * width[100]
+`} prompt="Write rf_profile(snr): build K(f) on the frequency grid F with S = snr / F² and N = 1 (set the zero-frequency term to 0), transform to space with the inverse FFT (fftshift to centre it), and return the profile along one row from the centre outwards. Then record each profile's most negative value relative to its peak, and the half-width of its centre."
+code={String.raw`
+  def rf_profile(snr):
+      S, N = snr / F ** 2, 1.0
+      K = ...
+      K[0, 0] = 0
+      k = np.real(np.fft.fftshift(np.fft.ifft2(K)))
+      return k[n // 2, n // 2:]
+
+  surround, width = {}, {}
+  for snr in (1e-4, 1e-2, 1, 100):
+      p = rf_profile(snr)
+      surround[snr] = p.min() / p.max()
+      width[snr] = int(np.argmax(p < p.max() / 2))
+      plt.plot(p[:12] / p.max(), "o-", label=f"SNR {snr:g}")
+      print(f"SNR {snr:8g}: surround {surround[snr]:+.3f} of peak, centre half-width {width[snr]} pixels")
+  plt.axhline(0, color="gray", lw=0.5); plt.xlabel("distance from centre (pixels)"); plt.ylabel("receptive field (relative)"); plt.legend(); plt.show()
+`}
+hint="K = (S / (S + N)) / np.sqrt(S + N)."
+solution={String.raw`
+  def rf_profile(snr):
+      S, N = snr / F ** 2, 1.0
+      K = (S / (S + N)) / np.sqrt(S + N)
+      K[0, 0] = 0
+      k = np.real(np.fft.fftshift(np.fft.ifft2(K)))
+      return k[n // 2, n // 2:]
+
+  surround, width = {}, {}
+  for snr in (1e-4, 1e-2, 1, 100):
+      p = rf_profile(snr)
+      surround[snr] = p.min() / p.max()
+      width[snr] = int(np.argmax(p < p.max() / 2))
+      plt.plot(p[:12] / p.max(), "o-", label=f"SNR {snr:g}")
+      print(f"SNR {snr:8g}: surround {surround[snr]:+.3f} of peak, centre half-width {width[snr]} pixels")
+  plt.axhline(0, color="gray", lw=0.5); plt.xlabel("distance from centre (pixels)"); plt.ylabel("receptive field (relative)"); plt.legend(); plt.show()
+`} />
+
+At signal-to-noise ratios of 1 and 100, the optimal receptive field has a narrow centre one pixel in half-width and a negative surround reaching 13 to 18% of the peak: a centre-surround field, derived from nothing but the image spectrum and the noise. At very low signal-to-noise ratio the surround almost vanishes (about 1% of the peak) and the centre widens to three pixels: the filter now averages over a larger region to beat the noise. That answers the prediction: the surround should weaken in dim light, which is what Barlow, Fitzhugh and Kuffler found in the cat retina in 1957.
+
+<Step n={4} title="Decorrelation" minutes={25} />
+
+Does the bright-light filter actually remove redundancy? Filter the image and compare the correlation between pixels a few apart before and after.
+
+<PyCell id="decor" title="Removing spatial correlation" tests={String.raw`
+  import numpy as np
+  def test_decor():
+      "the correlation between pixels 3 apart falls from above 0.5 to below 0.1"
+      assert ac_raw > 0.5 and abs(ac_filt) < 0.1
+`} prompt="Filter img with the SNR 100 kernel (multiply their Fourier transforms) and compute the correlation coefficient between each pixel and the pixel 3 to its right (np.roll), before and after filtering."
+code={String.raw`
+  S100 = 100 / F ** 2; K100 = (S100 / (S100 + 1)) / np.sqrt(S100 + 1); K100[0, 0] = 0
+  filtered = np.real(np.fft.ifft2(np.fft.fft2(img) * K100))
+
+  def lag_corr(im, lag=3):
+      ...
+
+  ac_raw, ac_filt = lag_corr(img), lag_corr(filtered)
+  print(f"correlation at 3 pixels: raw {ac_raw:.2f}, filtered {ac_filt:.3f}")
+  fig, ax = plt.subplots(1, 2, figsize=(8, 3.5))
+  ax[0].imshow(img, cmap="gray"); ax[1].imshow(filtered, cmap="gray")
+  for a, t in zip(ax, ["image", "after the efficient filter"]): a.set_title(t); a.axis("off")
+  plt.show()
+`}
+hint="a = im - im.mean(); return np.mean(a * np.roll(a, lag, axis=1)) / np.var(a)."
+solution={String.raw`
+  S100 = 100 / F ** 2; K100 = (S100 / (S100 + 1)) / np.sqrt(S100 + 1); K100[0, 0] = 0
+  filtered = np.real(np.fft.ifft2(np.fft.fft2(img) * K100))
+
+  def lag_corr(im, lag=3):
+      a = im - im.mean()
+      return np.mean(a * np.roll(a, lag, axis=1)) / np.var(a)
+
+  ac_raw, ac_filt = lag_corr(img), lag_corr(filtered)
+  print(f"correlation at 3 pixels: raw {ac_raw:.2f}, filtered {ac_filt:.3f}")
+  fig, ax = plt.subplots(1, 2, figsize=(8, 3.5))
+  ax[0].imshow(img, cmap="gray"); ax[1].imshow(filtered, cmap="gray")
+  for a, t in zip(ax, ["image", "after the efficient filter"]): a.set_title(t); a.axis("off")
+  plt.show()
+`} />
+
+The image's pixels three apart correlate at 0.63; after filtering, at essentially zero. The filtered image looks like a sketch of edges and fine texture, with the large smooth regions gone: the redundant part of the signal has been removed before transmission. In the retina this means the optic nerve's limited capacity is spent on the parts of the image that are not predictable from their neighbours.
+
+<Callout kind="think">
+
+Whitening is only the beginning of efficient coding. A linear filter can remove only second-order correlations; natural images also have higher-order structure (edges, contours, textures) that whitening leaves untouched. Sparse coding and independent component analysis go further, and when applied to whitened natural images they produce oriented, localised, Gabor-like filters (Olshausen and Field, Week 13), the receptive fields of V1. Tomorrow you apply the same idea to sounds.
+
+</Callout>
+
+<Bridge title="Spending a limited channel well"
+  neuro="Efficient coding explains not just the centre-surround shape of retinal receptive fields but how they change: surrounds weaken and centres widen in dim light, and the balance shifts with the statistics of the scene. The theory makes quantitative predictions from measurable quantities, the image spectrum and the noise, without fitting the receptive field itself."
+  ai="Whitening is a standard preprocessing step for images in classical machine learning, and the same trade-off between amplifying signal and amplifying noise appears in image denoising, in compression (JPEG discards high-frequency detail where it carries little information) and in the design of learned image codecs.">
+
+The best filter depends on what the world looks like and how noisy the measurement is.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The power spectrum of natural images falls roughly as...", options: ["1/f²", "f", "Constant", "1/f⁴"], answer: 0, explain: "Field (1987) and others." },
+  { q: "Spatial redundancy in images means...", options: ["Neighbouring pixels are correlated", "Images are random", "All pixels are equal", "Colours are mixed"], answer: 0, explain: "Power concentrated at low frequencies." },
+  { q: "A whitening filter for a 1/f² spectrum multiplies amplitude by about...", options: ["f", "1/f", "f²", "1"], answer: 0, explain: "To flatten the spectrum." },
+  { q: "Whitening alone would be harmful at high frequencies because...", options: ["It amplifies noise where the signal is weak", "It removes signal", "It is non-linear", "It blurs"], answer: 0, explain: "Hence the Wiener factor." },
+  { q: "The Atick and Redlich filter is...", options: ["A Wiener filter times a whitening filter", "A pure low-pass filter", "A Gabor filter", "A high-pass filter only"], answer: 0, explain: "S/(S+N) times 1/√(S+N)." },
+  { q: "In space, the bright-light optimal filter is...", options: ["Centre-surround", "A single Gaussian", "Oriented", "A step"], answer: 0, explain: "Band-pass in frequency." },
+  { q: "In dim light, the theory predicts the surround...", options: ["Weakens and the centre widens", "Strengthens", "Is unchanged", "Becomes oriented"], answer: 0, explain: "Smoothing against noise." },
+  { q: "Whitening removes...", options: ["Second-order correlations only", "All statistical dependence", "Edges", "Noise"], answer: 0, explain: "Higher-order structure remains." },
+]} />
+
+<Flashcards cards={[
+  { front: "Efficient coding hypothesis?", back: "Sensory neurons should remove redundancy and transmit as much information as possible within their limits (Barlow, 1961)." },
+  { front: "Natural image spectrum?", back: "Power falls roughly as $1/f^2$ with spatial frequency." },
+  { front: "Atick and Redlich filter?", back: "$K = \\frac{S}{S+N}\\cdot\\frac{1}{\\sqrt{S+N}}$: noise suppression then whitening." },
+  { front: "Prediction for dim light?", back: "Lower signal-to-noise ratio: the surround weakens and the centre widens, as observed in retinal ganglion cells." },
+  { front: "Limit of whitening?", back: "It removes only pairwise (second-order) correlations; sparse coding or ICA are needed for higher-order structure." },
+]} />
+
+<Predict revisit question="What does efficient coding predict for the surround of a ganglion cell in very dim light?" />
+
+<Key title="Before you go">
+<ul>
+<li>Natural images have 1/f² spectra: strongly correlated, highly redundant.</li>
+<li>Whitening removes correlations but amplifies noise; the optimum balances the two.</li>
+<li>The optimal filter is centre-surround in bright light and smoothing in dim light.</li>
+<li>Efficient coding predicts receptive fields from image statistics and noise.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Atick and Redlich (1992), <em>What does the retina know about natural scenes?</em></li>
+<li>Field (1987), <em>Relations between the statistics of natural images and the response properties of cortical cells</em>, Journal of the Optical Society of America A 4(12), 2379 to 2394.</li>
+<li>Simoncelli and Olshausen (2001), <em>Natural image statistics and neural representation</em>, Annual Review of Neuroscience 24, 1193 to 1216.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Efficient coding assumes the goal is to transmit as much information as possible. Name two goals a retina might have that conflict with that, such as speed or detecting particular features, and say how each would change the predicted receptive field." />

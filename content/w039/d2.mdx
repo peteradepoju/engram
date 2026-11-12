@@ -1,0 +1,259 @@
+export const meta = {
+  title: "Where is that sound? Interaural time and coincidence detection",
+  intro: "The cochlea maps frequency, not space: nothing on the basilar membrane says where a sound came from. The brain works it out by comparing the two ears. A sound from the left reaches the left ear first, by up to about two thirds of a millisecond, and is louder there. In 1948 Lloyd Jeffress proposed a circuit to measure the delay: axons of different lengths from the two ears converging on a row of coincidence-detecting neurons, each firing most for one delay, a place map of sound direction. Today you estimate interaural time differences by cross-correlation, the computation Jeffress's circuit performs, convert them to direction, and find out why the method fails for high-frequency tones.",
+  goals: [
+    "Describe interaural time and level differences and their ranges",
+    "Estimate an interaural time difference by cross-correlation",
+    "Convert time differences to azimuth with a spherical-head model",
+    "Explain phase ambiguity and the duplex theory of localisation",
+  ],
+  plan: [
+    { label: "Predict and two ears", minutes: 20 },
+    { label: "Cross-correlation", minutes: 30 },
+    { label: "From delay to direction", minutes: 20 },
+    { label: "When timing fails", minutes: 35 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "jeffress-1948",
+};
+
+<Predict question="The largest delay between a human's ears is about 0.65 ms. A pure tone at 2 kHz has a period of 0.5 ms. If the brain compares the timing of this tone at the two ears, can it tell whether the sound is on the left or the right?" />
+
+<Step n={1} title="Two ears" minutes={20} />
+
+Sound travels at about 343 m/s, and the ears are about 18 cm apart around the head, so a sound directly to one side arrives at the far ear about 0.65 ms later: the maximum **interaural time difference** (ITD). Humans can detect ITDs as small as 10 to 20 microseconds, far shorter than an action potential. The head also casts an acoustic shadow, making the far ear quieter: the **interaural level difference** (ILD), large for high frequencies, whose wavelengths are short compared with the head, and small for low ones, which bend around it. The **duplex theory**, going back to Lord Rayleigh, holds that we use ITDs for low frequencies and ILDs for high ones.
+
+Jeffress (1948) proposed that the brain measures ITD with **delay lines and coincidence detectors**. Axons from the two ears run in opposite directions along a row of neurons, so each neuron receives the two inputs with a different relative delay; a neuron fires most when the sound's ITD exactly cancels its internal delay. The array is a map of ITD, and so of direction. In barn owls, Carr and Konishi (1990) found axonal delay lines and a map of ITD in the nucleus laminaris much as Jeffress described. In mammals the story differs, as you will see.
+
+<Video id="3Bfk1HoZekI" title="What are spikes for?" by="Dan Goodman (Neuroscience for Machine Learners)" note="Dan Goodman discusses why the brain uses spikes, including the sound localisation circuit, where the precise timing of spikes from the two ears clearly matters." />
+
+<Step n={2} title="Cross-correlation" minutes={30} />
+
+<Figure caption="An array of Jeffress-style coincidence detectors, each with its own internal delay, responding to a sound at the chosen direction. Compare broadband noise with pure tones of different frequencies." credit="Interactive figure by Engram, after Jeffress (1948).">
+  <ITDArray />
+</Figure>
+
+<PyCell id="xcorr" title="Measuring the delay" tests={String.raw`
+  import numpy as np
+  def test_itd():
+      "the estimated ITD is within 25 microseconds of the true 300"
+      assert abs(itd_hat - 300e-6) < 25e-6
+
+  def test_noise():
+      "with independent noise added at each ear (signal-to-noise ratio 0 dB), the estimate is still within 50 microseconds"
+      assert abs(itd_noisy - 300e-6) < 50e-6
+`} prompt="Write estimate_itd(left, right, max_lag): compute the cross-correlation sum(left[t] * right[t + k]) for integer lags k from -max_lag to max_lag samples, and return the lag with the largest value converted to seconds. Positive values mean the right ear lags."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1948)
+  fs = 96000
+  dur = 0.1
+  src = r.normal(size=int(dur * fs) + 200)
+
+  def binaural(src, itd, fs):
+      d = int(round(itd * fs))
+      return src[100:100 + int(dur * fs)], src[100 - d:100 - d + int(dur * fs)]
+
+  def estimate_itd(left, right, max_lag):
+      lags = np.arange(-max_lag, max_lag + 1)
+      cc = ...
+      return lags[np.argmax(cc)] / fs, lags, cc
+
+  left, right = binaural(src, 300e-6, fs)
+  itd_hat, lags, cc = estimate_itd(left, right, int(0.0008 * fs))
+  noisy_l, noisy_r = left + r.normal(size=left.size), right + r.normal(size=right.size)
+  itd_noisy, _, cc_noisy = estimate_itd(noisy_l, noisy_r, int(0.0008 * fs))
+  print(f"estimated ITD {itd_hat * 1e6:.0f} us (clean), {itd_noisy * 1e6:.0f} us (0 dB noise)")
+  plt.plot(lags / fs * 1e6, cc / cc.max(), label="clean"); plt.plot(lags / fs * 1e6, cc_noisy / cc_noisy.max(), label="noisy")
+  plt.axvline(300, color="k", ls="--"); plt.xlabel("internal delay (microseconds)"); plt.ylabel("coincidence (normalised)"); plt.legend(); plt.show()
+`}
+hint="cc = np.array([np.sum(left[max_lag:-max_lag] * right[max_lag + k: len(right) - max_lag + k]) for k in lags])."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1948)
+  fs = 96000
+  dur = 0.1
+  src = r.normal(size=int(dur * fs) + 200)
+
+  def binaural(src, itd, fs):
+      d = int(round(itd * fs))
+      return src[100:100 + int(dur * fs)], src[100 - d:100 - d + int(dur * fs)]
+
+  def estimate_itd(left, right, max_lag):
+      lags = np.arange(-max_lag, max_lag + 1)
+      cc = np.array([np.sum(left[max_lag:-max_lag] * right[max_lag + k: len(right) - max_lag + k]) for k in lags])
+      return lags[np.argmax(cc)] / fs, lags, cc
+
+  left, right = binaural(src, 300e-6, fs)
+  itd_hat, lags, cc = estimate_itd(left, right, int(0.0008 * fs))
+  noisy_l, noisy_r = left + r.normal(size=left.size), right + r.normal(size=right.size)
+  itd_noisy, _, cc_noisy = estimate_itd(noisy_l, noisy_r, int(0.0008 * fs))
+  print(f"estimated ITD {itd_hat * 1e6:.0f} us (clean), {itd_noisy * 1e6:.0f} us (0 dB noise)")
+  plt.plot(lags / fs * 1e6, cc / cc.max(), label="clean"); plt.plot(lags / fs * 1e6, cc_noisy / cc_noisy.max(), label="noisy")
+  plt.axvline(300, color="k", ls="--"); plt.xlabel("internal delay (microseconds)"); plt.ylabel("coincidence (normalised)"); plt.legend(); plt.show()
+`} />
+
+The cross-correlation of broadband noise has one sharp peak, at 302 microseconds against a true 300 (the samples at 96 kHz are about 10 microseconds apart), and adding independent noise at each ear at equal power changes the peak's height but not its position. Each internal delay in the array is one coincidence detector, and the curve you plotted is the pattern of activity across the array: Jeffress's place code, read by finding the most active neuron.
+
+<Step n={3} title="From delay to direction" minutes={20} />
+
+For a spherical head of radius $a$ and a distant source at azimuth $\theta$ (0 straight ahead, 90° to the side), Woodworth's formula gives the ITD as the extra path around the head:
+
+$$
+\text{ITD}(\theta) = \frac{a}{c}\left(\theta + \sin\theta\right),
+$$
+
+with $\theta$ in radians, $a \approx 8.75$ cm and $c = 343$ m/s. It is not linear: the ITD changes fastest near the midline, which is one reason localisation is sharpest straight ahead.
+
+<PyCell id="woodworth" title="Azimuth from ITD" tests={String.raw`
+  import numpy as np
+  def test_max():
+      "the maximum ITD (at 90 degrees) is between 600 and 700 microseconds"
+      assert 600e-6 < itd_of(90) < 700e-6
+
+  def test_invert():
+      "azimuth_of recovers 35 degrees from its ITD to within 0.5 degrees"
+      assert abs(azimuth_of(itd_of(35)) - 35) < 0.5
+`} prompt="Write itd_of(theta_deg) with Woodworth's formula, and azimuth_of(itd) inverting it numerically on a fine grid of azimuths from 0 to 90 degrees. Then convert the estimated ITD from the last cell to an azimuth."
+code={String.raw`
+  a, c = 0.0875, 343.0
+
+  def itd_of(theta_deg):
+      th = np.deg2rad(theta_deg)
+      return ...
+
+  def azimuth_of(itd):
+      grid = np.linspace(0, 90, 9001)
+      return ...
+
+  print(f"maximum ITD {itd_of(90) * 1e6:.0f} us; the ITD of {itd_hat * 1e6:.0f} us corresponds to {azimuth_of(itd_hat):.1f} degrees")
+  th = np.linspace(0, 90, 91)
+  plt.plot(th, itd_of(th) * 1e6); plt.xlabel("azimuth (deg)"); plt.ylabel("ITD (microseconds)"); plt.show()
+`}
+hint="return a / c * (th + np.sin(th)); for the inverse, return grid[np.argmin(np.abs(itd_of(grid) - itd))]."
+solution={String.raw`
+  a, c = 0.0875, 343.0
+
+  def itd_of(theta_deg):
+      th = np.deg2rad(theta_deg)
+      return a / c * (th + np.sin(th))
+
+  def azimuth_of(itd):
+      grid = np.linspace(0, 90, 9001)
+      return grid[np.argmin(np.abs(itd_of(grid) - itd))]
+
+  print(f"maximum ITD {itd_of(90) * 1e6:.0f} us; the ITD of {itd_hat * 1e6:.0f} us corresponds to {azimuth_of(itd_hat):.1f} degrees")
+  th = np.linspace(0, 90, 91)
+  plt.plot(th, itd_of(th) * 1e6); plt.xlabel("azimuth (deg)"); plt.ylabel("ITD (microseconds)"); plt.show()
+`} />
+
+The model head gives a maximum ITD of 656 microseconds at 90°, and the estimated 302 microseconds corresponds to an azimuth of 35°. The curve is steepest near the midline, where a 10° change in direction shifts the ITD by about 90 microseconds, and flattens towards the side, where the same change shifts it by much less, matching the finding that localisation is most precise for sounds straight ahead.
+
+<Step n={4} title="When timing fails" minutes={35} />
+
+Noise has a single sharp peak in its cross-correlation, but a pure tone's cross-correlation is itself a cosine, with peaks one period apart. If the period is shorter than the range of possible ITDs, more than one internal delay matches equally well and the direction is ambiguous. This **phase ambiguity** is one reason ITD cues are useful mainly below about 1.5 kHz in humans, and why high frequencies rely on level differences (and on timing of the slow envelope of complex sounds).
+
+<PyCell id="ambiguity" title="Phase ambiguity for tones" tests={String.raw`
+  import numpy as np
+  def test_low():
+      "a 500 Hz tone has a single cross-correlation peak within the physiological range"
+      assert n_peaks[500] == 1
+
+  def test_high():
+      "a 2000 Hz tone has at least two peaks of nearly equal height within the range"
+      assert n_peaks[2000] >= 2
+`} prompt="Write count_peaks(cc): the number of local maxima of the cross-correlation within 95% of its largest value. Count them for tones of 500 and 2000 Hz with an ITD of 300 microseconds, over lags of plus or minus 700 microseconds."
+code={String.raw`
+  def tone_pair(freq, itd):
+      t = np.arange(int(dur * fs)) / fs
+      return np.sin(2 * np.pi * freq * t), np.sin(2 * np.pi * freq * (t - itd))
+
+  def count_peaks(cc):
+      ...
+
+  n_peaks = {}
+  for freq in (500, 2000):
+      l, rr = tone_pair(freq, 300e-6)
+      _, lg, ccf = estimate_itd(l, rr, int(0.0007 * fs))
+      n_peaks[freq] = count_peaks(ccf)
+      plt.plot(lg / fs * 1e6, ccf / ccf.max(), label=f"{freq} Hz")
+  print("peaks within 95% of the maximum:", n_peaks)
+  plt.axvline(300, color="k", ls="--"); plt.xlabel("internal delay (microseconds)"); plt.legend(); plt.show()
+`}
+hint="is_max = (cc[1:-1] > cc[:-2]) & (cc[1:-1] >= cc[2:]); return int(np.sum(is_max & (cc[1:-1] > 0.95 * cc.max())))."
+solution={String.raw`
+  def tone_pair(freq, itd):
+      t = np.arange(int(dur * fs)) / fs
+      return np.sin(2 * np.pi * freq * t), np.sin(2 * np.pi * freq * (t - itd))
+
+  def count_peaks(cc):
+      is_max = (cc[1:-1] > cc[:-2]) & (cc[1:-1] >= cc[2:])
+      return int(np.sum(is_max & (cc[1:-1] > 0.95 * cc.max())))
+
+  n_peaks = {}
+  for freq in (500, 2000):
+      l, rr = tone_pair(freq, 300e-6)
+      _, lg, ccf = estimate_itd(l, rr, int(0.0007 * fs))
+      n_peaks[freq] = count_peaks(ccf)
+      plt.plot(lg / fs * 1e6, ccf / ccf.max(), label=f"{freq} Hz")
+  print("peaks within 95% of the maximum:", n_peaks)
+  plt.axvline(300, color="k", ls="--"); plt.xlabel("internal delay (microseconds)"); plt.legend(); plt.show()
+`} />
+
+At 500 Hz the period is 2 ms, longer than the whole range of ITDs, so the cross-correlation has one peak in range, at the true delay. At 2 kHz the period is 0.5 ms, and the cross-correlation has two peaks of equal height within the range of possible ITDs, at +300 and about -200 microseconds, which answers the prediction: from timing alone the brain cannot tell left from right. For such tones listeners rely on level differences, which the head shadow makes large at high frequencies, as the duplex theory says.
+
+<Callout kind="research">
+
+In small mammals such as gerbils, ITD-sensitive neurons in the medial superior olive mostly prefer delays outside the range the head can produce, and the steep slopes of their tuning curves, not their peaks, sit across the physiological range. McAlpine, Jiang and Palmer (2001) and Brand and colleagues (2002) argued that mammals represent ITD by comparing the overall activity of two broadly tuned populations, one on each side of the brain, rather than by a Jeffress-style place map. Using Week 36's Fisher information, compare a place code of sharply tuned detectors with a two-channel code of broadly tuned ones for a small head (maximum ITD 120 µs) and a large one (650 µs). Which code is better for each, and why?
+
+</Callout>
+
+<Bridge title="Computing with delays"
+  neuro="Sound localisation is the clearest case where the brain computes with precise spike timing: microsecond differences between the ears are compared by coincidence-detecting neurons with fast synapses and specialised dendrites. It shows that spike timing can carry information that rates cannot, at least in specialised circuits."
+  ai="Cross-correlation is how engineered systems localise sound with microphone arrays, and its generalised forms (with frequency weighting) are standard in robotics and speech enhancement. Spiking neural networks trained on sound localisation, including work by Goodman and colleagues, learn delay-based solutions when given learnable delays.">
+
+The brain measures direction by asking which delay makes two ears agree.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The maximum interaural time difference for a human head is about...", options: ["0.65 ms", "6.5 ms", "65 ms", "0.065 ms"], answer: 0, explain: "About 18 cm around the head at 343 m/s." },
+  { q: "Interaural level differences are largest for...", options: ["High frequencies", "Low frequencies", "All frequencies equally", "Silence"], answer: 0, explain: "Short wavelengths are shadowed by the head." },
+  { q: "Jeffress's model uses...", options: ["Delay lines and coincidence detectors", "Level comparison only", "The cochlea alone", "Pitch"], answer: 0, explain: "A place map of ITD." },
+  { q: "Cross-correlation over internal delays peaks at...", options: ["The delay that cancels the ITD", "Zero always", "The period", "The maximum delay"], answer: 0, explain: "What coincidence detectors compute." },
+  { q: "Woodworth's formula gives ITD as...", options: ["(a/c)(θ + sin θ)", "aθ", "c/a", "sin θ only"], answer: 0, explain: "Path around a spherical head." },
+  { q: "A 2 kHz tone gives ambiguous ITDs because...", options: ["Its period is shorter than the range of possible ITDs", "It is too quiet", "The cochlea ignores it", "It has no phase"], answer: 0, explain: "Several delays match." },
+  { q: "The duplex theory says...", options: ["ITDs are used at low frequencies and ILDs at high", "Only ILDs matter", "Only ITDs matter", "Two cochleas are needed"], answer: 0, explain: "Lord Rayleigh." },
+  { q: "In small mammals, ITD may be coded by...", options: ["Comparing two broadly tuned hemispheric populations", "A sharp place map only", "Pitch", "Loudness alone"], answer: 0, explain: "McAlpine and colleagues." },
+]} />
+
+<Flashcards cards={[
+  { front: "ITD and ILD?", back: "Interaural time difference (up to about 0.65 ms in humans) and interaural level difference (large at high frequencies)." },
+  { front: "Jeffress model?", back: "Axonal delay lines from the two ears converge on coincidence detectors; each fires best for one ITD, forming a place map." },
+  { front: "Woodworth's formula?", back: "$\\text{ITD} = (a/c)(\\theta + \\sin\\theta)$ for a spherical head of radius $a$." },
+  { front: "Phase ambiguity?", back: "For tones with periods shorter than the ITD range, several internal delays match equally; timing cues fail at high frequencies." },
+  { front: "Hemispheric code?", back: "ITD represented by the relative activity of two broadly tuned populations, as proposed for small mammals." },
+]} />
+
+<Predict revisit question="Can the brain tell left from right using the timing of a 2 kHz pure tone at the two ears?" />
+
+<Key title="Before you go">
+<ul>
+<li>Direction is computed by comparing the two ears: timing at low frequencies, level at high.</li>
+<li>Cross-correlation over internal delays, Jeffress's coincidence detectors, estimates ITD.</li>
+<li>Woodworth's formula converts ITD to azimuth.</li>
+<li>Tones with periods shorter than the ITD range are ambiguous.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Jeffress (1948), <em>A place theory of sound localization</em>.</li>
+<li>Carr and Konishi (1990), <em>A circuit for detection of interaural time differences in the brain stem of the barn owl</em>, Journal of Neuroscience 10(10), 3227 to 3246.</li>
+<li>McAlpine, Jiang and Palmer (2001), <em>A neural code for low-frequency sound localization in mammals</em>, Nature Neuroscience 4(4), 396 to 401.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A sound directly in front of you and one directly behind you give the same ITD and ILD. How do you nevertheless tell them apart? List the cues you think the brain could use, and an experiment that would test one of them." />

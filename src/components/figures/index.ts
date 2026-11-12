@@ -179,3 +179,8 @@ export { GaborRF } from "./gabor-rf";
 export { DivisiveNormalization } from "./divisive-normalization";
 export { MotionEnergy } from "./motion-energy";
 export { InvariancePooling } from "./invariance-pooling";
+export { CochleaFilterbank } from "./cochlea-filterbank";
+export { ITDArray } from "./itd-array";
+export { FlyHash } from "./fly-hash";
+export { WhiteningFilter } from "./whitening-filter";
+export { SoundBasis } from "./sound-basis";

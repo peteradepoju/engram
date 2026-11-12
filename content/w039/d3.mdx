@@ -1,0 +1,248 @@
+export const meta = {
+  title: "Smell: random expansion and sparse codes",
+  intro: "Olfaction faces a problem unlike vision or hearing: odours have no natural map. There is no axis along which smells vary smoothly, only a huge, irregular space of molecules. The fly's olfactory system handles it in three steps: about 50 types of receptor neuron each respond to many odours, a normalisation stage removes the effect of concentration, and then about 2,000 Kenyon cells each sample a few inputs at random, with inhibition leaving only the most active few per cent on. In 2017 Dasgupta, Stevens and Navlakha showed that this is a version of a computer science algorithm, locality-sensitive hashing, and that the fly's variant can find similar items better than the standard one. Today you build the fly's circuit and test it as a similarity search.",
+  goals: [
+    "Describe the stages of the insect olfactory pathway and their sizes",
+    "Explain how divisive normalisation makes odour codes concentration invariant",
+    "Build a random expansion with winner-take-all and use it for similarity search",
+    "Compare the fly hash with standard locality-sensitive hashing",
+  ],
+  plan: [
+    { label: "Predict and the olfactory pathway", minutes: 20 },
+    { label: "Normalising concentration", minutes: 25 },
+    { label: "A random, sparse expansion", minutes: 35 },
+    { label: "How many inputs per cell?", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "dasgupta-2017",
+};
+
+<Predict question="Each of 2,000 model Kenyon cells sums the activity of a few randomly chosen input channels, and only the 20 most active cells are kept for each odour. Will odours that are similar in the 50 input channels tend to get overlapping sets of 20 active cells, or will the random wiring scramble similarity away?" />
+
+<Step n={1} title="The olfactory pathway" minutes={20} />
+
+In the fruit fly, about 50 types of **olfactory receptor neuron** (ORN) each express one receptor protein, and each type responds to many odours with different strengths. Neurons of one type converge on one **glomerulus** in the antennal lobe, where **projection neurons** (PNs) carry the signal on: a code of about 50 channels. PNs then project to about 2,000 **Kenyon cells** in the mushroom body, each of which receives input from about six or seven randomly chosen glomeruli (Caron and colleagues, 2013). A single inhibitory neuron, APL, gives feedback to all Kenyon cells, and the result is a sparse code in which only about 5 to 10% of Kenyon cells respond to any odour. Mammals have a similar plan on a larger scale: about 1,000 receptor types, glomeruli in the olfactory bulb, and expansion into piriform cortex.
+
+The two key operations are a **dimension expansion** (50 to 2,000) through random, sparse connections, and a **winner-take-all** that keeps only the most active cells. Dasgupta and colleagues recognised this as a form of locality-sensitive hashing (LSH), a family of algorithms for finding similar items quickly in large databases by giving similar items similar short codes.
+
+<Video id="Uwht2Y6xLj4" title="Neuromorphic sensing and applications" by="Dan Goodman (Neuroscience for Machine Learners)" note="Dan Goodman surveys neuromorphic sensors that mimic biological senses, including silicon cochleas and artificial olfactory and tactile sensors, and how brain-inspired processing is applied to their signals." />
+
+<Step n={2} title="Normalising concentration" minutes={25} />
+
+A stronger dose of the same odour activates every receptor type more, so the raw ORN pattern changes with concentration. In the antennal lobe, lateral inhibition divides each glomerulus's output by the total activity (Olsen, Bhandawat and Wilson, 2010), the divisive normalisation of Week 38, so the pattern across PNs depends on which odour it is more than on how much. Dasgupta and colleagues model this step by centring each odour's vector on its mean.
+
+<PyCell id="norm" title="Concentration invariance by normalisation" tests={String.raw`
+  import numpy as np
+  def test_raw():
+      "the raw ORN vector's length changes more than tenfold over a 100-fold concentration range"
+      assert np.linalg.norm(orn(odour, 100)) / np.linalg.norm(orn(odour, 1)) > 10
+
+  def test_normalised():
+      "after normalisation, the patterns at 1 and 100 units of concentration have cosine similarity above 0.85"
+      a, b = normalise(orn(odour, 1)), normalise(orn(odour, 100))
+      assert np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)) > 0.85
+`} prompt="Write normalise(v): divide the vector by its mean (divisive normalisation), then subtract the mean of the result (centring), returning a vector whose pattern, not its overall level, carries the odour's identity."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2017)
+  d = 50
+  odour = r.exponential(1, d)                              # affinities of the 50 receptor types for one odour
+
+  def orn(affinity, conc, K=200.0):
+      x = conc * affinity
+      return 100 * x / (x + K)                             # saturating receptor responses
+
+  def normalise(v):
+      ...
+
+  for conc in (1, 10, 100):
+      raw = orn(odour, conc); nv = normalise(raw)
+      print(f"concentration {conc:3d}: raw length {np.linalg.norm(raw):7.1f}; normalised, first five channels {np.round(nv[:5], 2)}")
+`}
+hint="u = v / v.mean(); return u - u.mean()."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2017)
+  d = 50
+  odour = r.exponential(1, d)                              # affinities of the 50 receptor types for one odour
+
+  def orn(affinity, conc, K=200.0):
+      x = conc * affinity
+      return 100 * x / (x + K)                             # saturating receptor responses
+
+  def normalise(v):
+      u = v / v.mean()
+      return u - u.mean()
+
+  for conc in (1, 10, 100):
+      raw = orn(odour, conc); nv = normalise(raw)
+      print(f"concentration {conc:3d}: raw length {np.linalg.norm(raw):7.1f}; normalised, first five channels {np.round(nv[:5], 2)}")
+`} />
+
+Over a hundredfold change in concentration, the raw response vector grows more than fortyfold in length, but after normalisation the first five channels keep the same pattern of high and low values; the cosine similarity between the normalised patterns at the lowest and highest concentrations is about 0.91. What remains of the change comes from receptor saturation: at high concentration the strongest channels approach their ceiling and the pattern flattens, a limit that no later normalisation can undo. Real flies also use the timing of responses, which changes with concentration, so identity and intensity can both be read.
+
+<Step n={3} title="A random, sparse expansion" minutes={35} />
+
+Now build a library of 1,000 odours, in 40 families of related odours, and ask the question that matters for learning: if the fly has learned that one odour predicts food, will it treat similar odours similarly? Measure it as a similarity search: for each query odour, find its 25 nearest neighbours by Euclidean distance in the 50-dimensional normalised input, and ask what fraction of them are also among its 25 nearest neighbours in the hashed code. Compare the fly's hash (expand to 2,000 cells, each summing six random inputs, keep the top 20 or 50) with standard LSH (random Gaussian projections to 20 or 50 dimensions, keeping only their signs), so that both use the same number of tags.
+
+<Figure caption="The fly's hash: 50 input channels, a random sparse expansion to Kenyon cells, and a winner-take-all that keeps the most active few. Two similar odours share many active cells; a dissimilar one shares few." credit="Interactive figure by Engram, after Dasgupta, Stevens and Navlakha (2017).">
+  <FlyHash />
+</Figure>
+
+<PyCell id="hash" title="The fly hash against LSH" tests={String.raw`
+  import numpy as np
+  def test_fly_wins_small():
+      "with 20 tags, the fly hash finds at least 15 percentage points more true neighbours than sign LSH"
+      assert prec["fly", 20] > prec["LSH", 20] + 0.15
+
+  def test_both_good():
+      "with 50 tags, both find more than 70% of the true neighbours"
+      assert prec["fly", 50] > 0.7 and prec["LSH", 50] > 0.7
+`} prompt="Write fly_hash(X, m=2000, k=6, top=20): a binary m by d connection matrix in which each Kenyon cell samples k random inputs, the projection X @ M, and a winner-take-all that sets the top entries of each row to 1 and the rest to 0. The neighbour-precision measure and sign LSH are given."
+code={String.raw`
+  centres = r.exponential(1, (40, d))
+  X = np.repeat(centres, 25, 0) * r.lognormal(0, 0.4, (1000, d))       # 40 families of 25 related odours
+  X = np.array([normalise(x) for x in X])
+
+  def fly_hash(X, m=2000, k=6, top=20, seed=0):
+      g = np.random.default_rng(seed)
+      M = np.zeros((X.shape[1], m))
+      for j in range(m):
+          M[g.choice(X.shape[1], k, replace=False), j] = 1
+      Y = X @ M
+      H = ...
+      return H
+
+  def sign_lsh(X, bits=20, seed=0):
+      g = np.random.default_rng(seed)
+      return np.sign(X @ g.normal(size=(X.shape[1], bits)))
+
+  def neighbour_precision(X, H, n_query=200, k=25):
+      sq = lambda A: (A ** 2).sum(1)[:, None] + (A ** 2).sum(1)[None] - 2 * A @ A.T
+      dx, dh = sq(X), sq(H)
+      hits = [len(set(np.argsort(dx[i])[1:k + 1]) & set(np.argsort(dh[i], kind="stable")[1:k + 1])) / k for i in range(n_query)]
+      return np.mean(hits)
+
+  prec = {}
+  for tags in (20, 50):
+      prec["fly", tags] = neighbour_precision(X, fly_hash(X, top=tags))
+      prec["LSH", tags] = neighbour_precision(X, sign_lsh(X, bits=tags))
+      print(f"{tags} tags: fly hash {prec['fly', tags]:.2f}, sign LSH {prec['LSH', tags]:.2f}")
+`}
+hint="H = np.zeros_like(Y); idx = np.argsort(-Y, axis=1)[:, :top]; np.put_along_axis(H, idx, 1, axis=1)."
+solution={String.raw`
+  centres = r.exponential(1, (40, d))
+  X = np.repeat(centres, 25, 0) * r.lognormal(0, 0.4, (1000, d))       # 40 families of 25 related odours
+  X = np.array([normalise(x) for x in X])
+
+  def fly_hash(X, m=2000, k=6, top=20, seed=0):
+      g = np.random.default_rng(seed)
+      M = np.zeros((X.shape[1], m))
+      for j in range(m):
+          M[g.choice(X.shape[1], k, replace=False), j] = 1
+      Y = X @ M
+      H = np.zeros_like(Y)
+      idx = np.argsort(-Y, axis=1)[:, :top]
+      np.put_along_axis(H, idx, 1, axis=1)
+      return H
+
+  def sign_lsh(X, bits=20, seed=0):
+      g = np.random.default_rng(seed)
+      return np.sign(X @ g.normal(size=(X.shape[1], bits)))
+
+  def neighbour_precision(X, H, n_query=200, k=25):
+      sq = lambda A: (A ** 2).sum(1)[:, None] + (A ** 2).sum(1)[None] - 2 * A @ A.T
+      dx, dh = sq(X), sq(H)
+      hits = [len(set(np.argsort(dx[i])[1:k + 1]) & set(np.argsort(dh[i], kind="stable")[1:k + 1])) / k for i in range(n_query)]
+      return np.mean(hits)
+
+  prec = {}
+  for tags in (20, 50):
+      prec["fly", tags] = neighbour_precision(X, fly_hash(X, top=tags))
+      prec["LSH", tags] = neighbour_precision(X, sign_lsh(X, bits=tags))
+      print(f"{tags} tags: fly hash {prec['fly', tags]:.2f}, sign LSH {prec['LSH', tags]:.2f}")
+`} />
+
+With 20 tags, the fly hash finds about 82% of each odour's true nearest neighbours, against 59% for sign LSH, which answers the prediction: random wiring preserves similarity, and the expansion with winner-take-all preserves it better than the same number of random sign bits. With 50 tags both reach about 86%: the advantage is largest when the code is short. Dasgupta and colleagues found the same pattern on image datasets used to benchmark similarity search, which is why the paper was published as computer science as much as neuroscience.
+
+<Step n={4} title="How many inputs per cell?" minutes={25} />
+
+Each Kenyon cell in the fly receives about six or seven inputs. What happens if it receives one, or all fifty? With one input, a Kenyon cell merely copies a single channel and the expansion adds nothing. With all fifty, every Kenyon cell computes the same sum, and the code cannot distinguish anything. Litwin-Kumar, Harris, Axel, Sompolinsky and Abbott (2017) analysed this trade-off for expansion layers in the fly mushroom body and the cerebellum, and found that small numbers of inputs per cell maximise the dimension of the expanded representation, close to the anatomical values.
+
+<PyCell id="degree" title="Sweeping the number of inputs" tests={String.raw`
+  import numpy as np
+  def test_one():
+      "one input per cell performs far worse than six"
+      assert deg[1] < deg[6] - 0.3
+
+  def test_all():
+      "sampling all 50 inputs collapses the code"
+      assert deg[50] < 0.3
+`} prompt="For k = 1, 3, 6, 12, 25 and 50 inputs per Kenyon cell (with 20 tags), compute the neighbour precision of the fly hash and store it in deg[k]."
+code={String.raw`
+  deg = {}
+  for k in (1, 3, 6, 12, 25, 50):
+      deg[k] = ...
+      print(f"{k:2d} inputs per cell: precision {deg[k]:.2f}")
+  plt.plot(list(deg), list(deg.values()), "o-"); plt.xscale("log"); plt.xlabel("inputs per Kenyon cell"); plt.ylabel("neighbour precision"); plt.show()
+`}
+hint="deg[k] = neighbour_precision(X, fly_hash(X, k=k, top=20))."
+solution={String.raw`
+  deg = {}
+  for k in (1, 3, 6, 12, 25, 50):
+      deg[k] = neighbour_precision(X, fly_hash(X, k=k, top=20))
+      print(f"{k:2d} inputs per cell: precision {deg[k]:.2f}")
+  plt.plot(list(deg), list(deg.values()), "o-"); plt.xscale("log"); plt.xlabel("inputs per Kenyon cell"); plt.ylabel("neighbour precision"); plt.show()
+`} />
+
+With one input per Kenyon cell, precision is only about 0.33: each cell copies one channel, and keeping the top 20 cells just keeps the strongest few channels. Precision rises steeply to 0.82 with six inputs and continues to about 0.92 with 25, then collapses to 0.12 when every cell sums all 50, because all cells then compute the same number. In this simulation more inputs keep helping up to about half the channels; the fly's six or seven may reflect costs this model ignores, such as wiring and the need for downstream learning to separate odour categories, which is the trade-off Litwin-Kumar and colleagues analysed.
+
+<Bridge title="An algorithm found twice"
+  neuro="Random expansion followed by sparsification appears in the insect mushroom body, the mammalian piriform cortex, the cerebellar granule layer and the dentate gyrus. It separates similar inputs into less overlapping codes that a single downstream neuron can learn to read with a simple synaptic rule."
+  ai="The same idea runs through machine learning: random features and kernel methods expand inputs to make them linearly separable, LSH indexes billions of vectors for similarity search, and sparse expansion layers appear in modern networks. Dasgupta and colleagues used the fly's design to improve LSH, a case of neuroscience suggesting an algorithm.">
+
+Expand at random, keep the strongest few, and similar things stay similar while dissimilar ones separate.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In the fly, each Kenyon cell receives input from about...", options: ["Six or seven glomeruli", "One glomerulus", "All 50 glomeruli", "Hundreds of glomeruli"], answer: 0, explain: "Random, sparse sampling." },
+  { q: "The projection from about 50 PN channels to about 2,000 Kenyon cells is...", options: ["A dimension expansion", "A compression", "An identity map", "Topographic"], answer: 0, explain: "Then sparsified." },
+  { q: "The APL neuron provides...", options: ["Feedback inhibition that keeps the Kenyon cell code sparse", "Excitation", "Odour receptors", "Motor output"], answer: 0, explain: "A winner-take-all." },
+  { q: "Normalisation in the antennal lobe makes the code...", options: ["Less dependent on odour concentration", "More dependent on concentration", "Random", "Silent"], answer: 0, explain: "Divisive normalisation." },
+  { q: "Locality-sensitive hashing aims to...", options: ["Give similar items similar short codes", "Encrypt data", "Compress losslessly", "Sort numbers"], answer: 0, explain: "For fast similarity search." },
+  { q: "With a small number of tags, the fly hash...", options: ["Found more true neighbours than sign LSH", "Did worse", "Did the same", "Failed entirely"], answer: 0, explain: "Dasgupta and colleagues' result." },
+  { q: "If every Kenyon cell sampled all inputs...", options: ["All cells would compute the same sum and the code would collapse", "Precision would be perfect", "Nothing would change", "Cells would be silent"], answer: 0, explain: "No diversity." },
+  { q: "Random expansion plus sparsification is also found in...", options: ["The cerebellar granule layer and piriform cortex", "Only flies", "The retina only", "Muscles"], answer: 0, explain: "A recurring motif." },
+]} />
+
+<Flashcards cards={[
+  { front: "Fly olfactory pathway?", back: "About 50 ORN types, 50 glomeruli and PN channels, then about 2,000 Kenyon cells each sampling 6 or 7 PNs, with APL inhibition keeping 5 to 10% active." },
+  { front: "Fly hash?", back: "Normalise, expand by a sparse random binary matrix, keep the top few responses (winner-take-all) as a binary tag." },
+  { front: "Locality-sensitive hashing?", back: "Random projections that give similar items similar codes, for fast approximate nearest-neighbour search." },
+  { front: "Why expand before sparsifying?", back: "More cells give more chances for each odour to have its own strongly driven set, so similar odours overlap and dissimilar ones separate." },
+  { front: "Dasgupta, Stevens and Navlakha (2017)?", back: "Showed the fly olfactory circuit implements a form of LSH and that its variant (expansion plus winner-take-all) improves similarity search." },
+]} />
+
+<Predict revisit question="After random expansion and winner-take-all, do similar odours get overlapping sets of active Kenyon cells?" />
+
+<Key title="Before you go">
+<ul>
+<li>Olfaction has no map; the fly uses normalisation, random expansion and sparsening.</li>
+<li>Divisive normalisation removes much of the effect of concentration.</li>
+<li>The fly hash preserves similarity and beats sign LSH with few tags.</li>
+<li>A few inputs per expansion cell is the useful range; one or all is useless.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Dasgupta, Stevens and Navlakha (2017), <em>A neural algorithm for a fundamental computing problem</em>.</li>
+<li>Olsen, Bhandawat and Wilson (2010), <em>Divisive normalization in olfactory population codes</em>, Neuron 66(2), 287 to 299.</li>
+<li>Litwin-Kumar, Harris, Axel, Sompolinsky and Abbott (2017), <em>Optimal degrees of synaptic connectivity</em>, Neuron 93(5), 1153 to 1164.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Kenyon cell connections are random and differ between individual flies. What does that imply for how a fly can learn an odour's meaning, and why could two flies not share learned associations by copying synapses? What does this suggest about representations in learned neural networks?" />

@@ -1,0 +1,240 @@
+export const meta = {
+  title: "Forge: Week 39 challenge, quiz and deep read",
+  intro: "This week went beyond vision: the cochlea's filter bank and the ERB scale, sound localisation by coincidence detection, the fly's olfactory hash, and efficient coding as a theory of why sensory systems look as they do, from the retina's surround to the ear's filters. Today's challenge tests two predictions of efficient coding numerically. First, a neuron facing a stimulus whose variance keeps changing should rescale its gain to match, as Brenner, Bialek and de Ruyter van Steveninck found in the fly. Second, the Atick and Redlich filter should transmit more information than simpler filters with the same output power. Then the quiz, and a critique of Dasgupta and colleagues' fly hash.",
+  goals: [
+    "Measure mutual information between a stimulus and a quantised response",
+    "Show that adaptive gain maximises information within each stimulus ensemble, and what it costs",
+    "Compare the information carried by different linear filters under noise and a power limit",
+    "Critique the fly hash as a model of olfactory coding",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "dasgupta-2017",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. What is the ERB of a cochlear filter centred at 4 kHz?
+2. What ITD does Woodworth's formula give for a source at 30° (head radius 8.75 cm)?
+3. A Gaussian channel has signal variance 9 and noise variance 1. How many bits does one use of it carry?
+
+<PyCell code={String.raw`
+  import numpy as np
+  print("1.", round(24.7 * (4.37 * 4 + 1)), "Hz")
+  th = np.deg2rad(30); print("2.", round(0.0875 / 343 * (th + np.sin(th)) * 1e6), "microseconds")
+  print("3.", round(0.5 * np.log2(1 + 9), 2), "bits")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: adapting to variance.** A stimulus alternates between blocks of low variance (standard deviation 1) and high variance (standard deviation 4), 2,000 samples each. A model neuron passes the stimulus through $\tanh(s/g)$, adds a little noise and quantises its output to eight levels, a limited range like a neuron's firing rate. Compare fixed gains $g$ of 1, 2 and 4 with an **adaptive** gain that tracks the recent standard deviation of the stimulus. Measure the mutual information between stimulus and response within each kind of block (ignoring the first 300 samples after each switch), and also over the whole recording.
+
+<PyCell id="partA" title="Part A: adaptive rescaling" tests={String.raw`
+  import numpy as np
+  def test_within():
+      "the adaptive gain gives the highest mean within-ensemble information"
+      assert max(within, key=lambda k: np.mean(within[k])) == "adaptive"
+
+  def test_balanced():
+      "each fixed gain is good in at most one ensemble; the adaptive gain is within 0.2 bits of the best in both"
+      best = [max(within[k][i] for k in within) for i in range(2)]
+      assert all(within["adaptive"][i] > best[i] - 0.2 for i in range(2))
+
+  def test_overall():
+      "over the whole recording, ignoring which ensemble is on, the adaptive gain carries less information than the best fixed gain"
+      assert overall["adaptive"] < max(overall[k] for k in overall if k != "adaptive")
+`} prompt="Write running_sd(s, alpha=0.01), an exponentially weighted estimate of the stimulus standard deviation (v = (1 - alpha) v + alpha s², starting at 1, returning sqrt(v) at each sample). Use it as the adaptive gain. The response, information estimate and comparisons are given."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2000)
+  T, blk = 40000, 2000
+  sig = np.repeat(np.tile([1.0, 4.0], T // (2 * blk)), blk)
+  s = r.normal(size=T) * sig
+  settle = np.tile(np.r_[np.zeros(300, bool), np.ones(blk - 300, bool)], T // blk)
+
+  def respond(gain):
+      x = np.tanh(s / gain) + 0.05 * r.normal(size=T)
+      return np.digitize(x, np.linspace(-1, 1, 9)[1:-1])          # 8 response levels
+
+  def mutual_info(a, b, nb=16):
+      qa = np.digitize(a, np.quantile(a, np.linspace(0, 1, nb + 1)[1:-1]))
+      P = np.histogram2d(qa, b, bins=[nb, 8])[0]; P /= P.sum()
+      px, py = P.sum(1, keepdims=True), P.sum(0, keepdims=True); nz = P > 0
+      return np.sum(P[nz] * np.log2(P[nz] / (px @ py)[nz]))
+
+  def running_sd(s, alpha=0.01):
+      ...
+
+  gains = {"fixed 1": 1.0, "fixed 2": 2.0, "fixed 4": 4.0, "adaptive": running_sd(s)}
+  within, overall = {}, {}
+  for name, g in gains.items():
+      resp = respond(g)
+      within[name] = [mutual_info(s[(sig == sv) & settle], resp[(sig == sv) & settle]) for sv in (1.0, 4.0)]
+      overall[name] = mutual_info(s, resp)
+      print(f"{name:9s} within low {within[name][0]:.2f}, within high {within[name][1]:.2f} bits;  overall {overall[name]:.2f} bits")
+`}
+hint="v = 1.0; out = np.empty(len(s)); for t in range(len(s)): v = (1 - alpha) * v + alpha * s[t] ** 2; out[t] = np.sqrt(v); return out."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2000)
+  T, blk = 40000, 2000
+  sig = np.repeat(np.tile([1.0, 4.0], T // (2 * blk)), blk)
+  s = r.normal(size=T) * sig
+  settle = np.tile(np.r_[np.zeros(300, bool), np.ones(blk - 300, bool)], T // blk)
+
+  def respond(gain):
+      x = np.tanh(s / gain) + 0.05 * r.normal(size=T)
+      return np.digitize(x, np.linspace(-1, 1, 9)[1:-1])          # 8 response levels
+
+  def mutual_info(a, b, nb=16):
+      qa = np.digitize(a, np.quantile(a, np.linspace(0, 1, nb + 1)[1:-1]))
+      P = np.histogram2d(qa, b, bins=[nb, 8])[0]; P /= P.sum()
+      px, py = P.sum(1, keepdims=True), P.sum(0, keepdims=True); nz = P > 0
+      return np.sum(P[nz] * np.log2(P[nz] / (px @ py)[nz]))
+
+  def running_sd(s, alpha=0.01):
+      v = 1.0; out = np.empty(len(s))
+      for t in range(len(s)):
+          v = (1 - alpha) * v + alpha * s[t] ** 2
+          out[t] = np.sqrt(v)
+      return out
+
+  gains = {"fixed 1": 1.0, "fixed 2": 2.0, "fixed 4": 4.0, "adaptive": running_sd(s)}
+  within, overall = {}, {}
+  for name, g in gains.items():
+      resp = respond(g)
+      within[name] = [mutual_info(s[(sig == sv) & settle], resp[(sig == sv) & settle]) for sv in (1.0, 4.0)]
+      overall[name] = mutual_info(s, resp)
+      print(f"{name:9s} within low {within[name][0]:.2f}, within high {within[name][1]:.2f} bits;  overall {overall[name]:.2f} bits")
+`} />
+
+Each fixed gain is good in one ensemble only: a gain of 1 carries 2.4 bits in low-variance blocks but 1.7 in high-variance ones, where its response saturates, and a gain of 4 does the reverse. The adaptive gain carries about 2.4 bits in both, the best mean. Over the whole recording, though, it carries only 1.8 bits against 2.45 for the compromise gain of 2: by rescaling to each ensemble it makes a small stimulus in the quiet blocks look like a large one in the loud blocks, discarding the absolute scale. This is the trade-off Brenner and colleagues and Fairhall and colleagues explored in the fly.
+
+**Part B: which filter carries the most?** Model a one-dimensional sensory channel with 256 frequency components. The signal has power $S_k \propto 1/k^2$, input noise has power 1 at every frequency, and after filtering by gain $K_k$, output noise of power 1 is added. The total output power $\sum_k K_k^2 (S_k + 1)$ is fixed at 50. The information carried is $\frac12\sum_k \log_2\!\left(1 + \frac{K_k^2 S_k}{K_k^2 + 1}\right)$ bits. Compare three filters scaled to the same output power: no filtering ($K_k = 1$), pure whitening ($K_k^2 = 1/(S_k + 1)$), and the Atick and Redlich filter.
+
+<PyCell id="partB" title="Part B: information under a power limit" tests={String.raw`
+  import numpy as np
+  def test_order():
+      "the Atick and Redlich filter carries the most information, then whitening, then no filter"
+      assert bits["Atick and Redlich"] > bits["whitening"] > bits["no filter"]
+
+  def test_power():
+      "every filter uses the same output power"
+      assert all(abs(np.sum(scaled[k] * (S + 1)) - P) < 1e-6 for k in scaled)
+`} prompt="Write info_bits(K2), which first rescales the squared gains K2 so that the output power equals P, stores the scaled gains, and returns the information in bits. Then evaluate the three filters."
+code={String.raw`
+  k = np.arange(1, 257)
+  S = 1e4 / k ** 2
+  P = 50.0
+  scaled = {}
+
+  def info_bits(name, K2):
+      K2 = ...
+      scaled[name] = K2
+      return ...
+
+  bits = {"no filter": info_bits("no filter", np.ones_like(S)),
+          "whitening": info_bits("whitening", 1 / (S + 1)),
+          "Atick and Redlich": info_bits("Atick and Redlich", (S / (S + 1)) ** 2 / (S + 1))}
+  print({name: round(float(b), 1) for name, b in bits.items()}, "bits")
+  for name, K2 in scaled.items():
+      plt.loglog(k, K2, label=name)
+  plt.xlabel("frequency index"); plt.ylabel("squared gain (scaled)"); plt.legend(); plt.show()
+`}
+hint="K2 = K2 * P / np.sum(K2 * (S + 1)); return 0.5 * np.sum(np.log2(1 + K2 * S / (K2 + 1)))."
+solution={String.raw`
+  k = np.arange(1, 257)
+  S = 1e4 / k ** 2
+  P = 50.0
+  scaled = {}
+
+  def info_bits(name, K2):
+      K2 = K2 * P / np.sum(K2 * (S + 1))
+      scaled[name] = K2
+      return 0.5 * np.sum(np.log2(1 + K2 * S / (K2 + 1)))
+
+  bits = {"no filter": info_bits("no filter", np.ones_like(S)),
+          "whitening": info_bits("whitening", 1 / (S + 1)),
+          "Atick and Redlich": info_bits("Atick and Redlich", (S / (S + 1)) ** 2 / (S + 1))}
+  print({name: round(float(b), 1) for name, b in bits.items()}, "bits")
+  for name, K2 in scaled.items():
+      plt.loglog(k, K2, label=name)
+  plt.xlabel("frequency index"); plt.ylabel("squared gain (scaled)"); plt.legend(); plt.show()
+`} />
+
+With the same output power, the unfiltered channel carries about 10 bits, pure whitening about 15, and the Atick and Redlich filter about 22. Without filtering, most of the power goes to the strong low frequencies, which needed little; whitening spreads it evenly, including over high frequencies where the input is mostly noise; the Atick and Redlich filter spends it where signal exceeds noise. The ranking holds for any power budget you try, which is the quantitative content of yesterday's centre-surround prediction.
+
+**Part C (written).** Answer in your journal. First, Part A showed that adaptation maximises information within each ensemble but loses it overall. Fairhall, Lewen, Bialek and de Ruyter van Steveninck (2001) found that the fly's H1 neuron solves this by carrying the variance in its slower firing statistics. Propose how a downstream neuron could recover the absolute stimulus from an adapted response plus such a slow signal. Second, in Part B the Atick and Redlich filter is not claimed to be the true optimum of this problem (that is found by water-filling); explain what water-filling would do differently at the highest frequencies.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. Information of a Gaussian channel" task="A Gaussian signal of variance $\sigma_s^2$ is received with independent Gaussian noise of variance $\sigma_n^2$. Show that the mutual information is $\frac12\log_2(1 + \sigma_s^2/\sigma_n^2)$ bits.">
+
+The differential entropy of a Gaussian of variance $v$ is $\frac12\log_2(2\pi e v)$.
+
+The received value $r = s + n$ has variance $\sigma_s^2 + \sigma_n^2$, and given $s$ its uncertainty is the noise alone. So $I = h(r) - h(r \mid s) = \frac12\log_2(2\pi e(\sigma_s^2 + \sigma_n^2)) - \frac12\log_2(2\pi e\sigma_n^2)$.
+
+The constants cancel, leaving $\frac12\log_2(1 + \sigma_s^2/\sigma_n^2)$. Summing over independent frequency components gives Part B's formula, with signal power $K^2 S$ and noise $K^2 N + M$ at each frequency.
+
+</Prove>
+
+<Prove title="2. The Atick and Redlich filter's two limits" task="With $K(f) = \frac{S}{S+N}\cdot\frac{1}{\sqrt{S+N}}$, show that $K \approx S^{-1/2}$ when $S \gg N$ and $K \approx S/N^{3/2}$ when $S \ll N$, and say what each means for a $1/f^2$ spectrum.">
+
+When $S \gg N$, $S/(S+N) \approx 1$ and $\sqrt{S+N} \approx \sqrt S$, so $K \approx S^{-1/2}$. For $S \propto 1/f^2$ this is $K \propto f$: gain rising with frequency, which whitens.
+
+When $S \ll N$, $S/(S+N) \approx S/N$ and $\sqrt{S+N} \approx \sqrt N$, so $K \approx S/N^{3/2} \propto 1/f^2$: gain falling with frequency, which smooths.
+
+The filter rises at low frequencies and falls at high ones, a band-pass filter peaking where $S \approx N$; in space, a centre with a surround. As $N$ grows the peak moves to lower frequencies, the centre widens and the surround fades.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 39 quiz (15 questions)" questions={[
+  { q: "High frequencies peak on the basilar membrane...", options: ["Near the base", "Near the apex", "In the middle", "Nowhere"], answer: 0, explain: "Day 1." },
+  { q: "The ERB at 1 kHz is about...", options: ["133 Hz", "13 Hz", "1.3 kHz", "456 Hz"], answer: 0, explain: "Day 1." },
+  { q: "High harmonics of a voice are unresolved because...", options: ["Cochlear filters there are wider than the harmonic spacing", "They are quieter", "They are faster", "The brain ignores them"], answer: 0, explain: "Day 1." },
+  { q: "Jeffress's model localises sound with...", options: ["Delay lines and coincidence detectors", "Level differences only", "Pitch", "The cochlea alone"], answer: 0, explain: "Day 2." },
+  { q: "The maximum human ITD is about...", options: ["0.65 ms", "6.5 ms", "65 ms", "6.5 µs"], answer: 0, explain: "Day 2." },
+  { q: "High-frequency tones give ambiguous ITDs because...", options: ["Their period is shorter than the ITD range", "They are louder", "They lack phase", "They are not heard"], answer: 0, explain: "Day 2." },
+  { q: "In the fly, each Kenyon cell samples about...", options: ["Six or seven glomeruli", "All glomeruli", "One glomerulus", "A thousand glomeruli"], answer: 0, explain: "Day 3." },
+  { q: "The fly hash consists of...", options: ["Normalisation, random sparse expansion and winner-take-all", "A dense projection only", "Sorting", "A neural network trained by backprop"], answer: 0, explain: "Day 3." },
+  { q: "Natural images have power spectra falling as...", options: ["1/f²", "f²", "Constant", "e^(-f)"], answer: 0, explain: "Day 4." },
+  { q: "The Atick and Redlich filter in dim light...", options: ["Loses its surround and widens", "Gains a stronger surround", "Becomes oriented", "Is unchanged"], answer: 0, explain: "Day 4." },
+  { q: "Whitening removes...", options: ["Pairwise correlations", "All dependence", "Edges", "Noise"], answer: 0, explain: "Day 4." },
+  { q: "ICA finds components by maximising...", options: ["Non-Gaussianity", "Variance", "Correlation", "Smoothness"], answer: 0, explain: "Day 5." },
+  { q: "ICA on transient sounds learns...", options: ["Short wavelet-like filters", "Long sinusoids", "Gabors in space", "Constants"], answer: 0, explain: "Day 5." },
+  { q: "Adaptive gain maximises information...", options: ["Within each stimulus ensemble, at the cost of absolute scale", "Overall in every case", "Only for low variance", "Never"], answer: 0, explain: "Part A." },
+  { q: "A Gaussian channel with SNR 15 carries...", options: ["2 bits per use", "15 bits", "4 bits", "0.5 bits"], answer: 0, explain: "½ log₂(16) = 2." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Dasgupta, Stevens and Navlakha (2017) its third pass and write your critique under the five headings. Focus on one question: **is similarity search what the fly's mushroom body is for?** Consider the evidence that Kenyon cell connectivity is random and that the code is sparse, and how closely the model's parameters match the anatomy; the benchmarks used (image and word datasets) and what an odour benchmark would need; whether nearest-neighbour precision is the right measure for a circuit whose output neurons learn associations with reward and punishment; the role of the APL neuron's inhibition, modelled as an exact winner-take-all; and the claim that neuroscience improved the algorithm, including what later work found when the fly hash was compared with optimised versions of standard hashing. End with an experiment, in flies or in silico, that would test whether the mushroom body's code is better described as a hash or as features for learning.
+
+<Callout kind="research">
+
+Brenner and colleagues measured adaptation by reconstructing the fly H1 neuron's input-output relation in each variance condition and found that, plotted against the stimulus divided by its standard deviation, the curves coincided. Repeat the analysis on Part A's model: for each gain, estimate the response as a function of stimulus within each ensemble, plot against $s/\sigma$, and measure how well the two curves overlap. Then make the adaptation slower (alpha 0.001) and find how long after a switch the information recovers, the time scale Fairhall and colleagues showed is itself close to optimal.
+
+</Callout>
+
+<Key title="Week 39 review checklist">
+<ul>
+<li>I can build a gammatone filter bank on the ERB scale and explain harmonic resolvability.</li>
+<li>I can estimate ITDs by cross-correlation, convert them to azimuth and explain phase ambiguity.</li>
+<li>I can implement the fly hash and compare it with locality-sensitive hashing.</li>
+<li>I can derive the Atick and Redlich filter and explain how it changes with noise.</li>
+<li>I can implement FastICA and explain how learned filters depend on input statistics.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then write a one-paragraph defence and a one-paragraph critique of the efficient coding hypothesis as an explanation of sensory systems, using one example from this week in each." />
