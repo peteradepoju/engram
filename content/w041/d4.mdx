@@ -1,0 +1,292 @@
+export const meta = {
+  title: "Optimal feedback control",
+  intro: "Days 1 and 2 planned a movement in advance and assumed it would be carried out as planned. Real movements are corrected as they unfold: push a reaching arm and it recovers, smoothly, towards the target rather than back onto its old path. Todorov and Jordan proposed in 2002 that the motor system is an optimal feedback controller: at every moment it chooses commands from its current state estimate to minimise a cost on task error and effort. A striking prediction follows, the minimal intervention principle: deviations that do not affect the task are left alone, so variability piles up in task-irrelevant directions. Today you build a linear quadratic regulator, watch it correct perturbations, and test the minimal intervention principle on a redundant task.",
+  goals: [
+    "Formulate movement as a linear quadratic control problem",
+    "Compute time-varying feedback gains with the backward Riccati recursion",
+    "Show how an optimal feedback controller responds to perturbations",
+    "Demonstrate the minimal intervention principle in a redundant task",
+  ],
+  plan: [
+    { label: "Predict and feedback control", minutes: 20 },
+    { label: "The linear quadratic regulator", minutes: 35 },
+    { label: "Perturbations", minutes: 20 },
+    { label: "Minimal intervention", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "todorov-jordan-2002",
+};
+
+<Predict question="Two fingers must together press with a total force of 10 N; how the force is shared does not matter. Across many repetitions, will the force of each finger vary more, less, or about as much as their total?" />
+
+<Step n={1} title="Feedback control" minutes={20} />
+
+A **feedback controller** chooses each command from the current state: $u_t = \pi_t(\mathbf x_t)$. Optimal feedback control chooses the policy $\pi$ that minimises the expected cost of the whole movement. For linear dynamics $\mathbf x_{t+1} = A\mathbf x_t + B\mathbf u_t + \text{noise}$ and a quadratic cost
+
+$$
+J = \mathbf x_T^\top Q_f\,\mathbf x_T + \sum_{t=0}^{T-1}\mathbf u_t^\top R\,\mathbf u_t,
+$$
+
+which penalises the final error and the effort spent, the optimal policy is linear, $\mathbf u_t = -K_t\mathbf x_t$, with gains found by a **backward Riccati recursion**: start from $S_T = Q_f$ and work back,
+
+$$
+K_t = (R + B^\top S_{t+1}B)^{-1}B^\top S_{t+1}A, \qquad S_t = A^\top S_{t+1}(A - BK_t).
+$$
+
+This is the **linear quadratic regulator** (LQR); with additive Gaussian noise the gains are unchanged (certainty equivalence), and with a Kalman filter for the state (Day 3), it becomes LQG. Todorov and Jordan (2002) argued that this framework, not trajectory planning, describes how the motor system coordinates movement.
+
+<Video id="NZSwDy7wtIs" title="Linear quadratic regulator (LQR)" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's tutorial video on the linear quadratic regulator: choosing feedback gains that trade off reaching a goal against the cost of control, with the Riccati recursion that computes them." />
+
+<Step n={2} title="The linear quadratic regulator" minutes={35} />
+
+Model a reach as a point mass, with position and velocity as the state and force as the command, moving 10 cm in 0.6 s (60 steps of 10 ms). The cost penalises distance from the target and velocity at the end, and effort throughout. Writing the state relative to the target makes the goal the origin.
+
+<Figure caption="Optimal feedback control of a redundant task: two effectors whose sum must reach a target. Each dot is the end point of one noisy movement. Compare the optimal controller with one that servos each effector to its own target." credit="Interactive figure by Engram, after Todorov and Jordan (2002).">
+  <MinimalIntervention />
+</Figure>
+
+<PyCell id="lqr" title="Riccati gains and a reach" tests={String.raw`
+  import numpy as np
+  def test_reach():
+      "the reach ends within 1 mm of the target and nearly at rest"
+      assert abs(path[-1, 0]) < 1e-3 and abs(path[-1, 1]) < 0.01
+
+  def test_gains():
+      "the position gain rises steeply towards the end, peaking in the last few steps"
+      k = [g[0, 0] for g in gains]
+      assert np.argmax(k) >= T - 5 and max(k) > 20 * k[0]
+`} prompt="Write lqr_gains(A, B, Qf, R, T) using the backward Riccati recursion, returning the list of gains K_0 to K_(T-1) in forward order. Then simulate the reach from 10 cm short of the target with u = -K x."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2002)
+  dt, T, m = 0.01, 60, 1.0
+  A = np.array([[1, dt], [0, 1]]); B = np.array([[0], [dt / m]])
+  Qf = np.diag([1e4, 1e2]); R = np.array([[1e-4]])
+
+  def lqr_gains(A, B, Qf, R, T):
+      S = Qf.copy(); K_list = []
+      for t in range(T):
+          K = ...
+          S = ...
+          K_list.append(K)
+      return K_list[::-1]
+
+  gains = lqr_gains(A, B, Qf, R, T)
+  x = np.array([-0.1, 0.0]); path = [x.copy()]
+  for t in range(T):
+      x = A @ x + B @ (-gains[t] @ x); path.append(x.copy())
+  path = np.array(path)
+  print(f"final error {1000 * path[-1, 0]:.2f} mm, final velocity {path[-1, 1]:.4f} m/s; position gain from {gains[0][0, 0]:.1f} at the start to {max(g[0, 0] for g in gains):.0f} near the end")
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(np.arange(T + 1) * dt, path[:, 1]); ax[0].set_title("velocity (m/s)")
+  ax[1].plot(np.arange(T) * dt, [g[0, 0] for g in gains]); ax[1].set_title("position gain")
+  for a in ax: a.set_xlabel("s")
+  plt.show()
+`}
+hint="K = np.linalg.solve(R + B.T @ S @ B, B.T @ S @ A); S = A.T @ S @ (A - B @ K)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2002)
+  dt, T, m = 0.01, 60, 1.0
+  A = np.array([[1, dt], [0, 1]]); B = np.array([[0], [dt / m]])
+  Qf = np.diag([1e4, 1e2]); R = np.array([[1e-4]])
+
+  def lqr_gains(A, B, Qf, R, T):
+      S = Qf.copy(); K_list = []
+      for t in range(T):
+          K = np.linalg.solve(R + B.T @ S @ B, B.T @ S @ A)
+          S = A.T @ S @ (A - B @ K)
+          K_list.append(K)
+      return K_list[::-1]
+
+  gains = lqr_gains(A, B, Qf, R, T)
+  x = np.array([-0.1, 0.0]); path = [x.copy()]
+  for t in range(T):
+      x = A @ x + B @ (-gains[t] @ x); path.append(x.copy())
+  path = np.array(path)
+  print(f"final error {1000 * path[-1, 0]:.2f} mm, final velocity {path[-1, 1]:.4f} m/s; position gain from {gains[0][0, 0]:.1f} at the start to {max(g[0, 0] for g in gains):.0f} near the end")
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(np.arange(T + 1) * dt, path[:, 1]); ax[0].set_title("velocity (m/s)")
+  ax[1].plot(np.arange(T) * dt, [g[0, 0] for g in gains]); ax[1].set_title("position gain")
+  for a in ax: a.set_xlabel("s")
+  plt.show()
+`} />
+
+The reach ends within a hundredth of a millimetre of the target and almost at rest. The feedback gains are not constant: the position gain starts at about 16 and climbs steeply in the last tenth of a second to well over a thousand. Early in the movement there is time to fix errors cheaply later, so the controller tolerates them; near the end every error must be fixed at once, whatever it costs. The velocity profile is smooth and single-peaked, though not a perfect minimum-jerk bell, because this cost penalises force rather than jerk.
+
+<Step n={3} title="Perturbations" minutes={20} />
+
+A feedback controller does not follow a stored trajectory; it recomputes the best command from wherever the state now is. Push the hand halfway through the reach, by suddenly adding 0.3 m/s of velocity towards the target, and compare the optimal controller with an open-loop replay of the commands planned for the unperturbed movement.
+
+<PyCell id="perturb" title="Correcting a push" tests={String.raw`
+  import numpy as np
+  def test_feedback():
+      "with feedback, the perturbed reach still ends within 2 mm of the target"
+      assert abs(fb[-1, 0]) < 2e-3
+
+  def test_openloop():
+      "replaying the planned commands leaves an error larger than 5 mm"
+      assert abs(ol[-1, 0]) > 5e-3
+`} prompt="Simulate the reach twice with a push of +0.3 m/s added to the velocity at step 30: once with feedback (u = -K x at every step) and once replaying the commands u_planned recorded from the unperturbed feedback run. Store both paths."
+code={String.raw`
+  u_planned = [(-gains[t] @ p)[0] for t, p in enumerate(path[:-1])]
+
+  def simulate(feedback):
+      x = np.array([-0.1, 0.0]); out = [x.copy()]
+      for t in range(T):
+          u = ...
+          x = A @ x + B @ np.array([u])
+          if t == 30:
+              x = x + np.array([0.0, 0.3])
+          out.append(x.copy())
+      return np.array(out)
+
+  fb, ol = simulate(True), simulate(False)
+  print(f"final error after the push: feedback {1000 * fb[-1, 0]:.2f} mm, open-loop replay {1000 * ol[-1, 0]:.1f} mm")
+  plt.plot(np.arange(T + 1) * dt, path[:, 0], "k--", label="unperturbed"); plt.plot(np.arange(T + 1) * dt, fb[:, 0], label="feedback"); plt.plot(np.arange(T + 1) * dt, ol[:, 0], label="open loop")
+  plt.axhline(0, color="gray", lw=0.5); plt.xlabel("s"); plt.ylabel("position relative to target (m)"); plt.legend(); plt.show()
+`}
+hint="u = (-gains[t] @ x)[0] if feedback else u_planned[t]."
+solution={String.raw`
+  u_planned = [(-gains[t] @ p)[0] for t, p in enumerate(path[:-1])]
+
+  def simulate(feedback):
+      x = np.array([-0.1, 0.0]); out = [x.copy()]
+      for t in range(T):
+          u = (-gains[t] @ x)[0] if feedback else u_planned[t]
+          x = A @ x + B @ np.array([u])
+          if t == 30:
+              x = x + np.array([0.0, 0.3])
+          out.append(x.copy())
+      return np.array(out)
+
+  fb, ol = simulate(True), simulate(False)
+  print(f"final error after the push: feedback {1000 * fb[-1, 0]:.2f} mm, open-loop replay {1000 * ol[-1, 0]:.1f} mm")
+  plt.plot(np.arange(T + 1) * dt, path[:, 0], "k--", label="unperturbed"); plt.plot(np.arange(T + 1) * dt, fb[:, 0], label="feedback"); plt.plot(np.arange(T + 1) * dt, ol[:, 0], label="open loop")
+  plt.axhline(0, color="gray", lw=0.5); plt.xlabel("s"); plt.ylabel("position relative to target (m)"); plt.legend(); plt.show()
+`} />
+
+After the push, the feedback controller still ends within a fraction of a millimetre of the target; replaying the planned commands, the hand overshoots by about 87 mm. The feedback path does not return to the unperturbed trajectory: it brakes and lands on the target along a new path, the cheapest from where the hand now is. People respond to pushes in the same way, and experiments by Scott and colleagues found that the size of their corrections depends on the shape of the target, wide targets attracting smaller corrections than narrow ones, as optimal feedback control predicts.
+
+<Step n={4} title="Minimal intervention" minutes={30} />
+
+Now a redundant task. Two effectors, $x_1$ and $x_2$, each moved by its own command, must end with $x_1 + x_2 = 1$; how the total is shared is irrelevant. Both start at zero, and noise perturbs each effector at every step. Compare two controllers with the same effort cost. The **optimal** one penalises only the task error, $(x_1 + x_2 - 1)^2$. A **servo** controller, following a desired trajectory as trajectory-planning theories suggest, penalises each effector's distance from its own share, $(x_1 - 0.5)^2 + (x_2 - 0.5)^2$. Run each 300 times and measure the variance of the end points along the task-relevant direction ($x_1 + x_2$) and the irrelevant one ($x_1 - x_2$).
+
+<PyCell id="minimal" title="Variability where it does not matter" tests={String.raw`
+  import numpy as np
+  def test_structure():
+      "the optimal controller's irrelevant variance is more than 10 times its relevant variance; the servo's is within a factor of 2"
+      assert res["optimal"]["irrelevant"] > 10 * res["optimal"]["relevant"]
+      assert 0.5 < res["servo"]["irrelevant"] / res["servo"]["relevant"] < 2
+
+  def test_same_accuracy():
+      "both controllers achieve similar task accuracy, and the optimal one uses less effort"
+      assert res["optimal"]["relevant"] < 1.5 * res["servo"]["relevant"] and res["optimal"]["effort"] < res["servo"]["effort"]
+`} prompt="Write the terminal cost matrices for the augmented state [x1, x2, 1]: Qf_opt = 1000 v vᵀ with v = [1, 1, -1], and Qf_servo = 1000 (v1 v1ᵀ + v2 v2ᵀ) with v1 = [1, 0, -0.5] and v2 = [0, 1, -0.5]. The simulation is given."
+code={String.raw`
+  A2 = np.eye(3); B2 = np.array([[dt, 0], [0, dt], [0, 0]]); R2 = 1e-3 * np.eye(2)
+  v = np.array([1, 1, -1.0]); v1 = np.array([1, 0, -0.5]); v2 = np.array([0, 1, -0.5])
+  Qf_opt = ...
+  Qf_servo = ...
+
+  def run(Qf, trials=300):
+      Ks = lqr_gains(A2, B2, Qf, R2, T); ends, effort = [], []
+      for _ in range(trials):
+          x = np.array([0, 0, 1.0]); e = 0.0
+          for t in range(T):
+              u = -Ks[t] @ x; e += np.sum(u ** 2) * dt
+              x = A2 @ x + B2 @ u + np.r_[0.02 * r.normal(size=2), 0]
+          ends.append(x[:2]); effort.append(e)
+      ends = np.array(ends)
+      return {"relevant": ends.sum(1).var(), "irrelevant": (ends[:, 0] - ends[:, 1]).var(), "effort": np.mean(effort), "ends": ends}
+
+  res = {"optimal": run(Qf_opt), "servo": run(Qf_servo)}
+  for name, rr in res.items():
+      print(f"{name:7s}: variance along the task {rr['relevant']:.5f}, across it {rr['irrelevant']:.5f}; effort {rr['effort']:.2f}")
+  for name, rr in res.items():
+      plt.plot(rr["ends"][:, 0], rr["ends"][:, 1], ".", alpha=0.5, label=name)
+  plt.plot([0.2, 0.8], [0.8, 0.2], "k--", lw=0.8); plt.axis("equal"); plt.xlabel("x1"); plt.ylabel("x2"); plt.legend(); plt.show()
+`}
+hint="Qf_opt = 1e3 * np.outer(v, v); Qf_servo = 1e3 * (np.outer(v1, v1) + np.outer(v2, v2))."
+solution={String.raw`
+  A2 = np.eye(3); B2 = np.array([[dt, 0], [0, dt], [0, 0]]); R2 = 1e-3 * np.eye(2)
+  v = np.array([1, 1, -1.0]); v1 = np.array([1, 0, -0.5]); v2 = np.array([0, 1, -0.5])
+  Qf_opt = 1e3 * np.outer(v, v)
+  Qf_servo = 1e3 * (np.outer(v1, v1) + np.outer(v2, v2))
+
+  def run(Qf, trials=300):
+      Ks = lqr_gains(A2, B2, Qf, R2, T); ends, effort = [], []
+      for _ in range(trials):
+          x = np.array([0, 0, 1.0]); e = 0.0
+          for t in range(T):
+              u = -Ks[t] @ x; e += np.sum(u ** 2) * dt
+              x = A2 @ x + B2 @ u + np.r_[0.02 * r.normal(size=2), 0]
+          ends.append(x[:2]); effort.append(e)
+      ends = np.array(ends)
+      return {"relevant": ends.sum(1).var(), "irrelevant": (ends[:, 0] - ends[:, 1]).var(), "effort": np.mean(effort), "ends": ends}
+
+  res = {"optimal": run(Qf_opt), "servo": run(Qf_servo)}
+  for name, rr in res.items():
+      print(f"{name:7s}: variance along the task {rr['relevant']:.5f}, across it {rr['irrelevant']:.5f}; effort {rr['effort']:.2f}")
+  for name, rr in res.items():
+      plt.plot(rr["ends"][:, 0], rr["ends"][:, 1], ".", alpha=0.5, label=name)
+  plt.plot([0.2, 0.8], [0.8, 0.2], "k--", lw=0.8); plt.axis("equal"); plt.xlabel("x1"); plt.ylabel("x2"); plt.legend(); plt.show()
+`} />
+
+Both controllers achieve the same task accuracy, with end-point variance of about 0.0008 along the task direction. The optimal controller's end points, though, spread along the line $x_1 + x_2 = 1$, with variance across effectors about 77 times larger than along the task; the servo controller's end points form a round cloud, and it spends about 10% more effort correcting deviations that never mattered. That answers the prediction: each finger varies far more than the total. Latash, Scholz, Todorov and many others have found this structure in real movements, from finger forces to pointing and posture.
+
+<Callout kind="research">
+
+Scholz and Schöner (1999) introduced the uncontrolled manifold analysis to measure exactly this structure in real movements: split joint-angle variability into the part that leaves the task variable unchanged and the part that changes it. Todorov and Jordan showed that optimal feedback control predicts it. Record yourself pointing at a target repeatedly with your arm (a phone video tracked frame by frame will do), estimate shoulder and elbow angles at the end of each movement, and compute the variance along and across the set of joint configurations that place the fingertip on the target. Is variability structured the way the minimal intervention principle predicts?
+
+</Callout>
+
+<Bridge title="Controlling what matters"
+  neuro="Optimal feedback control explains why movements are variable yet successful: the motor system corrects only deviations that threaten the goal, so variability accumulates in task-irrelevant dimensions, and corrections depend on the task, not on a stored path. Rapid feedback responses in motor cortex and spinal circuits are tuned to the task in just this way (Scott, 2004)."
+  ai="LQR and its nonlinear extensions are standard in robotics, and reinforcement learning learns feedback policies for the same reason: in a noisy world a policy that maps states to actions beats a fixed plan. The minimal intervention principle reappears wherever a cost depends on only some dimensions of a redundant system.">
+
+Do not fight noise you can ignore: correct only what threatens the goal.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A feedback controller chooses each command from...", options: ["The current state", "A stored trajectory only", "Random choices", "The final target only"], answer: 0, explain: "u = π(x)." },
+  { q: "For linear dynamics and quadratic cost, the optimal policy is...", options: ["Linear in the state, u = -K x", "Bang-bang", "Constant", "Random"], answer: 0, explain: "The LQR." },
+  { q: "The Riccati recursion runs...", options: ["Backward in time from the final cost", "Forward from the start", "In frequency", "Only once"], answer: 0, explain: "From S_T = Q_f." },
+  { q: "Certainty equivalence means...", options: ["With additive Gaussian noise, LQR gains are unchanged", "Noise is ignored by the plant", "Estimates are certain", "Costs are equal"], answer: 0, explain: "Combine with a Kalman filter for LQG." },
+  { q: "After a push, an optimal feedback controller...", options: ["Moves to the target from wherever it is", "Returns to the old path", "Stops", "Repeats the planned commands"], answer: 0, explain: "It replans continuously." },
+  { q: "The minimal intervention principle says...", options: ["Deviations irrelevant to the task are not corrected", "All deviations are corrected", "No deviations are corrected", "Effort is maximised"], answer: 0, explain: "Todorov and Jordan (2002)." },
+  { q: "In the redundant task, the optimal controller's end points spread...", options: ["Along the line x1 + x2 = 1", "Equally in all directions", "Only across the line", "Not at all"], answer: 0, explain: "Variance in the irrelevant direction." },
+  { q: "The uncontrolled manifold analysis measures...", options: ["Variability that does and does not affect the task variable", "Muscle force", "Reaction time", "Neural noise"], answer: 0, explain: "Scholz and Schöner (1999)." },
+]} />
+
+<Flashcards cards={[
+  { front: "LQR?", back: "Linear dynamics, quadratic cost on state and effort; optimal policy $u_t = -K_t x_t$ from the backward Riccati recursion." },
+  { front: "Riccati recursion?", back: "$K_t = (R + B^\\top S_{t+1}B)^{-1}B^\\top S_{t+1}A$, $S_t = A^\\top S_{t+1}(A - BK_t)$, from $S_T = Q_f$." },
+  { front: "Optimal feedback control?", back: "Todorov and Jordan's theory that the motor system continuously computes commands from its state estimate to minimise task error and effort." },
+  { front: "Minimal intervention principle?", back: "Correct only deviations that affect the task; variability accumulates in task-irrelevant directions." },
+  { front: "Why not a desired trajectory?", back: "Servoing every degree of freedom to a plan wastes effort correcting harmless deviations and cannot exploit redundancy." },
+]} />
+
+<Predict revisit question="Two fingers must total 10 N: does each finger vary more, less, or as much as the total?" />
+
+<Key title="Before you go">
+<ul>
+<li>Optimal feedback control computes commands from the current state to minimise error and effort.</li>
+<li>For linear quadratic problems, the backward Riccati recursion gives the gains.</li>
+<li>Feedback recovers from perturbations by heading for the goal, not the old path.</li>
+<li>Redundant tasks leave variability in irrelevant directions: minimal intervention.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Todorov and Jordan (2002), <em>Optimal feedback control as a theory of motor coordination</em>.</li>
+<li>Scholz and Schöner (1999), <em>The uncontrolled manifold concept: identifying control variables for a functional task</em>, Experimental Brain Research 126(3), 289 to 306.</li>
+<li>Scott (2004), <em>Optimal feedback control and the neural basis of volitional motor control</em>, Nature Reviews Neuroscience 5(7), 532 to 546.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Think of a skill you are learning, such as a sport, an instrument or handwriting. Identify one task-relevant variable and one task-irrelevant variable in it, and predict which should become less variable with practice." />

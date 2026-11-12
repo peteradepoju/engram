@@ -1,0 +1,250 @@
+export const meta = {
+  title: "Internal models: knowing where your hand is",
+  intro: "To control a movement you need to know where your body is, and the senses report it late and noisily: proprioceptive signals take tens of milliseconds to arrive, vision longer. The brain has a second source: a copy of the motor command it just sent. A forward model, an internal simulation of the body, can turn that efference copy into a prediction of where the hand will be, available immediately. Wolpert, Ghahramani and Jordan showed in 1995 that people's errors in judging the position of their unseen hand are explained by a Kalman filter that combines such a prediction with delayed sensory feedback. Today you build the three estimators, prediction alone, feedback alone and their combination, and see why the brain needs both.",
+  goals: [
+    "Explain efference copy and forward models",
+    "Show that prediction alone drifts and delayed feedback alone lags",
+    "Combine a forward model with delayed feedback in a Kalman-style estimator",
+    "Interpret Wolpert and colleagues' estimation errors in these terms",
+  ],
+  plan: [
+    { label: "Predict and internal models", minutes: 20 },
+    { label: "Prediction alone", minutes: 25 },
+    { label: "Feedback alone", minutes: 20 },
+    { label: "Combining them", minutes: 40 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "wolpert-1995",
+};
+
+<Predict question="You move your hand in the dark for a few seconds. If your brain estimated its position only from the commands it sent (no feedback), would the error in its estimate stay constant, grow, or shrink over time?" />
+
+<Step n={1} title="Internal models" minutes={20} />
+
+When the brain sends a motor command, it can keep a copy, the **efference copy** (von Holst and Mittelstaedt, 1950) or **corollary discharge** (Sperry, 1950). A **forward model** uses that copy and the current estimate of the body's state to predict the next state, the way a physics simulation does. Forward models are thought to explain why you cannot tickle yourself (the predicted sensation is cancelled), why the world stays still when your eyes move, and how fast movements can be corrected before feedback arrives. The cerebellum is the leading candidate for where they are learned and stored. The reverse, an **inverse model**, maps a desired movement to the command that produces it.
+
+Prediction alone accumulates errors: any mismatch between model and body, and any noise in the body, adds up with nothing to correct it. Sensory feedback corrects, but it is delayed and noisy. The optimal combination is a Kalman filter (Week 36), with the forward model as its prediction step and delayed feedback as its measurement.
+
+<Video id="c_D7iDLT_bw" title="Linear Quadratic Gaussian (LQG) Control" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's tutorial video on LQG control, which pairs a Kalman filter estimating the hidden state from noisy measurements with a controller acting on that estimate, the structure of today's estimator and tomorrow's controller." />
+
+<Step n={2} title="Prediction alone" minutes={25} />
+
+Simulate a hand moving back and forth for 3 s in 5 ms steps, driven by commanded velocities that the brain knows. The real hand moves with a little random variability, and the brain's forward model underestimates the gain of the arm by 10%, a small miscalibration. Estimate the hand's position by integrating the commands through the forward model alone.
+
+<PyCell id="forward" title="Dead reckoning drifts" tests={String.raw`
+  import numpy as np
+  def test_drift():
+      "the forward-model error in the last second is at least 1.5 times its error in the first second"
+      err = np.abs(est_fwd - x_true)
+      assert err[-200:].mean() > 1.5 * err[:200].mean()
+`} prompt="Write forward_only(v, gain_model): starting at the true initial position, add dt times gain_model times each commanded velocity, returning the estimated positions."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1995)
+  dt, n = 0.005, 600
+  t = np.arange(n) * dt
+  v_cmd = 0.3 * np.sin(2 * np.pi * t / 1.5) + 0.15                   # commanded velocity (m/s), known to the brain
+  gain_true, gain_model = 1.0, 0.9
+  x_true = np.zeros(n)
+  for i in range(1, n):
+      x_true[i] = x_true[i - 1] + dt * gain_true * v_cmd[i - 1] + 0.0003 * r.normal()
+
+  def forward_only(v, gain_model):
+      est = np.zeros(len(v))
+      for i in range(1, len(v)):
+          est[i] = ...
+      return est
+
+  est_fwd = forward_only(v_cmd, gain_model)
+  err = np.abs(est_fwd - x_true)
+  print(f"forward model error: {1000 * err[100]:.1f} mm at 0.5 s, {1000 * err[-1]:.1f} mm at 3 s")
+  plt.plot(t, x_true, "k", label="true"); plt.plot(t, est_fwd, label="forward model only"); plt.xlabel("s"); plt.ylabel("position (m)"); plt.legend(); plt.show()
+`}
+hint="est[i] = est[i - 1] + dt * gain_model * v[i - 1]."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1995)
+  dt, n = 0.005, 600
+  t = np.arange(n) * dt
+  v_cmd = 0.3 * np.sin(2 * np.pi * t / 1.5) + 0.15                   # commanded velocity (m/s), known to the brain
+  gain_true, gain_model = 1.0, 0.9
+  x_true = np.zeros(n)
+  for i in range(1, n):
+      x_true[i] = x_true[i - 1] + dt * gain_true * v_cmd[i - 1] + 0.0003 * r.normal()
+
+  def forward_only(v, gain_model):
+      est = np.zeros(len(v))
+      for i in range(1, len(v)):
+          est[i] = est[i - 1] + dt * gain_model * v[i - 1]
+      return est
+
+  est_fwd = forward_only(v_cmd, gain_model)
+  err = np.abs(est_fwd - x_true)
+  print(f"forward model error: {1000 * err[100]:.1f} mm at 0.5 s, {1000 * err[-1]:.1f} mm at 3 s")
+  plt.plot(t, x_true, "k", label="true"); plt.plot(t, est_fwd, label="forward model only"); plt.xlabel("s"); plt.ylabel("position (m)"); plt.legend(); plt.show()
+`} />
+
+The forward model's estimate drifts away from the true position: its error averages about 17 mm in the first second and about 43 mm in the last, which answers the prediction: it grows. A 10% underestimate of the arm's gain means every centimetre moved adds a millimetre of error, and the small random variability of the real hand adds a slow random walk on top. Nothing in dead reckoning can notice, let alone correct, either kind of error.
+
+<Step n={3} title="Feedback alone" minutes={20} />
+
+Proprioception reports the hand's position with noise and a delay, here 100 ms (20 steps). Using it alone, the brain's estimate is always where the hand was, not where it is.
+
+<PyCell id="feedback" title="Delayed feedback lags" tests={String.raw`
+  import numpy as np
+  def test_lag():
+      "the feedback-only error is larger while the hand moves fast than while it moves slowly"
+      speed = np.abs(np.gradient(x_true, dt))
+      err = np.abs(est_fb - x_true)
+      assert err[speed > np.percentile(speed, 75)].mean() > 1.5 * err[speed < np.percentile(speed, 25)].mean()
+`} prompt="Build the delayed, noisy measurement y[i] = x_true[i - d] + noise (standard deviation 5 mm; for the first d steps, use x_true[0]), and use it directly as the estimate."
+code={String.raw`
+  d = 20
+  y = ...
+  est_fb = y.copy()
+  err_fb = np.abs(est_fb - x_true)
+  print(f"feedback-only RMS error {1000 * np.sqrt(np.mean(err_fb ** 2)):.1f} mm")
+  plt.plot(t, x_true, "k", label="true"); plt.plot(t, est_fb, label="delayed feedback only", alpha=0.7); plt.legend(); plt.show()
+`}
+hint="y = np.r_[np.full(d, x_true[0]), x_true[:-d]] + 0.005 * r.normal(size=n)."
+solution={String.raw`
+  d = 20
+  y = np.r_[np.full(d, x_true[0]), x_true[:-d]] + 0.005 * r.normal(size=n)
+  est_fb = y.copy()
+  err_fb = np.abs(est_fb - x_true)
+  print(f"feedback-only RMS error {1000 * np.sqrt(np.mean(err_fb ** 2)):.1f} mm")
+  plt.plot(t, x_true, "k", label="true"); plt.plot(t, est_fb, label="delayed feedback only", alpha=0.7); plt.legend(); plt.show()
+`} />
+
+Using delayed feedback alone, the RMS error is about 26 mm, and it is largest when the hand moves fastest, because in 100 ms a fast hand travels further from where the feedback says it was. It never drifts, since every measurement is a fresh report, but it is always late, and for a hand moving at 50 cm/s a 100 ms lag is a 5 cm error.
+
+<Step n={4} title="Combining them" minutes={40} />
+
+The combined estimator keeps an estimate of where the hand was $d$ steps ago, corrects it with the delayed measurement, and then runs the forward model forward over the commands sent since, to estimate where the hand is now:
+
+<Derivation>
+<div>
+
+Delayed estimate: $\tilde x_{t-d} \leftarrow \tilde x_{t-d}^{-} + K\,(y_t - \tilde x_{t-d}^{-})$, where $\tilde x_{t-d}^{-}$ is the forward model's prediction of $x_{t-d}$ and $K$ a gain between 0 and 1.
+
+</div>
+<div>
+
+Current estimate: $\hat x_t = \tilde x_{t-d} + \sum_{s=t-d}^{t-1} \Delta t\,\hat g\,v_s$, the forward model run over the last $d$ commands.
+
+</div>
+<div>
+
+The first step corrects drift with feedback; the second removes the lag with prediction. With a steady-state Kalman gain this is the optimal linear estimator for this problem when the model is correct, and still a good one when it is slightly wrong.
+
+</div>
+</Derivation>
+
+<Figure caption="Estimating the hand's position in the dark: the true path, the forward model alone, delayed feedback alone, and their combination. Change the feedback delay and the forward model's error." credit="Interactive figure by Engram, after Wolpert, Ghahramani and Jordan (1995).">
+  <ForwardModel />
+</Figure>
+
+<PyCell id="combined" title="Prediction plus correction" tests={String.raw`
+  import numpy as np
+  def test_best():
+      "the combined estimator's RMS error is lower than both alternatives"
+      assert rms["combined"] < rms["forward"] and rms["combined"] < rms["feedback"]
+
+  def test_bounded():
+      "the combined error does not grow: its last second is no worse than 1.5 times its second second"
+      e = np.abs(est_comb - x_true)
+      assert e[-200:].mean() < 1.5 * e[200:400].mean()
+`} prompt="Complete the loop of combine(y, v, K=0.1): update the delayed estimate xd with the measurement y[i] (after first predicting it forward one step with the forward model), then set the current estimate to xd plus the forward model's displacement over the last d commands."
+code={String.raw`
+  def combine(y, v, K=0.1):
+      est = np.zeros(n); xd = 0.0
+      for i in range(1, n):
+          if i > d:
+              xd = xd + dt * gain_model * v[i - d - 1]                 # forward model predicts x[i - d]
+              xd = ...                                                  # correct with the delayed measurement
+          recent = v[max(0, i - d):i]
+          est[i] = ...
+      return est
+
+  est_comb = combine(y, v_cmd)
+  rms = {name: 1000 * np.sqrt(np.mean((e - x_true) ** 2)) for name, e in (("forward", est_fwd), ("feedback", est_fb), ("combined", est_comb))}
+  print({k: f"{v:.1f} mm" for k, v in rms.items()}, "RMS error")
+  plt.plot(t, np.abs(est_fwd - x_true) * 1000, label="forward only"); plt.plot(t, np.abs(est_fb - x_true) * 1000, label="feedback only", alpha=0.6)
+  plt.plot(t, np.abs(est_comb - x_true) * 1000, label="combined"); plt.ylabel("error (mm)"); plt.xlabel("s"); plt.legend(); plt.show()
+`}
+hint="xd = xd + K * (y[i] - xd); est[i] = xd + dt * gain_model * recent.sum()."
+solution={String.raw`
+  def combine(y, v, K=0.1):
+      est = np.zeros(n); xd = 0.0
+      for i in range(1, n):
+          if i > d:
+              xd = xd + dt * gain_model * v[i - d - 1]                 # forward model predicts x[i - d]
+              xd = xd + K * (y[i] - xd)                                 # correct with the delayed measurement
+          recent = v[max(0, i - d):i]
+          est[i] = xd + dt * gain_model * recent.sum()
+      return est
+
+  est_comb = combine(y, v_cmd)
+  rms = {name: 1000 * np.sqrt(np.mean((e - x_true) ** 2)) for name, e in (("forward", est_fwd), ("feedback", est_fb), ("combined", est_comb))}
+  print({k: f"{v:.1f} mm" for k, v in rms.items()}, "RMS error")
+  plt.plot(t, np.abs(est_fwd - x_true) * 1000, label="forward only"); plt.plot(t, np.abs(est_fb - x_true) * 1000, label="feedback only", alpha=0.6)
+  plt.plot(t, np.abs(est_comb - x_true) * 1000, label="combined"); plt.ylabel("error (mm)"); plt.xlabel("s"); plt.legend(); plt.show()
+`} />
+
+Combining them cuts the RMS error to about 3.5 mm, roughly a tenth of either estimate alone, and the error stays bounded over the whole 3 s. The correction step pins the delayed estimate to the measurements, so the forward model's miscalibration cannot accumulate; the prediction step covers only the last 100 ms, so its miscalibration costs only the error of 100 ms of movement. Real proprioception is less noisy than in this simulation, and the brain also has vision, but the logic of combining them is the same.
+
+<Callout kind="history">
+
+Wolpert, Ghahramani and Jordan (1995) had people move their hand in the dark for different durations and then judge where it was. The bias in their estimates grew for about a second and then fell, and the variance rose and then levelled off. A Kalman filter with a slightly miscalibrated forward model and delayed proprioception reproduced both curves: early on the forward model's error builds up faster than feedback can correct it; later, feedback catches up. The result was among the first quantitative evidence that the brain estimates the body's state the way an optimal observer would.
+
+</Callout>
+
+<Bridge title="Predicting the consequences of action"
+  neuro="Forward models explain sensory cancellation (you cannot tickle yourself), the stability of the visual world during eye movements, and fast corrections before feedback arrives. Damage to the cerebellum disrupts all three, consistent with its role in learning and storing such models."
+  ai="Model-based reinforcement learning and world models give agents the same ability: a learned forward model predicts the consequences of actions, which can be used to plan and to correct for delayed or missing observations. Robots routinely fuse a dynamics model with delayed sensor readings in exactly today's way.">
+
+Prediction removes the delay; feedback removes the drift; together they know where the hand is now.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "An efference copy is...", options: ["A copy of the motor command kept by the brain", "A sensory signal", "A muscle reflex", "A memory of past movements"], answer: 0, explain: "Also called corollary discharge." },
+  { q: "A forward model predicts...", options: ["The next state of the body from the current state and command", "The command needed for a desired movement", "Sensory noise", "Reward"], answer: 0, explain: "The inverse model does the reverse." },
+  { q: "Estimating position from commands alone...", options: ["Drifts, because errors accumulate", "Is perfect", "Lags behind", "Is impossible"], answer: 0, explain: "Dead reckoning." },
+  { q: "Estimating position from delayed feedback alone...", options: ["Lags behind, most when the hand moves fast", "Drifts without bound", "Is perfect", "Leads the hand"], answer: 0, explain: "It reports the past." },
+  { q: "The combined estimator...", options: ["Corrects the delayed estimate, then predicts forward over the delay", "Averages the two estimates", "Ignores feedback", "Ignores commands"], answer: 0, explain: "Correction then prediction." },
+  { q: "Wolpert and colleagues found that the bias in judged hand position...", options: ["Grew for about a second, then fell", "Was zero", "Grew forever", "Fell immediately"], answer: 0, explain: "Matched by a Kalman filter." },
+  { q: "You cannot tickle yourself because...", options: ["A forward model predicts and cancels the sensation", "Your skin adapts", "You move too slowly", "Of reflexes"], answer: 0, explain: "Sensory cancellation." },
+  { q: "The brain area most associated with forward models is...", options: ["The cerebellum", "The retina", "The olfactory bulb", "The hippocampus"], answer: 0, explain: "Learning and storing internal models." },
+]} />
+
+<Flashcards cards={[
+  { front: "Efference copy?", back: "A copy of an outgoing motor command, used to predict its sensory consequences." },
+  { front: "Forward and inverse models?", back: "Forward: state and command to predicted next state. Inverse: desired movement to the command that produces it." },
+  { front: "Why combine prediction and feedback?", back: "Prediction alone drifts; delayed feedback alone lags. Correcting the past with feedback and predicting forward removes both errors." },
+  { front: "Wolpert, Ghahramani and Jordan (1995)?", back: "Errors in judging unseen hand position over time matched a Kalman filter with a forward model and delayed feedback." },
+  { front: "Sensory cancellation?", back: "Predicted sensory consequences of one's own actions are subtracted, explaining why self-tickling is weak." },
+]} />
+
+<Predict revisit question="Estimating hand position from commands alone in the dark: does the error stay constant, grow, or shrink over time?" />
+
+<Key title="Before you go">
+<ul>
+<li>Efference copies and forward models let the brain predict the body's state.</li>
+<li>Prediction alone drifts; delayed feedback alone lags.</li>
+<li>Correct the delayed estimate, then predict forward: the best of both.</li>
+<li>Human estimation errors look like those of such an estimator.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Wolpert, Ghahramani and Jordan (1995), <em>An internal model for sensorimotor integration</em>.</li>
+<li>Blakemore, Wolpert and Frith (1998), <em>Central cancellation of self-produced tickle sensation</em>, Nature Neuroscience 1(7), 635 to 640.</li>
+<li>Miall and Wolpert (1996), <em>Forward models for physiological motor control</em>, Neural Networks 9(8), 1265 to 1279.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="When you step onto a broken escalator, it feels strangely as if you are being pushed, even though you know it is not moving. Explain the sensation with today's forward model, and what it tells you about whether the model can be switched off by knowledge." />

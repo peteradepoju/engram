@@ -1,0 +1,267 @@
+export const meta = {
+  title: "Noise, accuracy and speed",
+  intro: "Minimum jerk says what reaches look like; it does not say why. In 1998 Harris and Wolpert proposed a reason grounded in biology: the noise in motor commands grows with their size. A larger command recruits more motor units, and the variability of the force they produce grows in proportion. A movement that uses large commands is therefore less accurate, and the best plan is the one that keeps the commands that matter small. Minimising the resulting variance at the end of a movement gives smooth, single-peaked speed profiles and a trade-off between speed and accuracy close to Fitts's law, from one assumption about noise.",
+  goals: [
+    "Describe signal-dependent noise and how it differs from additive noise",
+    "Compute the motor commands that minimise endpoint variance for a reach",
+    "Show that endpoint variability scales with distance and falls with duration",
+    "Relate the model's speed-accuracy trade-off to Fitts's law",
+  ],
+  plan: [
+    { label: "Predict and signal-dependent noise", minutes: 20 },
+    { label: "Noise that grows with the command", minutes: 20 },
+    { label: "The minimum-variance plan", minutes: 40 },
+    { label: "Speed against accuracy", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "harris-wolpert-1998",
+};
+
+<Predict question="If the noise in every motor command is proportional to the command's size, and you reach twice as far in the same time, how does the spread of your end points change: the same, about 1.4 times larger, or about twice as large?" />
+
+<Step n={1} title="Signal-dependent noise" minutes={20} />
+
+Hold a weight steady and your force fluctuates; hold a heavier one and it fluctuates more, roughly in proportion. The coefficient of variation of force (its standard deviation divided by its mean) is roughly constant over a wide range: motor noise is **signal dependent**. One reason is the way muscles are controlled: force is increased by recruiting more and larger motor units and by firing them faster, and the large units recruited at high forces each contribute big, variable twitches (Jones, Hamilton and Wolpert, 2002, made this argument quantitatively).
+
+Signal-dependent noise has a striking consequence. With additive noise, of the same size whatever the command, the best plan would use large commands freely, since they cost no extra variability. With noise proportional to the command, large commands are expensive in accuracy. Harris and Wolpert (1998) proposed that the brain chooses the commands that minimise the variance of the final position, subject to reaching the target on average.
+
+<Video id="Hc3uXQiKvZA" title="Speed vs Accuracy Tradeoff" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's tutorial video on the trade-off between speed and accuracy in decisions, where waiting for more evidence improves accuracy at the cost of time; today's motor version trades movement time against end-point accuracy." />
+
+<Step n={2} title="Noise that grows with the command" minutes={20} />
+
+<PyCell id="sdn" title="Constant coefficient of variation" tests={String.raw`
+  import numpy as np
+  def test_sdn():
+      "with signal-dependent noise, the coefficient of variation is the same (within 10%) at all command levels"
+      assert cv_sdn.max() / cv_sdn.min() < 1.1
+
+  def test_additive():
+      "with additive noise, the coefficient of variation falls more than fivefold from the weakest to the strongest command"
+      assert cv_add[0] / cv_add[-1] > 5
+`} prompt="For each command level, simulate 2,000 trials of force = u (1 + k e) for signal-dependent noise and force = u + s e for additive noise (e standard normal), and compute the coefficient of variation (standard deviation over mean) of each."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1998)
+  levels = np.array([1.0, 2.0, 5.0, 10.0, 20.0])
+  k, s = 0.1, 0.5
+  cv_sdn, cv_add = [], []
+  for u in levels:
+      e = r.normal(size=2000)
+      f_sdn = ...
+      f_add = ...
+      cv_sdn.append(f_sdn.std() / f_sdn.mean()); cv_add.append(f_add.std() / f_add.mean())
+  cv_sdn, cv_add = np.array(cv_sdn), np.array(cv_add)
+  print("CV, signal-dependent:", np.round(cv_sdn, 3)); print("CV, additive:        ", np.round(cv_add, 3))
+  plt.plot(levels, cv_sdn, "o-", label="signal-dependent"); plt.plot(levels, cv_add, "s-", label="additive")
+  plt.xlabel("command"); plt.ylabel("coefficient of variation"); plt.legend(); plt.show()
+`}
+hint="f_sdn = u * (1 + k * e); f_add = u + s * e."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1998)
+  levels = np.array([1.0, 2.0, 5.0, 10.0, 20.0])
+  k, s = 0.1, 0.5
+  cv_sdn, cv_add = [], []
+  for u in levels:
+      e = r.normal(size=2000)
+      f_sdn = u * (1 + k * e)
+      f_add = u + s * e
+      cv_sdn.append(f_sdn.std() / f_sdn.mean()); cv_add.append(f_add.std() / f_add.mean())
+  cv_sdn, cv_add = np.array(cv_sdn), np.array(cv_add)
+  print("CV, signal-dependent:", np.round(cv_sdn, 3)); print("CV, additive:        ", np.round(cv_add, 3))
+  plt.plot(levels, cv_sdn, "o-", label="signal-dependent"); plt.plot(levels, cv_add, "s-", label="additive")
+  plt.xlabel("command"); plt.ylabel("coefficient of variation"); plt.legend(); plt.show()
+`} />
+
+With signal-dependent noise the coefficient of variation is 0.1 at every level of command, a twentyfold range; with additive noise it falls from 0.5 to 0.025, because the same absolute noise matters less and less as the command grows. Measured forces in human muscles behave like the first case over most of their range, with additive noise visible only for very weak contractions.
+
+<Step n={3} title="The minimum-variance plan" minutes={40} />
+
+Model the arm as a mass driven by a muscle force that follows the neural command with a lag of 40 ms, in time steps of 5 ms: $\mathbf x_{t+1} = A\mathbf x_t + B u_t$, with state position, velocity and force. Each command $u_t$ carries noise of standard deviation $k|u_t|$. Because the system is linear, the position at any later time is a weighted sum of the commands, and its variance is $k^2 \sum_t w_t^2 u_t^2$, where $w_t$ is how much command $t$ moves that position. Harris and Wolpert minimised the variance of the position during a short period after the movement, subject to the mean arriving at the target and stopping there. That is a quadratic cost with linear constraints, solved in one step with Lagrange multipliers (Week 13):
+
+$$
+\min_{\mathbf u}\ \mathbf u^\top \text{diag}(\mathbf a)\,\mathbf u \ \text{ subject to } C\mathbf u = \mathbf b \quad\Rightarrow\quad \mathbf u = \text{diag}(\mathbf a)^{-1} C^\top\left(C\,\text{diag}(\mathbf a)^{-1}C^\top\right)^{-1}\mathbf b,
+$$
+
+where $a_t$ is the summed squared influence of command $t$ on the position during the hold period, and $C\mathbf u = \mathbf b$ says the final position, velocity and force are the target, 0 and 0.
+
+<Figure caption="The minimum-variance reach under signal-dependent noise: the planned velocity profile, and the spread of end points from many noisy repetitions. Change the distance and the movement duration." credit="Interactive figure by Engram, after Harris and Wolpert (1998).">
+  <SignalDependentNoise />
+</Figure>
+
+<PyCell id="plan" title="Commands that minimise endpoint variance" tests={String.raw`
+  import numpy as np
+  def test_target():
+      "the planned movement reaches 10 cm and stops there"
+      assert abs(traj[-1, 0] - 0.1) < 1e-6 and abs(traj[-1, 1]) < 1e-6
+
+  def test_shape():
+      "the velocity profile is single-peaked and positive throughout"
+      v = traj[:, 1]
+      assert np.all(v > -1e-9) and np.sum((v[1:-1] > v[:-2]) & (v[1:-1] > v[2:])) == 1
+
+  def test_scaling():
+      "endpoint spread doubles when the distance doubles"
+      assert abs(plan(0.2, 80)[2] / plan(0.1, 80)[2] - 2) < 1e-6
+`} prompt="Complete plan(D, T): build C (3 by T, the influence of each command on the final state) and a (the summed squared influence of each command on position over a 40-step hold), then solve for the commands with the formula above. Return the commands, the trajectory and the predicted standard deviation of position during the hold."
+code={String.raw`
+  dt, tau, k_noise, hold = 0.005, 0.04, 0.3, 40
+  A = np.array([[1, dt, 0], [0, 1, dt], [0, 0, 1 - dt / tau]]); B = np.array([0, 0, dt / tau])
+  P = [B]
+  for _ in range(600):
+      P.append(A @ P[-1])
+  P = np.array(P)                                      # P[j] = A^j B: effect of a command j steps later
+
+  def plan(D, T):
+      t = np.arange(T)
+      C = P[T - 1 - t].T                                # 3 x T: effect of each command on the state at the end
+      W = np.array([P[T - 1 - t + h, 0] for h in range(1, hold + 1)])   # hold x T: effect on later positions
+      a = k_noise ** 2 * (W ** 2).sum(0) + 1e-15
+      b = np.array([D, 0.0, 0.0])
+      u = ...
+      x, traj = np.zeros(3), []
+      for ut in u:
+          x = A @ x + B * ut; traj.append(x.copy())
+      sd = np.sqrt(np.sum(a * u ** 2) / hold)
+      return u, np.array(traj), sd
+
+  u, traj, sd = plan(0.1, 80)
+  print(f"end position {traj[-1, 0]:.4f} m, end velocity {traj[-1, 1]:.2e}; predicted endpoint spread {sd * 1000:.2f} mm")
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  tt = np.arange(80) * dt
+  ax[0].plot(tt, traj[:, 1]); ax[0].set_title("velocity (m/s)"); ax[1].plot(tt, u); ax[1].set_title("command")
+  for a_ in ax: a_.set_xlabel("s")
+  plt.show()
+`}
+hint="u = (1 / a) * (C.T @ np.linalg.solve((C / a) @ C.T, b))."
+solution={String.raw`
+  dt, tau, k_noise, hold = 0.005, 0.04, 0.3, 40
+  A = np.array([[1, dt, 0], [0, 1, dt], [0, 0, 1 - dt / tau]]); B = np.array([0, 0, dt / tau])
+  P = [B]
+  for _ in range(600):
+      P.append(A @ P[-1])
+  P = np.array(P)                                      # P[j] = A^j B: effect of a command j steps later
+
+  def plan(D, T):
+      t = np.arange(T)
+      C = P[T - 1 - t].T                                # 3 x T: effect of each command on the state at the end
+      W = np.array([P[T - 1 - t + h, 0] for h in range(1, hold + 1)])   # hold x T: effect on later positions
+      a = k_noise ** 2 * (W ** 2).sum(0) + 1e-15
+      b = np.array([D, 0.0, 0.0])
+      u = (1 / a) * (C.T @ np.linalg.solve((C / a) @ C.T, b))
+      x, traj = np.zeros(3), []
+      for ut in u:
+          x = A @ x + B * ut; traj.append(x.copy())
+      sd = np.sqrt(np.sum(a * u ** 2) / hold)
+      return u, np.array(traj), sd
+
+  u, traj, sd = plan(0.1, 80)
+  print(f"end position {traj[-1, 0]:.4f} m, end velocity {traj[-1, 1]:.2e}; predicted endpoint spread {sd * 1000:.2f} mm")
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  tt = np.arange(80) * dt
+  ax[0].plot(tt, traj[:, 1]); ax[0].set_title("velocity (m/s)"); ax[1].plot(tt, u); ax[1].set_title("command")
+  for a_ in ax: a_.set_xlabel("s")
+  plt.show()
+`} />
+
+The planned movement arrives at exactly 10 cm and stops. Its velocity profile is smooth and single-peaked, like a reach, although with this simple muscle model its peak comes somewhat after the midpoint rather than exactly at it. The commands are biphasic: a push to accelerate, a pull to brake, kept as small as the deadline allows. The predicted spread of end points is about 10 mm for this noise level, and it scales exactly with distance, which answers the prediction: twice as far in the same time means twice the spread, because every command doubles.
+
+<Step n={4} title="Speed against accuracy" minutes={25} />
+
+**Fitts's law** (Fitts, 1954) describes how long people take to point at a target of width $W$ at distance $D$: movement time grows linearly with the **index of difficulty**, $\log_2(2D/W)$, about 100 to 200 ms per bit. Does the minimum-variance model produce a similar trade-off? For each distance and target width, find the shortest duration whose endpoint spread fits the target (four standard deviations within the width), and fit movement time against the index of difficulty.
+
+<PyCell id="fitts" title="A Fitts-like law from noise" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "movement time increases with index of difficulty, and a straight line explains more than 80% of the variance"
+      assert slope > 0 and r2 > 0.8
+`} prompt="Because the spread scales exactly with distance, compute sd_unit[T], the spread for a 1 m reach, once for each duration. Then for each D and W, the movement time is the shortest duration with 4 D sd_unit[T] at most W. Fit MT = a + b ID by least squares and report the slope and R²."
+code={String.raw`
+  Ts = np.arange(20, 400, 5)
+  sd_unit = np.array([plan(1.0, T)[2] for T in Ts])
+  ID, MT = [], []
+  for D in (0.05, 0.1, 0.2, 0.4):
+      for W in (0.01, 0.02, 0.04):
+          ok = ...
+          if len(ok):
+              ID.append(np.log2(2 * D / W)); MT.append(ok[0] * dt)
+  ID, MT = np.array(ID), np.array(MT)
+  slope, intercept = np.polyfit(ID, MT, 1)
+  r2 = 1 - np.sum((MT - (intercept + slope * ID)) ** 2) / np.sum((MT - MT.mean()) ** 2)
+  print(f"MT = {intercept:.3f} + {slope:.3f} x ID seconds, R squared {r2:.2f}")
+  plt.plot(ID, MT, "o"); plt.plot(np.sort(ID), intercept + slope * np.sort(ID)); plt.xlabel("index of difficulty (bits)"); plt.ylabel("movement time (s)"); plt.show()
+`}
+hint="ok = Ts[4 * D * sd_unit <= W]."
+solution={String.raw`
+  Ts = np.arange(20, 400, 5)
+  sd_unit = np.array([plan(1.0, T)[2] for T in Ts])
+  ID, MT = [], []
+  for D in (0.05, 0.1, 0.2, 0.4):
+      for W in (0.01, 0.02, 0.04):
+          ok = Ts[4 * D * sd_unit <= W]
+          if len(ok):
+              ID.append(np.log2(2 * D / W)); MT.append(ok[0] * dt)
+  ID, MT = np.array(ID), np.array(MT)
+  slope, intercept = np.polyfit(ID, MT, 1)
+  r2 = 1 - np.sum((MT - (intercept + slope * ID)) ** 2) / np.sum((MT - MT.mean()) ** 2)
+  print(f"MT = {intercept:.3f} + {slope:.3f} x ID seconds, R squared {r2:.2f}")
+  plt.plot(ID, MT, "o"); plt.plot(np.sort(ID), intercept + slope * np.sort(ID)); plt.xlabel("index of difficulty (bits)"); plt.ylabel("movement time (s)"); plt.show()
+`} />
+
+Movement time grows with the index of difficulty, and a straight line in $\log_2(2D/W)$ explains about 88% of the variance across 12 combinations of distance and width. The model's relation is actually a power law (duration grows as a power of D/W), which a logarithm fits well over a limited range; its slope, about 0.56 s per bit, is several times the human value because the noise level here was chosen for illustration, not fitted. What the model explains is the form of the trade-off, from noise alone, not its exact numbers.
+
+<Callout kind="note">
+
+The same principle applied to the eyes predicts the main sequence of saccades: the systematic relation between saccade size, duration and peak velocity, and the skewed velocity profiles of large saccades. That Harris and Wolpert could explain eye and arm movements with one assumption, which is about a measurable property of motor neurons and muscles rather than an abstract cost, is why the model was influential. Later models added effort costs and feedback (Day 4) to explain what happens during movement.
+
+</Callout>
+
+<Bridge title="Noise as a design constraint"
+  neuro="Signal-dependent noise turns accuracy into a resource that commands spend: larger, faster commands buy speed at the cost of precision. Planning to minimise the consequences of noise explains smooth movements and the speed-accuracy trade-off without assuming smoothness is valued for its own sake."
+  ai="Robust control and reinforcement learning under multiplicative noise face the same trade-off, and risk-sensitive objectives that penalise variance as well as mean cost produce cautious, smooth policies. Planning that accounts for how actions change uncertainty is a general principle, not only a biological one.">
+
+When noise grows with effort, the best movement is the one that spends its effort where it matters least.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Signal-dependent noise means the noise standard deviation...", options: ["Grows in proportion to the command", "Is constant", "Falls with the command", "Is zero"], answer: 0, explain: "Constant coefficient of variation." },
+  { q: "A physiological source of signal-dependent noise is...", options: ["Recruitment of larger motor units at higher forces", "Photon noise", "Synaptic depression", "Thermal noise only"], answer: 0, explain: "Big units, big twitches." },
+  { q: "Harris and Wolpert's model minimises...", options: ["Variance of the final position", "Jerk", "Energy only", "Movement time"], answer: 0, explain: "Under signal-dependent noise." },
+  { q: "Under this model, doubling the reach distance in the same time...", options: ["Doubles the endpoint spread", "Leaves it unchanged", "Halves it", "Quadruples it"], answer: 0, explain: "All commands double." },
+  { q: "The optimal commands come from...", options: ["A quadratic cost with linear constraints, solved by Lagrange multipliers", "Gradient descent only", "Random search", "A lookup table"], answer: 0, explain: "One linear solve." },
+  { q: "Fitts's law says movement time grows with...", options: ["log₂(2D/W)", "D/W", "W/D", "D²"], answer: 0, explain: "The index of difficulty." },
+  { q: "The model's speed-accuracy trade-off arises because...", options: ["Faster movements need larger commands, which are noisier", "Muscles tire", "Vision is slow", "Targets move"], answer: 0, explain: "From signal-dependent noise." },
+  { q: "The same principle applied to saccades explains...", options: ["The main sequence of size, duration and peak velocity", "Smooth pursuit", "Blinking", "Vergence"], answer: 0, explain: "Harris and Wolpert (1998)." },
+]} />
+
+<Flashcards cards={[
+  { front: "Signal-dependent noise?", back: "Motor noise whose standard deviation is proportional to the size of the command: constant coefficient of variation." },
+  { front: "Harris and Wolpert (1998)?", back: "Minimising endpoint variance under signal-dependent noise predicts smooth trajectories, the saccadic main sequence and a speed-accuracy trade-off." },
+  { front: "Minimum-variance solution?", back: "$\\mathbf u = \\text{diag}(\\mathbf a)^{-1}C^\\top(C\\,\\text{diag}(\\mathbf a)^{-1}C^\\top)^{-1}\\mathbf b$." },
+  { front: "Fitts's law?", back: "$MT = a + b\\log_2(2D/W)$: movement time grows with the index of difficulty." },
+  { front: "Why endpoint spread scales with distance?", back: "The optimal commands scale with distance, and the noise scales with the commands." },
+]} />
+
+<Predict revisit question="Twice the distance in the same time, with noise proportional to the command: how does endpoint spread change?" />
+
+<Key title="Before you go">
+<ul>
+<li>Motor noise grows with the command, so large commands cost accuracy.</li>
+<li>Minimising endpoint variance under this noise gives smooth, single-peaked movements.</li>
+<li>Spread scales with distance and falls with duration: a speed-accuracy trade-off.</li>
+<li>The trade-off is close to Fitts's law over a practical range.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Harris and Wolpert (1998), <em>Signal-dependent noise determines motor planning</em>.</li>
+<li>Fitts (1954), <em>The information capacity of the human motor system in controlling the amplitude of movement</em>, Journal of Experimental Psychology 47(6), 381 to 391.</li>
+<li>Jones, Hamilton and Wolpert (2002), <em>Sources of signal-dependent noise during isometric force production</em>, Journal of Neurophysiology 88(3), 1533 to 1544.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Professional darts players are fast and accurate. Using today's model, list the ways someone could beat the speed-accuracy trade-off for a single, well-practised movement, and which of them the model can and cannot capture." />

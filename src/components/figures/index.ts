@@ -184,3 +184,8 @@ export { ITDArray } from "./itd-array";
 export { FlyHash } from "./fly-hash";
 export { WhiteningFilter } from "./whitening-filter";
 export { SoundBasis } from "./sound-basis";
+export { MinimumJerk } from "./minimum-jerk";
+export { SignalDependentNoise } from "./signal-dependent-noise";
+export { ForwardModel } from "./forward-model";
+export { MinimalIntervention } from "./minimal-intervention";
+export { TwoRateAdaptation } from "./two-rate-adaptation";

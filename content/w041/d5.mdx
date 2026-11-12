@@ -1,0 +1,259 @@
+export const meta = {
+  title: "Motor adaptation: learning at two speeds",
+  intro: "Movements stay accurate because the motor system keeps recalibrating. Reach in a force field that pushes the hand sideways and the first movements curve badly; within a few dozen trials they are nearly straight again, and when the field is switched off they curve the opposite way, an aftereffect that shows something was learned. Shadmehr and Mussa-Ivaldi established this paradigm in 1994. In 2006 Smith, Ghazizadeh and Shadmehr showed that a simple model with two learning processes, one fast and forgetful, one slow and retentive, explains features that no single process can: savings on relearning, interference between opposite fields, and the surprising reappearance of a forgotten adaptation. Today you build both models and test them on those signatures.",
+  goals: [
+    "Describe force-field adaptation and its aftereffects",
+    "Write a single-rate state-space model of trial-by-trial adaptation",
+    "Build the two-rate model and explain spontaneous recovery",
+    "Explain savings in terms of the slow process",
+  ],
+  plan: [
+    { label: "Predict and adaptation", minutes: 20 },
+    { label: "A single learning process", minutes: 25 },
+    { label: "Two processes and spontaneous recovery", minutes: 40 },
+    { label: "Savings", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "smith-2006",
+};
+
+<Predict question="People adapt to a force field over 200 trials, then quickly 'unlearn' it in a few trials of the opposite field until their output is back to zero. Then the experimenter clamps errors to zero so there is nothing more to learn from. Does their output stay at zero, drift back towards the first adaptation, or swing towards the opposite field?" />
+
+<Step n={1} title="Adaptation" minutes={20} />
+
+In Shadmehr and Mussa-Ivaldi's (1994) experiment, people held a robot handle and reached to targets while the robot applied a velocity-dependent force perpendicular to the movement, a **curl field**. At first, reaches curved in the direction of the force; with practice they straightened, as people learned to produce a compensating force before feedback could act, evidence for a learned internal model of the field (Day 3's forward models, now inverse). When the field was unexpectedly removed, reaches curved the other way, mirroring the original errors: an **aftereffect**. Adaptation to visual rotations, prisms and saccade target jumps follows similar rules.
+
+A **state-space model** describes such learning trial by trial. The motor output on trial $n$ is an internal estimate $x_n$ of the perturbation $f_n$; the error is $e_n = f_n - x_n$; and the estimate is updated by a fraction of the error, while slowly decaying:
+
+$$
+x_{n+1} = A\,x_n + B\,e_n,
+$$
+
+with retention $A$ just below 1 and learning rate $B$ between 0 and 1. In an **error-clamp** trial the robot holds the hand on a straight path, so the error is zero by design and only retention acts.
+
+<Video id="JeXwbbU2rlQ" title="Types of learning" by="Dan Goodman (Neuroscience for Machine Learners)" note="Dan Goodman surveys the kinds of learning studied in neuroscience and machine learning, from error-driven supervised learning, the kind behind motor adaptation, to reinforcement and unsupervised learning, and their possible mechanisms." />
+
+<Step n={2} title="A single learning process" minutes={25} />
+
+<PyCell id="single" title="Learning curve and aftereffect" tests={String.raw`
+  import numpy as np
+  def test_asymptote():
+      "output approaches the steady state B/(1 - A + B) during the field"
+      assert abs(x1[nA - 1] - B1 / (1 - A1 + B1)) < 0.02
+
+  def test_after():
+      "after the field is switched off, the first error is opposite in sign to the first error in the field"
+      assert (0 - x1[nA]) < 0 < (1 - x1[0])
+`} prompt="Write one_rate(f, A, B): starting from x = 0, record the output x on each trial, then update x with the error f[n] - x. Return the outputs. Apply it to 200 trials of the field (f = 1) followed by 50 trials without it (f = 0)."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def one_rate(f, A, B):
+      x, out = 0.0, []
+      for fn in f:
+          ...
+      return np.array(out)
+
+  A1, B1, nA = 0.99, 0.1, 200
+  f = np.r_[np.ones(nA), np.zeros(50)]
+  x1 = one_rate(f, A1, B1)
+  print(f"output after 200 field trials {x1[nA - 1]:.3f} (steady state {B1 / (1 - A1 + B1):.3f}); first error without the field {0 - x1[nA]:.3f}")
+  plt.plot(x1, label="output"); plt.plot(f, "k--", lw=0.8, label="field"); plt.xlabel("trial"); plt.legend(); plt.show()
+`}
+hint="out.append(x); x = A * x + B * (fn - x)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def one_rate(f, A, B):
+      x, out = 0.0, []
+      for fn in f:
+          out.append(x)
+          x = A * x + B * (fn - x)
+      return np.array(out)
+
+  A1, B1, nA = 0.99, 0.1, 200
+  f = np.r_[np.ones(nA), np.zeros(50)]
+  x1 = one_rate(f, A1, B1)
+  print(f"output after 200 field trials {x1[nA - 1]:.3f} (steady state {B1 / (1 - A1 + B1):.3f}); first error without the field {0 - x1[nA]:.3f}")
+  plt.plot(x1, label="output"); plt.plot(f, "k--", lw=0.8, label="field"); plt.xlabel("trial"); plt.legend(); plt.show()
+`} />
+
+The output climbs towards the steady state $B/(1 - A + B) \approx 0.91$, short of full compensation because retention keeps pulling it back while learning pushes it up; real adaptation also stops short of complete. When the field is removed, the first error is -0.91, as large as the original error and opposite in sign: the aftereffect, which then decays as the model unlearns.
+
+<Step n={3} title="Two processes and spontaneous recovery" minutes={40} />
+
+Smith, Ghazizadeh and Shadmehr (2006) proposed that the output is the sum of two states, both driven by the same error:
+
+$$
+x^{f}_{n+1} = A_f x^f_n + B_f e_n, \qquad x^{s}_{n+1} = A_s x^s_n + B_s e_n, \qquad x_n = x^f_n + x^s_n,
+$$
+
+with the fast process learning quickly and forgetting quickly ($A_f = 0.59$, $B_f = 0.21$) and the slow process learning slowly and retaining well ($A_s = 0.992$, $B_s = 0.02$), the values they fitted to their data. Run the paradigm of the prediction: adapt for 200 trials, de-adapt in the opposite field until the output returns to zero, then clamp the error at zero for 100 trials.
+
+<Figure caption="The two-rate model through adaptation, de-adaptation and an error clamp: the fast state, the slow state and their sum. Change the retention and learning rates of each." credit="Interactive figure by Engram, after Smith, Ghazizadeh and Shadmehr (2006).">
+  <TwoRateAdaptation />
+</Figure>
+
+<PyCell id="recovery" title="Spontaneous recovery" tests={String.raw`
+  import numpy as np
+  def test_two_rate():
+      "the two-rate model's output rebounds above 0.15 during the clamp"
+      assert out2[clamp_start:].max() > 0.15
+
+  def test_one_rate():
+      "the single-rate model shows no rebound (its clamp output stays below 0.02)"
+      assert out1[cs1:].max() < 0.02
+`} prompt="Write two_rate_trial(xf, xs, e) returning the updated fast and slow states. The paradigm runner, which de-adapts until the output first reaches zero and then clamps errors, is given and runs both models."
+code={String.raw`
+  Af, Bf, As, Bs = 0.59, 0.21, 0.992, 0.02
+
+  def two_rate_trial(xf, xs, e):
+      return ...
+
+  def paradigm(update, state, output, n_adapt=200, n_clamp=100):
+      outs, phase, clamp_start = [], "adapt", None
+      for n in range(n_adapt + 200 + n_clamp):
+          x = output(state); outs.append(x)
+          if phase == "adapt" and n == n_adapt: phase = "deadapt"
+          if phase == "deadapt" and x <= 0: phase, clamp_start = "clamp", n
+          f = 1.0 if phase == "adapt" else -1.0
+          e = 0.0 if phase == "clamp" else f - x
+          state = update(state, e)
+          if clamp_start is not None and n >= clamp_start + n_clamp: break
+      return np.array(outs), clamp_start
+
+  out2, clamp_start = paradigm(lambda s, e: two_rate_trial(*s, e), (0.0, 0.0), lambda s: s[0] + s[1])
+  out1, cs1 = paradigm(lambda s, e: A1 * s + B1 * e, 0.0, lambda s: s)
+  print(f"two-rate: de-adapted in {clamp_start - 200} trials, peak output during clamp {out2[clamp_start:].max():.2f}")
+  print(f"one-rate: de-adapted in {cs1 - 200} trials, peak output during clamp {out1[cs1:].max():.3f}")
+  plt.plot(out2, label="two-rate"); plt.plot(out1, label="single-rate"); plt.axhline(0, color="gray", lw=0.5)
+  plt.axvline(clamp_start, color="k", ls=":"); plt.xlabel("trial"); plt.ylabel("output"); plt.legend(); plt.show()
+`}
+hint="return Af * xf + Bf * e, As * xs + Bs * e."
+solution={String.raw`
+  Af, Bf, As, Bs = 0.59, 0.21, 0.992, 0.02
+
+  def two_rate_trial(xf, xs, e):
+      return Af * xf + Bf * e, As * xs + Bs * e
+
+  def paradigm(update, state, output, n_adapt=200, n_clamp=100):
+      outs, phase, clamp_start = [], "adapt", None
+      for n in range(n_adapt + 200 + n_clamp):
+          x = output(state); outs.append(x)
+          if phase == "adapt" and n == n_adapt: phase = "deadapt"
+          if phase == "deadapt" and x <= 0: phase, clamp_start = "clamp", n
+          f = 1.0 if phase == "adapt" else -1.0
+          e = 0.0 if phase == "clamp" else f - x
+          state = update(state, e)
+          if clamp_start is not None and n >= clamp_start + n_clamp: break
+      return np.array(outs), clamp_start
+
+  out2, clamp_start = paradigm(lambda s, e: two_rate_trial(*s, e), (0.0, 0.0), lambda s: s[0] + s[1])
+  out1, cs1 = paradigm(lambda s, e: A1 * s + B1 * e, 0.0, lambda s: s)
+  print(f"two-rate: de-adapted in {clamp_start - 200} trials, peak output during clamp {out2[clamp_start:].max():.2f}")
+  print(f"one-rate: de-adapted in {cs1 - 200} trials, peak output during clamp {out1[cs1:].max():.3f}")
+  plt.plot(out2, label="two-rate"); plt.plot(out1, label="single-rate"); plt.axhline(0, color="gray", lw=0.5)
+  plt.axvline(clamp_start, color="k", ls=":"); plt.xlabel("trial"); plt.ylabel("output"); plt.legend(); plt.show()
+`} />
+
+Both models de-adapt in a few trials, bringing their output to zero. In the clamp, the single-rate model's output stays at zero: it has one state, and that state is zero. The two-rate model's output climbs back to about 0.45 within a few dozen trials, which answers the prediction: it drifts back towards the first adaptation. During de-adaptation the fast state swung strongly negative while the slow state stayed positive, summing to zero; in the clamp the fast state decays quickly and reveals the slow state beneath. Smith and colleagues observed exactly this spontaneous recovery in people adapting to force fields.
+
+<Step n={4} title="Savings" minutes={20} />
+
+People relearn a perturbation faster the second time, even after their behaviour has returned to baseline: **savings**. In the two-rate model, washing out the behaviour need not wash out the slow state; a rapid de-adaptation drives the fast state negative while the slow state stays positive, so relearning starts with a head start hidden beneath a zero output.
+
+<PyCell id="savings" title="Faster relearning" tests={String.raw`
+  import numpy as np
+  def test_savings():
+      "the two-rate model reaches half adaptation faster on relearning than at first"
+      assert relearn_half < first_half
+`} prompt="Run the two-rate model through 200 trials of the field, de-adaptation until the output reaches zero, then the field again. Count how many trials it takes to reach an output of 0.5 the first time (first_half) and after de-adaptation (relearn_half)."
+code={String.raw`
+  xf = xs = 0.0; outs = []; phase = "learn1"; first_half = relearn_half = None; n = 0; t_relearn = None
+  while n < 600:
+      x = xf + xs; outs.append(x)
+      if phase == "learn1" and first_half is None and x >= 0.5: first_half = n
+      if phase == "learn1" and n == 200: phase = "deadapt"
+      if phase == "deadapt" and x <= 0: phase, t_relearn = "learn2", n
+      if phase == "learn2" and relearn_half is None and x >= 0.5: relearn_half = ...
+      f = -1.0 if phase == "deadapt" else 1.0
+      xf, xs = two_rate_trial(xf, xs, f - x)
+      n += 1
+      if relearn_half is not None: break
+  print(f"trials to reach 0.5: first time {first_half}, relearning {relearn_half}")
+  plt.plot(outs); plt.axhline(0.5, color="gray", ls=":"); plt.xlabel("trial"); plt.ylabel("output"); plt.show()
+`}
+hint="relearn_half = n - t_relearn."
+solution={String.raw`
+  xf = xs = 0.0; outs = []; phase = "learn1"; first_half = relearn_half = None; n = 0; t_relearn = None
+  while n < 600:
+      x = xf + xs; outs.append(x)
+      if phase == "learn1" and first_half is None and x >= 0.5: first_half = n
+      if phase == "learn1" and n == 200: phase = "deadapt"
+      if phase == "deadapt" and x <= 0: phase, t_relearn = "learn2", n
+      if phase == "learn2" and relearn_half is None and x >= 0.5: relearn_half = n - t_relearn
+      f = -1.0 if phase == "deadapt" else 1.0
+      xf, xs = two_rate_trial(xf, xs, f - x)
+      n += 1
+      if relearn_half is not None: break
+  print(f"trials to reach 0.5: first time {first_half}, relearning {relearn_half}")
+  plt.plot(outs); plt.axhline(0.5, color="gray", ls=":"); plt.xlabel("trial"); plt.ylabel("output"); plt.show()
+`} />
+
+The model needs 22 trials to reach half adaptation the first time and only 2 when relearning after de-adaptation, even though its output started from zero both times. The difference is the slow state, still near its adapted value after the brief de-adaptation, so only the fast state has to recover. Savings is the clearest sign that behaviour returning to baseline does not mean memory returning to baseline.
+
+<Callout kind="think">
+
+Two processes fit the data, but they are not the only explanation. Savings can also arise from learning which context you are in (Heald, Lengyel and Wolpert, 2021, proposed a contextual inference model in which memories are kept separate and recalled when the context seems familiar), and from changes in the learning rate itself with experience. These accounts predict different behaviour when cues signal the context or when perturbations switch at different speeds, which is what experiments now test.
+
+</Callout>
+
+<Bridge title="Fast and slow memories"
+  neuro="The fast process may reflect explicit strategies and the slow one implicit recalibration, possibly in the cerebellum; patients with cerebellar damage adapt poorly. Whatever their substrate, two time scales let the motor system respond quickly to transient changes without overwriting what it learned over long periods."
+  ai="Machine learning has its own versions: fast weights and slow weights, momentum and moving averages of parameters, and the stability-plasticity problem of continual learning, where networks must learn new tasks without forgetting old ones. Combining a fast, forgetful learner with a slow, stable one is a common solution in both.">
+
+Learn quickly, remember slowly: two time scales give flexibility without forgetting.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "An aftereffect after force-field adaptation is...", options: ["Errors opposite to the original errors when the field is removed", "No errors", "The same errors as at first", "Faster movements"], answer: 0, explain: "Evidence of a learned compensation." },
+  { q: "In the state-space model, B is...", options: ["The learning rate", "The retention factor", "The perturbation", "The output"], answer: 0, explain: "x(n+1) = A x(n) + B e(n)." },
+  { q: "In an error-clamp trial...", options: ["The error is held at zero, so only retention acts", "Errors are doubled", "The field is reversed", "Learning is faster"], answer: 0, explain: "A probe of what remains." },
+  { q: "The fast process...", options: ["Learns quickly and forgets quickly", "Learns slowly and retains well", "Never learns", "Is the sum"], answer: 0, explain: "A_f = 0.59, B_f = 0.21." },
+  { q: "Spontaneous recovery is...", options: ["The return of an adaptation during error clamps after de-adaptation", "Forgetting", "Savings", "An aftereffect"], answer: 0, explain: "The slow state re-emerges as the fast one decays." },
+  { q: "A single-rate model during the clamp...", options: ["Shows no rebound", "Rebounds strongly", "Oscillates", "Reverses"], answer: 0, explain: "One state, already at zero." },
+  { q: "Savings arise in the two-rate model because...", options: ["The slow state stays positive after de-adaptation", "The learning rate doubles", "The field is weaker", "Errors are clamped"], answer: 0, explain: "A hidden head start." },
+  { q: "An alternative explanation of savings is...", options: ["Contextual inference, recalling a separate memory", "Muscle fatigue", "Sensory noise", "Reflexes"], answer: 0, explain: "Heald and colleagues (2021)." },
+]} />
+
+<Flashcards cards={[
+  { front: "Single-rate model?", back: "$x_{n+1} = A x_n + B(f_n - x_n)$; steady state $B/(1 - A + B)$." },
+  { front: "Two-rate model?", back: "Fast and slow states driven by the same error, with output their sum (Smith, Ghazizadeh and Shadmehr, 2006)." },
+  { front: "Spontaneous recovery?", back: "After brief de-adaptation and error clamps, output drifts back towards the first adaptation, as the fast state decays and the slow state remains." },
+  { front: "Savings?", back: "Faster relearning of a previously learned perturbation, explained by residual slow-state memory." },
+  { front: "Curl field?", back: "A velocity-dependent force perpendicular to the hand's motion, used by Shadmehr and Mussa-Ivaldi (1994) to study adaptation." },
+]} />
+
+<Predict revisit question="After adaptation, brief de-adaptation to zero and then error clamps: does output stay at zero, drift back towards the first adaptation, or swing the other way?" />
+
+<Key title="Before you go">
+<ul>
+<li>Motor adaptation is error-driven learning with aftereffects.</li>
+<li>A single state-space process cannot explain spontaneous recovery or savings.</li>
+<li>Two processes, fast and slow, explain both.</li>
+<li>Contextual inference offers a competing account, tested by cues and switching.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Smith, Ghazizadeh and Shadmehr (2006), <em>Interacting adaptive processes with different timescales underlie short-term motor learning</em>.</li>
+<li>Shadmehr and Mussa-Ivaldi (1994), <em>Adaptive representation of dynamics during learning of a motor task</em>, Journal of Neuroscience 14(5), 3208 to 3224.</li>
+<li>Heald, Lengyel and Wolpert (2021), <em>Contextual inference underlies the learning of sensorimotor repertoires</em>, Nature 600(7889), 489 to 493.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="You return to a sport after a long break and find your first attempts poor but your recovery quick. Explain this with the two-rate model, and suggest an experiment that would distinguish it from the contextual inference account." />
