@@ -1,0 +1,277 @@
+export const meta = {
+  title: "Pattern separation and completion in the hippocampus",
+  intro: "To store episodes, a memory system must do two things that pull in opposite directions. It must keep similar experiences apart, so that today's parking spot does not overwrite yesterday's, and it must recall a whole experience from a fragment of it. David Marr's 1971 theory of the hippocampus, developed by McNaughton, Morris, Treves and Rolls, assigned these jobs to different subregions: the dentate gyrus separates overlapping inputs by recoding them sparsely, and the recurrent collaterals of CA3 complete partial cues as an autoassociative network. In 2007 Leutgeb, Leutgeb, Moser and Moser tested the idea by morphing an arena gradually from a square to a circle. Today you build both halves of the circuit and measure how sparseness helps each.",
+  goals: [
+    "Explain pattern separation and pattern completion and why both are needed",
+    "Show that random expansion and k-winners-take-all reduce overlap",
+    "Store sparse patterns with a covariance rule and complete them from partial cues",
+    "Compare the capacity of sparse and dense autoassociative memories",
+  ],
+  plan: [
+    { label: "Predict and the circuit", minutes: 20 },
+    { label: "Separation in the dentate gyrus", minutes: 30 },
+    { label: "Completion in CA3", minutes: 30 },
+    { label: "Why sparse codes store more", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "leutgeb-2007",
+};
+
+<Predict question="Two input patterns share 90% of their active neurons. After a random expansion into ten times as many neurons, keeping only the most strongly driven 2%, will the outputs share more than 90%, about 90%, or much less than 90% of their active neurons?" />
+
+<Step n={1} title="A circuit with two jobs" minutes={20} />
+
+Information enters the hippocampus from the entorhinal cortex. It reaches the dentate gyrus, whose roughly one million granule cells in a rat outnumber their entorhinal inputs about five to one and are very sparsely active, with perhaps 2 to 5% firing in any environment. The granule cells project to CA3 through the mossy fibres, few but powerful synapses that can act as "detonators". CA3 pyramidal cells are richly connected to each other by recurrent collaterals, and also receive direct entorhinal input. CA3 projects to CA1, which projects back to the entorhinal cortex.
+
+Marr (1971) proposed that a recurrent network like CA3 can store patterns in its connections and retrieve a whole pattern from part of it, which is the Hopfield idea of Weeks 6 and 22 applied to a real circuit. McNaughton and Morris (1987) and Treves and Rolls (1994) added that, for this to work with many similar memories, the patterns must first be made dissimilar, and that the dentate gyrus with its expansion and sparse firing is suited to that. Leutgeb and colleagues (2007) recorded both regions as rats explored arenas morphed in small steps between a square and a circle. Even the smallest change of shape produced clear changes in the activity of dentate granule cells, as separation predicts, while CA3 ensembles changed less for small differences and more as the shapes became distinct.
+
+<Video id="Xld6cw3y5q8" title="Hopfield Model" by="Wulfram Gerstner (EPFL, Neuronal Dynamics)" note="Gerstner's account of the Hopfield model: storing patterns in symmetric connections and retrieving them from partial cues, the model of CA3 we use today." />
+
+<Step n={2} title="Separation in the dentate gyrus" minutes={30} />
+
+Model 200 entorhinal cells, 20% active, projecting randomly (each connection present with probability 0.1) to 2,000 granule cells. A granule cell's input is the number of active entorhinal cells it receives from; competition through inhibitory interneurons lets only the 40 most strongly driven fire, which is k-winners-take-all. Measure overlap as the cosine between binary patterns.
+
+<Figure caption="Pattern separation. Input overlap against output overlap for a random expansion with k-winners-take-all. Change the output sparseness: the sparser the code, the further the curve falls below the diagonal." credit="Interactive figure by Engram, after Treves and Rolls (1994) and Leutgeb et al. (2007).">
+  <PatternSeparation />
+</Figure>
+
+<PyCell id="separate" title="Expansion and competition" tests={String.raw`
+  import numpy as np
+  def test_below():
+      "for every input overlap, the output overlap is lower"
+      assert all(out_ov[o] < o for o in out_ov)
+  def test_large():
+      "an input overlap of 0.9 falls to below 0.7"
+      assert out_ov[0.9] < 0.7
+`} prompt="Write kwta(h, k), which returns a binary vector with ones at the k largest entries of h. Then for each input overlap, make 20 pairs of entorhinal patterns and average the overlap of their dentate outputs."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2007)
+  NE, ND, kE, kD = 200, 2000, 40, 40
+  W_dg = (r.random((ND, NE)) < 0.1).astype(float)
+
+  def kwta(h, k):
+      ...
+
+  def ec_pair(overlap):
+      a = np.zeros(NE); idx = r.choice(NE, kE, replace=False); a[idx] = 1
+      b = a.copy(); n = int(round((1 - overlap) * kE))
+      b[r.choice(idx, n, replace=False)] = 0
+      b[r.choice(np.where(a == 0)[0], n, replace=False)] = 1
+      return a, b
+
+  def ov(a, b):
+      return (a * b).sum() / np.sqrt(a.sum() * b.sum())
+
+  out_ov = {}
+  for o in [0.9, 0.7, 0.5, 0.3]:
+      vals = []
+      for _ in range(20):
+          a, b = ec_pair(o)
+          vals.append(ov(kwta(W_dg @ a, kD), kwta(W_dg @ b, kD)))
+      out_ov[o] = np.mean(vals)
+  print({o: round(v, 3) for o, v in out_ov.items()})
+  plt.plot(list(out_ov), list(out_ov.values()), "o-"); plt.plot([0, 1], [0, 1], "k:")
+  plt.xlabel("entorhinal overlap"); plt.ylabel("dentate overlap"); plt.show()
+`}
+hint="out = np.zeros_like(h); out[np.argsort(h)[-k:]] = 1; return out."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2007)
+  NE, ND, kE, kD = 200, 2000, 40, 40
+  W_dg = (r.random((ND, NE)) < 0.1).astype(float)
+
+  def kwta(h, k):
+      out = np.zeros_like(h); out[np.argsort(h)[-k:]] = 1
+      return out
+
+  def ec_pair(overlap):
+      a = np.zeros(NE); idx = r.choice(NE, kE, replace=False); a[idx] = 1
+      b = a.copy(); n = int(round((1 - overlap) * kE))
+      b[r.choice(idx, n, replace=False)] = 0
+      b[r.choice(np.where(a == 0)[0], n, replace=False)] = 1
+      return a, b
+
+  def ov(a, b):
+      return (a * b).sum() / np.sqrt(a.sum() * b.sum())
+
+  out_ov = {}
+  for o in [0.9, 0.7, 0.5, 0.3]:
+      vals = []
+      for _ in range(20):
+          a, b = ec_pair(o)
+          vals.append(ov(kwta(W_dg @ a, kD), kwta(W_dg @ b, kD)))
+      out_ov[o] = np.mean(vals)
+  print({o: round(v, 3) for o, v in out_ov.items()})
+  plt.plot(list(out_ov), list(out_ov.values()), "o-"); plt.plot([0, 1], [0, 1], "k:")
+  plt.xlabel("entorhinal overlap"); plt.ylabel("dentate overlap"); plt.show()
+`} />
+
+Every input overlap comes out lower: 0.9 becomes about 0.55, 0.7 becomes 0.33 and 0.3 becomes 0.09. Two things do the work. The random expansion spreads each input over many granule cells, and the competition is a threshold: a granule cell that was just inside the top 40 for one input can fall just outside for a similar one. Because only 2% of cells survive, these small shifts change a large fraction of the winners. Make the output denser in the figure and the separation weakens.
+
+<Step n={3} title="Completion in CA3" minutes={30} />
+
+Now store $M$ random sparse patterns $\boldsymbol\xi^\mu$ in a recurrent network of 1,000 CA3 cells, each pattern with a fraction $a$ of cells active. With binary patterns that are mostly zeros, the plain Hebbian outer product is dominated by the mean; the covariance rule subtracts it:
+
+$$
+W_{ij} = \sum_{\mu}(\xi^\mu_i - a)(\xi^\mu_j - a), \qquad W_{ii} = 0.
+$$
+
+Recall iterates $\mathbf s \leftarrow \mathrm{kWTA}(W\mathbf s)$, keeping the activity level fixed at $aN$ as inhibition would. Cue the network with a pattern from which 70% of the active cells have been removed.
+
+<PyCell id="complete" title="Recall from 30% of a pattern" tests={String.raw`
+  import numpy as np
+  def test_complete():
+      "with 50 stored sparse patterns, recall from a 30% cue has overlap above 0.95"
+      assert recall_q[(0.05, 50)] > 0.95
+  def test_cue():
+      "the cue itself has overlap below 0.6, so the network did the work"
+      assert cue_q < 0.6
+`} prompt="Write store(P, a), the covariance rule with zero diagonal, and recall(W, cue, k, steps=10), which repeatedly applies W and keeps the k most active cells. Then test recall from cues with 70% of the active cells removed."
+code={String.raw`
+  N = 1000
+
+  def store(P, a):
+      ...
+
+  def recall(W, cue, k, steps=10):
+      ...
+
+  def patterns(M, a):
+      k = int(a * N); P = np.zeros((M, N))
+      for m in range(M):
+          P[m, r.choice(N, k, replace=False)] = 1
+      return P
+
+  def run_recall(a, M, n_test=10):
+      k = int(a * N); P = patterns(M, a); W = store(P, a); q, qc = [], []
+      for m in range(n_test):
+          cue = P[m].copy(); on = np.where(cue == 1)[0]
+          cue[r.choice(on, int(0.7 * k), replace=False)] = 0
+          qc.append(ov(cue, P[m])); q.append(ov(recall(W, cue, k), P[m]))
+      return np.mean(q), np.mean(qc)
+
+  recall_q = {}
+  recall_q[(0.05, 50)], cue_q = run_recall(0.05, 50)
+  print(f"sparse (a = 0.05), 50 patterns: cue overlap {cue_q:.2f}, recalled overlap {recall_q[(0.05, 50)]:.3f}")
+`}
+hint="store: W = (P - a).T @ (P - a); np.fill_diagonal(W, 0); return W. recall: s = cue.copy(); repeat s = kwta(W @ s, k); return s."
+solution={String.raw`
+  N = 1000
+
+  def store(P, a):
+      W = (P - a).T @ (P - a)
+      np.fill_diagonal(W, 0)
+      return W
+
+  def recall(W, cue, k, steps=10):
+      s = cue.copy()
+      for _ in range(steps):
+          s = kwta(W @ s, k)
+      return s
+
+  def patterns(M, a):
+      k = int(a * N); P = np.zeros((M, N))
+      for m in range(M):
+          P[m, r.choice(N, k, replace=False)] = 1
+      return P
+
+  def run_recall(a, M, n_test=10):
+      k = int(a * N); P = patterns(M, a); W = store(P, a); q, qc = [], []
+      for m in range(n_test):
+          cue = P[m].copy(); on = np.where(cue == 1)[0]
+          cue[r.choice(on, int(0.7 * k), replace=False)] = 0
+          qc.append(ov(cue, P[m])); q.append(ov(recall(W, cue, k), P[m]))
+      return np.mean(q), np.mean(qc)
+
+  recall_q = {}
+  recall_q[(0.05, 50)], cue_q = run_recall(0.05, 50)
+  print(f"sparse (a = 0.05), 50 patterns: cue overlap {cue_q:.2f}, recalled overlap {recall_q[(0.05, 50)]:.3f}")
+`} />
+
+The cue keeps only 30% of the pattern's active cells, an overlap of about 0.55, and the network restores the full pattern exactly. Each correct cell in the cue votes, through the stored weights, for the other cells of its pattern; after kWTA the most supported cells are exactly the missing ones, and a few iterations clean up the rest. This is the behaviour Nakazawa and colleagues (2002) tested in mice lacking NMDA receptors in CA3: the mice learned a water maze normally but, unlike controls, could not find the platform when most of the room's cues were removed.
+
+<Step n={4} title="Why sparse codes store more" minutes={25} />
+
+The classic Hopfield network with dense patterns ($a = 0.5$) stores about $0.14N$ patterns. Theory for sparse patterns with the covariance rule gives a capacity that grows as the code gets sparser, roughly as $N/(a\,|\ln a|)$ (Tsodyks and Feigel'man, 1988; Treves and Rolls, 1991), because sparse patterns overlap less and so interfere less. Test it.
+
+<PyCell id="capacity" title="Dense against sparse" tests={String.raw`
+  import numpy as np
+  def test_sparse():
+      "sparse coding recalls 400 patterns almost perfectly"
+      assert recall_q[(0.05, 400)] > 0.95
+  def test_dense():
+      "dense coding fails at 200 patterns"
+      assert recall_q[(0.5, 200)] < 0.9
+`} prompt="Run run_recall for sparse patterns (a = 0.05) with 200 and 400 stored patterns, and dense patterns (a = 0.5) with 50 and 200."
+code={String.raw`
+  for a, M in [(0.05, 200), (0.05, 400), (0.5, 50), (0.5, 200)]:
+      ...
+  for key, q in recall_q.items():
+      print(f"a = {key[0]}, {key[1]} patterns: recalled overlap {q:.3f}")
+`}
+hint="recall_q[(a, M)] = run_recall(a, M)[0]."
+solution={String.raw`
+  for a, M in [(0.05, 200), (0.05, 400), (0.5, 50), (0.5, 200)]:
+      recall_q[(a, M)] = run_recall(a, M)[0]
+  for key, q in recall_q.items():
+      print(f"a = {key[0]}, {key[1]} patterns: recalled overlap {q:.3f}")
+`} />
+
+With 5% of cells active, 400 patterns in 1,000 neurons are all recalled perfectly, and the theoretical capacity is far higher. With half the cells active, 50 patterns are fine but 200, which is $0.2N$, pushes the network past its capacity of about $0.14N$ and recall falls to an overlap of about 0.7. Sparseness is not free: each sparse pattern carries less information, and very sparse codes need precise inhibition to hold the activity level. But for a structure that must store many episodes, the trade is a good one.
+
+<Callout kind="think">
+
+Separation and completion conflict. A network that completes strongly will merge a genuinely new but similar experience into an old memory; one that separates strongly will fail to recognise an old place seen from a new angle. Where should a memory system set the balance, and should the balance depend on how familiar or how important the situation is? Some theories give acetylcholine this role, switching the hippocampus between encoding and retrieval (Hasselmo, 2006).
+
+</Callout>
+
+<Bridge title="Separate, then store"
+  neuro="The dentate gyrus expands and sparsifies its input; CA3 stores patterns in recurrent synapses and completes them. Adult neurogenesis in the dentate gyrus and its link to fine discrimination between similar contexts are active research topics."
+  ai="Random expansion followed by sparsification is the fly hash of Week 39 and the idea behind random features; sparse key-value memories and modern Hopfield networks, which can be read as attention, store far more patterns than classical ones by making retrieval more selective.">
+
+Sparse, decorrelated codes let a recurrent memory hold many similar experiences without confusing them.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Pattern separation means...", options: ["Making similar inputs more different", "Completing partial cues", "Averaging patterns", "Deleting memories"], answer: 0, explain: "Attributed to the dentate gyrus." },
+  { q: "Pattern completion means...", options: ["Recalling a whole pattern from part of it", "Separating similar patterns", "Learning new patterns", "Forgetting"], answer: 0, explain: "Attributed to CA3." },
+  { q: "Dentate granule cells are...", options: ["Numerous and sparsely active", "Few and dense", "Inhibitory", "Absent in rats"], answer: 0, explain: "Expansion and sparseness." },
+  { q: "k-winners-take-all models...", options: ["Competition through inhibition", "Synaptic scaling", "STDP", "Dopamine"], answer: 0, explain: "Only the k most driven cells fire." },
+  { q: "The covariance rule subtracts the mean activity because...", options: ["Otherwise the mean dominates for sparse patterns", "It speeds up recall", "It adds noise", "It makes weights positive"], answer: 0, explain: "(ξ − a)(ξ − a)." },
+  { q: "Dense Hopfield capacity is about...", options: ["0.14 N patterns", "N patterns", "N² patterns", "10 patterns"], answer: 0, explain: "Amit, Gutfreund and Sompolinsky." },
+  { q: "Sparse codes store more because...", options: ["Sparse patterns overlap and interfere less", "They have more active cells", "They use larger weights", "They need no learning"], answer: 0, explain: "Capacity grows roughly as N/(a|ln a|)." },
+  { q: "Leutgeb et al. (2007) morphed the arena and found...", options: ["Large changes in dentate activity for small morphs", "No changes anywhere", "Identical CA3 and DG responses", "Only rate changes"], answer: 0, explain: "Evidence for separation in DG." },
+]} />
+
+<Flashcards cards={[
+  { front: "Pattern separation?", back: "Transforming similar input patterns into less similar output patterns, by expansion and sparse competition in the dentate gyrus." },
+  { front: "Pattern completion?", back: "Retrieving a stored pattern from a partial or noisy cue through recurrent attractor dynamics in CA3." },
+  { front: "Covariance rule?", back: "$W_{ij} = \\sum_\\mu(\\xi_i^\\mu - a)(\\xi_j^\\mu - a)$ with zero diagonal." },
+  { front: "Sparse capacity?", back: "Roughly $N/(a|\\ln a|)$ patterns for activity fraction $a$, far above $0.14N$ for dense patterns." },
+  { front: "Marr's hippocampus?", back: "A recurrent network that stores events quickly and retrieves them from partial cues (1971)." },
+]} />
+
+<Predict revisit question="Inputs sharing 90% of active cells, after expansion and keeping the top 2%: more, about the same, or much less overlap?" />
+
+<Key title="Before you go">
+<ul>
+<li>Expansion with competition separates similar patterns.</li>
+<li>A recurrent network with the covariance rule completes partial cues.</li>
+<li>Sparse codes store many more patterns than dense ones.</li>
+<li>The hippocampus balances separation against completion.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Leutgeb, Leutgeb, Moser and Moser (2007), <em>Pattern separation in the dentate gyrus and CA3 of the hippocampus</em>.</li>
+<li>Treves and Rolls (1994), <em>Computational analysis of the role of the hippocampus in memory</em>, Hippocampus 4(3), 374 to 391.</li>
+<li>Marr (1971), <em>Simple memory: a theory for archicortex</em>, Philosophical Transactions of the Royal Society B 262(841), 23 to 81.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Write down one everyday situation where you think your memory separated two similar experiences well, and one where it merged them. What features of the situations might have tipped the balance, and how would you turn that into an experiment?" />

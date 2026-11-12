@@ -1,0 +1,244 @@
+export const meta = {
+  title: "Continuous attractors: head direction and the ring network",
+  intro: "Head-direction cells fire when an animal faces one direction, whatever its location, and keep firing in the dark. Together they hold a single number, the current heading, as a bump of activity on a ring. In 1996 Kechen Zhang showed how a recurrent network can hold such a bump anywhere on the ring, with no preferred position, and how an asymmetric component of the connections driven by angular velocity can move it. Twenty years later Seelig and Jayaraman watched exactly such a bump turn around a ring of neurons in the fruit fly. Today you build Zhang's ring attractor, make it turn, and see how imperfect connections make the memory of heading drift.",
+  goals: [
+    "Build a ring network with cosine connectivity and show that it holds a bump",
+    "Explain what makes an attractor continuous rather than discrete",
+    "Move the bump with asymmetric connections and relate speed to asymmetry",
+    "Show how heterogeneity breaks the continuum into a few stable points",
+  ],
+  plan: [
+    { label: "Predict and head-direction cells", minutes: 15 },
+    { label: "A bump that stays", minutes: 35 },
+    { label: "Turning the bump", minutes: 25 },
+    { label: "Drift and imperfection", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "zhang-1996",
+};
+
+<Predict question="In a ring attractor whose connections have small random errors, a bump is placed at ten different starting angles and left alone. Will it stay at ten different angles, drift to random angles, or gather at a few particular angles?" />
+
+<Step n={1} title="Head-direction cells" minutes={15} />
+
+Ranck discovered head-direction cells in the rat's dorsal presubiculum in 1984, and Taube, Muller and Ranck described them in detail in 1990. Each cell has a preferred direction and a tuning curve about 90 degrees wide; together their preferred directions cover the circle. Their activity follows head turns with a small anticipatory lead, persists in darkness (with slow drift), and rotates as a whole when a landmark is rotated: the cells keep their relationships with each other while their common reference changes.
+
+These properties suggested a network whose activity can sit at any angle and stay there, a **continuous attractor**. In the fruit fly central complex, Seelig and Jayaraman (2015) imaged the ellipsoid body, a physical ring of neurons, and saw a single bump of activity that rotated as the fly turned, even in darkness. Kim and colleagues (2017) then showed by stimulating it that the bump could be moved and that only one bump could exist at a time, as attractor models predict.
+
+<Video id="9LjFqc2JRk4" title="Attractor Networks" by="Wulfram Gerstner (EPFL, Neuronal Dynamics)" note="An introduction to attractor dynamics in recurrent networks, the idea behind today's ring model and Day 4's memory networks." />
+
+<Step n={2} title="A bump that stays" minutes={35} />
+
+Take $N$ rate neurons with preferred angles $\theta_i$ around a ring and connections that depend only on the difference of angles:
+
+$$
+\tau\dot u_i = -u_i + \sum_j W_{ij}\,f(u_j) + I_i, \qquad W_{ij} = \frac{1}{N}\big(J_0 + J_1\cos(\theta_i - \theta_j)\big),
+$$
+
+with $f$ a rectified, saturating function. Nearby neurons excite each other ($J_1 \gt 0$) and global inhibition ($J_0 \lt 0$) keeps activity local. If $J_1$ is large enough, a bump of activity can sustain itself without input. Because $W$ depends only on angle differences, if a bump centred at $\phi$ is a steady state, so is the same bump rotated to any other angle: the steady states form a ring, a continuum of fixed points. This is the two-dimensional cousin of the line attractor you met in Week 6.
+
+<Figure caption="A ring attractor. A brief cue creates a bump that persists after the cue is removed. Add an angular-velocity signal to move it, or connection noise to make it drift." credit="Interactive figure by Engram, after Zhang (1996).">
+  <RingAttractor />
+</Figure>
+
+<PyCell id="bump" title="A self-sustaining bump" tests={String.raw`
+  import numpy as np
+  def test_persist():
+      "the bump stays within 0.05 rad of the cue direction long after the cue is removed"
+      assert abs(centre(h[-1]) - 1.0) < 0.05 and h[-1].max() > 0.3
+  def test_local():
+      "the bump is local: fewer than half the neurons are active"
+      assert (h[-1] > 0.01).sum() < 50
+`} prompt="Complete simulate(): Euler steps of tau du/dt = -u + W f(u) + I with dt = 0.1, adding optional noise of size noise times sqrt(dt). Cue the network at 1 rad for 300 steps, then remove the cue."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1996)
+  N = 100; th = np.linspace(-np.pi, np.pi, N, endpoint=False)
+  J0, J1 = -2.0, 6.0
+  D = th[:, None] - th[None, :]
+  W = (J0 + J1 * np.cos(D)) / N
+  f = lambda x: np.clip(x, 0, 1)
+
+  def simulate(W, I, T=2000, dt=0.1, tau=1.0, u0=None, noise=0.0):
+      u = np.zeros(N) if u0 is None else u0.copy(); hist = []
+      for t in range(T):
+          inp = I(t) if callable(I) else I
+          u += ...
+          hist.append(f(u).copy())
+      return np.array(hist)
+
+  def centre(rates):
+      return np.angle((rates * np.exp(1j * th)).sum(-1))
+
+  cue = lambda t: (0.5 * np.cos(th - 1.0) + 0.1) if t < 300 else 0.1 * np.ones(N)
+  h = simulate(W, cue)
+  print(f"bump centre at the end of the cue {centre(h[299]):.3f} rad, 1700 steps later {centre(h[-1]):.3f} rad; active neurons {(h[-1] > 0.01).sum()}")
+  plt.imshow(h.T, aspect="auto", origin="lower", extent=[0, 2000, -np.pi, np.pi]); plt.axvline(300, color="w", ls=":")
+  plt.xlabel("step"); plt.ylabel("preferred direction (rad)"); plt.show()
+`}
+hint="u += dt / tau * (-u + W @ f(u) + inp) + noise * np.sqrt(dt) * r.normal(size=N)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1996)
+  N = 100; th = np.linspace(-np.pi, np.pi, N, endpoint=False)
+  J0, J1 = -2.0, 6.0
+  D = th[:, None] - th[None, :]
+  W = (J0 + J1 * np.cos(D)) / N
+  f = lambda x: np.clip(x, 0, 1)
+
+  def simulate(W, I, T=2000, dt=0.1, tau=1.0, u0=None, noise=0.0):
+      u = np.zeros(N) if u0 is None else u0.copy(); hist = []
+      for t in range(T):
+          inp = I(t) if callable(I) else I
+          u += dt / tau * (-u + W @ f(u) + inp) + noise * np.sqrt(dt) * r.normal(size=N)
+          hist.append(f(u).copy())
+      return np.array(hist)
+
+  def centre(rates):
+      return np.angle((rates * np.exp(1j * th)).sum(-1))
+
+  cue = lambda t: (0.5 * np.cos(th - 1.0) + 0.1) if t < 300 else 0.1 * np.ones(N)
+  h = simulate(W, cue)
+  print(f"bump centre at the end of the cue {centre(h[299]):.3f} rad, 1700 steps later {centre(h[-1]):.3f} rad; active neurons {(h[-1] > 0.01).sum()}")
+  plt.imshow(h.T, aspect="auto", origin="lower", extent=[0, 2000, -np.pi, np.pi]); plt.axvline(300, color="w", ls=":")
+  plt.xlabel("step"); plt.ylabel("preferred direction (rad)"); plt.show()
+`} />
+
+The cue creates a bump centred on 1 rad, and 1700 steps after the cue is removed it is still there, within 0.005 rad of where it started, with 41 of the 100 neurons active. Nothing in the network marks 1 rad as special; cue it at any other angle and the bump stays there instead. Lower $J_1$ below about 2 and the bump decays once the cue is gone: recurrent excitation must be strong enough to replace the input, the same condition as the line attractor's eigenvalue of exactly one.
+
+<Step n={3} title="Turning the bump" minutes={25} />
+
+To follow head turns, the bump must move at a speed proportional to angular velocity. Zhang's solution was to add an odd component to the connections, $\gamma\sin(\theta_i - \theta_j)$, whose size is set by the angular velocity signal. Each neuron then excites its neighbours on one side more than on the other, and the bump slides towards that side. In the fly, a separate set of neurons, the P-EN neurons, carry angular velocity and project to the ring with a shift in one direction or the other, which is an anatomical version of the same idea (Turner-Evans and colleagues, 2017; Green and colleagues, 2017).
+
+<PyCell id="turn" title="Speed set by asymmetry" tests={String.raw`
+  import numpy as np
+  def test_still():
+      "with no asymmetry, the bump does not move"
+      assert abs(speeds[0.0]) < 1e-3
+  def test_linear():
+      "speed is proportional to asymmetry to within 10%"
+      s = np.array([speeds[g] / g for g in [0.5, 1.0, 2.0]])
+      assert s.std() / s.mean() < 0.1 and s.mean() > 0
+`} prompt="For each gamma in 0, 0.5, 1 and 2, build W_rot = (J0 + J1 cos D + gamma sin D) / N, start from a bump at 0 and run 1500 steps with a uniform input of 0.1. Measure the bump's angular speed (radians per unit time) from the unwrapped centre between steps 500 and 1500."
+code={String.raw`
+  speeds = {}
+  u0 = np.maximum(0, np.cos(th))
+  for gamma in [0.0, 0.5, 1.0, 2.0]:
+      W_rot = ...
+      hh = simulate(W_rot, 0.1 * np.ones(N), T=1500, u0=u0)
+      c = np.unwrap(centre(hh))
+      speeds[gamma] = ...
+  print({g: round(v, 4) for g, v in speeds.items()}, "rad per unit time")
+`}
+hint="W_rot = (J0 + J1 * np.cos(D) + gamma * np.sin(D)) / N; speeds[gamma] = (c[-1] - c[500]) / (1000 * 0.1)."
+solution={String.raw`
+  speeds = {}
+  u0 = np.maximum(0, np.cos(th))
+  for gamma in [0.0, 0.5, 1.0, 2.0]:
+      W_rot = (J0 + J1 * np.cos(D) + gamma * np.sin(D)) / N
+      hh = simulate(W_rot, 0.1 * np.ones(N), T=1500, u0=u0)
+      c = np.unwrap(centre(hh))
+      speeds[gamma] = (c[-1] - c[500]) / (1000 * 0.1)
+  print({g: round(v, 4) for g, v in speeds.items()}, "rad per unit time")
+`} />
+
+Without asymmetry the bump stays put; with $\gamma$ of 0.5, 1 and 2 it turns at about 0.083, 0.166 and 0.331 radians per unit time, proportional to $\gamma$ to within a fraction of a percent. A linear map from angular velocity to $\gamma$ therefore gives a bump that tracks heading, which is integration of angular velocity. Any error in that gain makes the internal compass turn too fast or too slow, and in flies and rodents the gain is recalibrated by visual landmarks.
+
+<Step n={4} title="Drift and imperfection" minutes={30} />
+
+A continuous attractor needs perfect symmetry. Any heterogeneity, in connection strengths or in neurons' excitability, makes some bump positions slightly more stable than others, and the bump slowly slides into these few preferred positions. Noise, meanwhile, makes it diffuse. Both effects limit how long a ring can remember a heading without input, and both have been measured: head-direction estimates in the dark drift, and working-memory reports of remembered angles show both diffusion and attraction towards particular angles (Week 46).
+
+<PyCell id="drift" title="A ring with imperfect connections" tests={String.raw`
+  import numpy as np
+  def test_moved():
+      "with heterogeneous connections, most bumps have moved more than 0.1 rad"
+      moved = np.abs(np.angle(np.exp(1j * (ends[:, 1] - ends[:, 0]))))
+      assert np.mean(moved > 0.1) >= 0.5
+  def test_clustered():
+      "the bumps gather: at least five end within 0.05 rad of another bump"
+      d = np.abs(np.angle(np.exp(1j * (ends[:, 1][:, None] - ends[:, 1][None]))))
+      np.fill_diagonal(d, 9)
+      assert (d.min(1) < 0.05).sum() >= 5
+`} prompt="Add random errors of standard deviation 0.3/N to W, then start bumps at ten random angles and run each for 8000 steps with uniform input 0.1. Record start and end angles in the array ends."
+code={String.raw`
+  r4 = np.random.default_rng(1996)
+  W_het = W + 0.3 * r4.normal(size=W.shape) / N
+  ends = []
+  for k in range(10):
+      s = r4.uniform(-np.pi, np.pi)
+      ...
+  ends = np.array(ends)
+  for s, e in ends:
+      print(f"start {s:+.2f} rad -> end {e:+.2f} rad")
+`}
+hint="hh = simulate(W_het, 0.1 * np.ones(N), T=8000, u0=np.maximum(0, np.cos(th - s))); ends.append((s, centre(hh[-1])))."
+solution={String.raw`
+  r4 = np.random.default_rng(1996)
+  W_het = W + 0.3 * r4.normal(size=W.shape) / N
+  ends = []
+  for k in range(10):
+      s = r4.uniform(-np.pi, np.pi)
+      hh = simulate(W_het, 0.1 * np.ones(N), T=8000, u0=np.maximum(0, np.cos(th - s)))
+      ends.append((s, centre(hh[-1])))
+  ends = np.array(ends)
+  for s, e in ends:
+      print(f"start {s:+.2f} rad -> end {e:+.2f} rad")
+`} />
+
+Ten starting angles end at only five places, and five of the ten bumps end within a hundredth of a radian of 0.56 rad, having travelled up to 1.3 rad to get there. Connection errors of a few percent have turned the ring of fixed points into a handful of discrete attractors joined by slow channels. The bumps that started near one of the stable points barely moved, which is why drift can look small in short experiments and large in long ones. In real circuits, this kind of drift is one reason head-direction estimates need constant correction by landmarks.
+
+<Callout kind="research">
+
+Ring attractors are the best-supported continuous attractors in any brain, but how they are wired is still being worked out. In the fly, the connectome (Hulse and colleagues, 2021) lets models be built from measured synapses rather than assumed cosines. In mammals, Chaudhuri, Gerçek, Pandey, Peyrache and Fiete (2019) found that the joint activity of head-direction neurons lies on a one-dimensional ring even during sleep, when there is no heading to track, which is strong evidence that the ring is a property of the network itself.
+
+</Callout>
+
+<Bridge title="Memory as a position on a manifold"
+  neuro="Head direction in flies and mammals, and possibly eye position, spatial working memory and grid cells, are held as positions along continuous attractor manifolds. The theory explains persistence, drift, and why only one bump can exist."
+  ai="Recurrent networks trained to integrate angular velocity or remember a continuous value develop ring-shaped or line-shaped sets of slow points (Week 22). Analysing a trained network's fixed points has become a standard way to understand how it solves a task.">
+
+A network can remember a continuous quantity by letting it choose where, along a ring of fixed points, to sit.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Head-direction cells fire according to...", options: ["Which way the head points, regardless of location", "Location", "Speed", "Time"], answer: 0, explain: "Ranck (1984); Taube, Muller and Ranck (1990)." },
+  { q: "A continuous attractor has...", options: ["A continuum of stable states", "One stable state", "No stable states", "Two stable states"], answer: 0, explain: "A ring of fixed points." },
+  { q: "The ring network's bump can sit anywhere because...", options: ["The connections depend only on angle differences", "There is no inhibition", "The input is uniform", "The neurons are identical in rate"], answer: 0, explain: "Rotational symmetry." },
+  { q: "Global inhibition in the ring network...", options: ["Keeps the bump local and prevents multiple bumps", "Moves the bump", "Creates the bump", "Has no role"], answer: 0, explain: "J₀ below zero." },
+  { q: "An asymmetric sin component in the connections...", options: ["Moves the bump at a speed proportional to its size", "Widens the bump", "Silences the network", "Creates a second bump"], answer: 0, explain: "Zhang (1996)." },
+  { q: "In the fly, the bump of head direction is in...", options: ["The ellipsoid body of the central complex", "The mushroom body", "The optic lobe", "The antennal lobe"], answer: 0, explain: "Seelig and Jayaraman (2015)." },
+  { q: "Heterogeneous connections make the bump...", options: ["Drift towards a few preferred positions", "Stay perfectly", "Disappear", "Split"], answer: 0, explain: "Symmetry is broken." },
+  { q: "Evidence that the ring is intrinsic includes...", options: ["Ring-shaped population activity during sleep", "Cells firing only in light", "Place cells remapping", "Grid modules"], answer: 0, explain: "Chaudhuri et al. (2019)." },
+]} />
+
+<Flashcards cards={[
+  { front: "Ring attractor connectivity?", back: "$W_{ij} = (J_0 + J_1\\cos(\\theta_i - \\theta_j))/N$, local excitation and global inhibition." },
+  { front: "Why is the attractor continuous?", back: "Rotational symmetry: any rotation of a steady bump is also steady." },
+  { front: "How does the bump move?", back: "An odd component $\\gamma\\sin(\\theta_i - \\theta_j)$ set by angular velocity; speed is proportional to $\\gamma$." },
+  { front: "Why do real rings drift?", back: "Noise causes diffusion and heterogeneity creates a few preferred positions the bump slides towards." },
+  { front: "Fly head-direction system?", back: "A bump in the ellipsoid body moved by P-EN neurons carrying angular velocity." },
+]} />
+
+<Predict revisit question="With small random connection errors, will ten bumps stay at ten angles, drift randomly, or gather at a few?" />
+
+<Key title="Before you go">
+<ul>
+<li>Head-direction cells hold heading as a bump on a ring.</li>
+<li>Symmetric cosine connectivity gives a continuum of stable bumps.</li>
+<li>Velocity-gated asymmetry moves the bump.</li>
+<li>Imperfections make the bump drift to a few points.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Zhang (1996), <em>Representation of spatial orientation by the intrinsic dynamics of the head-direction cell ensemble: a theory</em>.</li>
+<li>Seelig and Jayaraman (2015), <em>Neural dynamics for landmark orientation and angular path integration</em>, Nature 521(7551), 186 to 191.</li>
+<li>Chaudhuri, Gerçek, Pandey, Peyrache and Fiete (2019), <em>The intrinsic attractor manifold and population dynamics of a canonical cognitive circuit across waking and sleep</em>, Nature Neuroscience 22(9), 1512 to 1520.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Zhang's model needs angular velocity to gate the asymmetric connections. List three ways a real circuit could implement that gating, and for one of them, describe the experiment you would do in the fly to test it." />

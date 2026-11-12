@@ -1,0 +1,293 @@
+export const meta = {
+  title: "Grid cells: a hexagonal code and path integration",
+  intro: "In 2005 Torkel Hafting, Marianne Fyhn, Sturla Molden, May-Britt Moser and Edvard Moser recorded from the medial entorhinal cortex, one synapse upstream of the hippocampus, and found cells whose firing fields formed a triangular lattice tiling the whole arena. Grid cells come in modules with different spacings, keep their pattern in the dark, and appear to provide the metric for the brain's map. Today you build a grid map from three plane waves, measure gridness from its autocorrelogram, see why several grid scales together can encode position over a huge range, and simulate the problem that grid cells are thought to solve: keeping track of position by integrating velocity, whose errors grow without landmarks.",
+  goals: [
+    "Construct a grid map from three plane waves at 60 degrees",
+    "Compute a spatial autocorrelogram and a gridness score",
+    "Explain how several grid modules encode position over a long range, and the cost in noise",
+    "Show that path-integration error grows like the square root of time",
+  ],
+  plan: [
+    { label: "Predict and the discovery", minutes: 15 },
+    { label: "Building and scoring a grid", minutes: 35 },
+    { label: "A modular code for position", minutes: 30 },
+    { label: "Path integration", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "hafting-2005",
+};
+
+<Predict question="A rat estimates its position by adding up its own movements, each measured with a little noise. After 20 seconds the typical error is 4 cm. Roughly what will it be after 80 seconds?" />
+
+<Step n={1} title="A lattice in the entorhinal cortex" minutes={15} />
+
+Hafting and colleagues found that cells in layer II of dorsocaudal medial entorhinal cortex fired at the vertices of an equilateral triangular grid. Each cell's grid is described by three numbers: its **spacing** (distance between neighbouring fields, from about 30 cm dorsally to several metres ventrally), its **orientation**, and its **phase** (the offset of the lattice). Neighbouring cells share spacing and orientation but have different phases, so together they tile the floor. Later work (Stensola and colleagues, 2012) showed that spacings are organised in a few discrete **modules**, with each module's spacing about 1.4 times the previous one.
+
+Grid patterns survive darkness and persist when the arena is changed, suggesting the cells compute position from the animal's own movement, a process called path integration, with landmarks used to correct accumulated error. Head-direction cells and speed cells in the same region supply the inputs that such a computation would need.
+
+<Video id="vQpo3rTwUjc" title="Neural Integrators" by="Michale Fee (MIT 9.40 Introduction to Neural Computation)" note="Fee explains how recurrent circuits can integrate their input over time, using the oculomotor integrator as the example. Path integration in the entorhinal cortex is the same computation in two dimensions." />
+
+<Step n={2} title="Building and scoring a grid" minutes={35} />
+
+The sum of three cosine gratings whose wave vectors are 60 degrees apart has hexagonal symmetry. With wave number $k = 4\pi/(\sqrt3\,\lambda)$ the peaks are spaced $\lambda$ apart:
+
+$$
+g(\mathbf x) = \sum_{j=0}^{2}\cos\!\big(\mathbf k_j\cdot(\mathbf x - \mathbf c)\big),\qquad \mathbf k_j = k\,(\cos(\theta + j\pi/3),\ \sin(\theta + j\pi/3)).
+$$
+
+To score real data, the convention (Sargolini and colleagues, 2006) is to compute the map's spatial autocorrelogram, rotate it, and compare: a hexagonal pattern matches itself at 60 and 120 degrees and mismatches at 30, 90 and 150 degrees. **Gridness** is the smaller of the 60 and 120 degree correlations minus the largest of the other three.
+
+<Figure caption="A grid built from three plane waves. Change the spacing, orientation and phase; then change the angle between the waves and watch the pattern lose its symmetry." credit="Interactive figure by Engram.">
+  <GridCell />
+</Figure>
+
+<PyCell id="gridness" title="Gridness from the autocorrelogram" tests={String.raw`
+  import numpy as np
+  def test_grid():
+      "the hexagonal map scores above 1 and stays above 1 with noise"
+      assert scores["grid"] > 1 and scores["noisy grid"] > 1
+  def test_others():
+      "a single place field scores near zero and a square lattice scores below -1"
+      assert abs(scores["place field"]) < 0.2 and scores["square lattice"] < -1
+`} prompt="Write gridness(m): compute the autocorrelogram a; build a ring mask from radius 4 bins to a quarter of the autocorrelogram's size; for each angle rotate a (scipy.ndimage.rotate, reshape=False, order=1) and correlate with a over the ring."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.ndimage import rotate
+  from scipy.signal import fftconvolve
+  r = np.random.default_rng(2005)
+  nb = 50; g = (np.arange(nb) + 0.5) / nb; X, Y = np.meshgrid(g, g, indexing="ij")
+
+  def grid(lam=0.3, ori=0.0, phase=(0, 0)):
+      k = 4 * np.pi / (np.sqrt(3) * lam); s = 0
+      for a in [0, np.pi / 3, 2 * np.pi / 3]:
+          s = s + np.cos(k * np.cos(a + ori) * (X - phase[0]) + k * np.sin(a + ori) * (Y - phase[1]))
+      return np.maximum(0, (s + 1.5) / 4.5)
+
+  def autocorr(m):
+      m = m - m.mean(); a = fftconvolve(m, m[::-1, ::-1], mode="full")
+      return a / a.max()
+
+  def gridness(m):
+      a = autocorr(m); n = a.shape[0]; c = n // 2
+      yy, xx = np.mgrid[:n, :n]; rr = np.hypot(yy - c, xx - c)
+      ring = ...
+      def cc(angle):
+          ...
+      return min(cc(60), cc(120)) - max(cc(30), cc(90), cc(150))
+
+  maps = {"grid": grid(0.3),
+          "noisy grid": grid(0.3) + 0.3 * r.normal(size=(nb, nb)),
+          "place field": np.exp(-((X - 0.4) ** 2 + (Y - 0.6) ** 2) / (2 * 0.08 ** 2)),
+          "square lattice": np.maximum(0, np.cos(2 * np.pi * X / 0.3) + np.cos(2 * np.pi * Y / 0.3))}
+  scores = {k: gridness(m) for k, m in maps.items()}
+  print({k: round(v, 2) for k, v in scores.items()})
+  fig, ax = plt.subplots(1, 2, figsize=(8, 4)); ax[0].imshow(maps["grid"].T, origin="lower"); ax[1].imshow(autocorr(maps["grid"]).T, origin="lower"); plt.show()
+`}
+hint="ring = (rr > 4) & (rr < n // 4); in cc: b = rotate(a, angle, reshape=False, order=1); return np.corrcoef(a[ring], b[ring])[0, 1]."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.ndimage import rotate
+  from scipy.signal import fftconvolve
+  r = np.random.default_rng(2005)
+  nb = 50; g = (np.arange(nb) + 0.5) / nb; X, Y = np.meshgrid(g, g, indexing="ij")
+
+  def grid(lam=0.3, ori=0.0, phase=(0, 0)):
+      k = 4 * np.pi / (np.sqrt(3) * lam); s = 0
+      for a in [0, np.pi / 3, 2 * np.pi / 3]:
+          s = s + np.cos(k * np.cos(a + ori) * (X - phase[0]) + k * np.sin(a + ori) * (Y - phase[1]))
+      return np.maximum(0, (s + 1.5) / 4.5)
+
+  def autocorr(m):
+      m = m - m.mean(); a = fftconvolve(m, m[::-1, ::-1], mode="full")
+      return a / a.max()
+
+  def gridness(m):
+      a = autocorr(m); n = a.shape[0]; c = n // 2
+      yy, xx = np.mgrid[:n, :n]; rr = np.hypot(yy - c, xx - c)
+      ring = (rr > 4) & (rr < n // 4)
+      def cc(angle):
+          b = rotate(a, angle, reshape=False, order=1)
+          return np.corrcoef(a[ring], b[ring])[0, 1]
+      return min(cc(60), cc(120)) - max(cc(30), cc(90), cc(150))
+
+  maps = {"grid": grid(0.3),
+          "noisy grid": grid(0.3) + 0.3 * r.normal(size=(nb, nb)),
+          "place field": np.exp(-((X - 0.4) ** 2 + (Y - 0.6) ** 2) / (2 * 0.08 ** 2)),
+          "square lattice": np.maximum(0, np.cos(2 * np.pi * X / 0.3) + np.cos(2 * np.pi * Y / 0.3))}
+  scores = {k: gridness(m) for k, m in maps.items()}
+  print({k: round(v, 2) for k, v in scores.items()})
+  fig, ax = plt.subplots(1, 2, figsize=(8, 4)); ax[0].imshow(maps["grid"].T, origin="lower"); ax[1].imshow(autocorr(maps["grid"]).T, origin="lower"); plt.show()
+`} />
+
+The hexagonal map scores about 1.26 and barely changes with noise of 30% of its peak, because the autocorrelogram averages over many fields. A single place field scores zero: its autocorrelogram is a central blob that looks the same at every rotation. A square lattice scores about -1.2, since it matches itself at 90 degrees and not at 60. In real recordings, a cell is usually called a grid cell if its gridness exceeds the 95th or 99th percentile of shuffled data, the same logic as Day 1's spatial information test.
+
+<Step n={3} title="A modular code for position" minutes={30} />
+
+A single grid module is ambiguous: positions one spacing apart look identical. But the phases of several modules with different spacings, taken together, are unique over a range far larger than any one spacing, much as the remainders of a number divided by 3, 5 and 7 identify it uniquely up to 105. Fiete, Burak and Brookings (2008) argued that this gives grid cells an enormous coding range. The price is fragility: a small error in one module's phase can make the decoder jump to a completely different position.
+
+<PyCell id="modular" title="Decoding position from three modules" tests={String.raw`
+  import numpy as np
+  def test_precise():
+      "without phase noise, the median error is under 1 mm over a 10 m track"
+      assert med[0.0] < 0.001
+  def test_catastrophic():
+      "with phase noise of 0.05, more than 20% of decodes are off by over 0.5 m"
+      assert cat[0.05] > 0.2 and cat[0.02] < 0.05
+`} prompt="Write decode(phases): for every candidate position on a 1 mm grid from 0 to 10 m, compute each module's phase (x mod period, divided by period), the circular distance to the observed phases, and return the candidate with the smallest summed squared distance."
+code={String.raw`
+  periods = np.array([0.30, 0.42, 0.59])            # metres, ratio about 1.4
+  xs = np.linspace(0, 10, 10001)
+  cand = (xs[:, None] % periods) / periods            # phases of every candidate
+
+  def decode(phases):
+      d = ...
+      d = np.minimum(d, 1 - d)                        # circular distance
+      return ...
+
+  med, cat = {}, {}
+  for sd in [0.0, 0.02, 0.05, 0.1]:
+      errs = []
+      for k in range(200):
+          x = r.uniform(0, 10)
+          ph = ((x % periods) / periods + sd * r.normal(size=3)) % 1
+          errs.append(abs(decode(ph) - x))
+      errs = np.array(errs); med[sd] = np.median(errs); cat[sd] = np.mean(errs > 0.5)
+      print(f"phase noise {sd:.2f}: median error {100 * med[sd]:.2f} cm, catastrophic errors {100 * cat[sd]:.1f}%")
+`}
+hint="d = np.abs(cand - phases[None]); return xs[np.argmin((d ** 2).sum(1))]."
+solution={String.raw`
+  periods = np.array([0.30, 0.42, 0.59])            # metres, ratio about 1.4
+  xs = np.linspace(0, 10, 10001)
+  cand = (xs[:, None] % periods) / periods            # phases of every candidate
+
+  def decode(phases):
+      d = np.abs(cand - phases[None])
+      d = np.minimum(d, 1 - d)                        # circular distance
+      return xs[np.argmin((d ** 2).sum(1))]
+
+  med, cat = {}, {}
+  for sd in [0.0, 0.02, 0.05, 0.1]:
+      errs = []
+      for k in range(200):
+          x = r.uniform(0, 10)
+          ph = ((x % periods) / periods + sd * r.normal(size=3)) % 1
+          errs.append(abs(decode(ph) - x))
+      errs = np.array(errs); med[sd] = np.median(errs); cat[sd] = np.mean(errs > 0.5)
+      print(f"phase noise {sd:.2f}: median error {100 * med[sd]:.2f} cm, catastrophic errors {100 * cat[sd]:.1f}%")
+`} />
+
+Without noise, three modules with spacings under 60 cm locate the rat to within a fraction of a millimetre anywhere on a 10 m track. With phase noise of 2% of a cycle the median error is a few millimetres and almost no decode goes badly wrong; at 5% the typical error is still about a centimetre, but over a third of decodes land on the wrong position entirely, often metres away. The range of a modular code comes at the cost of this all-or-nothing failure, and Sreenivasan and Fiete (2011) argued that a suitable readout, possibly in the hippocampus, can correct such errors by allowing only consistent combinations of phases.
+
+<Step n={4} title="Path integration" minutes={25} />
+
+If the grid is driven by velocity, its estimate of position is the integral of noisy velocity measurements. Independent errors add, so their variance grows linearly in time and the typical error like $\sqrt t$, which is the signature of a random walk (Week 24).
+
+<PyCell id="pathint" title="Errors that accumulate" tests={String.raw`
+  import numpy as np
+  def test_sqrt():
+      "RMS error at 60 s is about sqrt(12) times the error at 5 s"
+      ratio = rms[2999] / rms[249]
+      assert 2.8 < ratio < 4.2
+  def test_reset():
+      "with landmark resets every 10 s, the error never exceeds half of the uncorrected error at 60 s"
+      assert rms_reset.max() < 0.5 * rms[2999]
+`} prompt="Integrate 200 noisy velocity traces (noise 0.05 m/s per component) and compute the RMS position error over time. Then repeat, resetting the estimate to the true position every 500 steps (10 s), as a landmark would."
+code={String.raw`
+  dt, T = 0.02, 3000                                    # 60 s
+  v = 0.2 * r.normal(size=(T, 2)); x_true = np.cumsum(v * dt, 0)
+
+  def integrate(reset_every=None, noise=0.05):
+      est = np.zeros(2); out = np.zeros((T, 2))
+      vm = v + noise * r.normal(size=v.shape)
+      for t in range(T):
+          ...
+          out[t] = est
+      return out
+
+  errs = np.array([np.linalg.norm(integrate() - x_true, axis=1) for _ in range(200)])
+  errs_r = np.array([np.linalg.norm(integrate(500) - x_true, axis=1) for _ in range(200)])
+  rms, rms_reset = np.sqrt((errs ** 2).mean(0)), np.sqrt((errs_r ** 2).mean(0))
+  print(f"RMS error at 5, 20, 60 s: {np.round(100 * rms[[249, 999, 2999]], 1)} cm; with resets, never above {100 * rms_reset.max():.1f} cm")
+  plt.plot(np.arange(T) * dt, 100 * rms, label="integration only"); plt.plot(np.arange(T) * dt, 100 * rms_reset, label="landmark every 10 s")
+  plt.xlabel("time (s)"); plt.ylabel("RMS error (cm)"); plt.legend(); plt.show()
+`}
+hint="Inside the loop: est = est + vm[t] * dt; then if reset_every and (t + 1) % reset_every == 0: est = x_true[t].copy()."
+solution={String.raw`
+  dt, T = 0.02, 3000                                    # 60 s
+  v = 0.2 * r.normal(size=(T, 2)); x_true = np.cumsum(v * dt, 0)
+
+  def integrate(reset_every=None, noise=0.05):
+      est = np.zeros(2); out = np.zeros((T, 2))
+      vm = v + noise * r.normal(size=v.shape)
+      for t in range(T):
+          est = est + vm[t] * dt
+          if reset_every and (t + 1) % reset_every == 0:
+              est = x_true[t].copy()
+          out[t] = est
+      return out
+
+  errs = np.array([np.linalg.norm(integrate() - x_true, axis=1) for _ in range(200)])
+  errs_r = np.array([np.linalg.norm(integrate(500) - x_true, axis=1) for _ in range(200)])
+  rms, rms_reset = np.sqrt((errs ** 2).mean(0)), np.sqrt((errs_r ** 2).mean(0))
+  print(f"RMS error at 5, 20, 60 s: {np.round(100 * rms[[249, 999, 2999]], 1)} cm; with resets, never above {100 * rms_reset.max():.1f} cm")
+  plt.plot(np.arange(T) * dt, 100 * rms, label="integration only"); plt.plot(np.arange(T) * dt, 100 * rms_reset, label="landmark every 10 s")
+  plt.xlabel("time (s)"); plt.ylabel("RMS error (cm)"); plt.legend(); plt.show()
+`} />
+
+The error grows from about 2 cm at 5 s to 4.4 cm at 20 s and 7.8 cm at 60 s: quadrupling the time doubles the error. Correcting against a landmark every 10 s caps it at the error reached in 10 s, about 3 cm. Real animals show this drift: in darkness, grid patterns slowly lose their alignment, and Hardcastle, Ganguli and Giocomo (2015) found that grid errors grew with time since the mouse last touched a wall and were corrected at boundaries.
+
+<Callout kind="research">
+
+Grid-like units emerge in recurrent networks trained to path integrate (Banino and colleagues, 2018; Cueva and Wei, 2018), but Schaeffer, Khona and Fiete (2022) showed that whether they appear depends sharply on choices such as the readout and the activation function. Whether trained networks explain why the brain has grid cells, or only show that grids are one of several solutions, is an active debate.
+
+</Callout>
+
+<Bridge title="A metric for the map"
+  neuro="Grid cells provide a coordinate system that is reused across environments, while place cells remap. Grid-like signals have also been found with fMRI in humans navigating virtual spaces and even abstract conceptual spaces."
+  ai="Periodic, multi-scale codes for position are used in AI too: the sinusoidal positional encodings of the original transformer combine sines and cosines at geometrically spaced frequencies, much as grid modules combine geometrically spaced spacings.">
+
+Several periodic codes at different scales locate a point over a range far larger than any one of them.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Grid cells were found by Hafting et al. (2005) in...", options: ["Medial entorhinal cortex", "CA1", "Dentate gyrus", "Visual cortex"], answer: 0, explain: "Layer II of dorsocaudal MEC." },
+  { q: "Grid fields form...", options: ["An equilateral triangular lattice", "A square lattice", "A single field", "Concentric rings"], answer: 0, explain: "Hexagonal symmetry." },
+  { q: "A grid is described by...", options: ["Spacing, orientation and phase", "Peak rate only", "Size only", "Theta frequency"], answer: 0, explain: "Three parameters." },
+  { q: "Gridness compares autocorrelogram correlations at...", options: ["60 and 120 degrees against 30, 90 and 150", "90 and 180 degrees", "0 and 45 degrees", "All angles equally"], answer: 0, explain: "Sargolini et al. (2006)." },
+  { q: "Grid spacing across modules increases by a factor of about...", options: ["1.4", "10", "1.01", "3"], answer: 0, explain: "Stensola et al. (2012)." },
+  { q: "Several grid modules together can encode position over...", options: ["A range much larger than any single spacing", "One spacing only", "The smallest spacing", "Nothing unambiguous"], answer: 0, explain: "Like the Chinese remainder theorem." },
+  { q: "The weakness of the modular code is...", options: ["Small phase errors can cause large position errors", "It needs too few cells", "It is too smooth", "It cannot be decoded"], answer: 0, explain: "Catastrophic errors." },
+  { q: "Path-integration error without landmarks grows like...", options: ["The square root of time", "Time", "Time squared", "It does not grow"], answer: 0, explain: "A random walk." },
+]} />
+
+<Flashcards cards={[
+  { front: "Grid map from plane waves?", back: "Sum three cosines with wave vectors 60 degrees apart, $k = 4\\pi/(\\sqrt3\\lambda)$ for spacing $\\lambda$." },
+  { front: "Gridness score?", back: "min(r60, r120) minus max(r30, r90, r150) of the rotated autocorrelogram." },
+  { front: "Grid modules?", back: "Discrete groups sharing spacing and orientation, spacing increasing by about 1.4 from dorsal to ventral MEC." },
+  { front: "Path integration?", back: "Estimating position by integrating self-motion; error grows like $\\sqrt t$ and needs landmark correction." },
+  { front: "Modular grid code?", back: "Phases of several modules jointly identify position over a long range, but noise can cause catastrophic errors." },
+]} />
+
+<Predict revisit question="Path-integration error is 4 cm at 20 s. What is it at 80 s?" />
+
+<Key title="Before you go">
+<ul>
+<li>Grid cells fire on a hexagonal lattice with modular spacings.</li>
+<li>Gridness compares the autocorrelogram with its rotations.</li>
+<li>Multiple modules give a long-range but fragile code.</li>
+<li>Path integration drifts like a random walk without landmarks.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Hafting, Fyhn, Molden, Moser and Moser (2005), <em>Microstructure of a spatial map in the entorhinal cortex</em>.</li>
+<li>Stensola et al. (2012), <em>The entorhinal grid map is discretized</em>, Nature 492(7427), 72 to 78.</li>
+<li>Fiete, Burak and Brookings (2008), <em>What grid cells convey about rat location</em>, Journal of Neuroscience 28(27), 6858 to 6871.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Grid cells keep their spacing when a rat moves to a new room, while place cells remap. Propose how the hippocampus could use a fixed grid code to build a different place map in each room, and what would have to change between rooms." />

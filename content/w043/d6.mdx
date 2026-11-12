@@ -1,0 +1,248 @@
+export const meta = {
+  title: "Forge: Week 43 challenge, quiz and deep read",
+  intro: "This week followed the hippocampal formation from coding to memory. Place cells give each location in each environment its own pattern; grid cells provide a periodic metric and integrate self-motion; ring attractors hold a heading; the dentate gyrus separates and CA3 completes; and replay carries new episodes into the neocortex without overwriting old knowledge. Today's challenge connects two of these. First, build a place cell from grid cells, as many models propose, and see why the choice of inputs matters. Second, detect replay in a burst of spikes with the rank-order test used in hippocampal recordings. Then the quiz, and a critique of the discovery of grid cells.",
+  goals: [
+    "Build a single place field by combining grid cells from several modules",
+    "Detect sequential replay with a rank-order correlation and a shuffle test",
+    "Connect coding, attractors and memory across the week",
+    "Critique the evidence for grid cells and its interpretation",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "hafting-2005",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. A cell fires only in one of 64 equally visited bins. How many bits per spike does it carry?
+2. Path-integration error is 3 cm after 10 s. What is it after 90 s?
+3. Grid modules have spacings 30 cm and 42 cm. Over what distance do their phases first repeat together?
+
+<PyCell code={String.raw`
+  import numpy as np
+  print("1.", np.log2(64), "bits per spike")
+  print("2.", 3 * np.sqrt(90 / 10), "cm")
+  print("3.", np.lcm(30, 42), "cm")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: a place cell from grid cells.** Solstad, Moser and Einevoll (2006) showed that summing grid cells with different spacings and a common peak, then thresholding, gives a single place field. Build 40 grid maps: four modules with spacings $0.3 \times 1.4^m$ m, a random orientation per module, and ten random phases per module. A downstream cell sums them with weights $\mathbf w$ and fires above its 97th percentile. Compare weights chosen to match a target location (each grid cell weighted by its own rate at the target, which is what a Hebbian rule would give if the cell was active there) with random weights.
+
+<PyCell id="partA" title="Part A: grids to place" tests={String.raw`
+  import numpy as np
+  def test_selected():
+      "selected weights give a single field within 10 cm of the target"
+      assert n_sel == 1 and dist_sel < 0.1
+  def test_random():
+      "random weights give more than one field"
+      assert n_rand > 1
+`} prompt="Write place(w): the weighted sum of the 40 grid maps, minus its 97th percentile, rectified. Count the fields (connected regions above half the peak, using scipy.ndimage.label) and the distance of the peak from the target."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.ndimage import label
+  r = np.random.default_rng(2006)
+  nb = 50; g = (np.arange(nb) + 0.5) / nb; X, Y = np.meshgrid(g, g, indexing="ij")
+
+  def grid(lam, ori, ph):
+      k = 4 * np.pi / (np.sqrt(3) * lam); s = 0
+      for a in [0, np.pi / 3, 2 * np.pi / 3]:
+          s = s + np.cos(k * np.cos(a + ori) * (X - ph[0]) + k * np.sin(a + ori) * (Y - ph[1]))
+      return np.maximum(0, (s + 1.5) / 4.5)
+
+  G = []
+  for m in range(4):
+      lam = 0.3 * 1.4 ** m; ori = r.uniform(0, np.pi / 3)
+      for i in range(10):
+          G.append(grid(lam, ori, r.uniform(0, lam, 2)))
+  G = np.array(G)                                      # 40 x 50 x 50
+
+  def place(w):
+      ...
+
+  def describe(p, target):
+      lab, n = label(p > 0.5 * p.max())
+      i, j = np.unravel_index(p.argmax(), p.shape)
+      return n, np.hypot(g[i] - target[0], g[j] - target[1])
+
+  target = (0.62, 0.35); ti, tj = int(target[0] * nb), int(target[1] * nb)
+  p_sel, p_rand = place(G[:, ti, tj]), place(r.random(len(G)))
+  n_sel, dist_sel = describe(p_sel, target)
+  n_rand, _ = describe(p_rand, target)
+  print(f"selected weights: {n_sel} field(s), peak {100 * dist_sel:.1f} cm from the target;  random weights: {n_rand} fields")
+  fig, ax = plt.subplots(1, 2, figsize=(8, 4)); ax[0].imshow(p_sel.T, origin="lower"); ax[1].imshow(p_rand.T, origin="lower"); plt.show()
+`}
+hint="h = np.tensordot(w, G, 1); return np.maximum(0, h - np.percentile(h, 97))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.ndimage import label
+  r = np.random.default_rng(2006)
+  nb = 50; g = (np.arange(nb) + 0.5) / nb; X, Y = np.meshgrid(g, g, indexing="ij")
+
+  def grid(lam, ori, ph):
+      k = 4 * np.pi / (np.sqrt(3) * lam); s = 0
+      for a in [0, np.pi / 3, 2 * np.pi / 3]:
+          s = s + np.cos(k * np.cos(a + ori) * (X - ph[0]) + k * np.sin(a + ori) * (Y - ph[1]))
+      return np.maximum(0, (s + 1.5) / 4.5)
+
+  G = []
+  for m in range(4):
+      lam = 0.3 * 1.4 ** m; ori = r.uniform(0, np.pi / 3)
+      for i in range(10):
+          G.append(grid(lam, ori, r.uniform(0, lam, 2)))
+  G = np.array(G)                                      # 40 x 50 x 50
+
+  def place(w):
+      h = np.tensordot(w, G, 1)
+      return np.maximum(0, h - np.percentile(h, 97))
+
+  def describe(p, target):
+      lab, n = label(p > 0.5 * p.max())
+      i, j = np.unravel_index(p.argmax(), p.shape)
+      return n, np.hypot(g[i] - target[0], g[j] - target[1])
+
+  target = (0.62, 0.35); ti, tj = int(target[0] * nb), int(target[1] * nb)
+  p_sel, p_rand = place(G[:, ti, tj]), place(r.random(len(G)))
+  n_sel, dist_sel = describe(p_sel, target)
+  n_rand, _ = describe(p_rand, target)
+  print(f"selected weights: {n_sel} field(s), peak {100 * dist_sel:.1f} cm from the target;  random weights: {n_rand} fields")
+  fig, ax = plt.subplots(1, 2, figsize=(8, 4)); ax[0].imshow(p_sel.T, origin="lower"); ax[1].imshow(p_rand.T, origin="lower"); plt.show()
+`} />
+
+With weights matched to the target, the downstream cell has a single field whose peak lies about 6 cm from it: the grids of all four modules peak together only there, and the threshold keeps only that coincidence. With random weights the cell has three fields scattered across the arena, because different subsets of grids happen to align in several places. The coarse modules matter: without them, the fine grids' periodicity would give the downstream cell repeating fields. The same idea, in reverse, is the Day 2 modular code: what the grid code makes unique, a summing cell can pick out.
+
+**Part B: detecting replay.** Twenty place cells have fields in order along a linear track. During a sharp-wave ripple, each fires once. In a forward replay event the spikes follow the field order, compressed so that the whole track takes about 200 ms, with timing jitter of 15 ms; in a control event the order is random. The rank-order test (Lee and Wilson, 2002) correlates each cell's field order with its spike time and compares the correlation with 1,000 shuffles of cell identity.
+
+<PyCell id="partB" title="Part B: the rank-order test" tests={String.raw`
+  import numpy as np
+  def test_forward():
+      "the forward event has a large positive rank correlation and p below 0.01"
+      assert rho_f > 0.6 and p_f < 0.01
+  def test_reverse():
+      "the reversed event is significant with negative correlation"
+      assert rho_r < -0.6 and p_r < 0.01
+  def test_control():
+      "the random event is not significant"
+      assert p_c > 0.05
+`} prompt="Write rank_corr(a, b): the Pearson correlation of the ranks of a and b. Then rank_test(times): the rank correlation of field order with spike times and a two-sided p value from 1,000 shuffles of field order."
+code={String.raw`
+  N_c = 20; order = np.arange(N_c)
+
+  def make_event(kind, step=0.01, jitter=0.015):
+      base = {"forward": order, "reverse": order[::-1], "random": r.permutation(N_c)}[kind] * step
+      return base + jitter * r.normal(size=N_c)
+
+  def rank_corr(a, b):
+      ...
+
+  def rank_test(times, n=1000):
+      rho = rank_corr(order, times)
+      null = np.array([rank_corr(r.permutation(N_c), times) for _ in range(n)])
+      return rho, ...
+
+  rho_f, p_f = rank_test(make_event("forward"))
+  rho_r, p_r = rank_test(make_event("reverse"))
+  rho_c, p_c = rank_test(make_event("random"))
+  for nm, (rho, p) in {"forward": (rho_f, p_f), "reverse": (rho_r, p_r), "random": (rho_c, p_c)}.items():
+      print(f"{nm:8s} rho = {rho:+.2f}, p = {p:.3f}")
+`}
+hint="rank_corr: ra, rb = np.argsort(np.argsort(a)), np.argsort(np.argsort(b)); return np.corrcoef(ra, rb)[0, 1]. p value: np.mean(np.abs(null) >= abs(rho))."
+solution={String.raw`
+  N_c = 20; order = np.arange(N_c)
+
+  def make_event(kind, step=0.01, jitter=0.015):
+      base = {"forward": order, "reverse": order[::-1], "random": r.permutation(N_c)}[kind] * step
+      return base + jitter * r.normal(size=N_c)
+
+  def rank_corr(a, b):
+      ra, rb = np.argsort(np.argsort(a)), np.argsort(np.argsort(b))
+      return np.corrcoef(ra, rb)[0, 1]
+
+  def rank_test(times, n=1000):
+      rho = rank_corr(order, times)
+      null = np.array([rank_corr(r.permutation(N_c), times) for _ in range(n)])
+      return rho, np.mean(np.abs(null) >= abs(rho))
+
+  rho_f, p_f = rank_test(make_event("forward"))
+  rho_r, p_r = rank_test(make_event("reverse"))
+  rho_c, p_c = rank_test(make_event("random"))
+  for nm, (rho, p) in {"forward": (rho_f, p_f), "reverse": (rho_r, p_r), "random": (rho_c, p_c)}.items():
+      print(f"{nm:8s} rho = {rho:+.2f}, p = {p:.3f}")
+`} />
+
+The forward event has a rank correlation of about 0.98 and none of 1,000 shuffles comes close; the reversed event is equally significant with the opposite sign. Reverse replay is real: Foster and Wilson (2006) found it in awake rats pausing at the end of a run, and it has been linked to propagating reward information backwards along a path. The random event gives a small correlation with p near 0.5. Real events are harder: fewer cells fire, some fire more than once, and the number of candidate events tested is large, so the false positive rate must be controlled across all of them.
+
+**Part C (written).** Answer in your journal. First, in Part A the downstream cell's weights were set from the grid cells' rates at one location. Describe a learning rule from Week 42 that could set them while the rat explores, and say what would stop every downstream cell from learning the same place. Second, the rank-order test in Part B only asks whether spikes are ordered. Name two other replay-detection methods (for example, decoding the trajectory with a Bayesian decoder and fitting a line), and describe a false positive that each might produce in real data.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. Spatial information of an ideal place cell" task="A cell fires at rate $\lambda$ in a fraction $f$ of the arena and is silent elsewhere, with uniform occupancy. Show that its Skaggs information is $\log_2(1/f)$ bits per spike.">
+
+The mean rate is $\bar\lambda = f\lambda$. In the field, $\lambda_i/\bar\lambda = 1/f$; outside, the rate is zero and contributes nothing.
+
+So $I = \sum_{\text{field}} p_i \frac{1}{f}\log_2\frac{1}{f} = f \cdot \frac{1}{f}\log_2\frac{1}{f} = \log_2\frac{1}{f}$.
+
+A field covering 1/16 of the arena carries 4 bits per spike. Smaller fields carry more information per spike, but the cell fires less often, so its information per second, $\bar\lambda\,I = f\lambda\log_2(1/f)$, is largest for intermediate field sizes.
+
+</Prove>
+
+<Prove title="2. Random walk error" task="Position is estimated by summing $n$ velocity steps, each with independent error of variance $\sigma^2 \Delta t^2$. Show that the standard deviation of the position error after time $t = n\Delta t$ is $\sigma\sqrt{\Delta t\, t}$.">
+
+The position error is the sum of $n$ independent errors $\epsilon_k \Delta t$ with variance $\sigma^2\Delta t^2$ each.
+
+Variances of independent terms add: $\mathrm{Var} = n\sigma^2\Delta t^2 = (t/\Delta t)\sigma^2\Delta t^2 = \sigma^2\Delta t\, t$.
+
+The standard deviation is $\sigma\sqrt{\Delta t\,t}$, which grows like $\sqrt t$. Halving the velocity noise halves the error at every time, but no amount of improvement stops the growth: only an external reference, a landmark, can.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 43 quiz (15 questions)" questions={[
+  { q: "Place cells were discovered in...", options: ["Rat hippocampus in 1971", "Cat visual cortex in 1959", "Monkey prefrontal cortex in 1971", "Human entorhinal cortex in 2005"], answer: 0, explain: "Day 1." },
+  { q: "Spatial information is biased upwards because...", options: ["Finite data make maps uneven", "Of occupancy normalisation", "Of smoothing", "Of the log base"], answer: 0, explain: "Day 1." },
+  { q: "Global remapping means fields...", options: ["Move to unrelated positions in a new environment", "Keep position but change rate", "Disappear permanently", "Double in size"], answer: 0, explain: "Day 1." },
+  { q: "Grid cells were found in...", options: ["Medial entorhinal cortex", "CA3", "Subiculum only", "Striatum"], answer: 0, explain: "Day 2." },
+  { q: "Gridness rotates the autocorrelogram by...", options: ["30, 60, 90, 120 and 150 degrees", "45 and 90 degrees", "180 degrees", "1 degree steps"], answer: 0, explain: "Day 2." },
+  { q: "A modular grid code's main weakness is...", options: ["Catastrophic errors from small phase noise", "Short range", "Too many cells", "Square symmetry"], answer: 0, explain: "Day 2." },
+  { q: "A ring attractor's bump can rest anywhere because...", options: ["Connections depend only on angle differences", "Inhibition is absent", "Input is always on", "Neurons are silent"], answer: 0, explain: "Day 3." },
+  { q: "The bump is moved by...", options: ["An asymmetric component set by angular velocity", "Stronger inhibition", "Removing input", "Noise"], answer: 0, explain: "Day 3." },
+  { q: "Heterogeneity in a ring attractor causes...", options: ["Drift to a few preferred positions", "Perfect memory", "Multiple bumps", "Faster rotation"], answer: 0, explain: "Day 3." },
+  { q: "The dentate gyrus is thought to perform...", options: ["Pattern separation", "Pattern completion", "Path integration", "Replay"], answer: 0, explain: "Day 4." },
+  { q: "CA3 is thought to perform...", options: ["Pattern completion", "Pattern separation", "Grid coding", "Head direction"], answer: 0, explain: "Day 4." },
+  { q: "Sparse patterns allow...", options: ["Many more stored memories", "Fewer memories", "No recall", "Only dense recall"], answer: 0, explain: "Day 4." },
+  { q: "Catastrophic interference is avoided by...", options: ["Interleaved training or replay", "Faster sequential learning", "Larger learning rates", "Removing the hippocampus"], answer: 0, explain: "Day 5." },
+  { q: "Temporally graded amnesia spares...", options: ["Remote memories", "Recent memories", "No memories", "Only skills"], answer: 0, explain: "Day 5." },
+  { q: "The rank-order test detects replay by...", options: ["Correlating field order with spike order against shuffles", "Counting spikes", "Measuring theta power", "Fitting grid spacing"], answer: 0, explain: "Part B." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Hafting, Fyhn, Molden, Moser and Moser (2005) its third pass and write your critique under the five headings. Focus on one question: **what does the paper show grid cells do, and what does it only suggest?** Consider how the grid pattern was quantified and how many cells met the criterion; what the darkness and arena-change experiments establish about path integration and what they leave open; whether grid cells could be inherited from inputs rather than computed in entorhinal cortex; how much of the theory of grid cells as a metric for the place map rests on this paper and how much on later work; and what later findings, such as grids that distort in trapezoidal arenas or merge between connected rooms, mean for the idea of a universal metric. End with an experiment that would test whether grid cells are necessary for path integration.
+
+<Callout kind="research">
+
+Combine Day 3 and Day 2: build a two-dimensional continuous attractor (a sheet of neurons with periodic boundaries and centre-surround connections, as in Burak and Fiete, 2009) and drive it with velocity through direction-shifted connections. Does it produce grid fields as the simulated rat moves? How quickly does the grid drift with noise, and does the drift grow like the square root of time, as in Day 2?
+
+</Callout>
+
+<Key title="Week 43 review checklist">
+<ul>
+<li>I can compute rate maps and spatial information and test them with shuffles.</li>
+<li>I can build and score grid maps and explain the modular code and path integration.</li>
+<li>I can simulate a ring attractor, move its bump and explain drift.</li>
+<li>I can demonstrate pattern separation and sparse pattern completion.</li>
+<li>I can show catastrophic interference and its cure by replay, and model graded amnesia.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then draw, in words or a sketch, how a single episode (finding food in a new room) would pass through this week's circuits from entorhinal input to neocortical memory, naming what each region contributes." />

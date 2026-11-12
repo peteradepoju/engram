@@ -1,0 +1,249 @@
+export const meta = {
+  title: "Consolidation, replay and complementary learning systems",
+  intro: "Patient H.M. lost his hippocampi in 1953 and with them the ability to form new lasting memories of events, yet he kept many memories from long before the operation. Memories, it seems, start out depending on the hippocampus and gradually become independent of it. Why would the brain do that? McClelland, McNaughton and O'Reilly gave a computational answer in 1995: a network that learns structure across many experiences, like the neocortex, must learn slowly and from interleaved examples, or each new memory overwrites old ones. A fast hippocampal store can hold new episodes and replay them to the neocortex, interleaved with old ones, during rest and sleep. Today you produce catastrophic interference, cure it with interleaved replay, and model the temporal gradient of amnesia.",
+  goals: [
+    "Show catastrophic interference in a network trained on one set of items then another",
+    "Explain why interleaved training avoids it",
+    "Use replay from a fast store to protect old knowledge while learning new",
+    "Model temporally graded retrograde amnesia with two interacting stores",
+  ],
+  plan: [
+    { label: "Predict and the puzzle of consolidation", minutes: 20 },
+    { label: "Catastrophic interference", minutes: 30 },
+    { label: "Replay", minutes: 30 },
+    { label: "The gradient of amnesia", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "mcclelland-1995",
+};
+
+<Predict question="A network learns ten associations perfectly, then learns ten new ones using the same input dimensions. Without any rehearsal of the first set, how much of the first set will it remember: nearly all, about half, or almost none?" />
+
+<Step n={1} title="The puzzle of consolidation" minutes={20} />
+
+Scoville and Milner (1957) described H.M.'s profound anterograde amnesia after bilateral medial temporal lobe removal. Later studies of patients and animals with hippocampal damage found that retrograde amnesia is often temporally graded: recent memories are lost and remote ones spared. In rats, Kim and Fanselow (1992) found that hippocampal lesions one day after fear conditioning abolished the context fear memory, while lesions four weeks later left it intact. This pattern defines **systems consolidation**: a memory is initially supported by the hippocampus and over time comes to depend on the neocortex.
+
+The **complementary learning systems** theory of McClelland, McNaughton and O'Reilly (1995) explains why two systems exist. Neocortex extracts the shared structure of many experiences, which requires distributed, overlapping representations and slow learning. Overlapping representations make a network vulnerable to interference: learning new items quickly disrupts old ones. The hippocampus, with its sparse, separated codes (Day 4), can learn an episode in one shot without interference. If it then replays recent episodes, interleaved with the neocortex's existing knowledge, the neocortex can absorb new information slowly without destroying what it already knows.
+
+Wilson and McNaughton (1994) found the replay. Place cells that fired together while a rat explored also fired together during subsequent sleep, and later work showed replay of whole trajectories in compressed time during sharp-wave ripples (Week 47).
+
+<Video id="MSgbOvqFWws" title="Online Learning of Memories" by="Wulfram Gerstner (EPFL, Neuronal Dynamics)" note="Gerstner on what happens when a network stores new memories one after another while keeping old ones, the problem that complementary learning systems theory addresses." />
+
+<Step n={2} title="Catastrophic interference" minutes={30} />
+
+A linear network maps 20-dimensional inputs to 5-dimensional outputs. Train it by the delta rule (gradient descent on squared error) on ten random input-output pairs (set A) until it is perfect, then on ten new pairs (set B). Twenty random items in 20 dimensions can all be learned exactly, so a network trained on all twenty together could know both sets.
+
+<Figure caption="Sequential against interleaved learning. Error on set A while the network learns set B, with different fractions of replayed A items mixed in." credit="Interactive figure by Engram, after McClelland, McNaughton and O'Reilly (1995).">
+  <InterferenceReplay />
+</Figure>
+
+<PyCell id="interfere" title="Learning B destroys A" tests={String.raw`
+  import numpy as np
+  def test_forgets():
+      "after learning B, the error on A is above 80% of the untrained baseline"
+      assert err(W_AB, XA, YA) > 0.8 * np.mean(YA ** 2)
+  def test_interleaved():
+      "training on A and B together leaves both errors below 0.1"
+      assert err(W_int, XA, YA) < 0.1 and err(W_int, XB, YB) < 0.1
+`} prompt="Write train(W, X, Y, epochs): for each epoch go through the items in random order and apply the delta rule W += eta outer(x, y - x W). Train on A, then on B; separately train from scratch on A and B shuffled together."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1995)
+  D, nA, nB = 20, 10, 10
+  XA, XB = r.normal(size=(nA, D)), r.normal(size=(nB, D))
+  YA, YB = r.normal(size=(nA, 5)), r.normal(size=(nB, 5))
+
+  def err(W, X, Y):
+      return np.mean((X @ W - Y) ** 2)
+
+  def train(W, X, Y, epochs, eta=0.01, replay=None, frac=0.0):
+      W = W.copy()
+      for e in range(epochs):
+          for i in r.permutation(len(X)):
+              ...
+              if replay is not None and r.random() < frac:      # used in the next cell
+                  j = r.integers(len(replay[0]))
+                  x, y = replay[0][j], replay[1][j]
+                  W += eta * np.outer(x, y - x @ W)
+      return W
+
+  W0 = np.zeros((D, 5))
+  W_A = train(W0, XA, YA, 300)
+  W_AB = train(W_A, XB, YB, 300)
+  W_int = train(W0, np.r_[XA, XB], np.r_[YA, YB], 300)
+  print(f"untrained error on A {np.mean(YA ** 2):.3f}")
+  print(f"after A: error on A {err(W_A, XA, YA):.4f};  after A then B: A {err(W_AB, XA, YA):.3f}, B {err(W_AB, XB, YB):.4f}")
+  print(f"interleaved A and B: A {err(W_int, XA, YA):.3f}, B {err(W_int, XB, YB):.3f}")
+`}
+hint="W += eta * np.outer(X[i], Y[i] - X[i] @ W)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1995)
+  D, nA, nB = 20, 10, 10
+  XA, XB = r.normal(size=(nA, D)), r.normal(size=(nB, D))
+  YA, YB = r.normal(size=(nA, 5)), r.normal(size=(nB, 5))
+
+  def err(W, X, Y):
+      return np.mean((X @ W - Y) ** 2)
+
+  def train(W, X, Y, epochs, eta=0.01, replay=None, frac=0.0):
+      W = W.copy()
+      for e in range(epochs):
+          for i in r.permutation(len(X)):
+              W += eta * np.outer(X[i], Y[i] - X[i] @ W)
+              if replay is not None and r.random() < frac:      # used in the next cell
+                  j = r.integers(len(replay[0]))
+                  x, y = replay[0][j], replay[1][j]
+                  W += eta * np.outer(x, y - x @ W)
+      return W
+
+  W0 = np.zeros((D, 5))
+  W_A = train(W0, XA, YA, 300)
+  W_AB = train(W_A, XB, YB, 300)
+  W_int = train(W0, np.r_[XA, XB], np.r_[YA, YB], 300)
+  print(f"untrained error on A {np.mean(YA ** 2):.3f}")
+  print(f"after A: error on A {err(W_A, XA, YA):.4f};  after A then B: A {err(W_AB, XA, YA):.3f}, B {err(W_AB, XB, YB):.4f}")
+  print(f"interleaved A and B: A {err(W_int, XA, YA):.3f}, B {err(W_int, XB, YB):.3f}")
+`} />
+
+After training on A the network is perfect on A. After training on B it is perfect on B, and its error on A is 0.83, almost the 0.89 of a network that never learned A at all. Every B update changes the weights in directions that A's inputs also use, and nothing pushes back. Trained on all twenty items together from the start, the same network reaches errors of about 0.05 and 0.03 on the two sets in the same number of epochs. The capacity was there; the order of training destroyed it. McCloskey and Cohen (1989) and Ratcliff (1990) first described this in connectionist networks.
+
+<Step n={3} title="Replay" minutes={30} />
+
+The network has already learned A; we want it to learn B without forgetting. Suppose a hippocampal store keeps the A items, and while B is being learned it replays an A item after a fraction of the B presentations.
+
+<PyCell id="replay" title="How much replay is enough?" tests={String.raw`
+  import numpy as np
+  def test_none():
+      "without replay, A is forgotten"
+      assert res[0.0][0] > 0.7
+  def test_some():
+      "replay after 10% of B presentations cuts the A error by more than two thirds, and B is still learned"
+      assert res[0.1][0] < res[0.0][0] / 3 and res[0.1][1] < 0.05
+  def test_more():
+      "more replay protects A better"
+      assert res[1.0][0] < res[0.3][0] < res[0.1][0]
+`} prompt="Starting from W_A, train on B for 300 epochs with replay=(XA, YA) and frac in 0, 0.1, 0.3 and 1. Store the errors on A and B in res[frac]."
+code={String.raw`
+  res = {}
+  for frac in [0.0, 0.1, 0.3, 1.0]:
+      W = ...
+      res[frac] = (err(W, XA, YA), err(W, XB, YB))
+      print(f"replay fraction {frac:.1f}: error on A {res[frac][0]:.3f}, on B {res[frac][1]:.4f}")
+`}
+hint="W = train(W_A, XB, YB, 300, replay=(XA, YA), frac=frac)."
+solution={String.raw`
+  res = {}
+  for frac in [0.0, 0.1, 0.3, 1.0]:
+      W = train(W_A, XB, YB, 300, replay=(XA, YA), frac=frac)
+      res[frac] = (err(W, XA, YA), err(W, XB, YB))
+      print(f"replay fraction {frac:.1f}: error on A {res[frac][0]:.3f}, on B {res[frac][1]:.4f}")
+`} />
+
+Replaying one A item after one in ten B presentations cuts the error on A from 0.83 to about 0.23, while B is still learned almost perfectly; replaying after every B item brings the error on A down to 0.05, as good as full interleaving. A modest amount of replay from a store that holds the old items goes a long way. In the theory, that store is the hippocampus and the replay happens during sleep and quiet rest, when sharp-wave ripples carry compressed sequences of recent experience.
+
+<Step n={4} title="The gradient of amnesia" minutes={25} />
+
+A minimal two-store model captures the temporal gradient. A new memory is laid down at strength 1 in the hippocampus, which decays with time constant $\tau_h$. While the hippocampal trace lasts, replay strengthens a neocortical trace $c$ towards 1:
+
+$$
+\dot h = -h/\tau_h, \qquad \dot c = k\,h\,(1 - c).
+$$
+
+Retrieval succeeds with strength $1 - (1 - h)(1 - c)$ when both stores are available. A hippocampal lesion at time $t$ leaves only $c(t)$.
+
+<PyCell id="gradient" title="Lesions at different ages" tests={String.raw`
+  import numpy as np
+  def test_graded():
+      "after a lesion, recent memories are weaker than remote ones"
+      assert c_at[1] < c_at[10] < c_at[50]
+  def test_saturates():
+      "remote memories approach full neocortical strength"
+      assert c_at[100] > 0.9
+`} prompt="Integrate h and c with Euler steps of 0.1 day from day 0 to day 100, with tau_h = 10 days and k = 0.3 per day. Record c at days 1, 10, 50 and 100, which is what survives a lesion at that age."
+code={String.raw`
+  dt_d, tau_h, k = 0.1, 10.0, 0.3
+  days = np.arange(0, 100 + dt_d / 2, dt_d)
+  h, c = np.zeros_like(days), np.zeros_like(days)
+  h[0] = 1.0
+  for i in range(1, len(days)):
+      ...
+  intact = 1 - (1 - h) * (1 - c)
+  c_at = {d: c[int(round(d / dt_d))] for d in [1, 10, 50, 100]}
+  print({d: round(v, 3) for d, v in c_at.items()}, "memory strength surviving a lesion at each age (days)")
+  plt.plot(days, h, label="hippocampal trace"); plt.plot(days, c, label="neocortical trace (after lesion)"); plt.plot(days, intact, "k:", label="intact")
+  plt.xlabel("age of memory at lesion (days)"); plt.legend(); plt.show()
+`}
+hint="h[i] = h[i - 1] - dt_d * h[i - 1] / tau_h; c[i] = c[i - 1] + dt_d * k * h[i - 1] * (1 - c[i - 1])."
+solution={String.raw`
+  dt_d, tau_h, k = 0.1, 10.0, 0.3
+  days = np.arange(0, 100 + dt_d / 2, dt_d)
+  h, c = np.zeros_like(days), np.zeros_like(days)
+  h[0] = 1.0
+  for i in range(1, len(days)):
+      h[i] = h[i - 1] - dt_d * h[i - 1] / tau_h
+      c[i] = c[i - 1] + dt_d * k * h[i - 1] * (1 - c[i - 1])
+  intact = 1 - (1 - h) * (1 - c)
+  c_at = {d: c[int(round(d / dt_d))] for d in [1, 10, 50, 100]}
+  print({d: round(v, 3) for d, v in c_at.items()}, "memory strength surviving a lesion at each age (days)")
+  plt.plot(days, h, label="hippocampal trace"); plt.plot(days, c, label="neocortical trace (after lesion)"); plt.plot(days, intact, "k:", label="intact")
+  plt.xlabel("age of memory at lesion (days)"); plt.legend(); plt.show()
+`} />
+
+A lesion one day after learning leaves a memory of strength 0.25; at ten days 0.85; at fifty days 0.95, which is as strong as it will get. This is the temporal gradient seen after hippocampal damage. The intact memory stays strong throughout, because the hippocampal trace fades only as the neocortical one takes over. The model has only two parameters, and fitting them to lesion data from different species gives very different time scales, from days in rodents to years in humans, which the theory attributes to different rates of neocortical learning.
+
+<Callout kind="history">
+
+The standard model of consolidation is not the only view. Nadel and Moscovitch (1997) proposed multiple trace theory: detailed episodic memories always depend on the hippocampus, however old, while only gist and semantic knowledge become independent of it. Evidence that some remote autobiographical memories are lost after hippocampal damage supports them. Later versions of complementary learning systems theory (Kumaran, Hassabis and McClelland, 2016) also allow fast neocortical learning when new information fits an existing schema, as Tse and colleagues (2007) showed in rats.
+
+</Callout>
+
+<Bridge title="Two learning systems"
+  neuro="A fast, sparse, episodic store in the hippocampus and a slow, distributed, structured store in neocortex, linked by replay during rest and sleep. Disrupting sharp-wave ripples after learning impairs later memory."
+  ai="Experience replay in deep reinforcement learning, introduced in DQN, was inspired by hippocampal replay, and replay buffers are a standard defence against catastrophic forgetting in continual learning. Generative replay, which samples old data from a learned model rather than storing it, is a closer analogue of a compressed hippocampal store.">
+
+Learn fast in one place, learn slowly in another, and connect them by replay.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "H.M.'s amnesia was mainly...", options: ["Anterograde, with remote memories partly spared", "Retrograde only", "Procedural", "Total"], answer: 0, explain: "Scoville and Milner (1957)." },
+  { q: "Temporally graded retrograde amnesia means...", options: ["Recent memories are lost and remote ones spared", "Remote memories are lost first", "All memories are lost equally", "No memories are lost"], answer: 0, explain: "Kim and Fanselow (1992) in rats." },
+  { q: "Catastrophic interference occurs when...", options: ["Learning new items with overlapping representations overwrites old ones", "A network is too large", "Learning is too slow", "Items are interleaved"], answer: 0, explain: "Sequential learning." },
+  { q: "Interleaved training...", options: ["Lets a network learn old and new items together", "Causes forgetting", "Is impossible", "Only works for the hippocampus"], answer: 0, explain: "The cure CLS proposes." },
+  { q: "In CLS theory the neocortex learns...", options: ["Slowly, with overlapping representations", "In one shot", "Only during wakefulness", "Without plasticity"], answer: 0, explain: "To extract structure." },
+  { q: "Wilson and McNaughton (1994) showed...", options: ["Place cells co-active during exploration were co-active during later sleep", "Grid cells in the dark", "Dopamine bursts", "Sharp-wave ripples cause seizures"], answer: 0, explain: "Reactivation in sleep." },
+  { q: "Multiple trace theory claims...", options: ["Detailed episodic memories always need the hippocampus", "Consolidation is complete in a day", "The hippocampus stores nothing", "Replay is unnecessary"], answer: 0, explain: "Nadel and Moscovitch (1997)." },
+  { q: "The AI analogue of hippocampal replay is...", options: ["Experience replay buffers", "Dropout", "Convolution", "Tokenisation"], answer: 0, explain: "Introduced in DQN." },
+]} />
+
+<Flashcards cards={[
+  { front: "Systems consolidation?", back: "Memories initially depend on the hippocampus and gradually become supported by the neocortex." },
+  { front: "Complementary learning systems?", back: "Fast sparse hippocampal learning plus slow distributed neocortical learning, linked by replay, avoids catastrophic interference." },
+  { front: "Catastrophic interference?", back: "Sequential training on new items with overlapping representations destroys old knowledge." },
+  { front: "Two-store model?", back: "$\\dot h = -h/\\tau_h$, $\\dot c = k h(1 - c)$; a lesion at age $t$ leaves $c(t)$, which grows with $t$." },
+  { front: "Evidence for replay?", back: "Reactivation of co-firing place cells in sleep (Wilson and McNaughton, 1994) and compressed trajectory replay in sharp-wave ripples." },
+]} />
+
+<Predict revisit question="After learning ten new associations in the same input space without rehearsal, how much of the first ten will the network remember?" />
+
+<Key title="Before you go">
+<ul>
+<li>Sequential learning in a distributed network causes catastrophic interference.</li>
+<li>Interleaving old and new examples avoids it.</li>
+<li>Replay from a fast store lets the slow store learn without forgetting.</li>
+<li>Two stores with decay and transfer produce graded retrograde amnesia.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: McClelland, McNaughton and O'Reilly (1995), <em>Why there are complementary learning systems in the hippocampus and neocortex</em>.</li>
+<li>Wilson and McNaughton (1994), <em>Reactivation of hippocampal ensemble memories during sleep</em>, Science 265(5172), 676 to 679.</li>
+<li>Kumaran, Hassabis and McClelland (2016), <em>What learning systems do intelligent agents need? Complementary learning systems theory updated</em>, Trends in Cognitive Sciences 20(7), 512 to 534.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="In Step 3, replay used stored copies of the old items. A brain cannot store every experience exactly. Describe what the hippocampus might replay instead, how imperfect replay would change what the neocortex learns, and whether that could be useful rather than harmful." />

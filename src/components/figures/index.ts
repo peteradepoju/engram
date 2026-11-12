@@ -194,3 +194,8 @@ export { STDPWindow } from "./stdp-window";
 export { BCMRule } from "./bcm-rule";
 export { SynapticScaling } from "./synaptic-scaling";
 export { EligibilityTrace } from "./eligibility-trace";
+export { PlaceField } from "./place-field";
+export { GridCell } from "./grid-cell";
+export { RingAttractor } from "./ring-attractor";
+export { PatternSeparation } from "./pattern-separation";
+export { InterferenceReplay } from "./interference-replay";

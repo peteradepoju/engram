@@ -1,0 +1,300 @@
+export const meta = {
+  title: "Place cells: rate maps, spatial information and remapping",
+  intro: "In 1971 John O'Keefe and Jonathan Dostrovsky recorded from the hippocampus of rats moving freely around a platform and found cells that fired only when the rat was in one part of it. These place cells, together with the grid cells and head-direction cells you meet later this week, gave the hippocampal formation its reputation as the brain's map, and O'Keefe shared the 2014 Nobel Prize for them. This week asks how that map is built, how it is kept, and how it supports memory. Today you do what every place-cell paper does first: turn a trajectory and some spikes into rate maps, measure how much a cell tells you about position, test that against chance, and see what happens to the map in a new room.",
+  goals: [
+    "Compute occupancy-normalised rate maps from position and spikes",
+    "Calculate spatial information and test it with a shuffle",
+    "Explain why a non-spatial cell has positive measured information",
+    "Describe global remapping and measure it with map correlations",
+  ],
+  plan: [
+    { label: "Predict and the discovery", minutes: 15 },
+    { label: "Rate maps", minutes: 30 },
+    { label: "Spatial information and its bias", minutes: 35 },
+    { label: "Remapping", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "okeefe-dostrovsky-1971",
+};
+
+<Predict question="A neuron fires at a steady 2 Hz wherever the rat is. You compute its spatial information from a 20-minute session. Will you get exactly zero bits per spike?" />
+
+<Step n={1} title="A map in the hippocampus" minutes={15} />
+
+O'Keefe and Dostrovsky's 1971 report was short: of 76 units recorded in dorsal CA1, eight responded only when the rat was in a particular part of the testing platform, facing in a particular way. O'Keefe and Nadel's 1978 book, <em>The Hippocampus as a Cognitive Map</em>, built a theory on it: the hippocampus holds an allocentric map, organised by places in the world rather than by the animal's body, in the spirit of Tolman's cognitive maps.
+
+Fifty years on, a few facts are settled. In an open arena most CA1 and CA3 pyramidal cells have zero, one or a few place fields, each about 20 to 50 cm across in a rat. Fields form within minutes of entering a new environment and are stable for days. The spikes within a field are timed against the theta rhythm (phase precession, which you analysed with Fourier methods in Week 11), and a population of a few dozen cells is enough to decode position to within a few centimetres (Week 36).
+
+<Video id="eBTEdZx0oKk" title="Analysing" by="Marcus Ghosh (Neuroscience for Machine Learners)" note="Part of the Neuro4ML unit on understanding neural data: place cells recorded as a rat explores, and how position can be decoded from them." />
+
+<Step n={2} title="Rate maps" minutes={30} />
+
+A rate map is spikes per bin divided by time per bin. Dividing by occupancy matters: a rat spends far more time in corners and along walls than in the middle, and a cell that fires at a constant rate would otherwise look like a corner cell.
+
+<Figure caption="A simulated place cell. The grey path is the rat's trajectory, the dots are spikes, and the heat map is the occupancy-normalised rate map. Change the bin size and the session length and see how the map's noise and resolution trade off." credit="Interactive figure by Engram.">
+  <PlaceField />
+</Figure>
+
+<PyCell id="ratemap" title="From spikes to a rate map" tests={String.raw`
+  import numpy as np
+  def test_cover():
+      "the rat visits almost every bin"
+      assert (occ > 0).mean() > 0.95
+
+  def test_map():
+      "the estimated rate map correlates above 0.85 with the true field"
+      ok = occ > 0
+      assert np.corrcoef(m0[ok], true0[ok])[0, 1] > 0.85
+`} prompt="Write ratemap(s): histogram the positions into 20 by 20 bins, weighted by the spike counts s, and divide by the occupancy (seconds per bin). Leave unvisited bins as NaN."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1971)
+  dt = 0.02; T = int(20 * 60 / dt)                    # 20 minutes at 50 Hz
+  pos = np.zeros((T, 2)); p = np.array([0.5, 0.5]); hd = 0.0
+  for t in range(T):                                   # a random forager in a 1 m box
+      hd += 0.3 * r.normal()
+      q = p + 0.15 * dt * np.array([np.cos(hd), np.sin(hd)])
+      if not (0 < q[0] < 1 and 0 < q[1] < 1):
+          hd += np.pi; q = p
+      p = q; pos[t] = p
+
+  N, sig, peak = 30, 0.08, 15.0
+  cent = r.uniform(0.1, 0.9, (N, 2))
+  lam = peak * np.exp(-((pos[:, None, :] - cent[None]) ** 2).sum(-1) / (2 * sig ** 2))
+  spikes = r.poisson(lam * dt)                         # T x N spike counts
+
+  nb = 20
+  occ, _, _ = np.histogram2d(pos[:, 0], pos[:, 1], bins=nb, range=[[0, 1], [0, 1]])
+  occ = occ * dt                                       # seconds in each bin
+
+  def ratemap(s):
+      ...
+
+  g = (np.arange(nb) + 0.5) / nb; X, Y = np.meshgrid(g, g, indexing="ij")
+  true0 = peak * np.exp(-((X - cent[0, 0]) ** 2 + (Y - cent[0, 1]) ** 2) / (2 * sig ** 2))
+  m0 = ratemap(spikes[:, 0])
+  print(f"bins visited {(occ > 0).mean():.3f}; correlation with the true field {np.corrcoef(m0[occ > 0], true0[occ > 0])[0, 1]:.3f}")
+  fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+  ax[0].plot(pos[:, 0], pos[:, 1], color="0.8", lw=0.3); s = spikes[:, 0] > 0; ax[0].plot(pos[s, 0], pos[s, 1], "r.", ms=2)
+  ax[1].imshow(m0.T, origin="lower", extent=[0, 1, 0, 1]); plt.show()
+`}
+hint="c, _, _ = np.histogram2d(pos[:, 0], pos[:, 1], bins=nb, range=[[0, 1], [0, 1]], weights=s); then return c / occ inside np.errstate(invalid='ignore', divide='ignore')."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1971)
+  dt = 0.02; T = int(20 * 60 / dt)                    # 20 minutes at 50 Hz
+  pos = np.zeros((T, 2)); p = np.array([0.5, 0.5]); hd = 0.0
+  for t in range(T):                                   # a random forager in a 1 m box
+      hd += 0.3 * r.normal()
+      q = p + 0.15 * dt * np.array([np.cos(hd), np.sin(hd)])
+      if not (0 < q[0] < 1 and 0 < q[1] < 1):
+          hd += np.pi; q = p
+      p = q; pos[t] = p
+
+  N, sig, peak = 30, 0.08, 15.0
+  cent = r.uniform(0.1, 0.9, (N, 2))
+  lam = peak * np.exp(-((pos[:, None, :] - cent[None]) ** 2).sum(-1) / (2 * sig ** 2))
+  spikes = r.poisson(lam * dt)                         # T x N spike counts
+
+  nb = 20
+  occ, _, _ = np.histogram2d(pos[:, 0], pos[:, 1], bins=nb, range=[[0, 1], [0, 1]])
+  occ = occ * dt                                       # seconds in each bin
+
+  def ratemap(s):
+      c, _, _ = np.histogram2d(pos[:, 0], pos[:, 1], bins=nb, range=[[0, 1], [0, 1]], weights=s)
+      with np.errstate(invalid="ignore", divide="ignore"):
+          return c / occ
+
+  g = (np.arange(nb) + 0.5) / nb; X, Y = np.meshgrid(g, g, indexing="ij")
+  true0 = peak * np.exp(-((X - cent[0, 0]) ** 2 + (Y - cent[0, 1]) ** 2) / (2 * sig ** 2))
+  m0 = ratemap(spikes[:, 0])
+  print(f"bins visited {(occ > 0).mean():.3f}; correlation with the true field {np.corrcoef(m0[occ > 0], true0[occ > 0])[0, 1]:.3f}")
+  fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+  ax[0].plot(pos[:, 0], pos[:, 1], color="0.8", lw=0.3); s = spikes[:, 0] > 0; ax[0].plot(pos[s, 0], pos[s, 1], "r.", ms=2)
+  ax[1].imshow(m0.T, origin="lower", extent=[0, 1, 0, 1]); plt.show()
+`} />
+
+The rat visits all but a bin or two in 20 minutes, and the estimated map correlates about 0.93 with the true field. The remaining error is Poisson noise, which is worst in rarely visited bins, where a single spike in a fraction of a second becomes a very high rate. Published analyses usually smooth the map with a Gaussian of one or two bins and drop bins with less than a fraction of a second of occupancy, trading resolution for noise.
+
+<Step n={3} title="Spatial information and its bias" minutes={35} />
+
+How much does a spike tell you about where the rat is? Skaggs, McNaughton, Gothard and Markus (1993) proposed
+
+$$
+I = \sum_i p_i\,\frac{\lambda_i}{\bar\lambda}\log_2\frac{\lambda_i}{\bar\lambda}\quad\text{bits per spike},
+$$
+
+where $p_i$ is the fraction of time in bin $i$, $\lambda_i$ the rate there and $\bar\lambda = \sum_i p_i\lambda_i$ the mean rate. It is the mutual information between spike and position (Week 35), per spike, in the limit of short time bins. A cell that fires in one bin out of $K$ equally visited bins carries $\log_2 K$ bits per spike.
+
+Estimated from finite data it is biased upwards: noise makes the measured map uneven even when the true map is flat. The standard remedy is a shuffle. Shift the whole spike train in time by a random amount, wrapping round the end, so that its relation to position is broken while its own temporal structure is kept; recompute the information many times; and call the cell spatial only if its real value beats, say, 99% of the shuffles.
+
+<PyCell id="info" title="Information, bias and the shuffle" tests={String.raw`
+  import numpy as np
+  def test_place():
+      "the place cell carries more than 3 bits per spike and beats its shuffles"
+      assert I_place > 3 and I_place > null_place
+  def test_bias():
+      "the non-spatial cell has positive measured information but does not beat its shuffles"
+      assert I_flat > 0 and I_flat < null_flat
+`} prompt="Write skaggs(m) using the visited bins only, then shuffle_null(s, n=100), which returns the 99th percentile of the information over n random circular shifts of the spike train by at least 20 s."
+code={String.raw`
+  ok = occ > 0
+
+  def skaggs(m):
+      p = occ[ok] / occ[ok].sum(); lam_i = m[ok]
+      lam_bar = ...
+      with np.errstate(divide="ignore", invalid="ignore"):
+          terms = np.where(lam_i > 0, ..., 0.0)
+      return terms.sum()
+
+  def shuffle_null(s, n=100):
+      shift_min = int(20 / dt)
+      vals = [skaggs(ratemap(np.roll(s, r.integers(shift_min, T - shift_min)))) for _ in range(n)]
+      return np.percentile(vals, 99)
+
+  flat = r.poisson(np.full(T, 2.0) * dt)               # a cell that ignores position
+  I_place, I_flat = skaggs(m0), skaggs(ratemap(flat))
+  null_place, null_flat = shuffle_null(spikes[:, 0]), shuffle_null(flat)
+  print(f"place cell: {I_place:.2f} bits/spike (99% of shuffles below {null_place:.2f})")
+  print(f"flat cell:  {I_flat:.3f} bits/spike (99% of shuffles below {null_flat:.3f})")
+`}
+hint="lam_bar = (p * lam_i).sum(); terms = p * (lam_i / lam_bar) * np.log2(lam_i / lam_bar)."
+solution={String.raw`
+  ok = occ > 0
+
+  def skaggs(m):
+      p = occ[ok] / occ[ok].sum(); lam_i = m[ok]
+      lam_bar = (p * lam_i).sum()
+      with np.errstate(divide="ignore", invalid="ignore"):
+          terms = np.where(lam_i > 0, p * (lam_i / lam_bar) * np.log2(lam_i / lam_bar), 0.0)
+      return terms.sum()
+
+  def shuffle_null(s, n=100):
+      shift_min = int(20 / dt)
+      vals = [skaggs(ratemap(np.roll(s, r.integers(shift_min, T - shift_min)))) for _ in range(n)]
+      return np.percentile(vals, 99)
+
+  flat = r.poisson(np.full(T, 2.0) * dt)               # a cell that ignores position
+  I_place, I_flat = skaggs(m0), skaggs(ratemap(flat))
+  null_place, null_flat = shuffle_null(spikes[:, 0]), shuffle_null(flat)
+  print(f"place cell: {I_place:.2f} bits/spike (99% of shuffles below {null_place:.2f})")
+  print(f"flat cell:  {I_flat:.3f} bits/spike (99% of shuffles below {null_flat:.3f})")
+`} />
+
+The place cell carries about 4 bits per spike, far above its shuffles, which reach about 2.2: the shuffled place cell still looks spatial because the rat moves slowly and the shifted spike bursts still land in clusters. The flat cell, whose true information is zero, measures about 0.12 bits per spike. That is the bias, and it is the same size as its shuffles, so the test correctly refuses to call it spatial. Without the shuffle you could not tell 0.12 bits of real tuning from 0.12 bits of noise.
+
+<Callout kind="warning">
+
+The shuffle answers "is this cell spatial at all?", not "how spatial is it?". With long sessions almost any cell with a weak spatial modulation passes, and the proportion of "place cells" reported in a study depends heavily on the threshold, the bin size, the speed filter (most studies drop periods when the rat is still) and the session length. When you compare place-cell proportions across papers, check these choices first.
+
+</Callout>
+
+<Step n={4} title="Remapping" minutes={25} />
+
+Put the rat in a different room and the map changes completely. Cells that had fields lose them, silent cells gain fields, and the fields that remain move to unrelated positions. This global remapping (Muller and Kubie, 1987) means the hippocampus gives each environment its own nearly independent code. Smaller changes, such as the colour of the walls, can instead change firing rates while leaving fields in place, which is called rate remapping (Leutgeb and colleagues, 2005).
+
+<PyCell id="remap" title="Same room, new room" tests={String.raw`
+  import numpy as np
+  def test_same():
+      "maps from the two halves of a session correlate above 0.7 on average"
+      assert np.mean(r_same) > 0.7
+  def test_new():
+      "maps from different rooms correlate below 0.15 on average"
+      assert abs(np.mean(r_new)) < 0.15
+`} prompt="Write mapcorr(a, b): the Pearson correlation of two rate maps over bins visited in both. Use it to compare the first and second halves of the session, and room A with room B, where each cell's field has moved to a random new centre."
+code={String.raw`
+  half = T // 2
+  occ1, _, _ = np.histogram2d(pos[:half, 0], pos[:half, 1], bins=nb, range=[[0, 1], [0, 1]])
+  occ2, _, _ = np.histogram2d(pos[half:, 0], pos[half:, 1], bins=nb, range=[[0, 1], [0, 1]])
+
+  def map_from(s, idx, o):
+      c, _, _ = np.histogram2d(pos[idx, 0], pos[idx, 1], bins=nb, range=[[0, 1], [0, 1]], weights=s[idx])
+      with np.errstate(invalid="ignore", divide="ignore"):
+          return c / (o * dt)
+
+  def mapcorr(a, b):
+      ...
+
+  cent_B = r.uniform(0.1, 0.9, (N, 2))                 # room B: every field moves
+  lam_B = peak * np.exp(-((pos[:, None, :] - cent_B[None]) ** 2).sum(-1) / (2 * sig ** 2))
+  spikes_B = r.poisson(lam_B * dt)
+  first, second = np.arange(half), np.arange(half, T)
+  r_same = [mapcorr(map_from(spikes[:, i], first, occ1), map_from(spikes[:, i], second, occ2)) for i in range(N)]
+  r_new = [mapcorr(ratemap(spikes[:, i]), ratemap(spikes_B[:, i])) for i in range(N)]
+  print(f"same room, two halves: mean r = {np.mean(r_same):.2f};  room A against room B: mean r = {np.mean(r_new):.2f}")
+`}
+hint="ok = np.isfinite(a) & np.isfinite(b); return np.corrcoef(a[ok], b[ok])[0, 1]."
+solution={String.raw`
+  half = T // 2
+  occ1, _, _ = np.histogram2d(pos[:half, 0], pos[:half, 1], bins=nb, range=[[0, 1], [0, 1]])
+  occ2, _, _ = np.histogram2d(pos[half:, 0], pos[half:, 1], bins=nb, range=[[0, 1], [0, 1]])
+
+  def map_from(s, idx, o):
+      c, _, _ = np.histogram2d(pos[idx, 0], pos[idx, 1], bins=nb, range=[[0, 1], [0, 1]], weights=s[idx])
+      with np.errstate(invalid="ignore", divide="ignore"):
+          return c / (o * dt)
+
+  def mapcorr(a, b):
+      ok = np.isfinite(a) & np.isfinite(b)
+      return np.corrcoef(a[ok], b[ok])[0, 1]
+
+  cent_B = r.uniform(0.1, 0.9, (N, 2))                 # room B: every field moves
+  lam_B = peak * np.exp(-((pos[:, None, :] - cent_B[None]) ** 2).sum(-1) / (2 * sig ** 2))
+  spikes_B = r.poisson(lam_B * dt)
+  first, second = np.arange(half), np.arange(half, T)
+  r_same = [mapcorr(map_from(spikes[:, i], first, occ1), map_from(spikes[:, i], second, occ2)) for i in range(N)]
+  r_new = [mapcorr(ratemap(spikes[:, i]), ratemap(spikes_B[:, i])) for i in range(N)]
+  print(f"same room, two halves: mean r = {np.mean(r_same):.2f};  room A against room B: mean r = {np.mean(r_new):.2f}")
+`} />
+
+Maps from the two halves of the same session correlate about 0.87, limited by noise; maps from different rooms correlate about zero. In real data the across-room correlation is also near zero for CA3, while CA1 keeps a little more overlap, and the pattern of which cells are active is close to what you would expect if each room recruited a random subset. On Day 4 you will see why sparse, nearly independent codes like this are good for storing many memories.
+
+<Bridge title="A map that is also a memory"
+  neuro="Place cells are a code for location, but the same cells also respond to time, odours, sounds and task events when those matter. Remapping means each context gets its own code, which is what an index for episodic memories would need."
+  ai="Agents trained to navigate develop place-like and grid-like units in their hidden layers, and transformers trained on sequences have been related to hippocampal models. Giving each context its own nearly orthogonal code is also a way to reduce interference between tasks in continual learning.">
+
+The hippocampus gives every place in every environment its own pattern of activity.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "O'Keefe and Dostrovsky (1971) recorded place cells in...", options: ["Dorsal hippocampus of freely moving rats", "Primary visual cortex of cats", "Entorhinal cortex of mice", "Human prefrontal cortex"], answer: 0, explain: "CA1, on a platform." },
+  { q: "A rate map divides spike counts by...", options: ["Time spent in each bin", "The number of spikes", "Bin area", "The peak rate"], answer: 0, explain: "Occupancy normalisation." },
+  { q: "Skaggs information is measured in...", options: ["Bits per spike", "Hertz", "Bits per bin", "Centimetres"], answer: 0, explain: "Information about position carried by each spike." },
+  { q: "A cell firing in 1 of K equally visited bins carries...", options: ["log₂ K bits per spike", "K bits per spike", "1 bit", "0 bits"], answer: 0, explain: "From the formula." },
+  { q: "A non-spatial cell's measured information is positive because...", options: ["Finite data make its rate map uneven", "It is secretly spatial", "Of the log", "Occupancy is uneven"], answer: 0, explain: "Upward bias of the estimator." },
+  { q: "The shuffle test shifts the spike train in time to...", options: ["Break its relation to position while keeping its temporal structure", "Remove spikes", "Smooth the map", "Increase the rate"], answer: 0, explain: "A null distribution for spatial information." },
+  { q: "Global remapping means...", options: ["Fields move to unrelated positions or appear and disappear", "Rates change with fields fixed", "Fields expand", "Cells stop firing"], answer: 0, explain: "Muller and Kubie (1987)." },
+  { q: "Rate remapping means...", options: ["Firing rates change while field positions stay", "Fields move", "Cells become grid cells", "Theta changes"], answer: 0, explain: "Leutgeb et al. (2005)." },
+]} />
+
+<Flashcards cards={[
+  { front: "Rate map?", back: "Spike counts per spatial bin divided by time spent in that bin." },
+  { front: "Skaggs spatial information?", back: "$I = \\sum_i p_i (\\lambda_i/\\bar\\lambda)\\log_2(\\lambda_i/\\bar\\lambda)$ bits per spike." },
+  { front: "Why shuffle?", back: "Finite-sample information is biased upwards; circularly shifted spike trains give the chance distribution." },
+  { front: "Global against rate remapping?", back: "Global: field positions change between environments. Rate: positions stay, rates change." },
+  { front: "Typical place field size in a rat?", back: "About 20 to 50 cm in an open arena, larger in ventral hippocampus." },
+]} />
+
+<Predict revisit question="A neuron fires at a steady 2 Hz everywhere. Will its measured spatial information be exactly zero?" />
+
+<Key title="Before you go">
+<ul>
+<li>Rate maps need occupancy normalisation.</li>
+<li>Spatial information is biased upwards; test against circular shuffles.</li>
+<li>A few dozen place cells encode position precisely.</li>
+<li>Different environments get nearly independent maps.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: O'Keefe and Dostrovsky (1971), <em>The hippocampus as a spatial map. Preliminary evidence from unit activity in the freely-moving rat</em>.</li>
+<li>Skaggs, McNaughton, Gothard and Markus (1993), <em>An information-theoretic approach to deciphering the hippocampal code</em>, Advances in Neural Information Processing Systems 5, 1030 to 1037.</li>
+<li>Muller and Kubie (1987), <em>The effects of changes in the environment on the spatial firing of hippocampal complex-spike cells</em>, Journal of Neuroscience 7(7), 1951 to 1968.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A colleague reports that 80% of the CA1 cells they recorded are place cells. List the analysis choices you would ask about before believing the number, and say how each could push it up or down." />
