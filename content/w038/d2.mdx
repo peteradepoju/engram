@@ -1,0 +1,254 @@
+export const meta = {
+  title: "Primary visual cortex: oriented receptive fields",
+  intro: "From the retina, signals pass through the lateral geniculate nucleus (LGN) of the thalamus, whose cells still have centre-surround receptive fields, to primary visual cortex (V1). There, Hubel and Wiesel found something new: cells that responded best to bars and edges of one orientation (Week 34). Jones and Palmer later mapped the receptive fields of these simple cells in detail and showed that a Gabor function, a sinusoid in a Gaussian envelope, fits them closely. Today you build Gabor receptive fields, measure their orientation and spatial frequency tuning with gratings, and test Hubel and Wiesel's proposal that orientation selectivity arises by lining up the centre-surround fields of LGN inputs.",
+  goals: [
+    "Describe the pathway from retina through LGN to V1",
+    "Model a simple cell's receptive field as a Gabor function",
+    "Measure orientation and spatial frequency tuning with drifting gratings",
+    "Build an oriented receptive field from aligned centre-surround inputs",
+  ],
+  plan: [
+    { label: "Predict and the pathway", minutes: 20 },
+    { label: "Gabor receptive fields", minutes: 30 },
+    { label: "Spatial frequency", minutes: 20 },
+    { label: "Orientation from alignment", minutes: 35 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "jones-palmer-1987",
+};
+
+<Predict question="A model V1 cell is built by adding up the receptive fields of five ON-centre LGN cells whose centres lie in a vertical row. Will it respond best to vertical bars, horizontal bars, or equally to all orientations?" />
+
+<Step n={1} title="The pathway" minutes={20} />
+
+The optic nerves meet at the optic chiasm, where fibres from the nasal half of each retina cross, so that each side of the brain receives the opposite half of the visual field. Most fibres end in the LGN, whose layers keep the two eyes and the main ganglion cell classes separate, and whose cells have centre-surround receptive fields much like the retina's. LGN axons project to layer 4 of V1. In V1, Hubel and Wiesel (1962) found **simple cells**, with separate ON and OFF subregions arranged side by side and elongated along one axis, so that a bar at one orientation and position drives them strongly; and **complex cells** (Day 3), which prefer an orientation but respond to it anywhere within their receptive field.
+
+<Video id="IOHayh06LJ4" title="Hubel and Wiesel cat experiment" by="David Hubel and Torsten Wiesel (archival recording)" note="Archival footage from Hubel and Wiesel's experiments, in which a neuron in a cat's visual cortex crackles over a loudspeaker as a bar of light is moved across the screen, firing only for one orientation." />
+
+<Step n={2} title="Gabor receptive fields" minutes={30} />
+
+Jones and Palmer (1987) mapped the two-dimensional receptive fields of simple cells in cat V1 with small flashed spots and fitted them with **Gabor functions**:
+
+$$
+g(x, y) = \exp\!\left(-\frac{x'^2}{2\sigma_x^2} - \frac{y'^2}{2\sigma_y^2}\right)\cos(2\pi f x' + \phi),
+$$
+
+where $x' = x\cos\theta + y\sin\theta$ and $y' = -x\sin\theta + y\cos\theta$ rotate the coordinates to the preferred orientation $\theta$, $f$ is the preferred spatial frequency and $\phi$ the phase, which decides whether the field has an ON centre flanked by OFF regions (even, $\phi = 0$) or an ON and an OFF region side by side (odd, $\phi = \pi/2$). The fits left little structure in the residuals. A simple cell's response is approximately a rectified linear function of the stimulus: the dot product of the image with this receptive field, set to zero when negative.
+
+<Figure caption="A Gabor receptive field and its orientation tuning to drifting gratings. Change the preferred orientation, the spatial frequency, the phase and the length of the envelope." credit="Interactive figure by Engram, after Jones and Palmer (1987).">
+  <GaborRF />
+</Figure>
+
+<PyCell id="gabor" title="Orientation tuning of a Gabor cell" tests={String.raw`
+  import numpy as np
+  def test_peak():
+      "the cell prefers 30 degrees"
+      assert oris[np.argmax(tuning)] == 30
+
+  def test_selective():
+      "the response at the orthogonal orientation is under 5% of the peak"
+      assert tuning[list(oris).index(120)] < 0.05 * tuning.max()
+`} prompt="Write gabor(theta, f, phase, sx, sy), returning the receptive field on the grid (X, Y in degrees) with orientation theta in degrees. A drifting grating response is computed for you as the mean over eight phases of the rectified dot product."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  n = 64; xy = (np.arange(n) - n / 2) * (4 / n)          # 4 degrees across
+  X, Y = np.meshgrid(xy, xy)
+
+  def gabor(theta, f, phase=0.0, sx=0.4, sy=0.6):
+      t = np.deg2rad(theta)
+      xr = ...
+      yr = ...
+      return np.exp(-xr ** 2 / (2 * sx ** 2) - yr ** 2 / (2 * sy ** 2)) * np.cos(2 * np.pi * f * xr + phase)
+
+  def grating(theta, f, phase):
+      t = np.deg2rad(theta)
+      return np.cos(2 * np.pi * f * (X * np.cos(t) + Y * np.sin(t)) + phase)
+
+  def drift_response(rf, theta, f):
+      return np.mean([max(0.0, np.sum(rf * grating(theta, f, p))) for p in np.linspace(0, 2 * np.pi, 8, endpoint=False)])
+
+  rf = gabor(30, 1.0)
+  oris = np.arange(0, 180, 10)
+  tuning = np.array([drift_response(rf, o, 1.0) for o in oris])
+  print("preferred orientation:", oris[np.argmax(tuning)], "deg")
+  fig, ax = plt.subplots(1, 2, figsize=(8, 3.5))
+  ax[0].imshow(rf, cmap="RdBu_r", extent=[-2, 2, -2, 2]); ax[0].set_title("receptive field")
+  ax[1].plot(oris, tuning, "o-"); ax[1].set_xlabel("grating orientation (deg)"); plt.show()
+`}
+hint="xr = X * np.cos(t) + Y * np.sin(t); yr = -X * np.sin(t) + Y * np.cos(t)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  n = 64; xy = (np.arange(n) - n / 2) * (4 / n)          # 4 degrees across
+  X, Y = np.meshgrid(xy, xy)
+
+  def gabor(theta, f, phase=0.0, sx=0.4, sy=0.6):
+      t = np.deg2rad(theta)
+      xr = X * np.cos(t) + Y * np.sin(t)
+      yr = -X * np.sin(t) + Y * np.cos(t)
+      return np.exp(-xr ** 2 / (2 * sx ** 2) - yr ** 2 / (2 * sy ** 2)) * np.cos(2 * np.pi * f * xr + phase)
+
+  def grating(theta, f, phase):
+      t = np.deg2rad(theta)
+      return np.cos(2 * np.pi * f * (X * np.cos(t) + Y * np.sin(t)) + phase)
+
+  def drift_response(rf, theta, f):
+      return np.mean([max(0.0, np.sum(rf * grating(theta, f, p))) for p in np.linspace(0, 2 * np.pi, 8, endpoint=False)])
+
+  rf = gabor(30, 1.0)
+  oris = np.arange(0, 180, 10)
+  tuning = np.array([drift_response(rf, o, 1.0) for o in oris])
+  print("preferred orientation:", oris[np.argmax(tuning)], "deg")
+  fig, ax = plt.subplots(1, 2, figsize=(8, 3.5))
+  ax[0].imshow(rf, cmap="RdBu_r", extent=[-2, 2, -2, 2]); ax[0].set_title("receptive field")
+  ax[1].plot(oris, tuning, "o-"); ax[1].set_xlabel("grating orientation (deg)"); plt.show()
+`} />
+
+The cell responds best to gratings at 30°, the orientation of its receptive field, and almost not at all at 120°, where the grating's stripes run along the Gabor's ON and OFF bands and excitation and inhibition cancel. A note on convention: in this code an orientation θ is the direction along which the grating varies, so its stripes run at θ + 90°; papers use both conventions, and it is worth checking which one before comparing numbers. The tuning has a half-width of a few tens of degrees, set by the length of the envelope along the stripes ($\sigma_y$): a longer field integrates along a longer line and is more selective.
+
+<Step n={3} title="Spatial frequency" minutes={20} />
+
+A Gabor's sinusoid also makes the cell selective for **spatial frequency**, the number of grating cycles per degree. Its tuning is roughly a Gaussian on a log scale, centred on $f$, with a bandwidth set by the number of cycles that fit in the envelope: a long envelope with many cycles gives narrow tuning, a short one broad tuning. V1 cells span a range of preferred frequencies, together covering what the eye can resolve, and each has a bandwidth of about one to one and a half octaves.
+
+<PyCell id="sf" title="Spatial frequency tuning and bandwidth" tests={String.raw`
+  import numpy as np
+  def test_peak():
+      "the cell prefers about 1 cycle per degree"
+      assert 0.8 <= freqs[np.argmax(sf_tuning)] <= 1.25
+
+  def test_bandwidth():
+      "the wider envelope gives a narrower bandwidth (in octaves)"
+      assert bw_wide < bw_narrow
+`} prompt="Write bandwidth_octaves(freqs, resp): the width of the response curve at half its maximum, measured as log2 of the ratio of the highest to the lowest frequency where the response is at least half the peak. Compare a Gabor with sx = 0.4 with one with sx = 0.8."
+code={String.raw`
+  freqs = np.logspace(np.log10(0.25), np.log10(4), 25)
+  sf_tuning = np.array([drift_response(gabor(30, 1.0), 30, f) for f in freqs])
+
+  def bandwidth_octaves(freqs, resp):
+      above = ...
+      return ...
+
+  bw_narrow = bandwidth_octaves(freqs, sf_tuning)
+  bw_wide = bandwidth_octaves(freqs, np.array([drift_response(gabor(30, 1.0, sx=0.8), 30, f) for f in freqs]))
+  print(f"preferred frequency {freqs[np.argmax(sf_tuning)]:.2f} cycles/deg; bandwidth {bw_narrow:.2f} octaves (sx 0.4) and {bw_wide:.2f} octaves (sx 0.8)")
+  plt.semilogx(freqs, sf_tuning, "o-"); plt.xlabel("spatial frequency (cycles/deg)"); plt.show()
+`}
+hint="above = freqs[resp >= 0.5 * resp.max()]; return np.log2(above.max() / above.min())."
+solution={String.raw`
+  freqs = np.logspace(np.log10(0.25), np.log10(4), 25)
+  sf_tuning = np.array([drift_response(gabor(30, 1.0), 30, f) for f in freqs])
+
+  def bandwidth_octaves(freqs, resp):
+      above = freqs[resp >= 0.5 * resp.max()]
+      return np.log2(above.max() / above.min())
+
+  bw_narrow = bandwidth_octaves(freqs, sf_tuning)
+  bw_wide = bandwidth_octaves(freqs, np.array([drift_response(gabor(30, 1.0, sx=0.8), 30, f) for f in freqs]))
+  print(f"preferred frequency {freqs[np.argmax(sf_tuning)]:.2f} cycles/deg; bandwidth {bw_narrow:.2f} octaves (sx 0.4) and {bw_wide:.2f} octaves (sx 0.8)")
+  plt.semilogx(freqs, sf_tuning, "o-"); plt.xlabel("spatial frequency (cycles/deg)"); plt.show()
+`} />
+
+The cell prefers 1 cycle per degree, the frequency of its sinusoid, with a bandwidth of about 1.3 octaves, close to typical V1 values. Doubling the envelope's width across the stripes narrows the bandwidth to about 0.5 octaves. This is the uncertainty principle of Week 11 in action: a filter cannot be narrow in both space and frequency, and Gabor functions are the ones that achieve the best joint resolution, which was part of the original appeal of Gabor models of V1.
+
+<Step n={4} title="Orientation from alignment" minutes={35} />
+
+Where does orientation come from, if V1's inputs from the LGN are not oriented? Hubel and Wiesel proposed that a simple cell sums the inputs of several LGN cells whose receptive field centres lie along a line. Their sum is an elongated receptive field, and a bar along that line covers all the centres at once while a bar across it covers only one. Reid and Alonso (1995) later recorded LGN and V1 cells together in cats and found that connected pairs had overlapping receptive fields of matching sign, as the model requires.
+
+<PyCell id="hw" title="Building a simple cell from the LGN" tests={String.raw`
+  import numpy as np
+  def test_vertical():
+      "the cell built from a vertical row prefers vertical stripes (0 degrees in this convention)"
+      assert hw_oris[np.argmax(hw_tuning)] == 0
+
+  def test_selective():
+      "its orientation selectivity index is above 0.3"
+      assert osi > 0.3
+`} prompt="Build rf_hw as the sum of five ON-centre difference-of-Gaussians fields centred at x = 0 and y = -0.8, -0.4, 0, 0.4, 0.8 degrees (centre σ 0.15, surround σ 0.45, weight 0.9), then compute its drifting-grating tuning at 1.2 cycles per degree and its orientation selectivity index."
+code={String.raw`
+  def dog_at(x0, y0, sc=0.15, ss=0.45, w=0.9):
+      r2 = (X - x0) ** 2 + (Y - y0) ** 2
+      c = np.exp(-r2 / (2 * sc ** 2)); s = np.exp(-r2 / (2 * ss ** 2))
+      return c / c.sum() - w * s / s.sum()
+
+  rf_hw = ...
+  hw_oris = np.arange(0, 180, 10)
+  hw_tuning = np.array([drift_response(rf_hw, o, 1.2) for o in hw_oris])
+  v = np.sum(hw_tuning * np.exp(2j * np.deg2rad(hw_oris)))
+  osi = np.abs(v) / hw_tuning.sum()
+  print(f"preferred orientation {hw_oris[np.argmax(hw_tuning)]} deg (0 = vertical stripes, which vary along x), OSI {osi:.2f}")
+  fig, ax = plt.subplots(1, 2, figsize=(8, 3.5))
+  ax[0].imshow(rf_hw, cmap="RdBu_r", extent=[-2, 2, -2, 2]); ax[1].plot(hw_oris, hw_tuning, "o-"); plt.show()
+`}
+hint="rf_hw = sum(dog_at(0, y) for y in (-0.8, -0.4, 0, 0.4, 0.8))."
+solution={String.raw`
+  def dog_at(x0, y0, sc=0.15, ss=0.45, w=0.9):
+      r2 = (X - x0) ** 2 + (Y - y0) ** 2
+      c = np.exp(-r2 / (2 * sc ** 2)); s = np.exp(-r2 / (2 * ss ** 2))
+      return c / c.sum() - w * s / s.sum()
+
+  rf_hw = sum(dog_at(0, y) for y in (-0.8, -0.4, 0, 0.4, 0.8))
+  hw_oris = np.arange(0, 180, 10)
+  hw_tuning = np.array([drift_response(rf_hw, o, 1.2) for o in hw_oris])
+  v = np.sum(hw_tuning * np.exp(2j * np.deg2rad(hw_oris)))
+  osi = np.abs(v) / hw_tuning.sum()
+  print(f"preferred orientation {hw_oris[np.argmax(hw_tuning)]} deg (0 = vertical stripes, which vary along x), OSI {osi:.2f}")
+  fig, ax = plt.subplots(1, 2, figsize=(8, 3.5))
+  ax[0].imshow(rf_hw, cmap="RdBu_r", extent=[-2, 2, -2, 2]); ax[1].plot(hw_oris, hw_tuning, "o-"); plt.show()
+`} />
+
+The sum of five centre-surround fields in a vertical row is an elongated ON region flanked by OFF regions, and it responds best to vertical stripes, with an orientation selectivity index of about 0.44, which answers the prediction. Its tuning is broader than a Gabor's of similar size, because each LGN field responds a little at every orientation, and tuning sharpens if more inputs are added along the row or the output threshold is raised.
+
+<Callout kind="think">
+
+The feedforward model explains where orientation comes from, but not everything about it. Real orientation tuning keeps its width as contrast changes, whereas a thresholded linear model broadens at high contrast (the iceberg effect), and cortical cells receive far more input from other cortical cells than from the LGN. Models in which recurrent cortical connections sharpen or stabilise tuning, and the normalisation of Day 3, address these gaps. The debate between feedforward and recurrent accounts ran for decades; most current models include both.
+
+</Callout>
+
+<Bridge title="Learned edge detectors"
+  neuro="V1 simple cells tile the visual field with oriented, localised, band-pass filters at many orientations, frequencies and phases: a multiscale Gabor-like decomposition of the image, built from the LGN's centre-surround signals."
+  ai="Convolutional networks trained on natural images learn first-layer filters that look strikingly like Gabors, and sparse coding of natural images produces them too (Olshausen and Field, Week 13). Many vision models simply fix their first layer as a Gabor filter bank.">
+
+Oriented, band-pass, localised filters appear wherever natural images are processed efficiently.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "LGN cells have receptive fields that are...", options: ["Centre-surround, like retinal ganglion cells", "Oriented", "Direction selective", "Colour blind"], answer: 0, explain: "Orientation emerges in V1." },
+  { q: "A Gabor function is...", options: ["A sinusoid inside a Gaussian envelope", "A difference of Gaussians", "A step function", "A Fourier series"], answer: 0, explain: "Jones and Palmer's fit to simple cells." },
+  { q: "The phase φ of a Gabor determines...", options: ["Whether ON and OFF subregions are even or odd", "The orientation", "The frequency", "The size"], answer: 0, explain: "Even or odd symmetry." },
+  { q: "A simple cell's response is roughly...", options: ["A rectified dot product of image and receptive field", "Independent of the image", "The image's mean brightness", "Its contrast squared"], answer: 0, explain: "Linear-nonlinear." },
+  { q: "A longer envelope along the modulation direction gives...", options: ["Narrower spatial frequency tuning", "Broader tuning", "No tuning", "Orientation tuning only"], answer: 0, explain: "More cycles, sharper in frequency." },
+  { q: "Hubel and Wiesel proposed orientation arises from...", options: ["Summing LGN inputs aligned along a line", "Recurrent excitation only", "Retinal orientation", "Colour opponency"], answer: 0, explain: "The feedforward model." },
+  { q: "Reid and Alonso found that connected LGN and V1 cells...", options: ["Had overlapping receptive fields of matching sign", "Were never connected", "Had opposite signs", "Had no receptive fields"], answer: 0, explain: "Support for the feedforward model." },
+  { q: "The first layer of a CNN trained on natural images often learns...", options: ["Gabor-like oriented filters", "Random noise", "Whole objects", "Text"], answer: 0, explain: "As do sparse coding models." },
+]} />
+
+<Flashcards cards={[
+  { front: "Simple cell?", back: "A V1 cell with separate, elongated ON and OFF subregions; responds to a bar of one orientation at one position." },
+  { front: "Gabor receptive field?", back: "$\\exp(-x'^2/2\\sigma_x^2 - y'^2/2\\sigma_y^2)\\cos(2\\pi f x' + \\phi)$ in rotated coordinates." },
+  { front: "Spatial frequency bandwidth?", back: "Width of frequency tuning at half height in octaves; V1 cells have about 1 to 1.5 octaves." },
+  { front: "Hubel and Wiesel's feedforward model?", back: "A simple cell sums LGN cells whose centre-surround fields lie along a line, giving an oriented receptive field." },
+  { front: "Jones and Palmer (1987)?", back: "Mapped cat simple cell receptive fields in two dimensions and showed Gabor functions fit them well." },
+]} />
+
+<Predict revisit question="Five ON-centre LGN fields in a vertical row: which orientation does their sum prefer?" />
+
+<Key title="Before you go">
+<ul>
+<li>Retina and LGN are centre-surround; V1 adds orientation.</li>
+<li>Simple cells are well described by Gabor receptive fields and a rectified linear response.</li>
+<li>Envelope size trades spatial frequency bandwidth against spatial extent.</li>
+<li>Aligning centre-surround inputs produces orientation selectivity.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Jones and Palmer (1987), <em>An evaluation of the two-dimensional Gabor filter model of simple receptive fields in cat striate cortex</em>.</li>
+<li>Reid and Alonso (1995), <em>Specificity of monosynaptic connections from thalamus to visual cortex</em>, Nature 378(6554), 281 to 284.</li>
+<li>Hubel and Wiesel (1962), <em>Receptive fields, binocular interaction and functional architecture in the cat's visual cortex</em> (Week 34).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Draw the receptive field you would expect for a simple cell that prefers horizontal edges with light above and dark below. Then describe two stimuli that would drive it equally well, and one that would drive a complex cell with the same preferences but not this simple cell." />

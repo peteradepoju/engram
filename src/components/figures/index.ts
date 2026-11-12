@@ -174,3 +174,8 @@ export { CalciumTrace } from "./calcium-trace";
 export { ISIViolations } from "./isi-violations";
 export { PsychometricLapses } from "./psychometric-lapses";
 export { Pseudoreplication } from "./pseudoreplication";
+export { RetinaDoG } from "./retina-dog";
+export { GaborRF } from "./gabor-rf";
+export { DivisiveNormalization } from "./divisive-normalization";
+export { MotionEnergy } from "./motion-energy";
+export { InvariancePooling } from "./invariance-pooling";

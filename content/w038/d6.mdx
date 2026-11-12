@@ -1,0 +1,245 @@
+export const meta = {
+  title: "Forge: Week 38 challenge, quiz and deep read",
+  intro: "This week followed the visual signal from the retina's centre-surround cells to oriented simple cells, phase-invariant complex cells, divisive normalisation, motion energy and the hierarchy of the ventral stream. Today's challenge is the characterisation every V1 experiment begins with. Forty neurons have been recorded while drifting gratings were shown at twelve directions and eight contrasts. For each one you will decide whether it is simple or complex, measure its orientation and direction preferences, and fit its contrast response with a Naka-Rushton function. Then the quiz, and a critique of Heeger's normalisation model.",
+  goals: [
+    "Classify V1 cells as simple or complex from their responses to drifting gratings",
+    "Measure preferred orientation, orientation selectivity and direction selectivity",
+    "Fit contrast response functions and recover semi-saturation contrasts",
+    "Critique the normalisation model as an account of V1",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "heeger-1992",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. A space-time filter has a spatial frequency of 2 cycles per degree and a temporal frequency of 6 Hz. What speed does it prefer?
+2. A normalised cell has c50 = 20%. What fraction of its maximum response does a 20% contrast grating give? And a 60% one?
+3. A half-wave rectified sinusoid has F1/F0 of π/2. What is F1/F0 for a full-wave rectified one, |cos|, at the stimulus frequency?
+
+<PyCell code={String.raw`
+  import numpy as np
+  print("1.", 6 / 2, "deg/s")
+  nr = lambda c, c50: c ** 2 / (c50 ** 2 + c ** 2)
+  print("2.", nr(0.2, 0.2), round(nr(0.6, 0.2), 2))
+  ph = np.linspace(0, 2 * np.pi, 256, endpoint=False); F = np.fft.rfft(np.abs(np.cos(ph)))
+  print("3.", round(2 * abs(F[1]) / abs(F[0]), 3), "(|cos| repeats twice per cycle, so its power is at the second harmonic)")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: what kind of cell, and what does it prefer?** For each of 40 cells you have spike counts in 16 phase bins of a drifting grating at each of 12 directions, at full contrast, averaged over 10 repeats. Some cells are simple, some complex; their preferred directions are spread around the circle, and some are direction selective. For each cell find the preferred direction, compute F1/F0 at that direction, and call the cell simple if F1/F0 exceeds 1. Then compute the orientation selectivity index (from the vector sum of responses at doubled angles) and the direction selectivity index (preferred against opposite direction).
+
+<PyCell id="partA" title="Part A: simple or complex, and tuning" tests={String.raw`
+  import numpy as np
+  def test_class():
+      "at least 36 of the 40 cells are classified correctly as simple or complex"
+      assert np.sum(is_simple == true_simple) >= 36
+
+  def test_pref():
+      "the preferred direction is within 30 degrees of the truth for at least 36 cells"
+      err = np.abs((pref_dir - true_dir + 180) % 360 - 180)
+      assert np.sum(err <= 30) >= 36
+
+  def test_dsi():
+      "cells built to be direction selective have higher DSI than the others on average"
+      assert dsi[true_ds].mean() > dsi[~true_ds].mean() + 0.3
+`} prompt="Using counts[cell, direction, phase_bin], compute for each cell: pref_dir (the direction with the largest mean count), f1f0 at that direction, is_simple (f1f0 above 1), osi from the vector sum at doubled angles of the mean counts, and dsi = (R_pref - R_opposite) / (R_pref + R_opposite)."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import curve_fit
+  r = np.random.default_rng(1992)
+  n_cells, dirs, nph, reps = 40, np.arange(0, 360, 30), 16, 10
+  contrasts = np.array([0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0])
+  true_simple = r.random(n_cells) < 0.5
+  true_dir = r.uniform(0, 360, n_cells)
+  true_ds = r.random(n_cells) < 0.4
+  null_gain = np.where(true_ds, r.uniform(0, 0.2, n_cells), r.uniform(0.7, 1.0, n_cells))
+  kappa = r.uniform(1.5, 4, n_cells); rmax = r.uniform(8, 25, n_cells); c50 = r.uniform(0.08, 0.4, n_cells)
+  phase = np.linspace(0, 2 * np.pi, nph, endpoint=False)
+
+  def rate(i, d, c):
+      th = np.deg2rad(d - true_dir[i])
+      g = np.exp(kappa[i] * (np.cos(th) - 1)) + null_gain[i] * np.exp(kappa[i] * (np.cos(th + np.pi) - 1))
+      nr = c ** 2 / (c50[i] ** 2 + c ** 2)
+      shape = np.maximum(0, np.cos(phase)) * np.pi if true_simple[i] else 1 + 0.25 * np.cos(phase)
+      return 0.3 + rmax[i] * g * nr * shape / 4
+
+  counts = np.array([[r.poisson(np.tile(rate(i, d, 1.0), (reps, 1))).mean(0) for d in dirs] for i in range(n_cells)])
+  mean_dir = counts.mean(2)                                   # cells by directions
+
+  def f1f0(x):
+      F = np.fft.rfft(x)
+      return 2 * np.abs(F[1]) / np.abs(F[0])
+
+  pref_idx = ...
+  pref_dir = dirs[pref_idx]
+  f1 = ...
+  is_simple = ...
+  osi = ...
+  opp = (pref_idx + 6) % 12
+  dsi = ...
+  print(f"{is_simple.sum()} cells called simple ({true_simple.sum()} truly simple); median OSI {np.median(osi):.2f}, median DSI {np.median(dsi):.2f}")
+  plt.hist(f1, 20); plt.axvline(1, color="k", ls="--"); plt.xlabel("F1/F0 at the preferred direction"); plt.show()
+`}
+hint="pref_idx = mean_dir.argmax(1); f1 = np.array([f1f0(counts[i, pref_idx[i]]) for i in range(n_cells)]); is_simple = f1 > 1; osi = np.abs((mean_dir * np.exp(2j * np.deg2rad(dirs))).sum(1)) / mean_dir.sum(1); dsi = (mean_dir[np.arange(n_cells), pref_idx] - mean_dir[np.arange(n_cells), opp]) / (mean_dir[np.arange(n_cells), pref_idx] + mean_dir[np.arange(n_cells), opp])."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import curve_fit
+  r = np.random.default_rng(1992)
+  n_cells, dirs, nph, reps = 40, np.arange(0, 360, 30), 16, 10
+  contrasts = np.array([0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0])
+  true_simple = r.random(n_cells) < 0.5
+  true_dir = r.uniform(0, 360, n_cells)
+  true_ds = r.random(n_cells) < 0.4
+  null_gain = np.where(true_ds, r.uniform(0, 0.2, n_cells), r.uniform(0.7, 1.0, n_cells))
+  kappa = r.uniform(1.5, 4, n_cells); rmax = r.uniform(8, 25, n_cells); c50 = r.uniform(0.08, 0.4, n_cells)
+  phase = np.linspace(0, 2 * np.pi, nph, endpoint=False)
+
+  def rate(i, d, c):
+      th = np.deg2rad(d - true_dir[i])
+      g = np.exp(kappa[i] * (np.cos(th) - 1)) + null_gain[i] * np.exp(kappa[i] * (np.cos(th + np.pi) - 1))
+      nr = c ** 2 / (c50[i] ** 2 + c ** 2)
+      shape = np.maximum(0, np.cos(phase)) * np.pi if true_simple[i] else 1 + 0.25 * np.cos(phase)
+      return 0.3 + rmax[i] * g * nr * shape / 4
+
+  counts = np.array([[r.poisson(np.tile(rate(i, d, 1.0), (reps, 1))).mean(0) for d in dirs] for i in range(n_cells)])
+  mean_dir = counts.mean(2)                                   # cells by directions
+
+  def f1f0(x):
+      F = np.fft.rfft(x)
+      return 2 * np.abs(F[1]) / np.abs(F[0])
+
+  pref_idx = mean_dir.argmax(1)
+  pref_dir = dirs[pref_idx]
+  f1 = np.array([f1f0(counts[i, pref_idx[i]]) for i in range(n_cells)])
+  is_simple = f1 > 1
+  osi = np.abs((mean_dir * np.exp(2j * np.deg2rad(dirs))).sum(1)) / mean_dir.sum(1)
+  opp = (pref_idx + 6) % 12
+  rp, ro = mean_dir[np.arange(n_cells), pref_idx], mean_dir[np.arange(n_cells), opp]
+  dsi = (rp - ro) / (rp + ro)
+  print(f"{is_simple.sum()} cells called simple ({true_simple.sum()} truly simple); median OSI {np.median(osi):.2f}, median DSI {np.median(dsi):.2f}")
+  plt.hist(f1, 20); plt.axvline(1, color="k", ls="--"); plt.xlabel("F1/F0 at the preferred direction"); plt.show()
+`} />
+
+F1/F0 separates the two classes cleanly here: 24 cells are called simple and all 24 truly simple cells are among them, because the simulated simple cells are perfectly rectified (F1/F0 near 1.57) and the complex cells only weakly modulated (about 0.25). Preferred directions are recovered to within the 30° spacing of the stimuli. The median direction index is low, 0.13, because most cells respond nearly as well to the opposite direction; the direction-selective minority stand out clearly. With weak responses or few repeats, Poisson noise inflates F1 for complex cells and real data are less tidy, which is what Part C asks you to think about.
+
+**Part B: contrast response.** At each cell's preferred direction, the same gratings were shown at eight contrasts, 10 repeats each. Fit each cell's mean response (averaged over phase) with a Naka-Rushton function $R(c) = b + R_{max} c^n/(c_{50}^n + c^n)$, with the exponent $n$ free, and compare the fitted $c_{50}$ with the true value.
+
+<PyCell id="partB" title="Part B: Naka-Rushton fits" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "the fitted c50 correlates with the true c50 above 0.85 across cells"
+      assert np.corrcoef(c50_fit, c50)[0, 1] > 0.85
+
+  def test_exponent():
+      "the median fitted exponent is between 1.5 and 2.5 (the model's true value is 2)"
+      assert 1.5 < np.median(n_fit) < 2.5
+`} prompt="Write naka(c, b, rm, c50_, n) and fit it to each cell's contrast response with curve_fit (starting values b = 0.3, rm = the maximum response, c50 = 0.2, n = 2; bounds keep c50 in [0.01, 1] and n in [0.5, 6]). Store the fitted c50 and n for each cell."
+code={String.raw`
+  cresp = np.array([[r.poisson(np.tile(rate(i, pref_dir[i], c), (reps, 1))).mean() for c in contrasts] for i in range(n_cells)])
+
+  def naka(c, b, rm, c50_, n):
+      return ...
+
+  c50_fit, n_fit = np.zeros(n_cells), np.zeros(n_cells)
+  for i in range(n_cells):
+      p, _ = curve_fit(naka, contrasts, cresp[i], p0=[0.3, cresp[i].max(), 0.2, 2],
+                       bounds=([0, 0, 0.01, 0.5], [5, 100, 1, 6]), maxfev=20000)
+      c50_fit[i], n_fit[i] = ...
+  print(f"correlation of fitted and true c50: {np.corrcoef(c50_fit, c50)[0, 1]:.2f}; median exponent {np.median(n_fit):.2f}")
+  plt.plot(c50, c50_fit, "o"); plt.plot([0, 0.45], [0, 0.45], "k--"); plt.xlabel("true c50"); plt.ylabel("fitted c50"); plt.show()
+`}
+hint="return b + rm * c ** n / (c50_ ** n + c ** n); c50_fit[i], n_fit[i] = p[2], p[3]."
+solution={String.raw`
+  cresp = np.array([[r.poisson(np.tile(rate(i, pref_dir[i], c), (reps, 1))).mean() for c in contrasts] for i in range(n_cells)])
+
+  def naka(c, b, rm, c50_, n):
+      return b + rm * c ** n / (c50_ ** n + c ** n)
+
+  c50_fit, n_fit = np.zeros(n_cells), np.zeros(n_cells)
+  for i in range(n_cells):
+      p, _ = curve_fit(naka, contrasts, cresp[i], p0=[0.3, cresp[i].max(), 0.2, 2],
+                       bounds=([0, 0, 0.01, 0.5], [5, 100, 1, 6]), maxfev=20000)
+      c50_fit[i], n_fit[i] = p[2], p[3]
+  print(f"correlation of fitted and true c50: {np.corrcoef(c50_fit, c50)[0, 1]:.2f}; median exponent {np.median(n_fit):.2f}")
+  plt.plot(c50, c50_fit, "o"); plt.plot([0, 0.45], [0, 0.45], "k--"); plt.xlabel("true c50"); plt.ylabel("fitted c50"); plt.show()
+`} />
+
+The fitted semi-saturation contrasts correlate with the true values at about 0.96, and the median fitted exponent is 2.0, the value built into the model. Eight contrasts, spaced roughly logarithmically, are enough to pin down a c50 between 8% and 40%; a cell with c50 near the lowest contrast tested would be poorly constrained. Real V1 cells have exponents between about 1 and 4, which normalisation models capture by raising energies to a power before dividing.
+
+**Part C (written).** Answer in your journal. First, which cells did Part A misclassify, and what property of a simple cell's response (its strength, its tuning, the number of repeats) makes F1/F0 unreliable? Second, normalisation predicts that a mask grating changes $c_{50}$ but not $R_{max}$ (a contrast gain change), while some forms of adaptation change $R_{max}$ (a response gain change). Describe the experiment and the Part B analysis that would distinguish them in these cells.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. Phase invariance of the energy model" task="An even filter $g_e$ and an odd filter $g_o$ in quadrature respond to a grating of phase $\phi$ with $A\cos(\phi + \delta)$ and $A\sin(\phi + \delta)$. Show that the energy does not depend on $\phi$, and that a simple cell's rectified response has F1/F0 of $\pi/2$.">
+
+The energy is $A^2\cos^2(\phi + \delta) + A^2\sin^2(\phi + \delta) = A^2$, independent of phase.
+
+For the simple cell, $r(\phi) = A\max(0, \cos\phi)$. Its mean over a cycle is $\frac{A}{2\pi}\int_{-\pi/2}^{\pi/2}\cos\phi\,d\phi = \frac{A}{\pi}$.
+
+Its first Fourier coefficient has amplitude $\frac{2}{2\pi}\int_{-\pi/2}^{\pi/2} A\cos^2\phi\,d\phi = \frac{A}{2}$. So F1/F0 $= \frac{A/2}{A/\pi} = \frac{\pi}{2}$, about 1.57, which is why 1 is a natural dividing line.
+
+</Prove>
+
+<Prove title="2. Normalisation gives Naka-Rushton with contrast-invariant tuning" task="With $E_i = c^2\hat E_i$ for every cell in the pool, show that $R_i = E_i/(\sigma^2 + \sum_j E_j)$ equals a fixed tuning term times $c^2/(c_{50}^2 + c^2)$, and find $c_{50}$.">
+
+Substituting, $R_i = \frac{c^2\hat E_i}{\sigma^2 + c^2\sum_j \hat E_j}$.
+
+Divide numerator and denominator by $\sum_j \hat E_j$: $R_i = \frac{\hat E_i}{\sum_j \hat E_j}\cdot\frac{c^2}{\sigma^2/\sum_j\hat E_j + c^2}$.
+
+The first factor depends on the cell's tuning but not on contrast; the second is a Naka-Rushton function with exponent 2 and $c_{50} = \sigma/\sqrt{\sum_j \hat E_j}$. Contrast multiplies the whole tuning curve by the same factor, so its shape, and its width, cannot change.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 38 quiz (15 questions)" questions={[
+  { q: "Retinal ganglion cells have...", options: ["Centre-surround receptive fields", "Oriented receptive fields", "Direction-selective fields only", "No receptive fields"], answer: 0, explain: "Day 1." },
+  { q: "The area-response curve falls for large spots because...", options: ["They invade the antagonistic surround", "The cell adapts", "Light saturates", "Spots are dimmer"], answer: 0, explain: "Day 1." },
+  { q: "Divisive gain control in the retina produces...", options: ["Responses to contrast independent of background", "Linear responses to intensity", "Orientation tuning", "Motion detection"], answer: 0, explain: "Weber's law, Day 1." },
+  { q: "Simple cell receptive fields are well fitted by...", options: ["Gabor functions", "Single Gaussians", "Step functions", "Polynomials"], answer: 0, explain: "Jones and Palmer, Day 2." },
+  { q: "Hubel and Wiesel's feedforward model builds orientation from...", options: ["Aligned centre-surround inputs", "Recurrent excitation", "Retinal orientation", "Colour"], answer: 0, explain: "Day 2." },
+  { q: "A larger envelope across the stripes gives...", options: ["Narrower spatial frequency tuning", "Broader tuning", "No change", "Direction selectivity"], answer: 0, explain: "Day 2." },
+  { q: "The energy model of complex cells sums...", options: ["Squared outputs of a quadrature pair", "Two simple cells of the same phase", "LGN cells", "Rectified outputs"], answer: 0, explain: "Day 3." },
+  { q: "Contrast-invariant tuning follows from...", options: ["Divisive normalisation", "A fixed threshold", "Linear filtering", "Adaptation of the LGN"], answer: 0, explain: "Day 3 and Derivation 2." },
+  { q: "Cross-orientation suppression is...", options: ["Suppression by an orthogonal grating that alone does not drive the cell", "Excitation by the mask", "Adaptation to orientation", "Direction selectivity"], answer: 0, explain: "Day 3." },
+  { q: "Direction selectivity requires receptive fields that are...", options: ["Oriented (inseparable) in space-time", "Separable in space and time", "Centre-surround", "Large"], answer: 0, explain: "Day 4." },
+  { q: "A space-time filter's preferred speed is...", options: ["f_t / f_x", "f_x / f_t", "f_x f_t", "1 / f_t"], answer: 0, explain: "Day 4." },
+  { q: "Area MT belongs to...", options: ["The dorsal stream", "The ventral stream", "The retina", "The LGN"], answer: 0, explain: "Day 4." },
+  { q: "In HMAX, max pooling provides...", options: ["Tolerance to position", "Selectivity", "Colour", "Motion"], answer: 0, explain: "Day 5." },
+  { q: "Global pooling of orientation fails on T against upside-down T because...", options: ["It discards spatial arrangement", "It lacks horizontal filters", "It is linear", "It uses too few images"], answer: 0, explain: "Day 5." },
+  { q: "A simple cell's F1/F0 for a perfectly rectified response is...", options: ["π/2", "1", "0", "2"], answer: 0, explain: "Derivation 1." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Heeger (1992) its third pass and write your critique under the five headings. Focus on one question: **is normalisation a mechanism or a description?** Consider which response properties the model was built to explain and which it predicted in advance; how many free parameters it needs per cell, and whether its successes could come from that flexibility; the circuit Heeger proposed, shunting inhibition from a pool of cortical cells, and the later evidence that some suppression arises before cortex (Freeman and colleagues, 2002); whether the pool should be the same for every cell, and what its spatial extent should be; and how the model has been extended to attention, surround suppression and other brain areas (Carandini and Heeger, 2012). End with an experiment that would distinguish two different circuit implementations of the same normalisation equation.
+
+<Callout kind="research">
+
+Coen-Cagli, Kohn and Schwartz proposed that normalisation by the surround should be flexible, applied only when the surround is statistically dependent on the centre in natural images. Using this week's Gabor filters, measure how often the energy at a centre location and at surround locations are dependent in a set of natural images (photographs you take yourself will do), and ask whether a fixed normalisation pool or a flexible one would better reduce the dependence. This is the efficient coding question of Week 39 asked of V1.
+
+</Callout>
+
+<Key title="Week 38 review checklist">
+<ul>
+<li>I can model retinal receptive fields as differences of Gaussians and explain adaptation.</li>
+<li>I can build Gabor simple cells and measure orientation and spatial frequency tuning.</li>
+<li>I can build complex cells with the energy model and classify cells by F1/F0.</li>
+<li>I can implement divisive normalisation and explain saturation, invariant tuning and suppression.</li>
+<li>I can build motion energy units, and explain selectivity and tolerance in the ventral stream.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then write the full set of measurements you would make on a newly recorded V1 cell, in order, with the stimulus for each and the parameter it estimates, as you would for a methods section." />

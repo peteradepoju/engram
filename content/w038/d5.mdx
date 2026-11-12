@@ -1,0 +1,289 @@
+export const meta = {
+  title: "The ventral stream: selectivity and invariance",
+  intro: "Beyond V1, two streams diverge: a dorsal stream for motion and space (Day 4) and a ventral stream, through V2 and V4 to inferior temporal cortex, for recognising what things are. Neurons along the ventral stream respond to increasingly complex features over increasingly large regions, until IT neurons respond to particular objects and faces across changes in position, size and viewpoint. Riesenhuber and Poggio proposed in 1999 that this comes from alternating two operations: template matching, which builds selectivity, and max pooling, which builds tolerance. Today you build a small version of their model, HMAX, and find out what each operation buys and what it costs.",
+  goals: [
+    "Describe the ventral and dorsal streams and how receptive fields change along the ventral stream",
+    "Build simple (S) and complex (C) layers with Gabor filters and max pooling",
+    "Show that pooling gives position tolerance but discards spatial arrangement",
+    "Use conjunction templates to recover selectivity while keeping tolerance",
+  ],
+  plan: [
+    { label: "Predict and two streams", minutes: 20 },
+    { label: "S1 and C1: filtering and pooling", minutes: 30 },
+    { label: "Recognition across positions", minutes: 25 },
+    { label: "Selectivity from conjunctions", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "riesenhuber-poggio-1999",
+};
+
+<Predict question="A model describes each image by the strongest response of each of four orientation detectors anywhere in the image. Will it tell a T from an upside-down T?" />
+
+<Step n={1} title="Two streams" minutes={20} />
+
+Ungerleider and Mishkin (1982) proposed, from lesion studies in monkeys, that visual cortex divides into a **ventral** stream running into the temporal lobe, needed to recognise objects, and a **dorsal** stream running into the parietal lobe, needed to locate them; Goodale and Milner later recast the dorsal stream as vision for action. Along the ventral stream, from V1 through V2 and V4 to inferior temporal cortex (IT), receptive fields grow from about a degree to tens of degrees, response latencies lengthen, and preferred stimuli become more complex: oriented edges in V1, corners and curvature in V2 and V4, object parts and whole objects, including faces, in IT. Yet IT neurons respond to their preferred objects across a range of positions and sizes, the **invariance**, or better tolerance, that recognition needs.
+
+Riesenhuber and Poggio's HMAX model builds this with two kinds of layer. **S** (simple) layers compute selectivity: each unit matches its input against a template, as a V1 simple cell matches the image against a Gabor. **C** (complex) layers compute tolerance: each unit takes the maximum over S units with the same template at nearby positions or scales, as a complex cell pools over phase and position. Stacking S and C layers gives units that are both more selective and more tolerant at each level.
+
+<Video id="UNBOPZf0QNQ" title="Convolutional Encoding Model" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's tutorial video on using a convolutional network, a stack of filtering and pooling layers like today's model, as an encoding model of visual cortical responses." />
+
+<Step n={2} title="S1 and C1: filtering and pooling" minutes={30} />
+
+<Figure caption="A row of S1 units tuned to a bar at different positions, and C1 units that each take the maximum over a pool of neighbouring S1 units. Move the bar and change the pool size." credit="Interactive figure by Engram, after Riesenhuber and Poggio (1999).">
+  <InvariancePooling />
+</Figure>
+
+<PyCell id="s1c1" title="Pooling buys tolerance" tests={String.raw`
+  import numpy as np
+  def test_tolerance():
+      "after a 2-pixel shift, C1 features stay more similar than S1 features"
+      assert sim_c1 > sim_s1 + 0.1 and sim_c1 > 0.8
+`} prompt="Write C1(im, pool=4): for each of the four S1 orientation maps, take the maximum over pool by pool neighbourhoods (maximum_filter) and keep every second pixel. Then compare the cosine similarity of S1 and of C1 features for a shape and the same shape shifted by 2 pixels."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.ndimage import convolve, maximum_filter
+  r = np.random.default_rng(1999); S = 28
+
+  def shape(kind, cx, cy, noise=0.1):
+      im = np.zeros((S, S)); L = 4
+      if kind == "+": im[cy, cx - L:cx + L + 1] = 1; im[cy - L:cy + L + 1, cx] = 1
+      if kind == "T": im[cy - L, cx - L:cx + L + 1] = 1; im[cy - L:cy + L + 1, cx] = 1
+      if kind == "B": im[cy + L, cx - L:cx + L + 1] = 1; im[cy - L:cy + L + 1, cx] = 1     # upside-down T
+      if kind == "X":
+          for k in range(2 * L + 1): im[cy - L + k, cx - L + k] = 1; im[cy - L + k, cx + L - k] = 1
+      return im + noise * r.normal(size=(S, S))
+
+  yy, xx = np.mgrid[-3:4, -3:4]
+  def gab(th):
+      t = np.deg2rad(th); xr = xx * np.cos(t) + yy * np.sin(t); yr = -xx * np.sin(t) + yy * np.cos(t)
+      g = np.exp(-xr ** 2 / 2 - yr ** 2 / 8) * np.cos(2 * np.pi * xr / 5); return g - g.mean()
+  bank = [gab(t) for t in (0, 45, 90, 135)]
+
+  def S1(im):
+      return np.stack([np.abs(convolve(im, g)) for g in bank])
+
+  def C1(im, pool=4):
+      ...
+
+  cos = lambda a, b: np.dot(a.ravel(), b.ravel()) / (np.linalg.norm(a) * np.linalg.norm(b))
+  a, b = shape("+", 12, 14, noise=0), shape("+", 14, 14, noise=0)
+  sim_s1, sim_c1 = cos(S1(a), S1(b)), cos(C1(a), C1(b))
+  print(f"similarity after a 2-pixel shift: S1 {sim_s1:.2f}, C1 {sim_c1:.2f}")
+  fig, ax = plt.subplots(1, 3, figsize=(9, 3))
+  ax[0].imshow(a, cmap="gray"); ax[1].imshow(S1(a)[2], cmap="magma"); ax[2].imshow(C1(a)[2], cmap="magma")
+  for x_, t_ in zip(ax, ["image", "S1, one orientation", "C1, same orientation"]): x_.set_title(t_); x_.axis("off")
+  plt.show()
+`}
+hint="s = S1(im); return np.stack([maximum_filter(m, size=pool)[::2, ::2] for m in s])."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.ndimage import convolve, maximum_filter
+  r = np.random.default_rng(1999); S = 28
+
+  def shape(kind, cx, cy, noise=0.1):
+      im = np.zeros((S, S)); L = 4
+      if kind == "+": im[cy, cx - L:cx + L + 1] = 1; im[cy - L:cy + L + 1, cx] = 1
+      if kind == "T": im[cy - L, cx - L:cx + L + 1] = 1; im[cy - L:cy + L + 1, cx] = 1
+      if kind == "B": im[cy + L, cx - L:cx + L + 1] = 1; im[cy - L:cy + L + 1, cx] = 1     # upside-down T
+      if kind == "X":
+          for k in range(2 * L + 1): im[cy - L + k, cx - L + k] = 1; im[cy - L + k, cx + L - k] = 1
+      return im + noise * r.normal(size=(S, S))
+
+  yy, xx = np.mgrid[-3:4, -3:4]
+  def gab(th):
+      t = np.deg2rad(th); xr = xx * np.cos(t) + yy * np.sin(t); yr = -xx * np.sin(t) + yy * np.cos(t)
+      g = np.exp(-xr ** 2 / 2 - yr ** 2 / 8) * np.cos(2 * np.pi * xr / 5); return g - g.mean()
+  bank = [gab(t) for t in (0, 45, 90, 135)]
+
+  def S1(im):
+      return np.stack([np.abs(convolve(im, g)) for g in bank])
+
+  def C1(im, pool=4):
+      s = S1(im)
+      return np.stack([maximum_filter(m, size=pool)[::2, ::2] for m in s])
+
+  cos = lambda a, b: np.dot(a.ravel(), b.ravel()) / (np.linalg.norm(a) * np.linalg.norm(b))
+  a, b = shape("+", 12, 14, noise=0), shape("+", 14, 14, noise=0)
+  sim_s1, sim_c1 = cos(S1(a), S1(b)), cos(C1(a), C1(b))
+  print(f"similarity after a 2-pixel shift: S1 {sim_s1:.2f}, C1 {sim_c1:.2f}")
+  fig, ax = plt.subplots(1, 3, figsize=(9, 3))
+  ax[0].imshow(a, cmap="gray"); ax[1].imshow(S1(a)[2], cmap="magma"); ax[2].imshow(C1(a)[2], cmap="magma")
+  for x_, t_ in zip(ax, ["image", "S1, one orientation", "C1, same orientation"]): x_.set_title(t_); x_.axis("off")
+  plt.show()
+`} />
+
+Shifting the cross by two pixels drops the similarity of the S1 maps to about 0.67, because each S1 unit sees the bar at a different place; the C1 maps stay at about 0.87, because each C1 unit takes the maximum over a 4-pixel neighbourhood and a small shift moves the bar within the same pool. Subsampling by two after pooling also halves the size of the maps, as receptive fields grow and the number of positions shrinks along the ventral stream.
+
+<Step n={3} title="Recognition across positions" minutes={25} />
+
+Now test recognition. Train a nearest-centroid classifier to tell a cross from an X with examples drawn only on the left of the image, and test it on examples drawn only on the right. A classifier on pixels has never seen the right side; one on globally pooled features (the maximum of each orientation map over the whole image) does not care where the shape is.
+
+<PyCell id="position" title="Generalising to new positions" tests={String.raw`
+  import numpy as np
+  def test_pixels():
+      "pixels generalise to new positions at chance (below 65%)"
+      assert acc["pixels"] < 0.65
+
+  def test_global():
+      "globally pooled features generalise above 95%"
+      assert acc["global pooling"] > 0.95
+`} prompt="Write global_pool(im): the maximum of each of the four S1 maps over the whole image (a vector of 4). Then compare the two feature sets on the left-to-right test."
+code={String.raw`
+  def dataset(classes, n, xs):
+      ims, ys = [], []
+      for k, c in enumerate(classes):
+          for _ in range(n):
+              ims.append(shape(c, r.integers(*xs), r.integers(6, S - 6))); ys.append(k)
+      return ims, np.array(ys)
+
+  def nearest_centroid(Ftr, ytr, Fte, yte):
+      mu, sd = Ftr.mean(0), Ftr.std(0) + 1e-9; A, B = (Ftr - mu) / sd, (Fte - mu) / sd
+      cent = np.array([A[ytr == k].mean(0) for k in np.unique(ytr)])
+      return np.mean(np.argmin(((B[:, None] - cent[None]) ** 2).sum(-1), 1) == yte)
+
+  def global_pool(im):
+      ...
+
+  tr, ytr = dataset(["+", "X"], 40, (6, 11)); te, yte = dataset(["+", "X"], 40, (17, 22))
+  acc = {"pixels": nearest_centroid(np.array([i.ravel() for i in tr]), ytr, np.array([i.ravel() for i in te]), yte),
+         "global pooling": nearest_centroid(np.array([global_pool(i) for i in tr]), ytr, np.array([global_pool(i) for i in te]), yte)}
+  print({k: f"{v:.0%}" for k, v in acc.items()}, "correct on shapes at new positions")
+`}
+hint="return S1(im).max(axis=(1, 2))."
+solution={String.raw`
+  def dataset(classes, n, xs):
+      ims, ys = [], []
+      for k, c in enumerate(classes):
+          for _ in range(n):
+              ims.append(shape(c, r.integers(*xs), r.integers(6, S - 6))); ys.append(k)
+      return ims, np.array(ys)
+
+  def nearest_centroid(Ftr, ytr, Fte, yte):
+      mu, sd = Ftr.mean(0), Ftr.std(0) + 1e-9; A, B = (Ftr - mu) / sd, (Fte - mu) / sd
+      cent = np.array([A[ytr == k].mean(0) for k in np.unique(ytr)])
+      return np.mean(np.argmin(((B[:, None] - cent[None]) ** 2).sum(-1), 1) == yte)
+
+  def global_pool(im):
+      return S1(im).max(axis=(1, 2))
+
+  tr, ytr = dataset(["+", "X"], 40, (6, 11)); te, yte = dataset(["+", "X"], 40, (17, 22))
+  acc = {"pixels": nearest_centroid(np.array([i.ravel() for i in tr]), ytr, np.array([i.ravel() for i in te]), yte),
+         "global pooling": nearest_centroid(np.array([global_pool(i) for i in tr]), ytr, np.array([global_pool(i) for i in te]), yte)}
+  print({k: f"{v:.0%}" for k, v in acc.items()}, "correct on shapes at new positions")
+`} />
+
+Trained on the left and tested on the right, the pixel classifier is at chance (42% here, by the luck of the draw), because none of the pixels it learned are active in the test images. The four globally pooled orientation features classify every test image correctly: a cross has horizontal and vertical energy, an X has diagonal energy, wherever they are. Pooling over the whole image is the extreme of tolerance.
+
+<Step n={4} title="Selectivity from conjunctions" minutes={30} />
+
+A T and an upside-down T contain exactly the same bars; they differ only in how the bars are arranged. Global pooling of orientation throws the arrangement away. HMAX's answer is a second S layer: **S2** units match small patches of the C1 maps, which span several orientations at neighbouring positions, against stored templates. A template taken from the junction of a T responds to a horizontal bar above a vertical one, a conjunction of features. A **C2** layer then takes the maximum of each S2 unit over all positions, so the conjunction is detected wherever it occurs.
+
+<PyCell id="s2c2" title="T against upside-down T" tests={String.raw`
+  import numpy as np
+  def test_global_fails():
+      "global orientation pooling is near chance (below 65%)"
+      assert acc_tb["global pooling"] < 0.65
+
+  def test_c2():
+      "C2 conjunction features exceed 90% on new positions"
+      assert acc_tb["C2"] > 0.9
+`} prompt="Write C2(im): for each template, compute the squared distance between it and every 4 by 4 patch of the image's C1 maps (all four orientations), and return exp(-minimum distance / template energy) for each template, a vector with one value per template."
+code={String.raw`
+  def patches(m, size=4):
+      H = m.shape[1]
+      return np.array([m[:, i:i + size, j:j + size] for i in range(H - size + 1) for j in range(H - size + 1)])
+
+  templates = []
+  for kind in ("T", "B"):                          # templates from one centred example of each shape
+      ps = patches(C1(shape(kind, 14, 14, noise=0)))
+      for idx in np.argsort(ps.sum(axis=(1, 2, 3)))[-6:]:
+          templates.append(ps[idx])
+
+  def C2(im):
+      ps = patches(C1(im))
+      ...
+
+  tr, ytr = dataset(["T", "B"], 40, (6, 11)); te, yte = dataset(["T", "B"], 40, (17, 22))
+  acc_tb = {"global pooling": nearest_centroid(np.array([global_pool(i) for i in tr]), ytr, np.array([global_pool(i) for i in te]), yte),
+            "C2": nearest_centroid(np.array([C2(i) for i in tr]), ytr, np.array([C2(i) for i in te]), yte)}
+  print({k: f"{v:.0%}" for k, v in acc_tb.items()}, "correct for T against upside-down T at new positions")
+`}
+hint="return np.array([np.exp(-((ps - tp) ** 2).sum(axis=(1, 2, 3)).min() / (tp ** 2).sum()) for tp in templates])."
+solution={String.raw`
+  def patches(m, size=4):
+      H = m.shape[1]
+      return np.array([m[:, i:i + size, j:j + size] for i in range(H - size + 1) for j in range(H - size + 1)])
+
+  templates = []
+  for kind in ("T", "B"):                          # templates from one centred example of each shape
+      ps = patches(C1(shape(kind, 14, 14, noise=0)))
+      for idx in np.argsort(ps.sum(axis=(1, 2, 3)))[-6:]:
+          templates.append(ps[idx])
+
+  def C2(im):
+      ps = patches(C1(im))
+      return np.array([np.exp(-((ps - tp) ** 2).sum(axis=(1, 2, 3)).min() / (tp ** 2).sum()) for tp in templates])
+
+  tr, ytr = dataset(["T", "B"], 40, (6, 11)); te, yte = dataset(["T", "B"], 40, (17, 22))
+  acc_tb = {"global pooling": nearest_centroid(np.array([global_pool(i) for i in tr]), ytr, np.array([global_pool(i) for i in te]), yte),
+            "C2": nearest_centroid(np.array([C2(i) for i in tr]), ytr, np.array([C2(i) for i in te]), yte)}
+  print({k: f"{v:.0%}" for k, v in acc_tb.items()}, "correct for T against upside-down T at new positions")
+`} />
+
+Global orientation pooling is at chance for T against upside-down T (45%), which answers the prediction: no, because the two shapes contain the same horizontal and vertical bars. The C2 features, built from twelve templates of C1 patches taken from one centred example of each shape, classify every test image correctly at positions they were never trained on. Selectivity for arrangement came from the templates; tolerance to position came from taking their maximum over the image. Stacking more such stages, with templates for conjunctions of conjunctions, is the route from edges to objects.
+
+<Callout kind="think">
+
+HMAX is a convolutional network with hand-set first-layer filters, max pooling and templates copied from examples. Deep convolutional networks keep the architecture and learn every layer by gradient descent on object recognition, and Week 35 showed that their layers predict V4 and IT responses well. Ask what HMAX still offers: an interpretable account of why the architecture works (alternating selectivity and tolerance), which the trained networks share but do not explain.
+
+</Callout>
+
+<Bridge title="Two operations, many layers"
+  neuro="Along the ventral stream, selectivity and tolerance grow together, which DiCarlo and colleagues describe as untangling: transforming the retinal image so that object identity becomes linearly separable in IT, despite changes in position, size, pose and lighting."
+  ai="Convolution then pooling, repeated, is the backbone of convolutional networks from LeNet to modern vision models, and the selectivity-tolerance trade-off of pooling is why later designs use strided convolutions, attention and data augmentation to learn which variations to ignore.">
+
+Template matching makes units selective; pooling makes them tolerant; alternating the two builds recognition.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The ventral stream is needed for...", options: ["Recognising what objects are", "Locating and acting on objects", "Detecting light", "Eye movements only"], answer: 0, explain: "Ungerleider and Mishkin; the dorsal stream is where or how." },
+  { q: "Along the ventral stream, receptive fields...", options: ["Grow larger and prefer more complex features", "Shrink", "Stay the same", "Become centre-surround"], answer: 0, explain: "V1 to IT." },
+  { q: "In HMAX, S layers compute...", options: ["Template matching (selectivity)", "Max pooling", "Normalisation only", "Motion"], answer: 0, explain: "Simple-cell-like units." },
+  { q: "C layers compute...", options: ["The maximum over S units at nearby positions or scales", "Templates", "Averages of pixels", "Errors"], answer: 0, explain: "Complex-cell-like tolerance." },
+  { q: "A pixel-based classifier fails on shapes at new positions because...", options: ["It has never seen pixels at those positions", "It is nonlinear", "It pools too much", "It uses templates"], answer: 0, explain: "No tolerance." },
+  { q: "Global orientation pooling cannot tell T from upside-down T because...", options: ["It discards the spatial arrangement of the bars", "It is too slow", "It lacks orientation filters", "The shapes have different bars"], answer: 0, explain: "Same bars, different arrangement." },
+  { q: "S2 templates respond to...", options: ["Conjunctions of oriented features at neighbouring positions", "Single pixels", "Colours", "Motion"], answer: 0, explain: "Patches of C1." },
+  { q: "Untangling means...", options: ["Making object identity linearly separable despite nuisance variation", "Removing noise", "Separating the streams", "Sorting spikes"], answer: 0, explain: "DiCarlo and colleagues." },
+]} />
+
+<Flashcards cards={[
+  { front: "Ventral and dorsal streams?", back: "Ventral (to temporal cortex): what, object recognition. Dorsal (to parietal cortex): where and how, motion and action." },
+  { front: "HMAX?", back: "Riesenhuber and Poggio's hierarchy alternating S layers (template matching) and C layers (max pooling over position and scale)." },
+  { front: "Why max pooling?", back: "A unit taking the maximum over positions responds to its feature anywhere in its pool: tolerance to position." },
+  { front: "Cost of pooling?", back: "It discards where features are relative to each other; conjunction templates at the next level recover arrangement." },
+  { front: "Invariance in IT?", back: "IT neurons respond to preferred objects across changes in position, size and viewpoint, though with graded tolerance rather than perfect invariance." },
+]} />
+
+<Predict revisit question="Can a model that keeps only the strongest response of each orientation detector anywhere in the image tell T from upside-down T?" />
+
+<Key title="Before you go">
+<ul>
+<li>The ventral stream builds selectivity and tolerance together on the way from V1 to IT.</li>
+<li>Template matching gives selectivity; max pooling gives tolerance.</li>
+<li>Pooling loses spatial arrangement; conjunction features at the next level recover it.</li>
+<li>Deep convolutional networks learn the same architecture end to end.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Riesenhuber and Poggio (1999), <em>Hierarchical models of object recognition in cortex</em>.</li>
+<li>DiCarlo, Zoccolan and Rust (2012), <em>How does the brain solve visual object recognition?</em>, Neuron 73(3), 415 to 434.</li>
+<li>Ungerleider and Mishkin (1982), <em>Two cortical visual systems</em>, in Ingle, Goodale and Mansfield (eds), <em>Analysis of Visual Behavior</em>, MIT Press, 549 to 586.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Face-selective neurons in IT respond to faces across positions and sizes but often depend on the arrangement of eyes, nose and mouth. Using today's model, describe the templates and pooling a face-selective unit would need, and an image that would fool it." />

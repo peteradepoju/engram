@@ -1,0 +1,246 @@
+export const meta = {
+  title: "Motion: space-time filters and the dorsal stream",
+  intro: "Many V1 neurons respond to a grating drifting one way and not the other. A receptive field fixed in space cannot do that: direction is a property of how a pattern changes over time. Adelson and Bergen showed in 1985 that direction selectivity follows naturally from receptive fields that are oriented in space-time, and that summing the squared outputs of two such filters gives a smooth, phase-invariant measure of motion, motion energy. Their model describes direction-selective cells in V1, and the cells of the dorsal stream area MT that combine them. Today you build space-time receptive fields, measure their direction and speed tuning, and see why separable filters cannot tell left from right.",
+  goals: [
+    "Represent a moving stimulus as an image in space and time",
+    "Explain why direction selectivity needs receptive fields oriented in space-time",
+    "Build motion energy and opponent motion energy from quadrature pairs",
+    "Measure speed tuning and relate it to the filter's orientation in space-time",
+  ],
+  plan: [
+    { label: "Predict and motion as orientation", minutes: 20 },
+    { label: "Separable and oriented filters", minutes: 30 },
+    { label: "Motion energy", minutes: 25 },
+    { label: "Speed and the dorsal stream", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "adelson-bergen-1985",
+};
+
+<Predict question="A model neuron's receptive field is a vertical bar in space, and its response to light rises and falls over 100 ms in the same way everywhere in the bar (a space-time separable filter). Can it respond differently to a grating drifting left and the same grating drifting right?" />
+
+<Step n={1} title="Motion as orientation in space-time" minutes={20} />
+
+Take one row of an image and stack it over time: a plot with space on one axis and time on the other. A stationary bar is a vertical stripe in this **space-time** plot; a bar moving at constant speed is a tilted stripe, whose slope is its velocity. A drifting grating is a set of tilted stripes. Detecting motion is therefore like detecting orientation, but in space-time, and the tools of Day 2 carry over: a receptive field oriented in space-time responds best to stimuli moving at the matching velocity in the matching direction.
+
+A **separable** receptive field, the product of a spatial profile and a temporal profile, is never oriented in space-time, so it cannot prefer one direction. Direction selectivity needs an **inseparable** receptive field, which can be built by adding two separable ones whose spatial and temporal profiles are each in quadrature: the same trick as $\cos a \cos b + \sin a \sin b = \cos(a - b)$.
+
+<Video id="zgO9rHYbDxE" title="2D Convolutions" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's tutorial video on two-dimensional convolution, the operation behind filtering an image, and here a space-time image of a moving stimulus, with an oriented receptive field." />
+
+<Step n={2} title="Separable and oriented filters" minutes={30} />
+
+<Figure caption="A drifting grating in space-time and two motion energy units tuned to rightward and leftward motion. Change the grating's velocity and see which unit responds." credit="Interactive figure by Engram, after Adelson and Bergen (1985).">
+  <MotionEnergy />
+</Figure>
+
+<PyCell id="xt" title="Direction from space-time orientation" tests={String.raw`
+  import numpy as np
+  def test_separable():
+      "the separable filter responds equally to both directions (direction index below 0.05)"
+      assert dsi(sep_r, sep_l) < 0.05
+
+  def test_oriented():
+      "the oriented filter prefers rightward motion with a direction index above 0.8"
+      assert dsi(ori_r, ori_l) > 0.8
+`} prompt="Write oriented(fx, ft), the space-time Gabor exp(-x²/2σx² - t²/2σt²) cos(2π(fx x - ft t)) on the grid (X in degrees, T in seconds). The separable filter, the stimuli and the drifting-grating response (mean over phases of the rectified dot product) are given. Then compute the direction index (R_pref - R_null)/(R_pref + R_null) for both filters."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  x = np.linspace(-2, 2, 80); t = np.linspace(-0.15, 0.15, 60)
+  X, T = np.meshgrid(x, t)                    # rows are time, columns are space
+  sx, st = 0.5, 0.05
+
+  def separable(fx, ft):
+      return np.exp(-X ** 2 / (2 * sx ** 2) - T ** 2 / (2 * st ** 2)) * np.cos(2 * np.pi * fx * X) * np.cos(2 * np.pi * ft * T)
+
+  def oriented(fx, ft):
+      return ...
+
+  def drifting(fx, ft, direction, phase):
+      return np.cos(2 * np.pi * (fx * X - direction * ft * T) + phase)
+
+  def drift_resp(rf, fx, ft, direction):
+      return np.mean([max(0.0, np.sum(rf * drifting(fx, ft, direction, p))) for p in np.linspace(0, 2 * np.pi, 8, endpoint=False)])
+
+  dsi = lambda r, l: abs(r - l) / (r + l)
+  fx, ft = 1.0, 8.0                           # 1 cycle/deg, 8 Hz: preferred speed 8 deg/s
+  sep_r, sep_l = drift_resp(separable(fx, ft), fx, ft, 1), drift_resp(separable(fx, ft), fx, ft, -1)
+  ori_r, ori_l = drift_resp(oriented(fx, ft), fx, ft, 1), drift_resp(oriented(fx, ft), fx, ft, -1)
+  print(f"separable: right {sep_r:.1f}, left {sep_l:.1f}, DSI {dsi(sep_r, sep_l):.2f}")
+  print(f"oriented:  right {ori_r:.1f}, left {ori_l:.1f}, DSI {dsi(ori_r, ori_l):.2f}")
+  fig, ax = plt.subplots(1, 2, figsize=(8, 3.5))
+  ax[0].imshow(separable(fx, ft), cmap="RdBu_r", aspect="auto", extent=[-2, 2, 0.15, -0.15]); ax[0].set_title("separable")
+  ax[1].imshow(oriented(fx, ft), cmap="RdBu_r", aspect="auto", extent=[-2, 2, 0.15, -0.15]); ax[1].set_title("oriented in space-time")
+  for a in ax: a.set_xlabel("space (deg)"); a.set_ylabel("time (s)")
+  plt.show()
+`}
+hint="return np.exp(-X ** 2 / (2 * sx ** 2) - T ** 2 / (2 * st ** 2)) * np.cos(2 * np.pi * (fx * X - ft * T))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  x = np.linspace(-2, 2, 80); t = np.linspace(-0.15, 0.15, 60)
+  X, T = np.meshgrid(x, t)                    # rows are time, columns are space
+  sx, st = 0.5, 0.05
+
+  def separable(fx, ft):
+      return np.exp(-X ** 2 / (2 * sx ** 2) - T ** 2 / (2 * st ** 2)) * np.cos(2 * np.pi * fx * X) * np.cos(2 * np.pi * ft * T)
+
+  def oriented(fx, ft):
+      return np.exp(-X ** 2 / (2 * sx ** 2) - T ** 2 / (2 * st ** 2)) * np.cos(2 * np.pi * (fx * X - ft * T))
+
+  def drifting(fx, ft, direction, phase):
+      return np.cos(2 * np.pi * (fx * X - direction * ft * T) + phase)
+
+  def drift_resp(rf, fx, ft, direction):
+      return np.mean([max(0.0, np.sum(rf * drifting(fx, ft, direction, p))) for p in np.linspace(0, 2 * np.pi, 8, endpoint=False)])
+
+  dsi = lambda r, l: abs(r - l) / (r + l)
+  fx, ft = 1.0, 8.0                           # 1 cycle/deg, 8 Hz: preferred speed 8 deg/s
+  sep_r, sep_l = drift_resp(separable(fx, ft), fx, ft, 1), drift_resp(separable(fx, ft), fx, ft, -1)
+  ori_r, ori_l = drift_resp(oriented(fx, ft), fx, ft, 1), drift_resp(oriented(fx, ft), fx, ft, -1)
+  print(f"separable: right {sep_r:.1f}, left {sep_l:.1f}, DSI {dsi(sep_r, sep_l):.2f}")
+  print(f"oriented:  right {ori_r:.1f}, left {ori_l:.1f}, DSI {dsi(ori_r, ori_l):.2f}")
+  fig, ax = plt.subplots(1, 2, figsize=(8, 3.5))
+  ax[0].imshow(separable(fx, ft), cmap="RdBu_r", aspect="auto", extent=[-2, 2, 0.15, -0.15]); ax[0].set_title("separable")
+  ax[1].imshow(oriented(fx, ft), cmap="RdBu_r", aspect="auto", extent=[-2, 2, 0.15, -0.15]); ax[1].set_title("oriented in space-time")
+  for a in ax: a.set_xlabel("space (deg)"); a.set_ylabel("time (s)")
+  plt.show()
+`} />
+
+The separable filter gives exactly the same response to both directions (a direction index of 0), which answers the prediction: no. The oriented filter responds strongly to rightward drift and almost not at all to leftward, a direction index of about 1. In the plots, the separable filter is a checkerboard of blobs aligned with the axes, while the oriented one has stripes tilted in space-time, matching the slope of a rightward-moving grating. V1 simple cells with inseparable space-time receptive fields, mapped with reverse correlation, look just like this.
+
+<Step n={3} title="Motion energy" minutes={25} />
+
+A single oriented filter still depends on the grating's phase, so its response flickers as the grating moves. Adelson and Bergen squared and summed the outputs of a quadrature pair of oriented filters, exactly as in the complex cell of Day 3, to get **motion energy**: a steady signal for motion in the preferred direction. Subtracting the energy of the opposite direction gives **opponent motion energy**, positive for one direction and negative for the other, which matches the direction tuning of many V1 complex cells and of perceived motion.
+
+<PyCell id="energy" title="Opponent motion energy" tests={String.raw`
+  import numpy as np
+  def test_steady():
+      "rightward motion energy varies by less than 1% across grating phases"
+      assert e_right.std() / e_right.mean() < 0.01
+
+  def test_opponent():
+      "opponent energy is positive for rightward motion and negative for leftward"
+      assert opp_right > 0 and opp_left < 0 and abs(opp_right + opp_left) < 0.01 * abs(opp_right)
+`} prompt="Write motion_energy(stim, fx, ft, direction): the sum of squared dot products of the stimulus with an even and an odd space-time filter oriented for that direction (phase 0 and π/2 in cos(2π(fx x - direction ft t)) + phase). Then compute rightward energy across phases, and opponent energy (right minus left) for rightward and leftward gratings."
+code={String.raw`
+  def oriented_dir(fx, ft, direction, phase):
+      return np.exp(-X ** 2 / (2 * sx ** 2) - T ** 2 / (2 * st ** 2)) * np.cos(2 * np.pi * (fx * X - direction * ft * T) + phase)
+
+  def motion_energy(stim, fx, ft, direction):
+      ...
+
+  phases = np.linspace(0, 2 * np.pi, 16, endpoint=False)
+  e_right = np.array([motion_energy(drifting(fx, ft, 1, p), fx, ft, 1) for p in phases])
+  opp = lambda stim: motion_energy(stim, fx, ft, 1) - motion_energy(stim, fx, ft, -1)
+  opp_right, opp_left = opp(drifting(fx, ft, 1, 0.3)), opp(drifting(fx, ft, -1, 0.3))
+  print(f"rightward energy across phases: mean {e_right.mean():.0f}, relative spread {e_right.std() / e_right.mean():.4f}")
+  print(f"opponent energy: rightward grating {opp_right:.0f}, leftward grating {opp_left:.0f}")
+`}
+hint="even = np.sum(oriented_dir(fx, ft, direction, 0) * stim); odd = np.sum(oriented_dir(fx, ft, direction, np.pi / 2) * stim); return even ** 2 + odd ** 2."
+solution={String.raw`
+  def oriented_dir(fx, ft, direction, phase):
+      return np.exp(-X ** 2 / (2 * sx ** 2) - T ** 2 / (2 * st ** 2)) * np.cos(2 * np.pi * (fx * X - direction * ft * T) + phase)
+
+  def motion_energy(stim, fx, ft, direction):
+      even = np.sum(oriented_dir(fx, ft, direction, 0) * stim)
+      odd = np.sum(oriented_dir(fx, ft, direction, np.pi / 2) * stim)
+      return even ** 2 + odd ** 2
+
+  phases = np.linspace(0, 2 * np.pi, 16, endpoint=False)
+  e_right = np.array([motion_energy(drifting(fx, ft, 1, p), fx, ft, 1) for p in phases])
+  opp = lambda stim: motion_energy(stim, fx, ft, 1) - motion_energy(stim, fx, ft, -1)
+  opp_right, opp_left = opp(drifting(fx, ft, 1, 0.3)), opp(drifting(fx, ft, -1, 0.3))
+  print(f"rightward energy across phases: mean {e_right.mean():.0f}, relative spread {e_right.std() / e_right.mean():.4f}")
+  print(f"opponent energy: rightward grating {opp_right:.0f}, leftward grating {opp_left:.0f}")
+`} />
+
+Rightward motion energy is constant across the grating's phase to four decimal places: the quadrature pair removes the flicker, as it removed phase dependence in the complex cell. Opponent energy is large and positive for the rightward grating and equal and negative for the leftward one, a clean signed signal for direction. The model also predicts illusions: two frames of a pattern shifted a little, or a stationary pattern whose contrast reverses in the right sequence, give motion energy and are seen as moving.
+
+<Step n={4} title="Speed and the dorsal stream" minutes={30} />
+
+A filter oriented in space-time with spatial frequency $f_x$ and temporal frequency $f_t$ prefers gratings moving at speed $v = f_t / f_x$. Measured with gratings of one spatial frequency, its response peaks at that speed. V1 cells, however, are tuned to temporal frequency more than to speed: change the grating's spatial frequency and their preferred speed changes with it. Neurons in area **MT** (middle temporal), the motion area of the dorsal stream, which receives input from direction-selective V1 cells, come closer to true speed tuning, and many MT cells respond to the motion of whole patterns rather than of their components.
+
+<PyCell id="speed" title="Speed tuning" tests={String.raw`
+  import numpy as np
+  def test_peak():
+      "motion energy peaks within 2 deg/s of the filter's preferred speed of 8 deg/s"
+      assert abs(speeds[np.argmax(speed_tuning)] - 8) <= 2
+
+  def test_tf():
+      "with gratings of 2 cycles/deg, the preferred speed roughly halves"
+      assert speeds[np.argmax(speed_tuning_2)] < 0.65 * speeds[np.argmax(speed_tuning)]
+`} prompt="For speeds from 1 to 24 deg/s, compute the rightward motion energy of the (fx = 1, ft = 8) filters for a rightward grating of spatial frequency 1 cycle/deg (temporal frequency = speed times spatial frequency). Repeat with gratings of 2 cycles/deg."
+code={String.raw`
+  speeds = np.arange(1, 25)
+  speed_tuning = ...
+  speed_tuning_2 = ...
+  print(f"preferred speed: {speeds[np.argmax(speed_tuning)]} deg/s with 1 c/deg gratings, {speeds[np.argmax(speed_tuning_2)]} deg/s with 2 c/deg gratings")
+  plt.plot(speeds, speed_tuning / speed_tuning.max(), label="1 c/deg"); plt.plot(speeds, speed_tuning_2 / speed_tuning_2.max(), label="2 c/deg")
+  plt.xlabel("grating speed (deg/s)"); plt.ylabel("normalised motion energy"); plt.legend(); plt.show()
+`}
+hint="speed_tuning = np.array([motion_energy(drifting(1.0, v * 1.0, 1, 0), fx, ft, 1) for v in speeds]); the same with drifting(2.0, v * 2.0, 1, 0)."
+solution={String.raw`
+  speeds = np.arange(1, 25)
+  speed_tuning = np.array([motion_energy(drifting(1.0, v * 1.0, 1, 0), fx, ft, 1) for v in speeds])
+  speed_tuning_2 = np.array([motion_energy(drifting(2.0, v * 2.0, 1, 0), fx, ft, 1) for v in speeds])
+  print(f"preferred speed: {speeds[np.argmax(speed_tuning)]} deg/s with 1 c/deg gratings, {speeds[np.argmax(speed_tuning_2)]} deg/s with 2 c/deg gratings")
+  plt.plot(speeds, speed_tuning / speed_tuning.max(), label="1 c/deg"); plt.plot(speeds, speed_tuning_2 / speed_tuning_2.max(), label="2 c/deg")
+  plt.xlabel("grating speed (deg/s)"); plt.ylabel("normalised motion energy"); plt.legend(); plt.show()
+`} />
+
+With gratings of 1 cycle per degree, the filters prefer 8 degrees per second, the ratio of their temporal to spatial frequency. With gratings of 2 cycles per degree, the preferred speed halves to 4 degrees per second, because the unit is really tuned to the temporal frequency of 8 Hz, as many V1 neurons are. Recordings in MT find that many neurons hold their preferred speed better across spatial frequencies than V1 neurons do, though the degree varies from cell to cell, which suggests that MT combines V1 inputs tuned to different spatial and temporal frequencies along a line of constant speed.
+
+<Callout kind="think">
+
+A V1 cell sees motion through a small aperture, and through an aperture only the motion perpendicular to an edge is visible: a diagonal line moving right looks the same as one moving down and right. This **aperture problem** means each V1 cell reports only a component of an object's motion. Movshon, Adelson, Gizzi and Newsome (1985) showed that some MT cells respond to the direction of a moving plaid as a whole, the pattern, rather than to its two component gratings, integrating component signals into object motion. How they do it, by intersecting constraints or by a weighted vector average, is still studied.
+
+</Callout>
+
+<Bridge title="Seeing what moves"
+  neuro="The dorsal stream, from V1 through MT and MST into parietal cortex, analyses motion and the spatial layout needed to act: where things are, how they move, how the eyes and body move through the world. Lesions of MT impair motion perception, and microstimulation of MT neurons biases monkeys' judgements of motion direction (Newsome and colleagues)."
+  ai="Video models face the same problem and found similar solutions: 3D convolutions over space and time, two-stream networks that process optical flow alongside frames, and learned space-time filters that resemble motion energy units. Optical flow algorithms are the engineering version of the aperture problem.">
+
+Motion is orientation in space-time, and the visual system detects it the same way it detects edges.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In a space-time plot, a bar moving at constant speed is...", options: ["A tilted stripe whose slope gives its velocity", "A vertical stripe", "A dot", "A circle"], answer: 0, explain: "Motion is orientation in space-time." },
+  { q: "A space-time separable receptive field...", options: ["Cannot be direction selective", "Is always direction selective", "Prefers fast motion", "Is phase invariant"], answer: 0, explain: "It is not oriented in space-time." },
+  { q: "An inseparable, oriented filter can be built by...", options: ["Adding two separable filters in spatial and temporal quadrature", "Squaring a separable filter", "Using one Gaussian", "Averaging over time"], answer: 0, explain: "cos a cos b + sin a sin b = cos(a - b)." },
+  { q: "Motion energy is...", options: ["The sum of squared outputs of a quadrature pair of oriented filters", "The velocity squared", "Kinetic energy of the eye", "The contrast"], answer: 0, explain: "Adelson and Bergen (1985)." },
+  { q: "Opponent motion energy is...", options: ["Preferred minus opposite direction energy", "Their sum", "Their ratio", "Always positive"], answer: 0, explain: "Signed direction signal." },
+  { q: "A filter with spatial frequency f_x and temporal frequency f_t prefers speed...", options: ["f_t / f_x", "f_x / f_t", "f_x f_t", "f_t²"], answer: 0, explain: "v = f_t / f_x." },
+  { q: "The aperture problem is that a local detector sees...", options: ["Only motion perpendicular to an edge", "No motion", "Only colour", "Only speed"], answer: 0, explain: "Components, not patterns." },
+  { q: "Area MT is part of...", options: ["The dorsal stream, specialised for motion", "The ventral stream", "The retina", "The thalamus"], answer: 0, explain: "Middle temporal area." },
+]} />
+
+<Flashcards cards={[
+  { front: "Space-time receptive field?", back: "A receptive field over space and time; oriented ones prefer one direction and speed of motion." },
+  { front: "Why separable filters lack direction selectivity?", back: "A product of a spatial and a temporal profile has no orientation in space-time, so mirror-image motions give equal responses." },
+  { front: "Motion energy?", back: "Sum of squares of a quadrature pair of space-time oriented filters: phase-invariant and direction selective." },
+  { front: "Preferred speed of a space-time filter?", back: "$v = f_t/f_x$; V1 cells are closer to temporal frequency tuning, MT cells closer to speed tuning." },
+  { front: "Aperture problem?", back: "Through a small window only the motion component perpendicular to an edge is visible; MT pattern cells combine components." },
+]} />
+
+<Predict revisit question="Can a space-time separable receptive field respond differently to leftward and rightward drift?" />
+
+<Key title="Before you go">
+<ul>
+<li>Motion is orientation in space-time.</li>
+<li>Direction selectivity needs inseparable, oriented space-time filters.</li>
+<li>Motion energy and opponent energy give steady, signed direction signals.</li>
+<li>Preferred speed is f_t / f_x; MT integrates V1 signals into speed and pattern motion.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Adelson and Bergen (1985), <em>Spatiotemporal energy models for the perception of motion</em>.</li>
+<li>Movshon, Adelson, Gizzi and Newsome (1985), <em>The analysis of moving visual patterns</em>, in Chagas, Gattass and Gross (eds), <em>Pattern Recognition Mechanisms</em>, pages 117 to 151, Pontifical Academy of Sciences.</li>
+<li>Born and Bradley (2005), <em>Structure and function of visual area MT</em>, Annual Review of Neuroscience 28, 157 to 189.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Watch the wheels of a car in a film, which sometimes appear to turn backwards. Using today's space-time picture and Week 11's sampling theorem, explain the illusion, and say what a motion energy unit sampling at the film's frame rate would report." />

@@ -1,0 +1,265 @@
+export const meta = {
+  title: "Complex cells and divisive normalisation",
+  intro: "Simple cells are only half of V1. Complex cells prefer an orientation and a spatial frequency but respond to it wherever it falls in their receptive field, ignoring the exact position of light and dark. And all V1 cells share nonlinear behaviours that no linear filter predicts: their responses saturate at high contrast, their tuning keeps its width as contrast rises, and a stimulus that does not drive a cell can still suppress it. Heeger proposed in 1992 that one operation explains all three: each cell's response is divided by the pooled activity of its neighbours. Today you build the energy model of complex cells and the normalisation model, and test both against the signatures that defined them.",
+  goals: [
+    "Build a complex cell from a quadrature pair of Gabor filters (the energy model)",
+    "Classify simple and complex cells by the modulation ratio F1/F0",
+    "Implement divisive normalisation and derive contrast saturation from it",
+    "Show contrast-invariant tuning and cross-orientation suppression",
+  ],
+  plan: [
+    { label: "Predict and the complex cell", minutes: 20 },
+    { label: "The energy model", minutes: 30 },
+    { label: "Normalisation and contrast", minutes: 30 },
+    { label: "Suppression from outside the tuning", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "heeger-1992",
+};
+
+<Predict question="A V1 cell does not respond at all to a vertical grating. Its preferred orientation is horizontal. If you add the vertical grating on top of a horizontal one, making a plaid, will the cell's response go up, stay the same, or go down?" />
+
+<Step n={1} title="The complex cell" minutes={20} />
+
+Hubel and Wiesel found that many V1 cells could not be mapped into ON and OFF subregions: a bar of the right orientation drove them anywhere within the receptive field, light or dark. Adelson and Bergen (1985) and others proposed the **energy model**: a complex cell sums the squared outputs of two simple-cell-like filters with the same orientation and frequency but phases 90° apart, a **quadrature pair**. Because $\cos^2 + \sin^2 = 1$, the sum of squares of the two filters' responses to a grating does not depend on the grating's phase, which is phase invariance. A drifting grating sweeps through all phases, so a simple cell's response rises and falls at the drift frequency, while a complex cell's stays nearly constant. The ratio of the first harmonic of the response to its mean, **F1/F0**, separates them: above 1 for simple cells, below 1 for complex cells (Skottun and colleagues, 1991).
+
+<Video id="KlXtKJCpV4I" title="Deep convolutional network for orientation discrimination" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's tutorial video on building a convolutional network that discriminates grating orientations and comparing its units with orientation-tuned neurons in visual cortex." />
+
+<Step n={2} title="The energy model" minutes={30} />
+
+<PyCell id="energy" title="Simple against complex" tests={String.raw`
+  import numpy as np
+  def test_ratio():
+      "the simple cell's F1/F0 is above 1 and the complex cell's is below 0.1"
+      assert f1f0(simple) > 1 and f1f0(complex_) < 0.1
+
+  def test_fn():
+      "f1f0 of a pure half-wave rectified sinusoid is about 1.57"
+      s = np.maximum(0, np.cos(np.linspace(0, 2 * np.pi, 64, endpoint=False)))
+      assert abs(f1f0(s) - np.pi / 2) < 0.02
+`} prompt="Write f1f0(r): the amplitude of the first Fourier harmonic of a response sampled over one cycle, 2 |F[1]| / N, divided by the mean |F[0]| / N. Then compute it for a simple cell (rectified even Gabor) and a complex cell (sum of squares of even and odd Gabors) as a grating drifts through 32 phases."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  n = 48; xy = (np.arange(n) - n / 2) * (4 / n)
+  X, Y = np.meshgrid(xy, xy)
+
+  def gabor(theta, f, phase=0.0, sx=0.4, sy=0.6):
+      t = np.deg2rad(theta)
+      xr = X * np.cos(t) + Y * np.sin(t); yr = -X * np.sin(t) + Y * np.cos(t)
+      return np.exp(-xr ** 2 / (2 * sx ** 2) - yr ** 2 / (2 * sy ** 2)) * np.cos(2 * np.pi * f * xr + phase)
+
+  def grating(theta, f, phase, c=1.0):
+      t = np.deg2rad(theta)
+      return c * np.cos(2 * np.pi * f * (X * np.cos(t) + Y * np.sin(t)) + phase)
+
+  def f1f0(r):
+      F = np.fft.rfft(r)
+      return ...
+
+  phases = np.linspace(0, 2 * np.pi, 32, endpoint=False)
+  g_even, g_odd = gabor(0, 1.0), gabor(0, 1.0, np.pi / 2)
+  simple = np.array([max(0.0, np.sum(g_even * grating(0, 1.0, p))) for p in phases])
+  complex_ = np.array([np.sum(g_even * grating(0, 1.0, p)) ** 2 + np.sum(g_odd * grating(0, 1.0, p)) ** 2 for p in phases])
+  print(f"F1/F0: simple {f1f0(simple):.2f}, complex {f1f0(complex_):.3f}")
+  plt.plot(phases, simple / simple.max(), label="simple"); plt.plot(phases, complex_ / complex_.max(), label="complex")
+  plt.xlabel("grating phase (rad)"); plt.ylabel("normalised response"); plt.legend(); plt.show()
+`}
+hint="return 2 * np.abs(F[1]) / np.abs(F[0])  (the 1/N factors cancel)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  n = 48; xy = (np.arange(n) - n / 2) * (4 / n)
+  X, Y = np.meshgrid(xy, xy)
+
+  def gabor(theta, f, phase=0.0, sx=0.4, sy=0.6):
+      t = np.deg2rad(theta)
+      xr = X * np.cos(t) + Y * np.sin(t); yr = -X * np.sin(t) + Y * np.cos(t)
+      return np.exp(-xr ** 2 / (2 * sx ** 2) - yr ** 2 / (2 * sy ** 2)) * np.cos(2 * np.pi * f * xr + phase)
+
+  def grating(theta, f, phase, c=1.0):
+      t = np.deg2rad(theta)
+      return c * np.cos(2 * np.pi * f * (X * np.cos(t) + Y * np.sin(t)) + phase)
+
+  def f1f0(r):
+      F = np.fft.rfft(r)
+      return 2 * np.abs(F[1]) / np.abs(F[0])
+
+  phases = np.linspace(0, 2 * np.pi, 32, endpoint=False)
+  g_even, g_odd = gabor(0, 1.0), gabor(0, 1.0, np.pi / 2)
+  simple = np.array([max(0.0, np.sum(g_even * grating(0, 1.0, p))) for p in phases])
+  complex_ = np.array([np.sum(g_even * grating(0, 1.0, p)) ** 2 + np.sum(g_odd * grating(0, 1.0, p)) ** 2 for p in phases])
+  print(f"F1/F0: simple {f1f0(simple):.2f}, complex {f1f0(complex_):.3f}")
+  plt.plot(phases, simple / simple.max(), label="simple"); plt.plot(phases, complex_ / complex_.max(), label="complex")
+  plt.xlabel("grating phase (rad)"); plt.ylabel("normalised response"); plt.legend(); plt.show()
+`} />
+
+As the grating drifts, the simple cell's response rises and falls once per cycle, half-wave rectified, with an F1/F0 of about 1.57, the value for a pure rectified sinusoid. The complex cell's response is flat: F1/F0 is zero to numerical precision, because the even and odd filters' squared responses trade off exactly. Real complex cells are not perfectly invariant (their F1/F0 values are small but not zero), and the distribution of F1/F0 across V1 is bimodal, which is one reason the simple and complex categories have lasted.
+
+<Step n={3} title="Normalisation and contrast" minutes={30} />
+
+Heeger's normalisation model divides each cell's energy $E_i$ by the summed energy of a pool of cells with all orientations, plus a constant:
+
+$$
+R_i = \frac{E_i}{\sigma^2 + \sum_j E_j}.
+$$
+
+For a grating of contrast $c$, every energy scales as $c^2$, so $R_i = \frac{c^2 \hat E_i}{\sigma^2 + c^2 \sum_j \hat E_j}$, where hats mean energies at full contrast. That is the **Naka-Rushton** function $c^2/(c_{50}^2 + c^2)$ times a fixed tuning curve: the response saturates, with half saturation at $c_{50} = \sigma/\sqrt{\sum_j \hat E_j}$, and the shape of the tuning does not change with contrast, because contrast only multiplies the whole curve. Both properties are seen in V1 and are hard to get from a fixed threshold.
+
+<Figure caption="Contrast response functions of a normalised cell to its preferred grating alone and with an orthogonal mask, which it does not respond to on its own. Change the mask's contrast and the semi-saturation constant." credit="Interactive figure by Engram, after Heeger (1992) and Carandini and Heeger (2012).">
+  <DivisiveNormalization />
+</Figure>
+
+<PyCell id="norm" title="Saturation and contrast-invariant tuning" tests={String.raw`
+  import numpy as np
+  def test_saturation():
+      "the response at 100% contrast is less than 1.3 times the response at 50%"
+      assert R_c[-1] < 1.3 * R_c[list(contrasts).index(0.5)]
+
+  def test_invariant():
+      "normalised tuning curves at 10% and 100% contrast differ by less than 0.01 everywhere"
+      assert np.max(np.abs(tun_lo / tun_lo.max() - tun_hi / tun_hi.max())) < 0.01
+
+  def test_threshold_broadens():
+      "a threshold model's tuning is broader at high contrast than at low"
+      assert width(thr_hi) > width(thr_lo)
+`} prompt="Write normalise(stim): the energies of complex cells at the 12 orientations in oris for this stimulus, divided by sigma2 plus their sum. Then compute the preferred cell's contrast response and the population tuning at 10% and 100% contrast."
+code={String.raw`
+  oris = np.arange(0, 180, 15)
+  bank = [(gabor(o, 1.0), gabor(o, 1.0, np.pi / 2)) for o in oris]
+  energy = lambda stim: np.array([np.sum(ge * stim) ** 2 + np.sum(go * stim) ** 2 for ge, go in bank])
+  sigma2 = 0.05 * energy(grating(0, 1.0, 0)).sum()          # half saturation near 22% contrast
+
+  def normalise(stim):
+      E = energy(stim)
+      return ...
+
+  contrasts = np.array([0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0])
+  R_c = np.array([normalise(grating(0, 1.0, 0, c))[0] for c in contrasts])
+  tun_lo, tun_hi = normalise(grating(0, 1.0, 0, 0.1)), normalise(grating(0, 1.0, 0, 1.0))
+  # a threshold model for comparison: rectified energy above a fixed threshold
+  fine = np.arange(0, 180, 3)
+  E0 = lambda stim: np.sum(bank[0][0] * stim) ** 2 + np.sum(bank[0][1] * stim) ** 2
+  top = E0(grating(0, 1.0, 0))
+  thr = lambda c: np.maximum(0, np.array([E0(grating(o, 1.0, 0, c)) for o in fine]) - 0.02 * top)
+  thr_lo, thr_hi = thr(0.2), thr(1.0)
+  width = lambda t: np.sum(t >= 0.5 * t.max())
+  print("contrast response (relative to 100%):", {float(c): round(float(v), 2) for c, v in zip(contrasts, R_c / R_c.max())})
+  print("threshold model, orientations above half maximum: 20% contrast", width(thr_lo), " 100% contrast", width(thr_hi))
+  print("normalised tuning at 10% and 100%:", np.round(tun_lo / tun_lo.max(), 2), np.round(tun_hi / tun_hi.max(), 2))
+  plt.semilogx(contrasts, R_c, "o-"); plt.xlabel("contrast"); plt.ylabel("response"); plt.show()
+`}
+hint="return E / (sigma2 + E.sum())."
+solution={String.raw`
+  oris = np.arange(0, 180, 15)
+  bank = [(gabor(o, 1.0), gabor(o, 1.0, np.pi / 2)) for o in oris]
+  energy = lambda stim: np.array([np.sum(ge * stim) ** 2 + np.sum(go * stim) ** 2 for ge, go in bank])
+  sigma2 = 0.05 * energy(grating(0, 1.0, 0)).sum()          # half saturation near 22% contrast
+
+  def normalise(stim):
+      E = energy(stim)
+      return E / (sigma2 + E.sum())
+
+  contrasts = np.array([0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0])
+  R_c = np.array([normalise(grating(0, 1.0, 0, c))[0] for c in contrasts])
+  tun_lo, tun_hi = normalise(grating(0, 1.0, 0, 0.1)), normalise(grating(0, 1.0, 0, 1.0))
+  # a threshold model for comparison: rectified energy above a fixed threshold
+  fine = np.arange(0, 180, 3)
+  E0 = lambda stim: np.sum(bank[0][0] * stim) ** 2 + np.sum(bank[0][1] * stim) ** 2
+  top = E0(grating(0, 1.0, 0))
+  thr = lambda c: np.maximum(0, np.array([E0(grating(o, 1.0, 0, c)) for o in fine]) - 0.02 * top)
+  thr_lo, thr_hi = thr(0.2), thr(1.0)
+  width = lambda t: np.sum(t >= 0.5 * t.max())
+  print("contrast response (relative to 100%):", {float(c): round(float(v), 2) for c, v in zip(contrasts, R_c / R_c.max())})
+  print("threshold model, orientations above half maximum: 20% contrast", width(thr_lo), " 100% contrast", width(thr_hi))
+  print("normalised tuning at 10% and 100%:", np.round(tun_lo / tun_lo.max(), 2), np.round(tun_hi / tun_hi.max(), 2))
+  plt.semilogx(contrasts, R_c, "o-"); plt.xlabel("contrast"); plt.ylabel("response"); plt.show()
+`} />
+
+The contrast response rises steeply from 5% to 30% and then saturates, reaching 88% of its maximum at 50% contrast, with half saturation near 20%, as set by $\sigma^2$. The normalised tuning curves at 10% and 100% contrast are identical to two decimal places: contrast scales the response without changing its selectivity. The threshold model, by contrast, has five orientations above half its maximum at 20% contrast and nine at 100%: at high contrast more of the tuning curve rises above the threshold, which is the iceberg effect that V1 does not show.
+
+<Step n={4} title="Suppression from outside the tuning" minutes={25} />
+
+The normalisation pool includes cells of every orientation, so a stimulus that excites none of a cell's own filters can still enlarge its denominator. Adding an orthogonal grating, a **mask**, to the preferred one should therefore reduce the response, even though the mask alone gives none: **cross-orientation suppression**, one of the clearest signatures of normalisation in V1 and in perception.
+
+<PyCell id="cross" title="Cross-orientation suppression" tests={String.raw`
+  import numpy as np
+  def test_mask_alone():
+      "the orthogonal mask alone barely drives the preferred cell"
+      assert r_mask < 0.01 * r_test
+
+  def test_suppression():
+      "adding the mask reduces the response to the preferred grating by at least 10%"
+      assert r_plaid < 0.9 * r_test
+`} prompt="Compute the preferred (0 degree) cell's normalised response to the preferred grating at 50% contrast alone (r_test), to the orthogonal 90 degree grating at 50% alone (r_mask), and to their sum, a plaid (r_plaid)."
+code={String.raw`
+  test = grating(0, 1.0, 0, 0.5); mask = grating(90, 1.0, 0, 0.5)
+  r_test = ...
+  r_mask = ...
+  r_plaid = ...
+  print(f"preferred alone {r_test:.3f}, mask alone {r_mask:.5f}, plaid {r_plaid:.3f} ({1 - r_plaid / r_test:.0%} suppression)")
+`}
+hint="r_test = normalise(test)[0]; r_mask = normalise(mask)[0]; r_plaid = normalise(test + mask)[0]."
+solution={String.raw`
+  test = grating(0, 1.0, 0, 0.5); mask = grating(90, 1.0, 0, 0.5)
+  r_test = normalise(test)[0]
+  r_mask = normalise(mask)[0]
+  r_plaid = normalise(test + mask)[0]
+  print(f"preferred alone {r_test:.3f}, mask alone {r_mask:.5f}, plaid {r_plaid:.3f} ({1 - r_plaid / r_test:.0%} suppression)")
+`} />
+
+The orthogonal mask alone gives no response at all, yet adding it to the preferred grating cuts the response from about 0.46 to 0.25, a suppression of 46%, which answers the prediction: it goes down. In this model the suppression comes entirely from the denominator. In V1 it is fast and broadly tuned, and Freeman, Durand, Kiper and Carandini (2002) argued that much of it arises from the thalamic inputs to cortex rather than from inhibition between cortical cells, a reminder that one equation can have several circuit implementations.
+
+<Callout kind="note">
+
+Normalisation is not only a V1 phenomenon. Carandini and Heeger (2012) collected evidence for the same computation in the retina, olfactory system, auditory cortex, attention, multisensory integration and value coding in decision making, and proposed that it is a canonical neural computation, one that the brain applies in many places for the same reasons: to keep responses in range, to make them invariant to nuisance variables such as contrast, and to sharpen selectivity by competition.
+
+</Callout>
+
+<Bridge title="Dividing by the neighbours"
+  neuro="Divisive normalisation explains contrast saturation, contrast-invariant tuning, cross-orientation and surround suppression, and attention effects in one equation. Its circuit implementation is still debated: shunting inhibition, synaptic depression and recurrent networks have all been proposed."
+  ai="Normalisation layers are everywhere in deep learning: local response normalisation in AlexNet was modelled on it, and batch, layer and group normalisation divide activations by statistics of a pool, much as V1 does. Softmax is a normalisation too: each output divided by the sum of all.">
+
+Divide each response by the activity of its neighbours, and many of V1's nonlinearities follow.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A complex cell responds to its preferred orientation...", options: ["Anywhere in its receptive field, regardless of phase", "Only at one position", "Only to dark bars", "Not at all"], answer: 0, explain: "Phase invariance." },
+  { q: "The energy model sums...", options: ["The squared outputs of a quadrature pair of filters", "Two identical filters", "LGN cells directly", "Many complex cells"], answer: 0, explain: "cos² + sin² = 1." },
+  { q: "F1/F0 above 1 indicates...", options: ["A simple cell", "A complex cell", "No response", "Direction selectivity"], answer: 0, explain: "Modulation at the drift frequency." },
+  { q: "In Heeger's model each response is divided by...", options: ["A constant plus the summed energy of a pool", "Its own energy", "The stimulus contrast", "Its threshold"], answer: 0, explain: "Divisive normalisation." },
+  { q: "Normalisation makes the contrast response...", options: ["Saturate, following a Naka-Rushton curve", "Linear", "Decrease with contrast", "Step-like"], answer: 0, explain: "c²/(c50² + c²)." },
+  { q: "Contrast-invariant tuning means...", options: ["The tuning width does not change with contrast", "Responses do not change with contrast", "Tuning sharpens at low contrast", "No tuning"], answer: 0, explain: "Contrast scales the whole curve." },
+  { q: "Cross-orientation suppression is...", options: ["Reduction of the response to a preferred grating by an orthogonal mask", "Excitation by the mask", "Adaptation", "Surround facilitation"], answer: 0, explain: "The mask enlarges the denominator." },
+  { q: "Carandini and Heeger proposed normalisation is...", options: ["A canonical computation across brain systems", "Specific to V1", "An artefact", "Only in cats"], answer: 0, explain: "Found in many systems." },
+]} />
+
+<Flashcards cards={[
+  { front: "Energy model?", back: "A complex cell sums the squared responses of a quadrature pair (phases 90° apart) of Gabor filters, giving phase invariance." },
+  { front: "F1/F0?", back: "Ratio of the first harmonic of the response to a drifting grating to its mean; above 1 simple, below 1 complex." },
+  { front: "Divisive normalisation?", back: "$R_i = E_i/(\\sigma^2 + \\sum_j E_j)$: each response divided by pooled activity plus a constant." },
+  { front: "Naka-Rushton function?", back: "$R = R_{max}\\,c^n/(c_{50}^n + c^n)$; with energies, $n = 2$." },
+  { front: "Cross-orientation suppression?", back: "An orthogonal mask that does not drive a cell reduces its response to the preferred grating." },
+]} />
+
+<Predict revisit question="Adding a vertical grating that alone gives no response to a cell's preferred horizontal grating: does the response go up, stay the same, or go down?" />
+
+<Key title="Before you go">
+<ul>
+<li>Complex cells are phase invariant; the energy model builds them from quadrature pairs.</li>
+<li>F1/F0 separates simple from complex cells.</li>
+<li>Divisive normalisation gives saturation and contrast-invariant tuning.</li>
+<li>Stimuli outside a cell's tuning suppress it through the normalisation pool.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Heeger (1992), <em>Normalization of cell responses in cat striate cortex</em>.</li>
+<li>Carandini and Heeger (2012), <em>Normalization as a canonical neural computation</em>, Nature Reviews Neuroscience 13(1), 51 to 62.</li>
+<li>Skottun and colleagues (1991), <em>Classifying simple and complex cells on the basis of response modulation</em>, Vision Research 31(7), 1079 to 1086.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Normalisation divides by a pool. Write down what you would need to know about the pool (which cells, with what weights, over what region) to predict a V1 cell's response to a natural image, and one experiment that would measure it." />

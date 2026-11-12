@@ -1,0 +1,231 @@
+export const meta = {
+  title: "The retina: centre and surround, ON and OFF, adaptation",
+  intro: "Vision begins with a sheet of neurons at the back of the eye that does far more than relay pixels. In 1953 Stephen Kuffler recorded from ganglion cells in the cat retina and found that each responded to light in a small central region and was opposed by light in a ring around it, some excited by light in the centre (ON) and others by darkness (OFF). Today you build these receptive fields as a difference of Gaussians, measure how a cell's response depends on the size of a spot, see how centre-surround filtering exaggerates edges, and model the light adaptation that lets the same cells work from starlight to sunlight.",
+  goals: [
+    "Model a centre-surround receptive field as a difference of Gaussians",
+    "Explain the area-response curve and what it says about the surround",
+    "Show how centre-surround filtering emphasises edges and discards uniform light",
+    "Describe light adaptation with divisive gain control and its link to Weber's law",
+  ],
+  plan: [
+    { label: "Predict and the retina", minutes: 20 },
+    { label: "Centre and surround", minutes: 30 },
+    { label: "Edges, not light", minutes: 25 },
+    { label: "Adaptation", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "kuffler-1953",
+};
+
+<Predict question="An ON-centre ganglion cell has an excitatory centre about 1° across and an inhibitory surround about 4° across. You flash spots of light of increasing diameter, centred on the cell. Will its response keep growing with the spot size, level off, or rise and then fall?" />
+
+<Step n={1} title="The retina" minutes={20} />
+
+Light is absorbed by photoreceptors, rods for dim light and three kinds of cones for daylight and colour. Their signals pass through bipolar cells to **retinal ganglion cells**, whose axons form the optic nerve, with horizontal and amacrine cells adding lateral connections at each stage. About a hundred million photoreceptors in each human eye converge onto about a million ganglion cells, so the retina must compress what it sends, and it does so selectively. Kuffler (1953) mapped ganglion cell receptive fields by moving a small spot of light across the retina and found the arrangement that dominates early vision: a centre and an antagonistic surround. ON-centre cells fire when light falls on the centre and are suppressed by light on the surround; OFF-centre cells do the opposite.
+
+A convenient model is the **difference of Gaussians** (DoG): a narrow positive Gaussian for the centre minus a broader, weaker Gaussian for the surround,
+
+$$
+k(\mathbf x) = \frac{1}{2\pi\sigma_c^2} e^{-|\mathbf x|^2/2\sigma_c^2} - w\,\frac{1}{2\pi\sigma_s^2} e^{-|\mathbf x|^2/2\sigma_s^2},
+$$
+
+with $\sigma_s$ larger than $\sigma_c$ and $w$ a little below 1.
+
+<Video id="fCqt07IXUPI" title="9. Receptive Fields" by="Michale Fee (MIT 9.40 Introduction to Neural Computation, MIT OpenCourseWare)" note="Michale Fee introduces receptive fields in the visual system, from centre-surround cells in the retina and LGN to oriented cells in primary visual cortex." />
+
+<Step n={2} title="Centre and surround" minutes={30} />
+
+<Figure caption="A difference-of-Gaussians receptive field, a spot of light of adjustable size, and the cell's response as a function of spot diameter." credit="Interactive figure by Engram, after Kuffler (1953) and the difference-of-Gaussians model of Rodieck (1965).">
+  <RetinaDoG />
+</Figure>
+
+<PyCell id="dog" title="The area-response curve" tests={String.raw`
+  import numpy as np
+  def test_kernel():
+      "the kernel's centre is positive and its sum is small but positive"
+      assert K[n // 2, n // 2] > 0 and 0 < K.sum() < 0.3
+
+  def test_curve():
+      "the response peaks at an intermediate spot size and falls below 40% of the peak for the largest spot"
+      i = int(np.argmax(resp))
+      assert 0 < i < len(diams) - 1 and resp[-1] < 0.4 * resp.max()
+`} prompt="Write dog(n, sc, ss, w), returning an n by n difference-of-Gaussians kernel on a grid of 0.1° pixels centred on the middle pixel (each Gaussian normalised to sum to 1 on the grid). Then compute the response to centred spots of increasing diameter as the sum of the kernel over the spot."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  n = 101                                         # 10 degrees at 0.1 degree per pixel
+  xy = (np.arange(n) - n // 2) * 0.1
+  X, Y = np.meshgrid(xy, xy); R = np.hypot(X, Y)
+
+  def dog(n, sc, ss, w):
+      centre = ...
+      surround = ...
+      return centre / centre.sum() - w * surround / surround.sum()
+
+  K = dog(n, sc=0.25, ss=1.0, w=0.85)
+  diams = np.arange(0.1, 8.01, 0.1)
+  resp = np.array([K[R <= d / 2].sum() for d in diams])
+  print(f"best spot diameter {diams[np.argmax(resp)]:.1f} deg; response to the largest spot is {resp[-1] / resp.max():.0%} of the peak")
+  plt.plot(diams, resp); plt.xlabel("spot diameter (deg)"); plt.ylabel("response"); plt.show()
+`}
+hint="centre = np.exp(-R ** 2 / (2 * sc ** 2)); surround = np.exp(-R ** 2 / (2 * ss ** 2))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  n = 101                                         # 10 degrees at 0.1 degree per pixel
+  xy = (np.arange(n) - n // 2) * 0.1
+  X, Y = np.meshgrid(xy, xy); R = np.hypot(X, Y)
+
+  def dog(n, sc, ss, w):
+      centre = np.exp(-R ** 2 / (2 * sc ** 2))
+      surround = np.exp(-R ** 2 / (2 * ss ** 2))
+      return centre / centre.sum() - w * surround / surround.sum()
+
+  K = dog(n, sc=0.25, ss=1.0, w=0.85)
+  diams = np.arange(0.1, 8.01, 0.1)
+  resp = np.array([K[R <= d / 2].sum() for d in diams])
+  print(f"best spot diameter {diams[np.argmax(resp)]:.1f} deg; response to the largest spot is {resp[-1] / resp.max():.0%} of the peak")
+  plt.plot(diams, resp); plt.xlabel("spot diameter (deg)"); plt.ylabel("response"); plt.show()
+`} />
+
+The response grows as the spot fills the centre, peaks for a spot about 1.2° across, and then falls as the spot spreads over the surround; the largest spot, 8° across, evokes only about a fifth of the peak. That answers the prediction: it rises and then falls. Kuffler saw exactly this, and the shape of the curve is the simplest way to measure the strength and extent of a cell's surround in an experiment. The response never falls to zero because the surround's weight here, 0.85, is less than the centre's.
+
+<Step n={3} title="Edges, not light" minutes={25} />
+
+Because the centre and surround nearly cancel, a DoG cell barely responds to uniform illumination; it responds to differences, to where light changes across space. Filter an image with the kernel and the regions of constant brightness fade to near zero, while edges stand out, with a bright band on the light side and a dark band on the dark side. These are close to the **Mach bands** that people see at the edges of graded steps of brightness. Separate ON and OFF cells, by rectifying the filtered signal positively and negatively, report the two sides of each edge.
+
+<PyCell id="edges" title="Filtering a step edge" tests={String.raw`
+  import numpy as np
+  def test_flat():
+      "far from the edge, the response is 0 on the dark side and only the small leak 1 - w = 0.15 on the bright side"
+      assert abs(out[100]) < 0.01 and abs(out[300] - 0.15) < 0.01
+
+  def test_overshoot():
+      "the ON response peaks just on the bright side of the edge and the OFF response just on the dark side"
+      edge = len(line) // 2
+      assert edge <= np.argmax(on) < edge + 15 and edge - 15 < np.argmax(off) < edge
+`} prompt="Make a 1D DoG profile (the same σ values, on a line of 0.1° pixels), convolve it with a step of light from 0 to 1 at the middle of a 400-pixel line ('same' mode), and split the result into ON = max(out, 0) and OFF = max(-out, 0)."
+code={String.raw`
+  x1 = (np.arange(121) - 60) * 0.1
+  k1 = np.exp(-x1 ** 2 / (2 * 0.25 ** 2)); k1 /= k1.sum()
+  s1 = np.exp(-x1 ** 2 / (2 * 1.0 ** 2)); s1 /= s1.sum()
+  kernel = k1 - 0.85 * s1
+  line = np.r_[np.zeros(200), np.ones(200)]
+  out = ...
+  on = ...
+  off = ...
+  print(f"peak ON response {on.max():.3f} at pixel {np.argmax(on)}, peak OFF {off.max():.3f} at pixel {np.argmax(off)} (edge at 200)")
+  plt.plot(line * 0.2, "k", lw=0.8, label="light (scaled)"); plt.plot(on, label="ON"); plt.plot(-off, label="OFF (negative)"); plt.xlim(120, 280); plt.legend(); plt.show()
+`}
+hint="out = np.convolve(line, kernel, mode='same'); on = np.maximum(out, 0); off = np.maximum(-out, 0)."
+solution={String.raw`
+  x1 = (np.arange(121) - 60) * 0.1
+  k1 = np.exp(-x1 ** 2 / (2 * 0.25 ** 2)); k1 /= k1.sum()
+  s1 = np.exp(-x1 ** 2 / (2 * 1.0 ** 2)); s1 /= s1.sum()
+  kernel = k1 - 0.85 * s1
+  line = np.r_[np.zeros(200), np.ones(200)]
+  out = np.convolve(line, kernel, mode="same")
+  on = np.maximum(out, 0)
+  off = np.maximum(-out, 0)
+  print(f"peak ON response {on.max():.3f} at pixel {np.argmax(on)}, peak OFF {off.max():.3f} at pixel {np.argmax(off)} (edge at 200)")
+  plt.plot(line * 0.2, "k", lw=0.8, label="light (scaled)"); plt.plot(on, label="ON"); plt.plot(-off, label="OFF (negative)"); plt.xlim(120, 280); plt.legend(); plt.show()
+`} />
+
+Far from the edge the output is zero on the dark side and only 0.15 on the bright side, the small part of uniform light that leaks through because the surround is slightly weaker than the centre. At the edge, the ON response peaks a few pixels into the bright side at about 0.39, more than twice the bright plateau, and the OFF response peaks a few pixels into the dark side. The image the brain receives is dominated by its edges, and most of the bandwidth of the optic nerve is spent on them.
+
+<Step n={4} title="Adaptation" minutes={30} />
+
+Light intensities in the world span about ten orders of magnitude, from starlight to sunlight, while a ganglion cell's firing rate spans perhaps two. The retina copes by **adapting**: its gain falls as the background brightens, so that it responds to contrast, the relative change in light, rather than absolute intensity. Perception follows **Weber's law** over much of this range: the smallest detectable change in intensity is a fixed fraction of the background. A simple model is divisive gain control,
+
+$$
+r = \frac{I - I_b}{I_b + I_0},
+$$
+
+where $I_b$ is the background and $I_0$ a constant that sets where adaptation begins. Above $I_0$ the response to a given contrast is the same at every background; below it, the cell responds to absolute changes in light.
+
+<PyCell id="adapt" title="Contrast invariance by divisive gain" tests={String.raw`
+  import numpy as np
+  def test_weber():
+      "for backgrounds at least 100 times I0, responses to 10% contrast vary by less than 2%"
+      big = resp_adapt[backgrounds >= 100 * I0]
+      assert big.max() / big.min() < 1.02
+
+  def test_linear():
+      "without adaptation, the response to 10% contrast grows over the range by a factor above 1000"
+      assert resp_linear[-1] / resp_linear[0] > 1000
+`} prompt="For backgrounds from 0.01 to 10,000 (log spaced), compute the response to a flash of 10% contrast (I = 1.1 I_b) with the adapting model, and with a non-adapting linear model r = I - I_b."
+code={String.raw`
+  I0 = 1.0
+  backgrounds = np.logspace(-2, 4, 25)
+  resp_adapt = ...
+  resp_linear = ...
+  plt.loglog(backgrounds, resp_adapt, "o-", label="adapting"); plt.loglog(backgrounds, resp_linear, "s-", label="linear")
+  plt.xlabel("background intensity"); plt.ylabel("response to a 10% flash"); plt.legend(); plt.show()
+  print("adapting responses at the brightest five backgrounds:", np.round(resp_adapt[-5:], 4))
+`}
+hint="resp_adapt = (1.1 * backgrounds - backgrounds) / (backgrounds + I0); resp_linear = 0.1 * backgrounds."
+solution={String.raw`
+  I0 = 1.0
+  backgrounds = np.logspace(-2, 4, 25)
+  resp_adapt = (1.1 * backgrounds - backgrounds) / (backgrounds + I0)
+  resp_linear = 0.1 * backgrounds
+  plt.loglog(backgrounds, resp_adapt, "o-", label="adapting"); plt.loglog(backgrounds, resp_linear, "s-", label="linear")
+  plt.xlabel("background intensity"); plt.ylabel("response to a 10% flash"); plt.legend(); plt.show()
+  print("adapting responses at the brightest five backgrounds:", np.round(resp_adapt[-5:], 4))
+`} />
+
+With divisive gain, the response to a 10% flash is about 0.1 at every background well above $I_0$, over four orders of magnitude, while the linear model's response grows a millionfold over the six decades tested. Real adaptation happens at several stages and speeds, in the photoreceptors themselves within seconds and in the retinal circuit, and it adapts to contrast as well as to mean light, but the principle is the same: send the brain relative changes, scaled to the current conditions.
+
+<Callout kind="note">
+
+The retina is far richer than a bank of DoG filters. Primates have around twenty types of ganglion cell, each tiling the retina with its own receptive field size and preference: midget and parasol cells carry fine detail and motion to the LGN, while others detect object motion, approaching objects or the direction of image motion. Gollisch and Meister (2010) review how such specific computations are performed within the retina itself, before any signal reaches the brain.
+
+</Callout>
+
+<Bridge title="Preprocessing that the eye does for you"
+  neuro="Centre-surround filtering and adaptation remove what is predictable in natural images, slowly varying light and the overall brightness of the scene, and keep what is surprising, edges and changes. Week 39 will show that this is close to what efficient coding predicts for natural images."
+  ai="Deep networks need the same help: images are normalised by subtracting the mean and dividing by the standard deviation, and convolutional networks trained on natural images often learn centre-surround and edge-like filters in their first layers. Local response normalisation in early CNNs was directly inspired by retinal and cortical gain control.">
+
+The first job of a visual system is to throw away what does not change.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Kuffler found that retinal ganglion cells have...", options: ["A centre and an antagonistic surround", "Oriented receptive fields", "No spatial structure", "Colour opponency only"], answer: 0, explain: "In the cat retina, 1953." },
+  { q: "An ON-centre cell is excited by...", options: ["Light in the centre", "Light in the surround", "Darkness in the centre", "Uniform light"], answer: 0, explain: "OFF-centre cells are the opposite." },
+  { q: "A difference of Gaussians has...", options: ["A narrow positive centre minus a broad weaker surround", "Two equal Gaussians", "A single Gaussian", "An oriented bar"], answer: 0, explain: "σ_s larger than σ_c, w just below 1." },
+  { q: "As a spot grows past the centre, the response...", options: ["Falls, because it invades the surround", "Keeps rising", "Is unchanged", "Becomes negative immediately"], answer: 0, explain: "The area-response curve." },
+  { q: "A DoG filter applied to uniform light gives...", options: ["Nearly zero", "A large response", "Oscillations", "Saturation"], answer: 0, explain: "Centre and surround cancel." },
+  { q: "Mach bands are...", options: ["Bright and dark bands seen at edges", "Colour aftereffects", "Blind spots", "Motion illusions"], answer: 0, explain: "Predicted by centre-surround filtering." },
+  { q: "Weber's law says the detectable change in intensity is...", options: ["A fixed fraction of the background", "A fixed amount", "Zero in bright light", "Proportional to its square"], answer: 0, explain: "Contrast, not absolute intensity." },
+  { q: "Divisive gain control r = (I - I_b)/(I_b + I_0) gives...", options: ["The same response to a given contrast at high backgrounds", "Larger responses in bright light", "No response to contrast", "Linear responses always"], answer: 0, explain: "Adaptation." },
+]} />
+
+<Flashcards cards={[
+  { front: "Centre-surround receptive field?", back: "A central region of one sign and a surrounding annulus of the opposite sign; ON-centre and OFF-centre types." },
+  { front: "Difference of Gaussians?", back: "$G_{\\sigma_c} - w\\,G_{\\sigma_s}$ with $\\sigma_s > \\sigma_c$ and $w$ just below 1." },
+  { front: "Area-response curve?", back: "Response against spot size: rises while the spot fills the centre, then falls as it invades the surround." },
+  { front: "Weber's law?", back: "The just-detectable change in intensity is a constant fraction of the background intensity." },
+  { front: "Divisive gain control?", back: "$r = (I - I_b)/(I_b + I_0)$: responses to contrast become independent of background above $I_0$." },
+]} />
+
+<Predict revisit question="As a centred spot grows past the centre and into the surround, does the ON-centre cell's response keep growing, level off, or rise and fall?" />
+
+<Key title="Before you go">
+<ul>
+<li>Retinal ganglion cells have centre-surround receptive fields, ON or OFF.</li>
+<li>A difference of Gaussians captures the area-response curve and edge enhancement.</li>
+<li>Uniform light is filtered out; edges and changes are kept.</li>
+<li>Divisive adaptation turns intensity into contrast over many orders of magnitude.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Kuffler (1953), <em>Discharge patterns and functional organization of mammalian retina</em>.</li>
+<li>Gollisch and Meister (2010), <em>Eye smarter than scientists believed: neural computations in circuits of the retina</em>, Neuron 65(2), 150 to 164.</li>
+<li>Rodieck (1965), <em>Quantitative analysis of cat retinal ganglion cell response to visual stimuli</em>, Vision Research 5(12), 583 to 601.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Look at a scene around you and find three places where an edge is much more visible than the brightness on either side of it. Describe what a population of ON and OFF cells would send to the brain from one of them, and what would be lost." />
