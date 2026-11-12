@@ -1,0 +1,290 @@
+export const meta = {
+  title: "The basal ganglia: actor, critic, Go and NoGo",
+  intro: "Dopamine neurons send their densest projection to the striatum, the input stage of the basal ganglia, a set of nuclei that select among competing actions. Two populations of striatal neurons respond oppositely to dopamine: those expressing D1 receptors form a direct pathway that promotes action (Go), and those expressing D2 receptors form an indirect pathway that suppresses it (NoGo). Michael Frank's 2005 model showed how a dopamine burst strengthens Go for a rewarded action and a dip strengthens NoGo for an unrewarded one, and it explained why patients with Parkinson's disease, who lack dopamine, learn better from punishment than from reward until they take their medication. Today you move from predicting reward to learning what to do: Q-learning and actor-critic in a small world, then the asymmetries that separate Go from NoGo.",
+  goals: [
+    "Describe the direct and indirect pathways and how dopamine affects each",
+    "Implement Q-learning and an actor-critic on a gridworld",
+    "Explain why actor-critic maps naturally onto the basal ganglia",
+    "Show how separate learning rates for positive and negative errors bias learned values",
+  ],
+  plan: [
+    { label: "Predict and the circuit", minutes: 20 },
+    { label: "Q-learning", minutes: 30 },
+    { label: "Actor and critic", minutes: 30 },
+    { label: "Learning from gains and losses", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "frank-2005",
+};
+
+<Predict question="An option pays 1 with probability 0.8 and 0 otherwise. A learner updates its estimate with learning rate 0.3 after positive errors and 0.05 after negative ones. Will its estimate settle below, at, or above 0.8?" />
+
+<Step n={1} title="Selecting actions in the basal ganglia" minutes={20} />
+
+The striatum receives input from almost the whole cortex and projects through two routes to the output nuclei, the internal globus pallidus and substantia nigra pars reticulata, which tonically inhibit the thalamus. The **direct pathway** (D1 striatal neurons) inhibits the output nuclei and so releases the thalamus: it promotes the selected action. The **indirect pathway** (D2 neurons, via the external globus pallidus and subthalamic nucleus) has the opposite net effect: it suppresses actions. Dopamine excites D1 neurons and inhibits D2 neurons, and it gates plasticity in both, in opposite directions (Shen and colleagues, 2008).
+
+Frank's model (2004, 2005) turned this into a learning rule. A dopamine burst after a good outcome strengthens the Go connections for the chosen action and weakens its NoGo connections; a dip after a bad outcome does the reverse. In the probabilistic selection task (Frank, Seeberger and O'Reilly, 2004), participants learn which symbol in each of three pairs is rewarded more often, then face new pairings. Patients with Parkinson's disease tested off their medication were better at avoiding the worst symbol than choosing the best; on medication, the pattern reversed. Learning from rewards and learning from punishments depend on dopamine in opposite ways.
+
+<Video id="8yvwMrUQJOU" title="MDPs and Q-learning" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch introduces Markov decision processes and Q-learning, the framework for learning which action to take in each state." />
+
+<Step n={2} title="Q-learning" minutes={30} />
+
+In a **Markov decision process**, an agent in state $s$ takes action $a$, receives reward $r$ and moves to state $s'$. Q-learning learns the value of each action in each state, using a TD error whose target assumes the best action will be taken next:
+
+$$
+\delta = r + \gamma\max_{a'}Q(s', a') - Q(s, a), \qquad Q(s, a) \leftarrow Q(s, a) + \alpha\,\delta.
+$$
+
+The world here is a 5 by 5 grid. The agent starts in one corner, moves up, down, left or right, and receives 1 on reaching the opposite corner, which ends the episode.
+
+<Figure caption="An agent learning to cross a gridworld. The arrows show the greedy action in each cell and the shading its value; drag the episode count and watch value spread back from the goal." credit="Interactive figure by Engram, after Sutton and Barto (2018).">
+  <GridworldQ />
+</Figure>
+
+<PyCell id="qlearn" title="Q-learning in a gridworld" tests={String.raw`
+  import numpy as np
+  def test_short():
+      "after 200 episodes the average path in the last 20 is under 11 steps (the shortest is 8)"
+      assert L_q[-20:].mean() < 11
+  def test_value():
+      "the learned value of the start state is close to gamma to the 7th power"
+      assert abs(Q.max(1)[0] - 0.9 ** 7) < 0.05
+`} prompt="Complete qlearn: choose epsilon-greedily, step, compute the Q-learning TD error (no future value if the episode ended) and update Q. Record the number of steps in each episode."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2005)
+  S, A, GOAL = 25, 4, 24
+
+  def step(s, a):
+      x, y = divmod(s, 5)
+      x = max(0, x - 1) if a == 0 else min(4, x + 1) if a == 1 else x
+      y = max(0, y - 1) if a == 2 else min(4, y + 1) if a == 3 else y
+      s2 = 5 * x + y
+      return s2, float(s2 == GOAL), s2 == GOAL
+
+  def qlearn(episodes=200, alpha=0.5, gamma=0.9, eps=0.1):
+      Q = np.zeros((S, A)); lengths = []
+      for k in range(episodes):
+          s, n = 0, 0
+          while True:
+              a = r.integers(A) if r.random() < eps else np.argmax(Q[s] + 1e-9 * r.random(A))
+              s2, rew, done = step(s, a)
+              ...
+              s, n = s2, n + 1
+              if done or n > 200:
+                  break
+          lengths.append(n)
+      return Q, np.array(lengths)
+
+  Q, L_q = qlearn()
+  print(f"steps in the first five episodes {L_q[:5]}, mean of the last 20 {L_q[-20:].mean():.1f}; V(start) = {Q.max(1)[0]:.3f} (0.9^7 = {0.9 ** 7:.3f})")
+  plt.imshow(Q.max(1).reshape(5, 5)); plt.colorbar(); plt.title("max_a Q(s, a)"); plt.show()
+`}
+hint="target = rew + (0 if done else gamma * Q[s2].max()); Q[s, a] += alpha * (target - Q[s, a])."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2005)
+  S, A, GOAL = 25, 4, 24
+
+  def step(s, a):
+      x, y = divmod(s, 5)
+      x = max(0, x - 1) if a == 0 else min(4, x + 1) if a == 1 else x
+      y = max(0, y - 1) if a == 2 else min(4, y + 1) if a == 3 else y
+      s2 = 5 * x + y
+      return s2, float(s2 == GOAL), s2 == GOAL
+
+  def qlearn(episodes=200, alpha=0.5, gamma=0.9, eps=0.1):
+      Q = np.zeros((S, A)); lengths = []
+      for k in range(episodes):
+          s, n = 0, 0
+          while True:
+              a = r.integers(A) if r.random() < eps else np.argmax(Q[s] + 1e-9 * r.random(A))
+              s2, rew, done = step(s, a)
+              target = rew + (0 if done else gamma * Q[s2].max())
+              Q[s, a] += alpha * (target - Q[s, a])
+              s, n = s2, n + 1
+              if done or n > 200:
+                  break
+          lengths.append(n)
+      return Q, np.array(lengths)
+
+  Q, L_q = qlearn()
+  print(f"steps in the first five episodes {L_q[:5]}, mean of the last 20 {L_q[-20:].mean():.1f}; V(start) = {Q.max(1)[0]:.3f} (0.9^7 = {0.9 ** 7:.3f})")
+  plt.imshow(Q.max(1).reshape(5, 5)); plt.colorbar(); plt.title("max_a Q(s, a)"); plt.show()
+`} />
+
+The first episode wanders for 92 steps; within a few episodes paths shorten, and the last twenty average under 10 steps, close to the shortest path of 8 given 10% random moves. The value of the start state is 0.478, exactly $\gamma^7$: the reward arrives on the eighth move, and each earlier step discounts it once. Values spread back from the goal one state at a time, as the TD error did along the time steps of Day 2.
+
+<Step n={3} title="Actor and critic" minutes={30} />
+
+Q-learning stores a value for every action. An **actor-critic** splits the job. A critic learns state values $V(s)$ with the ordinary TD error $\delta = r + \gamma V(s') - V(s)$. An actor keeps action preferences $H(s, a)$, chooses by softmax over them, and nudges the preference for the action it took by the same $\delta$: if things turned out better than expected, do that again.
+
+Barto (1995) and Houk, Adams and Barto (1995) proposed that the ventral striatum is the critic and the dorsal striatum the actor, with dopamine broadcasting the shared TD error to both. O'Doherty and colleagues (2004) found support in humans: ventral striatum responded to prediction errors whether or not a choice was required, while dorsal striatum responded only when the participant's actions mattered.
+
+<PyCell id="ac" title="An actor-critic on the same grid" tests={String.raw`
+  import numpy as np
+  def test_learns():
+      "the actor-critic's last 20 episodes average under 13 steps"
+      assert L_ac[-20:].mean() < 13
+  def test_critic():
+      "the critic's value rises towards the goal along the bottom row"
+      v = V_ac.reshape(5, 5)[4]
+      assert v[4] == 0 and v[3] > v[1]
+`} prompt="Complete actor_critic: choose by softmax over H[s], step, compute delta = r + gamma V(s') - V(s) (no future value at the goal), and update both V[s] and H[s, a] with delta."
+code={String.raw`
+  def actor_critic(episodes=200, a_c=0.5, a_a=0.5, gamma=0.9):
+      V = np.zeros(S); H = np.zeros((S, A)); lengths = []
+      for k in range(episodes):
+          s, n = 0, 0
+          while True:
+              p = np.exp(H[s] - H[s].max()); p /= p.sum()
+              a = r.choice(A, p=p)
+              s2, rew, done = step(s, a)
+              ...
+              s, n = s2, n + 1
+              if done or n > 200:
+                  break
+          lengths.append(n)
+      return V, H, np.array(lengths)
+
+  V_ac, H_ac, L_ac = actor_critic()
+  print(f"actor-critic: first five episodes {L_ac[:5]}, mean of the last 20 {L_ac[-20:].mean():.1f}")
+  plt.plot(L_q, label="Q-learning"); plt.plot(L_ac, label="actor-critic"); plt.yscale("log"); plt.xlabel("episode"); plt.ylabel("steps"); plt.legend(); plt.show()
+`}
+hint="delta = rew + (0 if done else gamma * V[s2]) - V[s]; V[s] += a_c * delta; H[s, a] += a_a * delta."
+solution={String.raw`
+  def actor_critic(episodes=200, a_c=0.5, a_a=0.5, gamma=0.9):
+      V = np.zeros(S); H = np.zeros((S, A)); lengths = []
+      for k in range(episodes):
+          s, n = 0, 0
+          while True:
+              p = np.exp(H[s] - H[s].max()); p /= p.sum()
+              a = r.choice(A, p=p)
+              s2, rew, done = step(s, a)
+              delta = rew + (0 if done else gamma * V[s2]) - V[s]
+              V[s] += a_c * delta
+              H[s, a] += a_a * delta
+              s, n = s2, n + 1
+              if done or n > 200:
+                  break
+          lengths.append(n)
+      return V, H, np.array(lengths)
+
+  V_ac, H_ac, L_ac = actor_critic()
+  print(f"actor-critic: first five episodes {L_ac[:5]}, mean of the last 20 {L_ac[-20:].mean():.1f}")
+  plt.plot(L_q, label="Q-learning"); plt.plot(L_ac, label="actor-critic"); plt.yscale("log"); plt.xlabel("episode"); plt.ylabel("steps"); plt.legend(); plt.show()
+`} />
+
+The actor-critic starts worse, with some episodes hitting the 200-step limit, because its initial policy is uniform and it has no separate value per action to guide it. But it ends at about 9 steps, as good as Q-learning. The two algorithms make different commitments: Q-learning needs a value for every state-action pair and can learn about the best action while doing something else (off-policy); actor-critic learns only from what it does (on-policy), but its policy can be anything the actor can represent, which is what makes it the basis of most methods for continuous actions.
+
+<Step n={4} title="Learning from gains and losses" minutes={25} />
+
+If positive and negative prediction errors drive learning through different pathways, their effective learning rates can differ, and dopamine levels or drugs can shift the balance. With rate $\alpha^+$ after positive errors and $\alpha^-$ after negative ones, a value learned for an option that pays 1 with probability $p$ settles where the expected upward and downward steps balance:
+
+$$
+p\,\alpha^+(1 - V) = (1 - p)\,\alpha^- V \quad\Rightarrow\quad V = \frac{p\,\alpha^+}{p\,\alpha^+ + (1 - p)\,\alpha^-}.
+$$
+
+When $\alpha^+ \gt \alpha^-$ the learner is optimistic; when $\alpha^- \gt \alpha^+$, pessimistic. Tomorrow you will see that a population of learners with different ratios represents a whole distribution of outcomes.
+
+<PyCell id="asym" title="Optimism and pessimism" tests={String.raw`
+  import numpy as np
+  def test_formula():
+      "simulated values match the fixed-point formula within 0.03"
+      assert all(abs(sim[k] - theory[k]) < 0.03 for k in sim)
+  def test_order():
+      "the optimist values the option above 0.8 and the pessimist below"
+      assert sim["optimist"] > 0.8 > sim["pessimist"]
+`} prompt="For each learner, update V towards outcomes drawn with p = 0.8 for 20,000 trials, using alpha_plus when the error is positive and alpha_minus otherwise, and average V over the last 10,000 trials. Compare with the formula."
+code={String.raw`
+  g = np.random.default_rng(2004)
+  learners = {"optimist": (0.3, 0.05), "balanced": (0.1, 0.1), "pessimist": (0.05, 0.3)}
+  p = 0.8
+  sim, theory = {}, {}
+  for name, (ap, am) in learners.items():
+      V, acc = 0.5, []
+      for t in range(20000):
+          out = float(g.random() < p)
+          ...
+          if t >= 10000:
+              acc.append(V)
+      sim[name] = np.mean(acc)
+      theory[name] = p * ap / (p * ap + (1 - p) * am)
+      print(f"{name:9s} simulated {sim[name]:.3f}, formula {theory[name]:.3f}")
+`}
+hint="d = out - V; V += (ap if d > 0 else am) * d."
+solution={String.raw`
+  g = np.random.default_rng(2004)
+  learners = {"optimist": (0.3, 0.05), "balanced": (0.1, 0.1), "pessimist": (0.05, 0.3)}
+  p = 0.8
+  sim, theory = {}, {}
+  for name, (ap, am) in learners.items():
+      V, acc = 0.5, []
+      for t in range(20000):
+          out = float(g.random() < p)
+          d = out - V
+          V += (ap if d > 0 else am) * d
+          if t >= 10000:
+              acc.append(V)
+      sim[name] = np.mean(acc)
+      theory[name] = p * ap / (p * ap + (1 - p) * am)
+      print(f"{name:9s} simulated {sim[name]:.3f}, formula {theory[name]:.3f}")
+`} />
+
+The simulations land on the formula: an optimistic learner values an 80% option at 0.96, a pessimistic one at about 0.39, and only the balanced learner recovers the true 0.8. Optimism can make an agent persist with a risky option; pessimism can make it avoid one that is objectively good. In Frank's terms, a learner whose Go pathway learns faster than its NoGo pathway behaves like the optimist.
+
+<Callout kind="warning">
+
+Fitting separate learning rates for gains and losses has become common, and differences between groups are often interpreted as differences in dopamine function. Be careful. With few trials the two rates trade off against each other and against the inverse temperature, and choice perseveration (a tendency to repeat the last choice regardless of outcome) can masquerade as asymmetric learning (Katahira, 2018). Fit a model with a perseveration term and check parameter recovery before drawing conclusions.
+
+</Callout>
+
+<Bridge title="Learning what to do"
+  neuro="Ventral striatum as critic, dorsal striatum as actor, dopamine as the shared TD error, and opposing D1 and D2 pathways that learn from positive and negative errors. The account explains action selection, habit formation and some effects of Parkinson's disease and its treatment."
+  ai="Actor-critic is the basis of modern policy-gradient methods such as A2C and PPO; Q-learning with deep networks is DQN. Separating optimistic and pessimistic estimates is used to counter overestimation in double Q-learning.">
+
+A critic learns how good things are; an actor learns what to do about it; both are taught by the same error.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The direct pathway...", options: ["Promotes the selected action and expresses D1 receptors", "Suppresses actions and expresses D2", "Carries dopamine", "Projects to cortex directly"], answer: 0, explain: "Go." },
+  { q: "Dopamine bursts in Frank's model...", options: ["Strengthen Go and weaken NoGo for the chosen action", "Strengthen NoGo", "Have no effect on learning", "Only affect the critic"], answer: 0, explain: "Dips do the reverse." },
+  { q: "Parkinson's patients off medication learned better from...", options: ["Negative outcomes", "Positive outcomes", "Neither", "Both equally"], answer: 0, explain: "Frank, Seeberger and O'Reilly (2004)." },
+  { q: "The Q-learning target uses...", options: ["The maximum Q-value in the next state", "The value of the action actually taken next", "The reward only", "The average Q-value"], answer: 0, explain: "Off-policy." },
+  { q: "In an actor-critic, the actor is updated by...", options: ["The critic's TD error", "Its own Q-values", "The reward only", "Supervised targets"], answer: 0, explain: "Shared δ." },
+  { q: "The proposed critic in the basal ganglia is...", options: ["Ventral striatum", "Dorsal striatum", "Globus pallidus", "Thalamus"], answer: 0, explain: "O'Doherty et al. (2004)." },
+  { q: "With α⁺ greater than α⁻, the learned value of a risky option is...", options: ["Above its mean payoff", "Below it", "Equal to it", "Zero"], answer: 0, explain: "Optimistic." },
+  { q: "A confound for asymmetric learning-rate fits is...", options: ["Choice perseveration", "Large samples", "High β", "Deterministic rewards"], answer: 0, explain: "Katahira (2018)." },
+]} />
+
+<Flashcards cards={[
+  { front: "Direct and indirect pathways?", back: "Direct (D1): disinhibits thalamus, promotes action (Go). Indirect (D2): suppresses action (NoGo)." },
+  { front: "Q-learning update?", back: "$Q(s,a) \\leftarrow Q(s,a) + \\alpha(r + \\gamma\\max_{a'}Q(s',a') - Q(s,a))$." },
+  { front: "Actor-critic?", back: "Critic learns $V(s)$ from the TD error; actor adjusts action preferences by the same error." },
+  { front: "Asymmetric learning fixed point?", back: "$V = p\\alpha^+/(p\\alpha^+ + (1-p)\\alpha^-)$." },
+  { front: "Probabilistic selection task finding?", back: "Off dopamine medication: better at avoiding the worst option. On medication: better at choosing the best." },
+]} />
+
+<Predict revisit question="With α⁺ = 0.3 and α⁻ = 0.05 for an option paying 1 with probability 0.8, where does the estimate settle?" />
+
+<Key title="Before you go">
+<ul>
+<li>The basal ganglia select actions through opposing Go and NoGo pathways shaped by dopamine.</li>
+<li>Q-learning learns action values with a max-based TD target.</li>
+<li>Actor-critic splits value and policy, a natural map onto ventral and dorsal striatum.</li>
+<li>Different rates for positive and negative errors make values optimistic or pessimistic.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Frank (2005), <em>Dynamic dopamine modulation in the basal ganglia: a neurocomputational account of cognitive deficits in medicated and nonmedicated Parkinsonism</em>.</li>
+<li>Frank, Seeberger and O'Reilly (2004), <em>By carrot or by stick: cognitive reinforcement learning in Parkinsonism</em>, Science 306(5703), 1940 to 1943.</li>
+<li>O'Doherty, Dayan, Schultz, Deichmann, Friston and Dolan (2004), <em>Dissociable roles of ventral and dorsal striatum in instrumental conditioning</em>, Science 304(5669), 452 to 454.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Describe a habit you have that might be maintained by an optimistic value estimate (you remember the good outcomes more than the bad). How would you measure your own alpha-plus and alpha-minus, and what confound from today's warning would you need to rule out?" />

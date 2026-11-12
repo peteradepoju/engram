@@ -1,0 +1,248 @@
+export const meta = {
+  title: "Beyond one number: distributional and model-based learning",
+  intro: "The TD model of Day 2 learns a single number, the expected reward. Two extensions have reshaped the field. The first came from machine learning: agents that learn the whole distribution of possible returns, not just its mean, learn better. In 2020 Will Dabney, Zeb Kurth-Nelson and colleagues at DeepMind and Harvard reanalysed recordings from mouse dopamine neurons and found that different neurons were optimistic or pessimistic to different degrees, exactly as a distributional learner needs. The second extension asks where the expectation comes from at all: from cached values learned by trial and error, or from a model of the world used to plan. Today you build a population of asymmetric learners that represents a reward distribution, then simulate the two-step task that separates model-free from model-based choice.",
+  goals: [
+    "Explain how asymmetric learning rates make a population learn expectiles of a distribution",
+    "Show that a distributional population recovers a bimodal reward distribution",
+    "Describe the evidence that dopamine neurons differ in optimism",
+    "Distinguish model-free and model-based control using the two-step task",
+  ],
+  plan: [
+    { label: "Predict and the idea", minutes: 15 },
+    { label: "A population of expectiles", minutes: 35 },
+    { label: "Evidence from dopamine neurons", minutes: 20 },
+    { label: "Model-free and model-based", minutes: 35 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "dabney-2020",
+};
+
+<Predict question="A reward is either about 1 (30% of the time) or about 6 (70% of the time). Nineteen learners each use a different ratio of positive to negative learning rate. Where will their learned values lie: all near the mean of 4.5, spread across the range, or clustered at 1 and 6?" />
+
+<Step n={1} title="Learning a distribution" minutes={15} />
+
+Yesterday's optimistic and pessimistic learners settled above and below the mean. That bias is useful. A learner whose positive and negative learning rates are in the ratio $\tau : (1 - \tau)$ converges to the value $V_\tau$ at which
+
+$$
+\tau\,\mathbb E\big[(r - V_\tau)_+\big] = (1 - \tau)\,\mathbb E\big[(V_\tau - r)_+\big],
+$$
+
+the $\tau$-**expectile** of the reward distribution. The 0.5-expectile is the mean; low $\tau$ gives values near the bottom of the distribution and high $\tau$ near the top. A population of learners with $\tau$ spread from 0 to 1 jointly encodes the whole distribution, and the distribution can be decoded from their values. Bellemare, Dabney and Munos (2017) showed that deep reinforcement learning agents that learn return distributions outperform those that learn only means, partly because predicting a richer target shapes better internal representations.
+
+<Video id="zT_legTotF0" title="Model-based RL" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch contrasts model-free learning of cached values with model-based planning using a learned model of the world, the second half of today's lesson." />
+
+<Step n={2} title="A population of expectiles" minutes={35} />
+
+<Figure caption="A distributional population. Each dot is one learner's value, placed by its optimism τ. Change the shape of the reward distribution and see the population's values spread to match it." credit="Interactive figure by Engram, after Dabney et al. (2020).">
+  <DistributionalTD />
+</Figure>
+
+<PyCell id="expectile" title="Nineteen learners, one distribution" tests={String.raw`
+  import numpy as np
+  def test_match():
+      "each learner's averaged value is within 0.05 of the true expectile"
+      assert np.abs(V_avg - E_true).max() < 0.05
+  def test_spread():
+      "the population spans more than 4 reward units and its middle learner sits near the mean"
+      assert V_avg[-1] - V_avg[0] > 4 and abs(V_avg[9] - xs.mean()) < 0.1
+`} prompt="Update all 19 values at once on each of 40,000 samples: V += 2 alpha (tau where the error is positive, 1 - tau where negative) times the error. Average V over the second half. Then compute the true expectiles by bisection on a large sample."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2020)
+
+  def sample(n):
+      return np.where(r.random(n) < 0.3, r.normal(1, 0.3, n), r.normal(6, 0.8, n))
+
+  taus = np.linspace(0.05, 0.95, 19); alpha = 0.01
+  V = np.full(19, 3.0); acc = np.zeros(19); n_acc = 0
+  for i, x in enumerate(sample(40000)):
+      d = x - V
+      ...
+      if i >= 20000:
+          acc += V; n_acc += 1
+  V_avg = acc / n_acc
+
+  xs = sample(400000)
+  def expectile(tau):
+      lo, hi = xs.min(), xs.max()
+      for _ in range(50):
+          m = (lo + hi) / 2
+          g = tau * np.mean(np.maximum(xs - m, 0)) - (1 - tau) * np.mean(np.maximum(m - xs, 0))
+          lo, hi = (m, hi) if g > 0 else (lo, m)
+      return m
+  E_true = np.array([expectile(t) for t in taus])
+  print("learned:", np.round(V_avg, 2)); print("true:   ", np.round(E_true, 2))
+  plt.hist(xs, 80, density=True, alpha=0.4); plt.plot(V_avg, np.full(19, 0.02), "k|", ms=20); plt.xlabel("reward"); plt.show()
+`}
+hint="V += 2 * alpha * np.where(d > 0, taus, 1 - taus) * d."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2020)
+
+  def sample(n):
+      return np.where(r.random(n) < 0.3, r.normal(1, 0.3, n), r.normal(6, 0.8, n))
+
+  taus = np.linspace(0.05, 0.95, 19); alpha = 0.01
+  V = np.full(19, 3.0); acc = np.zeros(19); n_acc = 0
+  for i, x in enumerate(sample(40000)):
+      d = x - V
+      V += 2 * alpha * np.where(d > 0, taus, 1 - taus) * d
+      if i >= 20000:
+          acc += V; n_acc += 1
+  V_avg = acc / n_acc
+
+  xs = sample(400000)
+  def expectile(tau):
+      lo, hi = xs.min(), xs.max()
+      for _ in range(50):
+          m = (lo + hi) / 2
+          g = tau * np.mean(np.maximum(xs - m, 0)) - (1 - tau) * np.mean(np.maximum(m - xs, 0))
+          lo, hi = (m, hi) if g > 0 else (lo, m)
+      return m
+  E_true = np.array([expectile(t) for t in taus])
+  print("learned:", np.round(V_avg, 2)); print("true:   ", np.round(E_true, 2))
+  plt.hist(xs, 80, density=True, alpha=0.4); plt.plot(V_avg, np.full(19, 0.02), "k|", ms=20); plt.xlabel("reward"); plt.show()
+`} />
+
+Each learner lands within a few hundredths of the true expectile for its $\tau$, and together they span from about 1.6 to 6.4. The middle learner ($\tau = 0.5$) sits at the mean, 4.5, a value the reward almost never takes. Notice how the learners spread: they are denser where the expectile curve is flat, between the two modes, and the gap between the modes shows up as a steep stretch. Imputing a distribution that matches all nineteen expectiles at once recovers the two humps, which is how Dabney and colleagues decoded distributions from neurons.
+
+<Step n={3} title="Evidence from dopamine neurons" minutes={20} />
+
+Dabney and colleagues reanalysed recordings by Eshel and colleagues of optogenetically identified dopamine neurons in mice receiving juice of seven different, unpredictable sizes. If all neurons reported the same TD error, each would switch from dip to burst at the same reward size, the mean. Instead, the **reversal points** differed reliably from neuron to neuron. Neurons whose responses to better-than-expected rewards were steep relative to their responses to worse-than-expected ones (high $\tau$) had high reversal points, as the theory requires, and decoding the population's reversal points recovered the shape of the reward distribution, including its bimodality in a second experiment.
+
+The finding is a neat case of an AI idea predicting a neural fact. It also invites caution: the reversal points were estimated from relatively few trials per neuron, the relation between asymmetry and reversal point is noisy, and alternative accounts (for example, neurons differing in their baseline expectations for other reasons) have been debated. Later work has looked for distributional codes in striatum and in human behaviour.
+
+<Step n={4} title="Model-free and model-based" minutes={35} />
+
+Everything so far is **model-free**: values are cached from experience, and change only when experienced outcomes produce errors. A **model-based** agent instead learns how the world works, which actions lead to which states and what each state yields, and computes values by planning. The two respond differently to the same events. Daw, Gershman, Seymour, Dayan and Dolan (2011) designed the two-step task to tell them apart.
+
+At the first step the agent chooses between two options. Each leads to one of two second-stage states, mostly (70%) to one and rarely (30%) to the other. At the second stage it chooses again and is rewarded with a probability that drifts slowly. The key is what happens after a reward reached through a rare transition. A model-free learner credits the first-stage choice it made and repeats it. A model-based learner knows that the rewarded second-stage state is more reliably reached by the other first-stage option, and switches.
+
+<PyCell id="twostep" title="The two-step task" tests={String.raw`
+  import numpy as np
+  def test_mf():
+      "model-free: staying depends on reward, not on transition"
+      s = stay[0.0]
+      assert s["rew common"] - s["unrew common"] > 0.2 and abs(s["rew common"] - s["rew rare"]) < 0.05
+  def test_mb():
+      "model-based: reward and transition interact (staying after rewarded common and unrewarded rare)"
+      s = stay[1.0]
+      assert s["rew common"] - s["rew rare"] > 0.1 and s["unrew rare"] - s["unrew common"] > 0.1
+`} prompt="Complete the first-stage valuation: the model-based value of each first-stage action is the transition matrix times the best second-stage value in each state; the agent uses w times the model-based value plus (1 - w) times the model-free value. Then compute stay probabilities by previous reward and transition."
+code={String.raw`
+  def two_step(w, T=5000, alpha=0.5, beta=5.0, seed=2011):
+      g = np.random.default_rng(seed)
+      Q1_mf = np.zeros(2); Q2 = np.full((2, 2), 0.5); P = g.uniform(0.25, 0.75, (2, 2))
+      trans = np.array([[0.7, 0.3], [0.3, 0.7]])
+      rec = []
+      for t in range(T):
+          Q1_mb = ...
+          Q1 = ...
+          a = int(g.random() < 1 / (1 + np.exp(-beta * (Q1[1] - Q1[0]))))
+          common = g.random() < 0.7; s = a if common else 1 - a
+          b = int(g.random() < 1 / (1 + np.exp(-beta * (Q2[s, 1] - Q2[s, 0]))))
+          rew = float(g.random() < P[s, b])
+          Q1_mf[a] += alpha * (Q2[s, b] - Q1_mf[a])          # first-stage TD update
+          d2 = rew - Q2[s, b]; Q2[s, b] += alpha * d2; Q1_mf[a] += alpha * d2   # second stage, credit passed back
+          P = np.clip(P + 0.025 * g.normal(size=(2, 2)), 0.25, 0.75)
+          rec.append((a, common, rew))
+      rec = np.array(rec)
+      stay_ = rec[1:, 0] == rec[:-1, 0]; c = rec[:-1, 1].astype(bool); rw_ = rec[:-1, 2].astype(bool)
+      return {k: stay_[m].mean() for k, m in [("rew common", rw_ & c), ("rew rare", rw_ & ~c), ("unrew common", ~rw_ & c), ("unrew rare", ~rw_ & ~c)]}
+
+  stay = {w: two_step(w) for w in [0.0, 1.0, 0.5]}
+  for w, s in stay.items():
+      print(f"w = {w}: " + ", ".join(f"{k} {v:.2f}" for k, v in s.items()))
+  fig, ax = plt.subplots(1, 3, figsize=(9, 3), sharey=True)
+  for a_, (w, s) in zip(ax, stay.items()):
+      a_.bar([0, 1, 3, 4], [s["rew common"], s["rew rare"], s["unrew common"], s["unrew rare"]], color=["C0", "C1", "C0", "C1"]); a_.set_title(f"w = {w}"); a_.set_xticks([0.5, 3.5], ["rewarded", "unrewarded"])
+  ax[0].set_ylabel("stay probability"); ax[0].set_ylim(0.3, 1); plt.show()
+`}
+hint="Q1_mb = trans @ Q2.max(1); Q1 = w * Q1_mb + (1 - w) * Q1_mf."
+solution={String.raw`
+  def two_step(w, T=5000, alpha=0.5, beta=5.0, seed=2011):
+      g = np.random.default_rng(seed)
+      Q1_mf = np.zeros(2); Q2 = np.full((2, 2), 0.5); P = g.uniform(0.25, 0.75, (2, 2))
+      trans = np.array([[0.7, 0.3], [0.3, 0.7]])
+      rec = []
+      for t in range(T):
+          Q1_mb = trans @ Q2.max(1)
+          Q1 = w * Q1_mb + (1 - w) * Q1_mf
+          a = int(g.random() < 1 / (1 + np.exp(-beta * (Q1[1] - Q1[0]))))
+          common = g.random() < 0.7; s = a if common else 1 - a
+          b = int(g.random() < 1 / (1 + np.exp(-beta * (Q2[s, 1] - Q2[s, 0]))))
+          rew = float(g.random() < P[s, b])
+          Q1_mf[a] += alpha * (Q2[s, b] - Q1_mf[a])          # first-stage TD update
+          d2 = rew - Q2[s, b]; Q2[s, b] += alpha * d2; Q1_mf[a] += alpha * d2   # second stage, credit passed back
+          P = np.clip(P + 0.025 * g.normal(size=(2, 2)), 0.25, 0.75)
+          rec.append((a, common, rew))
+      rec = np.array(rec)
+      stay_ = rec[1:, 0] == rec[:-1, 0]; c = rec[:-1, 1].astype(bool); rw_ = rec[:-1, 2].astype(bool)
+      return {k: stay_[m].mean() for k, m in [("rew common", rw_ & c), ("rew rare", rw_ & ~c), ("unrew common", ~rw_ & c), ("unrew rare", ~rw_ & ~c)]}
+
+  stay = {w: two_step(w) for w in [0.0, 1.0, 0.5]}
+  for w, s in stay.items():
+      print(f"w = {w}: " + ", ".join(f"{k} {v:.2f}" for k, v in s.items()))
+  fig, ax = plt.subplots(1, 3, figsize=(9, 3), sharey=True)
+  for a_, (w, s) in zip(ax, stay.items()):
+      a_.bar([0, 1, 3, 4], [s["rew common"], s["rew rare"], s["unrew common"], s["unrew rare"]], color=["C0", "C1", "C0", "C1"]); a_.set_title(f"w = {w}"); a_.set_xticks([0.5, 3.5], ["rewarded", "unrewarded"])
+  ax[0].set_ylabel("stay probability"); ax[0].set_ylim(0.3, 1); plt.show()
+`} />
+
+The model-free agent ($w = 0$) stays about 90% of the time after any reward and about 55% after no reward, whatever the transition: a main effect of reward. The model-based agent ($w = 1$) stays after a reward only if the transition was common (0.63 against 0.45) and, after no reward, stays more if the transition was rare (0.64 against 0.45): an interaction, because it reasons about which first-stage choice most reliably reaches the good state. The mixture shows both. Human participants typically look like the mixture, with weights that vary between people and shift with stress, cognitive load and training.
+
+<Callout kind="research">
+
+The two-step task became one of the most used paradigms in computational psychiatry, with reduced model-based weight reported in compulsive disorders (Gillan and colleagues, 2016). But Akam, Costa and Dayan (2015) showed that model-free strategies with richer state representations can mimic the model-based signature, and that the simple stay analysis can mislead. Fitting full models, checking recovery and designing tasks that force the distinction are now standard practice, and the distinction itself may be better seen as a continuum of ways to use a world model.
+
+</Callout>
+
+<Bridge title="Richer predictions"
+  neuro="Dopamine neurons appear to differ in optimism, so that the population encodes a distribution of future reward. Behaviour mixes cached and planned values, with prefrontal and hippocampal circuits supplying the model."
+  ai="Distributional RL (C51, QR-DQN) learns return distributions and improves deep agents; model-based RL (Dyna, MuZero) learns a model of the environment and plans with it. Combining cached values with planning is a central design choice in modern agents.">
+
+Brains and agents predict more than an average, and they predict it in more than one way.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A learner with positive and negative rates in ratio τ : (1 − τ) converges to...", options: ["The τ-expectile", "The mean", "The median", "The maximum"], answer: 0, explain: "The 0.5-expectile is the mean." },
+  { q: "A population of learners with different τ encodes...", options: ["The whole reward distribution", "Only the mean", "Only the variance", "The policy"], answer: 0, explain: "Expectiles can be decoded into a distribution." },
+  { q: "Dabney et al. (2020) found that dopamine neurons...", options: ["Have different reversal points that track their asymmetry", "All reverse at the mean", "Do not respond to reward size", "Only encode punishment"], answer: 0, explain: "Optimistic and pessimistic cells." },
+  { q: "A model-based agent computes values by...", options: ["Planning with a learned model of transitions and rewards", "Caching values from experience", "Random choice", "Averaging rewards"], answer: 0, explain: "Daw et al. (2011)." },
+  { q: "After a reward reached through a rare transition, a model-free agent...", options: ["Tends to repeat its first choice", "Switches", "Stops", "Explores randomly"], answer: 0, explain: "It credits the choice it made." },
+  { q: "The model-based signature in the two-step task is...", options: ["An interaction between reward and transition type in staying", "A main effect of reward only", "No effect of reward", "Faster responses"], answer: 0, explain: "Stay after rewarded common and unrewarded rare." },
+  { q: "A caution about the two-step task is that...", options: ["Some model-free strategies can mimic model-based behaviour", "It cannot be fitted", "It has no rare transitions", "It only works in mice"], answer: 0, explain: "Akam, Costa and Dayan (2015)." },
+  { q: "Distributional RL improves deep agents partly by...", options: ["Shaping better representations through richer targets", "Removing exploration", "Reducing network size", "Using no rewards"], answer: 0, explain: "Bellemare, Dabney and Munos (2017)." },
+]} />
+
+<Flashcards cards={[
+  { front: "Expectile condition?", back: "$\\tau\\mathbb E[(r - V)_+] = (1 - \\tau)\\mathbb E[(V - r)_+]$." },
+  { front: "Distributional TD in dopamine?", back: "Neurons differ in asymmetry of positive and negative responses, and their reversal points spread across the reward distribution (Dabney et al., 2020)." },
+  { front: "Model-free against model-based?", back: "Model-free caches values from experience; model-based plans using learned transitions and rewards." },
+  { front: "Two-step task logic?", back: "Model-free: stay after reward regardless of transition. Model-based: reward and transition interact." },
+  { front: "Mixture weight w?", back: "Fraction of first-stage value from the model-based system; fitted per participant." },
+]} />
+
+<Predict revisit question="Rewards near 1 (30%) or 6 (70%), nineteen learners with different optimism: where do their values lie?" />
+
+<Key title="Before you go">
+<ul>
+<li>Asymmetric learners converge to expectiles; a population encodes a distribution.</li>
+<li>Dopamine neurons show the diversity of optimism this requires.</li>
+<li>Model-free and model-based control respond differently to rare transitions.</li>
+<li>Signature analyses can mislead; fit full models and check recovery.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Dabney, Kurth-Nelson, Uchida, Starkweather, Hassabis, Munos and Botvinick (2020), <em>A distributional code for value in dopamine-based reinforcement learning</em>.</li>
+<li>Daw, Gershman, Seymour, Dayan and Dolan (2011), <em>Model-based influences on humans' choices and striatal prediction errors</em>, Neuron 69(6), 1204 to 1215.</li>
+<li>Akam, Costa and Dayan (2015), <em>Simple plans or sophisticated habits? State, transition and learning interactions in the two-step task</em>, PLoS Computational Biology 11(12), e1004648.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If dopamine neurons encode a distribution of rewards, what behaviour could a distribution support that a mean could not? Think of risk, gambling or anxiety, and propose one experiment linking a person's choices under risk to the asymmetry of their learning." />

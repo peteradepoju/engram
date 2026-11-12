@@ -1,0 +1,276 @@
+export const meta = {
+  title: "Temporal difference learning and dopamine",
+  intro: "In the 1980s and early 1990s Wolfram Schultz recorded midbrain dopamine neurons in monkeys learning that a light predicted a drop of juice. Before learning, the neurons burst when the juice arrived. After learning, they burst at the light and did nothing at the juice; and if the juice was then withheld, they paused at exactly the moment it should have come. In 1997 Schultz, Peter Dayan and Read Montague showed that this is precisely the behaviour of the error signal in temporal difference learning, an algorithm from machine learning that extends Rescorla-Wagner to predictions that unfold in time. Today you build the TD model, reproduce Schultz's three panels, and see why the correspondence became one of the most influential ideas in neuroscience.",
+  goals: [
+    "Define the value of a state as expected future reward",
+    "Write the TD error and the TD learning rule",
+    "Reproduce the transfer of the dopamine response from reward to cue, and the dip at omission",
+    "Explain how TD solves second-order conditioning and what the discount factor does",
+  ],
+  plan: [
+    { label: "Predict and Schultz's recordings", minutes: 15 },
+    { label: "Value and the TD error", minutes: 30 },
+    { label: "The three panels", minutes: 35 },
+    { label: "Discounting and probability", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "schultz-1997",
+};
+
+<Predict question="After learning, a cue at time 0 predicts juice at 2 seconds. On a test trial the juice comes 0.5 seconds early, at 1.5 seconds, and nothing happens at 2 seconds. What will dopamine neurons do at 1.5 seconds, and at 2 seconds?" />
+
+<Step n={1} title="Schultz's recordings" minutes={15} />
+
+Dopamine neurons in the ventral tegmental area and substantia nigra pars compacta fire tonically at a few spikes per second and respond to rewards with short bursts. Schultz and colleagues trained monkeys in simple tasks and found three properties. The neurons respond to unpredicted rewards; after learning, they respond to the earliest reliable predictor of reward instead; and when a predicted reward is omitted, their firing drops below baseline at the expected time. The response depends on the difference between what was received and what was expected, and on when it was expected.
+
+Later work made the case quantitative. Fiorillo, Tobler and Schultz (2003) varied reward probability: the response to the cue grew with probability while the response to the reward shrank. Bayer and Glimcher (2005) showed that firing tracks a graded positive prediction error, and Eshel and colleagues (2015) found that dopamine neurons in mice subtract expected reward from actual reward in a remarkably uniform way.
+
+<Video id="YoNbc9M92YY" title="Learning to Predict" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's introduction to temporal difference learning as a model of how animals learn to predict reward, with the dopamine data that motivated it." />
+
+<Step n={2} title="Value and the TD error" minutes={30} />
+
+Divide a trial into time steps. The **value** of the state at time $t$ is the expected sum of future rewards, discounted by $\gamma$ per step:
+
+$$
+V(t) = \mathbb E\big[r_{t+1} + \gamma r_{t+2} + \gamma^2 r_{t+3} + \cdots\big] = \mathbb E\big[r_{t+1} + \gamma V(t+1)\big].
+$$
+
+The second form, the Bellman equation, says that a good prediction now must agree with the reward that arrives next plus the prediction made one step later. The TD error measures the disagreement:
+
+$$
+\delta_t = r_{t+1} + \gamma V(t+1) - V(t),
+$$
+
+and learning moves the prediction towards removing it: $V(t) \leftarrow V(t) + \alpha\,\delta_t$. Unlike Rescorla-Wagner, the target includes a prediction, $V(t+1)$, so errors can arise from changes in expectation as well as from rewards. That is what lets a cue become rewarding.
+
+To represent time since the cue, use the **complete serial compound**: after the cue, a different feature is active at each time step, so each step has its own weight. Before the cue nothing is active and the value is zero, because the cue's timing is unpredictable.
+
+<Figure caption="TD learning of a cue that predicts reward. Each row is a trial; colour shows the TD error at each time step. Over training the error moves from the reward to the cue. Remove the reward on the last trial to see the dip." credit="Interactive figure by Engram, after Schultz, Dayan and Montague (1997).">
+  <TDError />
+</Figure>
+
+<PyCell id="td" title="The TD model of a conditioning trial" tests={String.raw`
+  import numpy as np
+  def test_early():
+      "on the first trial the error peaks at the reward"
+      assert D[0].argmax() == rt - 1 and abs(D[0].max() - 1) < 1e-9
+  def test_late():
+      "after training the error peaks at the cue and is near zero at the reward"
+      assert D[-1].argmax() == cs - 1 and D[-1].max() > 0.9 and abs(D[-1][rt - 1]) < 0.05
+`} prompt="Complete run_td: for each step t compute V(t) and V(t+1) from the features, the TD error delta[t] = r[t+1] + gamma V(t+1) - V(t), and update w by alpha delta[t] x[t]. Train for 300 trials."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  T, cs, rt = 40, 10, 30          # time steps, cue onset, reward time
+
+  def features():
+      x = np.zeros((T + 1, T))
+      for t in range(cs, T):
+          x[t, t - cs] = 1         # complete serial compound: one feature per step after the cue
+      return x
+
+  def run_td(trials=300, alpha=0.1, gamma=1.0, omit_last=False, early_last=False):
+      w = np.zeros(T); x = features(); D = []
+      for k in range(trials):
+          r = np.zeros(T + 1); r[rt] = 1
+          if k == trials - 1 and omit_last:
+              r[rt] = 0
+          if k == trials - 1 and early_last:
+              r[rt] = 0; r[rt - 5] = 1
+          delta = np.zeros(T)
+          for t in range(T):
+              ...
+          D.append(delta)
+      return w, np.array(D)
+
+  w, D = run_td()
+  print(f"first trial: error peaks at step {D[0].argmax()} (reward arrives at {rt});  last trial: peaks at step {D[-1].argmax()} (cue at {cs})")
+  plt.imshow(D, aspect="auto", cmap="RdBu_r", vmin=-1, vmax=1); plt.xlabel("time step"); plt.ylabel("trial"); plt.colorbar(); plt.show()
+`}
+hint="delta[t] = r[t + 1] + gamma * (x[t + 1] @ w) - x[t] @ w; w += alpha * delta[t] * x[t]."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  T, cs, rt = 40, 10, 30          # time steps, cue onset, reward time
+
+  def features():
+      x = np.zeros((T + 1, T))
+      for t in range(cs, T):
+          x[t, t - cs] = 1         # complete serial compound: one feature per step after the cue
+      return x
+
+  def run_td(trials=300, alpha=0.1, gamma=1.0, omit_last=False, early_last=False):
+      w = np.zeros(T); x = features(); D = []
+      for k in range(trials):
+          r = np.zeros(T + 1); r[rt] = 1
+          if k == trials - 1 and omit_last:
+              r[rt] = 0
+          if k == trials - 1 and early_last:
+              r[rt] = 0; r[rt - 5] = 1
+          delta = np.zeros(T)
+          for t in range(T):
+              delta[t] = r[t + 1] + gamma * (x[t + 1] @ w) - x[t] @ w
+              w += alpha * delta[t] * x[t]
+          D.append(delta)
+      return w, np.array(D)
+
+  w, D = run_td()
+  print(f"first trial: error peaks at step {D[0].argmax()} (reward arrives at {rt});  last trial: peaks at step {D[-1].argmax()} (cue at {cs})")
+  plt.imshow(D, aspect="auto", cmap="RdBu_r", vmin=-1, vmax=1); plt.xlabel("time step"); plt.ylabel("trial"); plt.colorbar(); plt.show()
+`} />
+
+On the first trial the only error is at the reward, of size 1, exactly as in Rescorla-Wagner. Over training, the error creeps backwards one step per trial or so, because each step's value is learned from the next step's, until it reaches the cue. There it stops: the step before the cue has no feature and so no value, and the cue's arrival is a jump in expectation from 0 to 1. After training the error at the cue is about 1 and at the reward about 0. Recordings have since found this gradual backward shift in some conditions (Amo and colleagues, 2022), though in many data sets the response seems to move to the cue without passing through the intermediate times, which is one argument for richer timing representations.
+
+<Step n={3} title="The three panels" minutes={35} />
+
+Schultz's famous figure has three rows: reward without a cue, cue then reward after learning, and cue then omitted reward. You have the first two. Now omit the reward on the last trial, and, separately, deliver it early.
+
+<PyCell id="omit" title="Omission and early reward" tests={String.raw`
+  import numpy as np
+  def test_omit():
+      "omission: positive error at the cue and a dip of about -1 at the expected reward time"
+      d = D_omit[-1]
+      assert d[cs - 1] > 0.9 and d[rt - 1] < -0.9
+  def test_early_reward():
+      "early reward: a burst at the early time and a dip at the usual time"
+      d = D_early[-1]
+      assert d[rt - 6] > 0.5 and d[rt - 1] < -0.5
+`} prompt="Run run_td with omit_last=True and with early_last=True, and plot the last trial's error for each next to the normal last trial."
+code={String.raw`
+  _, D_omit = ...
+  _, D_early = ...
+  for nm, d in [("normal", D[-1]), ("omitted", D_omit[-1]), ("early", D_early[-1])]:
+      print(f"{nm:8s} cue {d[cs - 1]:+.2f}, early time {d[rt - 6]:+.2f}, usual reward time {d[rt - 1]:+.2f}")
+  fig, ax = plt.subplots(3, 1, sharex=True, figsize=(6, 5))
+  for a, (nm, d) in zip(ax, [("cue, reward", D[-1]), ("cue, no reward", D_omit[-1]), ("cue, early reward", D_early[-1])]):
+      a.bar(range(T), d); a.set_ylabel(nm, rotation=0, ha="right")
+  ax[-1].set_xlabel("time step"); plt.show()
+`}
+hint="_, D_omit = run_td(omit_last=True); _, D_early = run_td(early_last=True)."
+solution={String.raw`
+  _, D_omit = run_td(omit_last=True)
+  _, D_early = run_td(early_last=True)
+  for nm, d in [("normal", D[-1]), ("omitted", D_omit[-1]), ("early", D_early[-1])]:
+      print(f"{nm:8s} cue {d[cs - 1]:+.2f}, early time {d[rt - 6]:+.2f}, usual reward time {d[rt - 1]:+.2f}")
+  fig, ax = plt.subplots(3, 1, sharex=True, figsize=(6, 5))
+  for a, (nm, d) in zip(ax, [("cue, reward", D[-1]), ("cue, no reward", D_omit[-1]), ("cue, early reward", D_early[-1])]):
+      a.bar(range(T), d); a.set_ylabel(nm, rotation=0, ha="right")
+  ax[-1].set_xlabel("time step"); plt.show()
+`} />
+
+Omitting the reward leaves the cue burst unchanged and produces an error of -1 at the time the reward was due: the dip in Schultz's third panel. The model knows when the reward should have come because each time step has its own learned value. Delivering the reward 5 steps early gives a burst at the early time, which is what Hollerman and Schultz (1998) found. But the model also predicts a dip at the usual time, and the neurons showed none: once the reward has arrived, real animals do not keep expecting it. A state representation that knows the reward has already happened, such as a belief state over hidden task states (Daw, Courville and Touretzky, 2006; Starkweather and colleagues, 2017), removes the false dip.
+
+<Step n={4} title="Discounting and probability" minutes={25} />
+
+Two parameters shape the model's predictions. The discount factor $\gamma$ makes the value ramp up towards the reward: a cue far from the reward is worth less. And if the reward arrives with probability $p$, the learned value at the cue becomes $p$, so the cue response grows with $p$ while the reward response, $1 - p$, shrinks, as Fiorillo and colleagues found.
+
+<PyCell id="prob" title="Reward probability" tests={String.raw`
+  import numpy as np
+  def test_cue():
+      "the average cue response grows with reward probability, close to p"
+      assert all(abs(cue_resp[p] - p) < 0.1 for p in cue_resp)
+  def test_reward():
+      "the average response on rewarded trials falls with p, close to 1 - p"
+      assert all(abs(rew_resp[p] - (1 - p)) < 0.1 for p in rew_resp)
+`} prompt="Write run_prob(p): like run_td but the reward arrives with probability p on each trial. Train for 1000 trials and average the cue response over the last 300 trials, and the reward-time response over the last 300 rewarded trials."
+code={String.raw`
+  rng = np.random.default_rng(2003)
+
+  def run_prob(p, trials=1000, alpha=0.05):
+      w = np.zeros(T); x = features(); cue, rew = [], []
+      for k in range(trials):
+          rewarded = rng.random() < p
+          r = np.zeros(T + 1); r[rt] = float(rewarded)
+          delta = np.zeros(T)
+          for t in range(T):
+              delta[t] = r[t + 1] + x[t + 1] @ w - x[t] @ w
+              w += alpha * delta[t] * x[t]
+          if k >= trials - 300:
+              ...
+      return np.mean(cue), np.mean(rew)
+
+  cue_resp, rew_resp = {}, {}
+  for p in [0.25, 0.5, 0.75]:
+      cue_resp[p], rew_resp[p] = run_prob(p)
+      print(f"p = {p}: cue response {cue_resp[p]:.2f}, response to delivered reward {rew_resp[p]:.2f}")
+`}
+hint="cue.append(delta[cs - 1]); if rewarded: rew.append(delta[rt - 1])."
+solution={String.raw`
+  rng = np.random.default_rng(2003)
+
+  def run_prob(p, trials=1000, alpha=0.05):
+      w = np.zeros(T); x = features(); cue, rew = [], []
+      for k in range(trials):
+          rewarded = rng.random() < p
+          r = np.zeros(T + 1); r[rt] = float(rewarded)
+          delta = np.zeros(T)
+          for t in range(T):
+              delta[t] = r[t + 1] + x[t + 1] @ w - x[t] @ w
+              w += alpha * delta[t] * x[t]
+          if k >= trials - 300:
+              cue.append(delta[cs - 1])
+              if rewarded:
+                  rew.append(delta[rt - 1])
+      return np.mean(cue), np.mean(rew)
+
+  cue_resp, rew_resp = {}, {}
+  for p in [0.25, 0.5, 0.75]:
+      cue_resp[p], rew_resp[p] = run_prob(p)
+      print(f"p = {p}: cue response {cue_resp[p]:.2f}, response to delivered reward {rew_resp[p]:.2f}")
+`} />
+
+The cue response comes out near $p$ (0.20, 0.47 and 0.74 for $p$ of 0.25, 0.5 and 0.75) and the response to a delivered reward near $1 - p$, the pattern Fiorillo and colleagues reported. The small shortfalls are the cost of a constant learning rate, which keeps the value fluctuating trial by trial around $p$. Fiorillo and colleagues also found a slow ramp of activity between cue and reward that was largest at $p = 0.5$, where uncertainty is greatest; whether that ramp reflects uncertainty or is an artefact of averaging TD errors has been debated (Niv, Duff and Dayan, 2005).
+
+<Callout kind="research">
+
+The TD account is powerful but contested in its details. Dopamine concentration in the striatum ramps up as rats approach a goal (Howe and colleagues, 2013), which a simple TD error does not predict but which may reflect value or a TD error with particular state representations (Kim and colleagues, 2020). Dopamine neurons also respond to novel and salient non-rewarding events, and some subpopulations encode movement or threat. And causal manipulations now test the theory directly: optogenetically stimulating dopamine neurons at the time of an expected reward can unblock learning, as a prediction error should (Steinberg and colleagues, 2013).
+
+</Callout>
+
+<Bridge title="An algorithm found in the brain"
+  neuro="Phasic dopamine reports a reward prediction error with the timing, sign and scaling of the TD error, and it modulates plasticity in the striatum (Week 42, Day 5). This made reinforcement learning a theory of a specific circuit."
+  ai="TD learning, developed by Sutton (1988), underlies TD-Gammon, Q-learning and deep Q-networks, and actor-critic methods use the TD error to train both value and policy. Few algorithms have such direct neural counterparts.">
+
+Dopamine neurons report the difference between what happened, plus what is now expected, and what was expected a moment ago.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Before learning, dopamine neurons burst at...", options: ["The reward", "The cue", "Neither", "Both equally"], answer: 0, explain: "The reward is unpredicted." },
+  { q: "After learning, they burst at...", options: ["The cue", "The reward", "The end of the trial", "Random times"], answer: 0, explain: "The earliest predictor." },
+  { q: "When a predicted reward is omitted, they...", options: ["Pause at the expected time", "Burst at the expected time", "Do nothing", "Burst at the cue only"], answer: 0, explain: "Negative prediction error." },
+  { q: "The TD error is...", options: ["r + γV(t+1) − V(t)", "r − V(t)", "V(t+1) − V(t)", "r + V(t)"], answer: 0, explain: "Reward plus discounted next value minus current value." },
+  { q: "The complete serial compound represents...", options: ["Time since the cue with a separate feature per step", "The reward size", "The cue identity only", "Space"], answer: 0, explain: "So each moment has its own value." },
+  { q: "Why is there no error before the cue after learning?", options: ["The cue's timing is unpredictable, so pre-cue value is zero", "The learning rate is zero", "The reward is absent", "γ = 0"], answer: 0, explain: "Value jumps at the unpredictable cue." },
+  { q: "With reward probability p, the cue response is about...", options: ["p", "1 − p", "1", "0"], answer: 0, explain: "Fiorillo, Tobler and Schultz (2003)." },
+  { q: "The response to a delivered reward with probability p is about...", options: ["1 − p", "p", "1", "0"], answer: 0, explain: "The surprise remaining." },
+]} />
+
+<Flashcards cards={[
+  { front: "TD error?", back: "$\\delta_t = r_{t+1} + \\gamma V(t+1) - V(t)$." },
+  { front: "Bellman equation?", back: "$V(t) = \\mathbb E[r_{t+1} + \\gamma V(t+1)]$: a consistent prediction equals the next reward plus the next prediction." },
+  { front: "Three dopamine panels?", back: "Unpredicted reward: burst at reward. Predicted reward: burst at cue only. Omitted reward: burst at cue, dip at expected time." },
+  { front: "Complete serial compound?", back: "A different feature for each time step after the cue, so value can be learned at each moment." },
+  { front: "Reward probability and dopamine?", back: "Cue response grows as $p$; reward response falls as $1 - p$." },
+]} />
+
+<Predict revisit question="Juice comes half a second early and not at the usual time. What happens at the early time and at the usual time?" />
+
+<Key title="Before you go">
+<ul>
+<li>Value is expected discounted future reward, defined recursively by the Bellman equation.</li>
+<li>The TD error includes the change in prediction, so cues can carry reward.</li>
+<li>TD reproduces the transfer to the cue, the omission dip and the probability scaling of dopamine responses.</li>
+<li>The fit is close but not complete: ramps, novelty and heterogeneity remain.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Schultz, Dayan and Montague (1997), <em>A neural substrate of prediction and reward</em>.</li>
+<li>Fiorillo, Tobler and Schultz (2003), <em>Discrete coding of reward probability and uncertainty by dopamine neurons</em>, Science 299(5614), 1898 to 1902.</li>
+<li>Sutton and Barto (2018), <em>Reinforcement Learning: An Introduction</em>, 2nd edition, MIT Press, Chapter 6, free from the authors' website.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="In the complete serial compound, the brain is assumed to have a perfect clock after the cue. Real interval timing is noisy, and noise grows with the interval. Predict how that would change the dopamine response at the time of a fully predicted reward that comes long after the cue, and how you would test it." />

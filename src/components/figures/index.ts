@@ -199,3 +199,8 @@ export { GridCell } from "./grid-cell";
 export { RingAttractor } from "./ring-attractor";
 export { PatternSeparation } from "./pattern-separation";
 export { InterferenceReplay } from "./interference-replay";
+export { RescorlaWagner } from "./rescorla-wagner";
+export { TDError } from "./td-error";
+export { BanditStrategies } from "./bandit-strategies";
+export { GridworldQ } from "./gridworld-q";
+export { DistributionalTD } from "./distributional-td";

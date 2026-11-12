@@ -1,0 +1,205 @@
+export const meta = {
+  title: "Learning from surprise: the Rescorla-Wagner model",
+  intro: "Pavlov's dogs learned that a bell predicts food. For decades it was assumed that pairing alone drives such learning: present two things together often enough and they become associated. In 1968 Leon Kamin showed that this is wrong. If one cue already predicts the food, a second cue added alongside it is learned about hardly at all, even though it is paired with food on every trial. Learning happens only when the outcome is surprising. Rescorla and Wagner turned that insight into a model in 1972, and its central quantity, the prediction error, is the thread that runs through this week, from the firing of dopamine neurons to the algorithms that train game-playing agents.",
+  goals: [
+    "Write the Rescorla-Wagner rule and explain the role of the prediction error",
+    "Simulate acquisition, extinction and blocking",
+    "Show that the rule is the delta rule, gradient descent on squared prediction error",
+    "Recognise what the model cannot explain",
+  ],
+  plan: [
+    { label: "Predict and conditioning", minutes: 15 },
+    { label: "The Rescorla-Wagner rule", minutes: 30 },
+    { label: "Blocking and overexpectation", minutes: 35 },
+    { label: "Limits of the model", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "niv-2009",
+};
+
+<Predict question="A light is paired with food until the animal fully expects food after the light. Then a tone is added, and light plus tone are paired with food for many more trials. Tested alone, how strongly will the tone predict food?" />
+
+<Step n={1} title="Conditioning" minutes={15} />
+
+In classical (Pavlovian) conditioning a neutral **conditioned stimulus** (CS), such as a tone, is followed by an **unconditioned stimulus** (US), such as food, that produces a response by itself. After pairings, the CS alone produces a conditioned response. In instrumental conditioning the animal's own action is followed by the outcome; that is the subject of Days 3 and 4.
+
+Kamin's blocking experiment (1968) is the key result. Rats first learned that a noise predicted a shock. Then noise and light together were followed by the same shock. Tested alone, the light produced almost no fear. Pairing was not enough: the light added no new information, and so it was not learned. Rescorla (1968) showed a related point from the other side: a tone paired with shock is not learned if shocks are just as likely without the tone. Animals learn about **contingency** and **surprise**, not co-occurrence.
+
+<Video id="fz5T2QhUjbY" title="Reinforcement Learning: Introduction" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's opening to its reinforcement learning day: learning from rewards, prediction errors and the link to dopamine, which frame this week." />
+
+<Step n={2} title="The Rescorla-Wagner rule" minutes={30} />
+
+Let each stimulus $i$ have an associative strength $V_i$. On a trial with stimuli present ($x_i = 1$) and outcome $r$, the animal's prediction is the sum of the strengths of the stimuli present, and every present stimulus changes in proportion to the shared error:
+
+$$
+\delta = r - \sum_i V_i x_i, \qquad \Delta V_i = \alpha\, \delta\, x_i.
+$$
+
+Because the error is shared, stimuli compete for the available prediction. This is the delta rule of Widrow and Hoff (1960), and it is gradient descent on $\tfrac12\delta^2$, the same learning rule as the linear network of Week 43 and, with nonlinear units, the root of backpropagation.
+
+<Figure caption="The Rescorla-Wagner model. Choose a schedule (acquisition then extinction, blocking, or overexpectation) and a learning rate, and watch the associative strengths of two cues trial by trial." credit="Interactive figure by Engram, after Rescorla and Wagner (1972).">
+  <RescorlaWagner />
+</Figure>
+
+<PyCell id="rw" title="Acquisition and extinction" tests={String.raw`
+  import numpy as np
+  def test_acquire():
+      "after 50 rewarded trials the light's strength is above 0.99"
+      assert hist[49, 0] > 0.99
+  def test_extinguish():
+      "after 50 unrewarded trials it is below 0.01"
+      assert hist[-1, 0] < 0.01
+  def test_curve():
+      "the first trial raises V by exactly alpha"
+      assert abs(hist[0, 0] - 0.2) < 1e-9
+`} prompt="Write rw(trials, alpha): trials is a list of (x, r) pairs, where x is a vector of which cues are present. Compute the prediction error, update V, and return the final V and the history of V after each trial."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def rw(trials, alpha=0.2, n_cues=2):
+      V = np.zeros(n_cues); hist = []
+      for x, r in trials:
+          x = np.asarray(x, float)
+          ...
+          hist.append(V.copy())
+      return V, np.array(hist)
+
+  light = [1, 0]
+  V, hist = rw([(light, 1)] * 50 + [(light, 0)] * 50)
+  print(f"after acquisition V_light = {hist[49, 0]:.3f}; after extinction V_light = {hist[-1, 0]:.4f}")
+  plt.plot(hist[:, 0]); plt.axvline(50, color="k", ls=":"); plt.xlabel("trial"); plt.ylabel("V (light)"); plt.show()
+`}
+hint="delta = r - V @ x; V += alpha * delta * x."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def rw(trials, alpha=0.2, n_cues=2):
+      V = np.zeros(n_cues); hist = []
+      for x, r in trials:
+          x = np.asarray(x, float)
+          delta = r - V @ x
+          V += alpha * delta * x
+          hist.append(V.copy())
+      return V, np.array(hist)
+
+  light = [1, 0]
+  V, hist = rw([(light, 1)] * 50 + [(light, 0)] * 50)
+  print(f"after acquisition V_light = {hist[49, 0]:.3f}; after extinction V_light = {hist[-1, 0]:.4f}")
+  plt.plot(hist[:, 0]); plt.axvline(50, color="k", ls=":"); plt.xlabel("trial"); plt.ylabel("V (light)"); plt.show()
+`} />
+
+The first rewarded trial raises $V$ by exactly $\alpha = 0.2$, the next by $0.2 \times 0.8 = 0.16$, and so on: learning is fast when the outcome is surprising and slows as it becomes expected, giving the negatively accelerated curve seen in conditioning experiments. Extinction is the same process in reverse, driven by negative errors when the food fails to arrive.
+
+<Step n={3} title="Blocking and overexpectation" minutes={35} />
+
+<PyCell id="block" title="Competition for prediction" tests={String.raw`
+  import numpy as np
+  def test_block():
+      "after pretraining on the light, the tone gains less than 0.01"
+      assert V_block[1] < 0.01
+  def test_control():
+      "without pretraining, light and tone share the prediction equally"
+      assert abs(V_ctrl[0] - 0.5) < 0.01 and abs(V_ctrl[1] - 0.5) < 0.01
+  def test_over():
+      "overexpectation: two cues each trained to 1, then trained together to 1, both fall below 0.6"
+      assert V_over[0] < 0.6 and V_over[1] < 0.6
+`} prompt="Simulate three designs with rw: blocking (light alone rewarded 50 trials, then light plus tone rewarded 50), the control (light plus tone rewarded 50 trials), and overexpectation (light alone rewarded 50, tone alone rewarded 50, then both together rewarded 50)."
+code={String.raw`
+  tone, both = [0, 1], [1, 1]
+  V_block, _ = ...
+  V_ctrl, _ = ...
+  V_over, h_over = ...
+  print(f"blocking: light {V_block[0]:.3f}, tone {V_block[1]:.4f}")
+  print(f"control:  light {V_ctrl[0]:.3f}, tone {V_ctrl[1]:.3f}")
+  print(f"overexpectation: light {V_over[0]:.3f}, tone {V_over[1]:.3f}")
+`}
+hint="V_block, _ = rw([(light, 1)] * 50 + [(both, 1)] * 50); V_ctrl, _ = rw([(both, 1)] * 50); V_over, h_over = rw([(light, 1)] * 50 + [(tone, 1)] * 50 + [(both, 1)] * 50)."
+solution={String.raw`
+  tone, both = [0, 1], [1, 1]
+  V_block, _ = rw([(light, 1)] * 50 + [(both, 1)] * 50)
+  V_ctrl, _ = rw([(both, 1)] * 50)
+  V_over, h_over = rw([(light, 1)] * 50 + [(tone, 1)] * 50 + [(both, 1)] * 50)
+  print(f"blocking: light {V_block[0]:.3f}, tone {V_block[1]:.4f}")
+  print(f"control:  light {V_ctrl[0]:.3f}, tone {V_ctrl[1]:.3f}")
+  print(f"overexpectation: light {V_over[0]:.3f}, tone {V_over[1]:.3f}")
+`} />
+
+After pretraining, the light predicts food perfectly, the error on compound trials is zero, and the tone learns nothing: blocking. Without pretraining, the two cues split the prediction between them. Overexpectation is the most striking prediction because it is counter-intuitive: two cues that each predict food perfectly, rewarded together on every trial, both get weaker, because together they predict two units of food and only one arrives. Rescorla confirmed this in rats, a success for a model that was built before the experiment was done.
+
+<Step n={4} title="Limits of the model" minutes={25} />
+
+Rescorla-Wagner explains a great deal with one line, which is why it is still the starting point. But several findings fall outside it.
+
+- **Latent inhibition.** Pre-exposing a CS without any outcome slows later learning about it. In the model nothing happens on those trials ($\delta = 0$ when $V = 0$ and $r = 0$), so pre-exposure should have no effect. Models in which attention to a cue changes with experience (Mackintosh, 1975; Pearce and Hall, 1980) explain it.
+- **Extinction is not unlearning.** After extinction, the response comes back with time (spontaneous recovery), in a different context (renewal) or after an unsignalled US (reinstatement). In the model, extinction drives $V$ back to zero and the memory is gone. Bouton's work showed that extinction is new learning, specific to context, laid over the old association. The two-rate model of Week 41 is one way to get spontaneous recovery.
+- **Timing within a trial.** The model treats a trial as a single event. It cannot say when within a trial the US is expected, or explain second-order conditioning, in which a cue paired with another predictive cue becomes predictive itself. Tomorrow's temporal difference model fixes both.
+
+<PyCell id="latent" title="What the model misses" tests={String.raw`
+  import numpy as np
+  def test_no_latent():
+      "in Rescorla-Wagner, 50 unrewarded pre-exposures leave learning unchanged"
+      assert np.allclose(h_pre[50:], h_fresh)
+`} prompt="Compare learning about the light after 50 pre-exposure trials (light alone, no reward) with learning from scratch: the 50 rewarded trials should give identical curves in the model, which is the prediction latent inhibition refutes."
+code={String.raw`
+  _, h_pre = ...
+  _, h_fresh = ...
+  print("largest difference between the two learning curves:", np.abs(h_pre[50:] - h_fresh).max())
+`}
+hint="_, h_pre = rw([(light, 0)] * 50 + [(light, 1)] * 50); _, h_fresh = rw([(light, 1)] * 50)."
+solution={String.raw`
+  _, h_pre = rw([(light, 0)] * 50 + [(light, 1)] * 50)
+  _, h_fresh = rw([(light, 1)] * 50)
+  print("largest difference between the two learning curves:", np.abs(h_pre[50:] - h_fresh).max())
+`} />
+
+The two curves are identical: pre-exposure changes nothing in the model, while real animals learn more slowly about a familiar cue. A model is most useful when you know exactly where it breaks.
+
+<Bridge title="One error signal, many uses"
+  neuro="The prediction error explains blocking, overexpectation and conditioned inhibition, and it is the quantity that midbrain dopamine neurons appear to report (Day 2). Its limits point to attention, context and timing as additional ingredients."
+  ai="The Rescorla-Wagner rule is the least-mean-squares or delta rule, and with hidden layers it becomes backpropagation. Blocking-like competition between features appears whenever several inputs jointly predict a target under a squared loss.">
+
+Learning is driven by the difference between what happened and what was expected.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Kamin's blocking shows that...", options: ["A cue paired with an already predicted outcome is learned about little", "Pairing alone produces learning", "Two cues always share learning equally", "Animals cannot learn about compounds"], answer: 0, explain: "Learning needs surprise." },
+  { q: "In Rescorla-Wagner, the prediction error is...", options: ["The outcome minus the summed strengths of present cues", "The outcome alone", "Each cue's own error", "The learning rate"], answer: 0, explain: "A shared error." },
+  { q: "On the first rewarded trial with α = 0.2, V rises by...", options: ["0.2", "1", "0.04", "0.5"], answer: 0, explain: "αδ with δ = 1." },
+  { q: "In the control design, light and tone each end near...", options: ["0.5", "1", "0", "0.25"], answer: 0, explain: "They share the prediction." },
+  { q: "Overexpectation predicts that training two fully predictive cues together...", options: ["Reduces both", "Increases both", "Leaves them unchanged", "Blocks one"], answer: 0, explain: "Summed prediction 2 exceeds the outcome 1." },
+  { q: "Rescorla-Wagner is mathematically the...", options: ["Delta rule, gradient descent on squared error", "Hebb rule", "BCM rule", "Oja rule"], answer: 0, explain: "Widrow and Hoff (1960)." },
+  { q: "Latent inhibition is a problem for the model because...", options: ["Pre-exposure with no outcome produces no error and so no change", "It predicts too much learning", "It needs dopamine", "It is about timing"], answer: 0, explain: "δ = 0 on pre-exposure trials." },
+  { q: "Spontaneous recovery after extinction suggests...", options: ["Extinction is new learning rather than erasure", "Extinction erases the memory", "The learning rate is too small", "No learning occurred"], answer: 0, explain: "Bouton." },
+]} />
+
+<Flashcards cards={[
+  { front: "Rescorla-Wagner rule?", back: "$\\delta = r - \\sum_i V_i x_i$, $\\Delta V_i = \\alpha\\delta x_i$." },
+  { front: "Blocking?", back: "A cue added to an already predictive cue gains little strength, because the outcome is no longer surprising." },
+  { front: "Overexpectation?", back: "Two separately trained cues presented together predict too much, so both lose strength." },
+  { front: "Why RW is gradient descent?", back: "$\\partial(\\tfrac12\\delta^2)/\\partial V_i = -\\delta x_i$, so $\\Delta V_i = \\alpha\\delta x_i$ descends the squared error." },
+  { front: "Three things RW cannot explain?", back: "Latent inhibition, recovery after extinction, and timing or second-order conditioning." },
+]} />
+
+<Predict revisit question="After the light fully predicts food, light plus tone are paired with food. How much does the tone predict alone?" />
+
+<Key title="Before you go">
+<ul>
+<li>Learning is driven by prediction error, not by pairing.</li>
+<li>Cues compete for a shared prediction, giving blocking and overexpectation.</li>
+<li>The rule is the delta rule, gradient descent on squared error.</li>
+<li>Attention, context and timing lie outside the model.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Niv (2009), <em>Reinforcement learning in the brain</em>, a review that takes you from Rescorla-Wagner to dopamine and the basal ganglia; read Sections 1 and 2 today.</li>
+<li>Rescorla and Wagner (1972), <em>A theory of Pavlovian conditioning: variations in the effectiveness of reinforcement and nonreinforcement</em>, in Black and Prokasy (eds), Classical Conditioning II, 64 to 99.</li>
+<li>Bouton (2004), <em>Context and behavioral processes in extinction</em>, Learning and Memory 11(5), 485 to 494.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Think of something you learned without noticing because it was always accompanied by a cue you already relied on. Describe it as a blocking experiment, and suggest how you could test whether you had actually learned the second cue." />

@@ -1,0 +1,285 @@
+export const meta = {
+  title: "Forge: Week 44 challenge, quiz and deep read",
+  intro: "This week traced one quantity, the reward prediction error, from Rescorla and Wagner's equations through Schultz's dopamine recordings to the basal ganglia, and then beyond the mean to distributions and models of the world. Today's challenge applies the week's tools as an analyst would. First, fit two learning models to a participant's choices, one with and one without a tendency to repeat the last choice, and let model comparison decide between them. Second, take the reversal points of a population of simulated dopamine neurons and decode the reward distribution they encode, as Dabney and colleagues did. Then the quiz, and a critique of the paper that tied dopamine to temporal difference learning.",
+  goals: [
+    "Fit and compare learning models with AIC and BIC",
+    "Recognise how choice perseveration distorts fitted parameters",
+    "Decode a reward distribution from a set of expectiles",
+    "Critique the evidence linking dopamine to TD errors",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "schultz-1997",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. Rescorla-Wagner with $\alpha = 0.25$: after three rewarded trials from $V = 0$, what is $V$?
+2. A cue predicts reward with probability 0.6. After learning, what is the TD error when the reward is delivered, and when it is omitted?
+3. An option pays 1 with probability 0.5. With $\alpha^+ = 0.2$ and $\alpha^- = 0.1$, where does its learned value settle?
+
+<PyCell code={String.raw`
+  V = 0
+  for _ in range(3):
+      V += 0.25 * (1 - V)
+  print("1.", V)
+  print("2. delivered", 1 - 0.6, " omitted", -0.6)
+  print("3.", round(0.5 * 0.2 / (0.5 * 0.2 + 0.5 * 0.1), 3))
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: perseveration and model comparison.** A participant plays a two-armed bandit with probabilities 0.7 and 0.3 that swap every 100 trials, for 400 trials. Unknown to you, they learn with $\alpha = 0.3$, choose with $\beta = 4$, and have a tendency $\kappa = 1.5$ to repeat their previous choice, added to the chosen option's utility. Fit a basic model ($\alpha$, $\beta$) and a sticky model ($\alpha$, $\beta$, $\kappa$) and compare them with
+
+$$
+\text{AIC} = 2\,\text{NLL} + 2k, \qquad \text{BIC} = 2\,\text{NLL} + k\ln n,
+$$
+
+where $k$ is the number of parameters and $n$ the number of choices. Lower is better.
+
+<PyCell id="partA" title="Part A: a sticky participant" tests={String.raw`
+  import numpy as np
+  def test_compare():
+      "both AIC and BIC prefer the sticky model"
+      assert aic["sticky"] < aic["basic"] and bic["sticky"] < bic["basic"]
+  def test_recover():
+      "the sticky model recovers kappa within 0.5 and beta within 1"
+      assert abs(fits["sticky"].x[2] - 1.5) < 0.5 and abs(fits["sticky"].x[1] - 4.0) < 1.0
+  def test_bias():
+      "the basic model overestimates beta, absorbing the stickiness"
+      assert fits["basic"].x[1] > fits["sticky"].x[1] + 1
+`} prompt="Write nll(par, ch, rw, sticky): utilities are beta Q plus kappa for the previously chosen option (kappa = 0 when sticky is False). Fit both models with L-BFGS-B and compute AIC and BIC."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+
+  def simulate(alpha, beta, kappa, T=400, seed=1):
+      g = np.random.default_rng(seed); p = np.array([0.7, 0.3]); Q = np.zeros(2); prev = -1; ch, rw = [], []
+      for t in range(T):
+          if t % 100 == 0 and t > 0:
+              p = p[::-1]
+          stick = np.zeros(2)
+          if prev >= 0:
+              stick[prev] = 1
+          u = beta * Q + kappa * stick
+          a = int(g.random() < 1 / (1 + np.exp(-(u[1] - u[0])))); rr = float(g.random() < p[a])
+          Q[a] += alpha * (rr - Q[a]); prev = a; ch.append(a); rw.append(rr)
+      return np.array(ch), np.array(rw)
+
+  def nll(par, ch, rw, sticky=True):
+      alpha, beta = par[0], par[1]; kappa = par[2] if sticky else 0.0
+      Q = np.zeros(2); prev = -1; L = 0.0
+      for a, rr in zip(ch, rw):
+          ...
+      return L
+
+  ch, rw = simulate(0.3, 4.0, 1.5)
+  n = len(ch)
+  fits = {"basic": minimize(nll, [0.5, 3], args=(ch, rw, False), method="L-BFGS-B", bounds=[(0.01, 0.99), (0.1, 20)]),
+          "sticky": minimize(nll, [0.5, 3, 0], args=(ch, rw, True), method="L-BFGS-B", bounds=[(0.01, 0.99), (0.1, 20), (-5, 5)])}
+  k = {"basic": 2, "sticky": 3}
+  aic = {m: ... for m in fits}
+  bic = {m: ... for m in fits}
+  for m in fits:
+      print(f"{m:6s} params {np.round(fits[m].x, 2)}, NLL {fits[m].fun:.1f}, AIC {aic[m]:.1f}, BIC {bic[m]:.1f}")
+`}
+hint="In the loop: s = np.zeros(2); if prev >= 0: s[prev] = 1; u = beta * Q + kappa * s; L -= u[a] - np.logaddexp(u[0], u[1]); then update Q[a] and prev. AIC: 2 * fits[m].fun + 2 * k[m]; BIC: 2 * fits[m].fun + k[m] * np.log(n)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+
+  def simulate(alpha, beta, kappa, T=400, seed=1):
+      g = np.random.default_rng(seed); p = np.array([0.7, 0.3]); Q = np.zeros(2); prev = -1; ch, rw = [], []
+      for t in range(T):
+          if t % 100 == 0 and t > 0:
+              p = p[::-1]
+          stick = np.zeros(2)
+          if prev >= 0:
+              stick[prev] = 1
+          u = beta * Q + kappa * stick
+          a = int(g.random() < 1 / (1 + np.exp(-(u[1] - u[0])))); rr = float(g.random() < p[a])
+          Q[a] += alpha * (rr - Q[a]); prev = a; ch.append(a); rw.append(rr)
+      return np.array(ch), np.array(rw)
+
+  def nll(par, ch, rw, sticky=True):
+      alpha, beta = par[0], par[1]; kappa = par[2] if sticky else 0.0
+      Q = np.zeros(2); prev = -1; L = 0.0
+      for a, rr in zip(ch, rw):
+          s = np.zeros(2)
+          if prev >= 0:
+              s[prev] = 1
+          u = beta * Q + kappa * s
+          L -= u[a] - np.logaddexp(u[0], u[1])
+          Q[a] += alpha * (rr - Q[a]); prev = a
+      return L
+
+  ch, rw = simulate(0.3, 4.0, 1.5)
+  n = len(ch)
+  fits = {"basic": minimize(nll, [0.5, 3], args=(ch, rw, False), method="L-BFGS-B", bounds=[(0.01, 0.99), (0.1, 20)]),
+          "sticky": minimize(nll, [0.5, 3, 0], args=(ch, rw, True), method="L-BFGS-B", bounds=[(0.01, 0.99), (0.1, 20), (-5, 5)])}
+  k = {"basic": 2, "sticky": 3}
+  aic = {m: 2 * fits[m].fun + 2 * k[m] for m in fits}
+  bic = {m: 2 * fits[m].fun + k[m] * np.log(n) for m in fits}
+  for m in fits:
+      print(f"{m:6s} params {np.round(fits[m].x, 2)}, NLL {fits[m].fun:.1f}, AIC {aic[m]:.1f}, BIC {bic[m]:.1f}")
+`} />
+
+The sticky model fits far better: its negative log-likelihood is about 30 units lower, which more than pays for the extra parameter under either criterion. It recovers $\kappa \approx 1.3$ and $\beta \approx 3.7$, close to the truth. The basic model is not merely worse; it is wrong in a misleading way. With no other way to explain runs of repeated choices, it inflates $\beta$ to 5.6, so a perseverative participant looks like an unusually consistent value-maximiser. Comparing groups on such a $\beta$ would confuse two different traits.
+
+**Part B: decoding a distribution from dopamine neurons.** Suppose nineteen dopamine neurons have asymmetries $\tau$ from 0.05 to 0.95, and their reversal points are the expectiles $E_\tau$ of the reward distribution. Find 50 samples $z_1, \dots, z_{50}$ whose expectiles match: minimise
+
+$$
+\sum_\tau \Big(\tau\,\overline{(z - E_\tau)_+} - (1 - \tau)\,\overline{(E_\tau - z)_+}\Big)^2,
+$$
+
+where the bars are averages over the samples. Use five random starts and keep the best.
+
+<PyCell id="partB" title="Part B: imputing the distribution" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "the best imputation matches the expectiles almost exactly"
+      assert best.fun < 1e-4
+  def test_shape():
+      "the decoded distribution puts about 30% of its mass in the low mode and has the right mean"
+      assert abs(np.mean(z < 3.5) - 0.3) < 0.1 and abs(z.mean() - E[9]) < 0.15
+`} prompt="Write loss(z) as above, then run scipy.optimize.minimize from five random starting sets of 50 samples (uniform between the smallest and largest expectile) and keep the best."
+code={String.raw`
+  g = np.random.default_rng(7)
+  xs = np.where(g.random(200000) < 0.3, g.normal(1, 0.3, 200000), g.normal(6, 0.8, 200000))
+  taus = np.linspace(0.05, 0.95, 19)
+
+  def expectiles(samples):
+      out = []
+      for tau in taus:
+          lo, hi = samples.min(), samples.max()
+          for _ in range(40):
+              m = (lo + hi) / 2
+              f = tau * np.mean(np.maximum(samples - m, 0)) - (1 - tau) * np.mean(np.maximum(m - samples, 0))
+              lo, hi = (m, hi) if f > 0 else (lo, m)
+          out.append(m)
+      return np.array(out)
+
+  E = expectiles(xs)                       # the "reversal points" of nineteen neurons
+
+  def loss(z):
+      ...
+
+  best = None
+  for k_ in range(5):
+      res = minimize(loss, g.uniform(E.min(), E.max(), 50), method="L-BFGS-B")
+      if best is None or res.fun < best.fun:
+          best = res
+  z = best.x
+  print(f"loss {best.fun:.2e}; fraction of decoded samples below 3.5: {np.mean(z < 3.5):.2f}; decoded mean {z.mean():.2f} (true {xs.mean():.2f})")
+  plt.hist(xs, 80, density=True, alpha=0.4, label="true"); plt.hist(z, 20, density=True, alpha=0.6, label="decoded"); plt.legend(); plt.show()
+`}
+hint="d = z[None, :] - E[:, None]; f = taus * np.mean(np.maximum(d, 0), 1) - (1 - taus) * np.mean(np.maximum(-d, 0), 1); return np.sum(f ** 2)."
+solution={String.raw`
+  g = np.random.default_rng(7)
+  xs = np.where(g.random(200000) < 0.3, g.normal(1, 0.3, 200000), g.normal(6, 0.8, 200000))
+  taus = np.linspace(0.05, 0.95, 19)
+
+  def expectiles(samples):
+      out = []
+      for tau in taus:
+          lo, hi = samples.min(), samples.max()
+          for _ in range(40):
+              m = (lo + hi) / 2
+              f = tau * np.mean(np.maximum(samples - m, 0)) - (1 - tau) * np.mean(np.maximum(m - samples, 0))
+              lo, hi = (m, hi) if f > 0 else (lo, m)
+          out.append(m)
+      return np.array(out)
+
+  E = expectiles(xs)                       # the "reversal points" of nineteen neurons
+
+  def loss(z):
+      d = z[None, :] - E[:, None]
+      f = taus * np.mean(np.maximum(d, 0), 1) - (1 - taus) * np.mean(np.maximum(-d, 0), 1)
+      return np.sum(f ** 2)
+
+  best = None
+  for k_ in range(5):
+      res = minimize(loss, g.uniform(E.min(), E.max(), 50), method="L-BFGS-B")
+      if best is None or res.fun < best.fun:
+          best = res
+  z = best.x
+  print(f"loss {best.fun:.2e}; fraction of decoded samples below 3.5: {np.mean(z < 3.5):.2f}; decoded mean {z.mean():.2f} (true {xs.mean():.2f})")
+  plt.hist(xs, 80, density=True, alpha=0.4, label="true"); plt.hist(z, 20, density=True, alpha=0.6, label="decoded"); plt.legend(); plt.show()
+`} />
+
+The optimiser finds 50 samples whose expectiles match the nineteen reversal points almost exactly. They put 30% of their mass below 3.5, as the true distribution does, and their mean is 4.50. The decoded histogram has two groups, but their shapes differ from the truth: nineteen numbers cannot pin down fifty, so many sample sets are equally consistent. Dabney and colleagues faced the same limitation with real neurons and fewer reward sizes, which is why their decoded distributions are best read as capturing coarse features such as bimodality rather than fine shape.
+
+**Part C (written).** Answer in your journal. First, in Part A, explain in words why ignoring perseveration inflates $\beta$, and describe a pattern in a participant's data that would make you suspect perseveration before fitting anything. Second, in Part B the decoded distribution matched the true one's mass and mean but not its fine shape. Why is the decoding not unique, and what extra assumption (for example, smoothness) would you add to make it so?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. Rescorla-Wagner after n trials" task="Starting from $V_0 = 0$ with reward 1 on every trial, show that $V_n = 1 - (1 - \alpha)^n$.">
+
+The update is $V_{n} = V_{n-1} + \alpha(1 - V_{n-1})$, so $1 - V_n = (1 - \alpha)(1 - V_{n-1})$.
+
+The distance from 1 shrinks by the factor $1 - \alpha$ each trial, so $1 - V_n = (1 - \alpha)^n(1 - V_0) = (1 - \alpha)^n$.
+
+Hence $V_n = 1 - (1 - \alpha)^n$, the negatively accelerated learning curve. The number of trials to get halfway is $\ln 2/|\ln(1 - \alpha)| \approx 0.69/\alpha$ for small $\alpha$.
+
+</Prove>
+
+<Prove title="2. The value of a TD cue with probabilistic reward" task="With the complete serial compound, $\gamma = 1$ and reward 1 delivered with probability $p$ at a fixed time after the cue, show that the expected TD update is zero when every post-cue weight equals $p$, and hence that the error at the cue converges to $p$ on average.">
+
+After the cue, consecutive post-cue states have equal values $p$, so for steps before the reward $\delta = 0 + p - p = 0$.
+
+At the step into the reward, $\delta = r - p$, whose expectation is $p \cdot 1 - p = 0$. So the weights $p$ are a fixed point of the expected update.
+
+Before the cue the value is zero, so the transition into the cue gives $\delta = 0 + p - 0 = p$. The cue response therefore converges to $p$, and the response to a delivered reward to $1 - p$, as in Day 2.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 44 quiz (15 questions)" questions={[
+  { q: "Blocking shows that learning requires...", options: ["Surprise", "Pairing only", "Dopamine depletion", "Long intervals"], answer: 0, explain: "Day 1." },
+  { q: "Rescorla-Wagner is equivalent to...", options: ["The delta rule", "Hebbian learning", "BCM", "PCA"], answer: 0, explain: "Day 1." },
+  { q: "Overexpectation reduces both cues because...", options: ["Their summed prediction exceeds the outcome", "They are new", "Their learning rate is zero", "They are never rewarded"], answer: 0, explain: "Day 1." },
+  { q: "After learning, dopamine neurons respond to...", options: ["The earliest reliable predictor of reward", "The reward only", "Every stimulus", "Nothing"], answer: 0, explain: "Day 2." },
+  { q: "The TD error is...", options: ["r + γV(t+1) − V(t)", "r − V(t)", "V(t) − V(t+1)", "γr"], answer: 0, explain: "Day 2." },
+  { q: "A TD model with a complete serial compound predicts, unlike the data, after an early reward...", options: ["A dip at the usual reward time", "No burst at the early time", "No cue response", "A larger cue response"], answer: 0, explain: "Day 2." },
+  { q: "UCB explores by...", options: ["Adding a bonus for rarely tried options", "Random choice", "Always choosing the best", "Ignoring uncertainty"], answer: 0, explain: "Day 3." },
+  { q: "Parameter recovery means...", options: ["Fitting simulated data with known parameters", "Testing a new participant", "Comparing models", "Collecting more data"], answer: 0, explain: "Day 3." },
+  { q: "The direct pathway expresses...", options: ["D1 receptors and promotes action", "D2 receptors and suppresses action", "No dopamine receptors", "Only GABA-B"], answer: 0, explain: "Day 4." },
+  { q: "Actor-critic maps onto the basal ganglia with the critic in...", options: ["Ventral striatum", "Dorsal striatum", "Cerebellum", "Thalamus"], answer: 0, explain: "Day 4." },
+  { q: "A learner with α⁺ greater than α⁻ is...", options: ["Optimistic", "Pessimistic", "Unbiased", "Random"], answer: 0, explain: "Day 4." },
+  { q: "A τ-asymmetric learner converges to...", options: ["The τ-expectile", "The τ-quantile exactly", "The mean always", "Zero"], answer: 0, explain: "Day 5." },
+  { q: "The two-step task's model-based signature is...", options: ["A reward by transition interaction", "A reward main effect", "No stay effect", "Faster responses"], answer: 0, explain: "Day 5." },
+  { q: "Ignoring perseveration in a fitted model tends to...", options: ["Inflate β", "Reduce β", "Leave all parameters unchanged", "Remove learning"], answer: 0, explain: "Part A." },
+  { q: "BIC penalises extra parameters by...", options: ["k ln n", "2k", "k²", "Nothing"], answer: 0, explain: "Part A." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Schultz, Dayan and Montague (1997) its third pass and write your critique under the five headings. Focus on one question: **how strong was the evidence in 1997 that dopamine neurons compute a TD error, and what has changed since?** Consider that the paper combined existing recordings with a model rather than reporting a new experiment designed to test it; which features of the data the TD model explained (transfer to the cue, the dip at omission) and which it needed extra assumptions for (timing representation, generalisation between stimuli); the alternatives offered at the time, such as salience or novelty signals; what later quantitative tests (graded prediction errors, probability scaling, optogenetic unblocking) added; and what the diversity of dopamine responses found more recently means for a single, global error signal. End with an experiment that would distinguish a TD error from a salience signal in dopamine neurons.
+
+<Callout kind="research">
+
+Build an agent that learns the two-step task with a learned transition model, starting from uniform transition beliefs, rather than being told the 70/30 structure. How many trials does it take before its behaviour shows the model-based signature, and how would a participant who is still learning the transitions be misclassified by the standard analysis?
+
+</Callout>
+
+<Key title="Week 44 review checklist">
+<ul>
+<li>I can simulate Rescorla-Wagner and explain blocking, overexpectation and the model's limits.</li>
+<li>I can implement TD learning and reproduce the main dopamine findings.</li>
+<li>I can compare exploration strategies and fit a learning model to choices.</li>
+<li>I can implement Q-learning and actor-critic and relate them to the basal ganglia.</li>
+<li>I can explain distributional learning and the two-step task, and compare models with AIC and BIC.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then write a paragraph explaining the reward prediction error hypothesis of dopamine to someone who knows no neuroscience, including one thing it explains well and one thing it does not." />

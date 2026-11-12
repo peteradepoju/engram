@@ -1,0 +1,305 @@
+export const meta = {
+  title: "Choosing actions: bandits, exploration and fitting choices",
+  intro: "Predicting reward is half the problem; the other half is choosing. A one-armed bandit is a slot machine, and a multi-armed bandit is a row of them with unknown payoffs. Each pull both earns a reward and tells you something about that machine, so every choice trades exploitation, taking what looks best now, against exploration, finding out whether something else is better. In 2006 Daw, O'Doherty, Dayan, Seymour and Dolan asked human participants to play a four-armed bandit whose payoffs drifted, fitted models of choice to their behaviour, and found that frontopolar cortex was more active when people chose to explore. Today you compare exploration strategies, then do what Daw and colleagues did: fit a learning model to a sequence of choices.",
+  goals: [
+    "Implement greedy, epsilon-greedy, softmax and upper-confidence-bound strategies",
+    "Measure regret and explain why pure exploitation fails",
+    "Write the likelihood of a choice sequence under a learning model",
+    "Fit learning rate and inverse temperature by maximum likelihood and check recovery",
+  ],
+  plan: [
+    { label: "Predict and the dilemma", minutes: 15 },
+    { label: "Four strategies", minutes: 35 },
+    { label: "The likelihood of choices", minutes: 30 },
+    { label: "Fitting and recovery", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "daw-2006",
+};
+
+<Predict question="An agent always chooses the arm with the highest estimated value, starting from estimates of zero. On a 10-armed bandit, will it usually find the best arm?" />
+
+<Step n={1} title="The exploration-exploitation dilemma" minutes={15} />
+
+An agent faces $K$ actions with unknown mean rewards $\mu_k$. It keeps an estimate $Q_k$ for each, updated after each pull by the incremental mean or by a Rescorla-Wagner rule with learning rate $\alpha$:
+
+$$
+Q_a \leftarrow Q_a + \alpha\,(r - Q_a).
+$$
+
+How should it choose? Performance is measured by **regret**, the reward lost by not always pulling the best arm: $\sum_t (\mu^* - \mu_{a_t})$. A good strategy has regret that grows more and more slowly. Lai and Robbins (1985) proved that no strategy can do better than regret growing like $\log t$.
+
+Humans and animals explore in at least two ways (Wilson and colleagues, 2014): randomly, by adding noise to choices, and in a directed way, by preferring options they know less about. Today's strategies cover both.
+
+<Video id="kdiXr1zsfo0" title="Multi-Armed Bandits" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's introduction to the exploration-exploitation dilemma in multi-armed bandits, with epsilon-greedy and softmax choice." />
+
+<Step n={2} title="Four strategies" minutes={35} />
+
+- **Greedy**: always choose $\arg\max_k Q_k$.
+- **Epsilon-greedy**: with probability $\varepsilon$ choose at random, otherwise greedily.
+- **Softmax**: choose $k$ with probability $\propto e^{\beta Q_k}$, where the inverse temperature $\beta$ sets how deterministic choice is.
+- **Upper confidence bound (UCB)**: choose $\arg\max_k \big(Q_k + c\sqrt{\ln t / N_k}\big)$, an optimistic estimate that adds a bonus for arms tried few times ($N_k$).
+
+<Figure caption="Exploration strategies on a 10-armed bandit, averaged over many simulated runs. Change epsilon, the inverse temperature and the UCB bonus and watch the average reward." credit="Interactive figure by Engram, after Sutton and Barto (2018).">
+  <BanditStrategies />
+</Figure>
+
+<PyCell id="bandit" title="Regret of four strategies" tests={String.raw`
+  import numpy as np
+  def test_greedy():
+      "greedy has the highest final regret per step"
+      assert final["greedy"] > max(final["epsilon 0.1"], final["softmax 3"], final["UCB 1"])
+  def test_ucb():
+      "UCB has the lowest total regret"
+      assert total["UCB 1"] < min(total["epsilon 0.1"], total["softmax 3"], total["greedy"])
+`} prompt="Complete choose(Q, N, t) for each policy: greedy (argmax with tiny random tie-breaking), epsilon-greedy, softmax (sample by comparing the cumulative probabilities with a uniform number) and UCB (untried arms first). All 500 runs are simulated in parallel as rows."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2006)
+  K, T, R = 10, 1000, 500
+  mu = r.normal(size=(R, K)); best = mu.max(1); rows = np.arange(R)
+
+  def choose(policy, par, Q, N, t):
+      if policy == "greedy":
+          return np.argmax(Q + 1e-9 * r.random((R, K)), 1)
+      if policy == "epsilon":
+          a = np.argmax(Q + 1e-9 * r.random((R, K)), 1)
+          ...
+          return a
+      if policy == "softmax":
+          p = np.exp(par * (Q - Q.max(1, keepdims=True))); p /= p.sum(1, keepdims=True)
+          return ...
+      if policy == "ucb":
+          bonus = np.where(N == 0, 1e9, par * np.sqrt(np.log(t + 1) / np.maximum(N, 1)))
+          return ...
+
+  def run(policy, par):
+      Q, N, reg = np.zeros((R, K)), np.zeros((R, K)), np.zeros(T)
+      for t in range(T):
+          a = choose(policy, par, Q, N, t)
+          rew = mu[rows, a] + r.normal(size=R)
+          N[rows, a] += 1; Q[rows, a] += (rew - Q[rows, a]) / N[rows, a]
+          reg[t] = (best - mu[rows, a]).mean()
+      return reg
+
+  final, total = {}, {}
+  for name, pol, par in [("greedy", "greedy", 0), ("epsilon 0.1", "epsilon", 0.1), ("softmax 3", "softmax", 3.0), ("UCB 1", "ucb", 1.0)]:
+      reg = run(pol, par); final[name], total[name] = reg[-100:].mean(), reg.sum()
+      plt.plot(np.cumsum(reg), label=name)
+      print(f"{name:12s} regret per step at the end {final[name]:.3f}, total {total[name]:.0f}")
+  plt.xlabel("step"); plt.ylabel("cumulative regret"); plt.legend(); plt.show()
+`}
+hint="epsilon: explore = r.random(R) < par; a[explore] = r.integers(K, size=explore.sum()). softmax: return (p.cumsum(1) < r.random((R, 1))).sum(1). ucb: return np.argmax(Q + bonus, 1)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2006)
+  K, T, R = 10, 1000, 500
+  mu = r.normal(size=(R, K)); best = mu.max(1); rows = np.arange(R)
+
+  def choose(policy, par, Q, N, t):
+      if policy == "greedy":
+          return np.argmax(Q + 1e-9 * r.random((R, K)), 1)
+      if policy == "epsilon":
+          a = np.argmax(Q + 1e-9 * r.random((R, K)), 1)
+          explore = r.random(R) < par
+          a[explore] = r.integers(K, size=explore.sum())
+          return a
+      if policy == "softmax":
+          p = np.exp(par * (Q - Q.max(1, keepdims=True))); p /= p.sum(1, keepdims=True)
+          return (p.cumsum(1) < r.random((R, 1))).sum(1)
+      if policy == "ucb":
+          bonus = np.where(N == 0, 1e9, par * np.sqrt(np.log(t + 1) / np.maximum(N, 1)))
+          return np.argmax(Q + bonus, 1)
+
+  def run(policy, par):
+      Q, N, reg = np.zeros((R, K)), np.zeros((R, K)), np.zeros(T)
+      for t in range(T):
+          a = choose(policy, par, Q, N, t)
+          rew = mu[rows, a] + r.normal(size=R)
+          N[rows, a] += 1; Q[rows, a] += (rew - Q[rows, a]) / N[rows, a]
+          reg[t] = (best - mu[rows, a]).mean()
+      return reg
+
+  final, total = {}, {}
+  for name, pol, par in [("greedy", "greedy", 0), ("epsilon 0.1", "epsilon", 0.1), ("softmax 3", "softmax", 3.0), ("UCB 1", "ucb", 1.0)]:
+      reg = run(pol, par); final[name], total[name] = reg[-100:].mean(), reg.sum()
+      plt.plot(np.cumsum(reg), label=name)
+      print(f"{name:12s} regret per step at the end {final[name]:.3f}, total {total[name]:.0f}")
+  plt.xlabel("step"); plt.ylabel("cumulative regret"); plt.legend(); plt.show()
+`} />
+
+Greedy choice loses about 0.55 per step even after 1,000 steps: it settles on whichever arm first looked better than zero and never checks the others. Epsilon-greedy keeps losing a little forever because it explores at a constant rate even when it knows the answer; softmax does slightly better because its exploration favours arms that are nearly as good. UCB's regret per step falls to about 0.01, and its total regret is a quarter of softmax's: it explores where exploring is informative and stops once the bonus shrinks. Optimism in the face of uncertainty is the simplest form of directed exploration.
+
+<Step n={3} title="The likelihood of choices" minutes={30} />
+
+To use these models as theories of a person or an animal, turn them around. Given a sequence of choices $a_1, \dots, a_T$ and rewards $r_1, \dots, r_T$, and a model with parameters $\theta = (\alpha, \beta)$, run the model along the observed sequence, updating $Q$ with the rewards that were actually received, and add up the log probabilities it assigned to the choices that were actually made:
+
+$$
+\log p(a_{1:T} \mid r_{1:T}, \theta) = \sum_t \log \frac{e^{\beta Q_{a_t}(t)}}{\sum_k e^{\beta Q_k(t)}}.
+$$
+
+The best-fitting parameters maximise this. This is the workhorse of model-based analysis of behaviour (Week 50) and of model-based fMRI, in which the fitted model's prediction errors are used as regressors, as Daw and colleagues did.
+
+Here a simulated participant plays a two-armed bandit whose arms pay off with probability 0.7 and 0.3, swapped halfway through (a reversal), learning with $\alpha = 0.3$ and choosing by softmax with $\beta = 5$.
+
+<PyCell id="lik" title="Log-likelihood on a grid" tests={String.raw`
+  import numpy as np
+  def test_nll():
+      "the negative log-likelihood at the true parameters is below that of a random chooser"
+      assert nll(0.3, 5.0, ch, rw) < len(ch) * np.log(2)
+  def test_grid():
+      "the grid minimum is within 0.1 of the true alpha and 1.5 of the true beta"
+      assert abs(a_hat - 0.3) <= 0.1 and abs(b_hat - 5.0) <= 1.5
+`} prompt="Write nll(alpha, beta, ch, rw), the negative log-likelihood of the choices under the softmax Q-learning model (use np.logaddexp for stability). Then evaluate it on a grid of alpha and beta and find the minimum."
+code={String.raw`
+  def simulate(alpha, beta, T=300, seed=1):
+      g = np.random.default_rng(seed); p_rew = np.array([0.7, 0.3]); Q = np.zeros(2); ch, rw = [], []
+      for t in range(T):
+          if t == T // 2:
+              p_rew = p_rew[::-1]
+          p1 = 1 / (1 + np.exp(-beta * (Q[1] - Q[0])))
+          a = int(g.random() < p1); rr = float(g.random() < p_rew[a])
+          Q[a] += alpha * (rr - Q[a]); ch.append(a); rw.append(rr)
+      return np.array(ch), np.array(rw)
+
+  def nll(alpha, beta, ch, rw):
+      Q = np.zeros(2); L = 0.0
+      for a, rr in zip(ch, rw):
+          ...
+      return L
+
+  ch, rw = simulate(0.3, 5.0)
+  A = np.linspace(0.05, 0.95, 19); B = np.linspace(0.5, 10, 20)
+  L = np.array([[nll(a, b, ch, rw) for b in B] for a in A])
+  i, j = np.unravel_index(L.argmin(), L.shape); a_hat, b_hat = A[i], B[j]
+  print(f"NLL at the truth {nll(0.3, 5.0, ch, rw):.1f}, random chooser {len(ch) * np.log(2):.1f}; grid minimum alpha {a_hat:.2f}, beta {b_hat:.1f}")
+  plt.contourf(B, A, L, 30); plt.plot(5, 0.3, "w*", ms=12); plt.plot(b_hat, a_hat, "rx"); plt.xlabel("beta"); plt.ylabel("alpha"); plt.colorbar(); plt.show()
+`}
+hint="Inside the loop: logp = beta * Q - np.logaddexp(beta * Q[0], beta * Q[1]); L -= logp[a]; Q[a] += alpha * (rr - Q[a])."
+solution={String.raw`
+  def simulate(alpha, beta, T=300, seed=1):
+      g = np.random.default_rng(seed); p_rew = np.array([0.7, 0.3]); Q = np.zeros(2); ch, rw = [], []
+      for t in range(T):
+          if t == T // 2:
+              p_rew = p_rew[::-1]
+          p1 = 1 / (1 + np.exp(-beta * (Q[1] - Q[0])))
+          a = int(g.random() < p1); rr = float(g.random() < p_rew[a])
+          Q[a] += alpha * (rr - Q[a]); ch.append(a); rw.append(rr)
+      return np.array(ch), np.array(rw)
+
+  def nll(alpha, beta, ch, rw):
+      Q = np.zeros(2); L = 0.0
+      for a, rr in zip(ch, rw):
+          logp = beta * Q - np.logaddexp(beta * Q[0], beta * Q[1])
+          L -= logp[a]
+          Q[a] += alpha * (rr - Q[a])
+      return L
+
+  ch, rw = simulate(0.3, 5.0)
+  A = np.linspace(0.05, 0.95, 19); B = np.linspace(0.5, 10, 20)
+  L = np.array([[nll(a, b, ch, rw) for b in B] for a in A])
+  i, j = np.unravel_index(L.argmin(), L.shape); a_hat, b_hat = A[i], B[j]
+  print(f"NLL at the truth {nll(0.3, 5.0, ch, rw):.1f}, random chooser {len(ch) * np.log(2):.1f}; grid minimum alpha {a_hat:.2f}, beta {b_hat:.1f}")
+  plt.contourf(B, A, L, 30); plt.plot(5, 0.3, "w*", ms=12); plt.plot(b_hat, a_hat, "rx"); plt.xlabel("beta"); plt.ylabel("alpha"); plt.colorbar(); plt.show()
+`} />
+
+The true parameters give a negative log-likelihood of about 103, half that of a random chooser, and the grid minimum lies at $\alpha = 0.25$, $\beta = 5.5$, close to the truth. The contour plot shows the shape that makes fitting hard: a diagonal valley along which a higher learning rate can be traded for a lower inverse temperature with little change in likelihood. Choices that look noisy can be explained either by noisy choice or by fast, jumpy learning, and 300 trials only partly separate the two.
+
+<Step n={4} title="Fitting and recovery" minutes={25} />
+
+Before trusting fitted parameters, check that the fitting procedure can recover them from data generated by the model itself. Wilson and Collins (2019) call this parameter recovery, and it is the first of their ten rules for modelling behaviour (Week 50).
+
+<PyCell id="recover" title="Parameter recovery" tests={String.raw`
+  import numpy as np
+  def test_alpha():
+      "fitted learning rates correlate with true ones above 0.6"
+      assert np.corrcoef(true[:, 0], fit[:, 0])[0, 1] > 0.6
+  def test_beta():
+      "fitted inverse temperatures correlate with true ones above 0.6"
+      assert np.corrcoef(true[:, 1], fit[:, 1])[0, 1] > 0.6
+`} prompt="Simulate 20 participants with alpha drawn from 0.1 to 0.6 and beta from 2 to 8, each with its own seed; fit each with scipy.optimize.minimize (method L-BFGS-B, bounds alpha 0.01 to 0.99 and beta 0.1 to 20, starting at 0.5 and 3) and collect the estimates."
+code={String.raw`
+  from scipy.optimize import minimize
+  g = np.random.default_rng(50)
+  true, fit = [], []
+  for s in range(20):
+      a0, b0 = g.uniform(0.1, 0.6), g.uniform(2, 8)
+      c, w = simulate(a0, b0, seed=100 + s)
+      res = ...
+      true.append((a0, b0)); fit.append(res.x)
+  true, fit = np.array(true), np.array(fit)
+  print(f"recovery: r(alpha) = {np.corrcoef(true[:, 0], fit[:, 0])[0, 1]:.2f}, r(beta) = {np.corrcoef(true[:, 1], fit[:, 1])[0, 1]:.2f}")
+  fig, ax = plt.subplots(1, 2, figsize=(8, 3.5))
+  for k, nm in enumerate(["alpha", "beta"]):
+      ax[k].plot(true[:, k], fit[:, k], "o"); lim = [true[:, k].min(), true[:, k].max()]; ax[k].plot(lim, lim, "k:"); ax[k].set_xlabel("true " + nm); ax[k].set_ylabel("fitted " + nm)
+  plt.tight_layout(); plt.show()
+`}
+hint="res = minimize(lambda p: nll(p[0], p[1], c, w), [0.5, 3.0], method='L-BFGS-B', bounds=[(0.01, 0.99), (0.1, 20)])."
+solution={String.raw`
+  from scipy.optimize import minimize
+  g = np.random.default_rng(50)
+  true, fit = [], []
+  for s in range(20):
+      a0, b0 = g.uniform(0.1, 0.6), g.uniform(2, 8)
+      c, w = simulate(a0, b0, seed=100 + s)
+      res = minimize(lambda p: nll(p[0], p[1], c, w), [0.5, 3.0], method="L-BFGS-B", bounds=[(0.01, 0.99), (0.1, 20)])
+      true.append((a0, b0)); fit.append(res.x)
+  true, fit = np.array(true), np.array(fit)
+  print(f"recovery: r(alpha) = {np.corrcoef(true[:, 0], fit[:, 0])[0, 1]:.2f}, r(beta) = {np.corrcoef(true[:, 1], fit[:, 1])[0, 1]:.2f}")
+  fig, ax = plt.subplots(1, 2, figsize=(8, 3.5))
+  for k, nm in enumerate(["alpha", "beta"]):
+      ax[k].plot(true[:, k], fit[:, k], "o"); lim = [true[:, k].min(), true[:, k].max()]; ax[k].plot(lim, lim, "k:"); ax[k].set_xlabel("true " + nm); ax[k].set_ylabel("fitted " + nm)
+  plt.tight_layout(); plt.show()
+`} />
+
+With 300 trials per participant, fitted and true values correlate at about 0.93 for the learning rate and 0.97 for the inverse temperature. That is good, but it holds only for this task, this number of trials and this range of parameters. With fewer trials, a task with no reversal, or very low $\beta$, recovery degrades, and differences between groups in fitted parameters may reflect the fitting rather than the people. Always run this check for your own design before collecting data.
+
+<Bridge title="Explore, exploit, and measure"
+  neuro="People and animals explore both randomly and towards uncertain options. Fitted learning models give each participant's learning rate and choice consistency, and their trial-by-trial prediction errors correlate with striatal BOLD signals and dopamine release."
+  ai="Epsilon-greedy and softmax exploration are standard in deep reinforcement learning; optimism in the face of uncertainty (UCB) and posterior sampling (Thompson sampling) give principled exploration with near-optimal regret, and are used in recommendation systems and clinical trial design.">
+
+Choosing well means valuing information as well as reward; fitting a model to choices turns behaviour into parameters.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Regret measures...", options: ["Reward lost by not always choosing the best arm", "The learning rate", "The number of arms", "Choice variability"], answer: 0, explain: "Σ(μ* − μ_a)." },
+  { q: "Greedy choice often fails because...", options: ["It can lock onto an arm that looked good early", "It explores too much", "It is too slow", "It needs a softmax"], answer: 0, explain: "No exploration." },
+  { q: "In softmax, a larger β means...", options: ["More deterministic choices", "More random choices", "Faster learning", "Larger rewards"], answer: 0, explain: "Inverse temperature." },
+  { q: "UCB adds a bonus that is larger for...", options: ["Arms tried fewer times", "Arms with higher value", "Recent arms", "All arms equally"], answer: 0, explain: "c√(ln t / N_k)." },
+  { q: "The best possible regret grows like...", options: ["log t", "t", "√t always", "Constant"], answer: 0, explain: "Lai and Robbins (1985)." },
+  { q: "The likelihood of a choice sequence is computed by...", options: ["Running the model on the observed choices and rewards and multiplying choice probabilities", "Simulating new choices", "Counting rewards", "Averaging Q-values"], answer: 0, explain: "Then maximise over parameters." },
+  { q: "Parameter recovery checks...", options: ["That fitting can retrieve known parameters from simulated data", "That the model fits real data", "Model comparison", "The p value"], answer: 0, explain: "Wilson and Collins (2019)." },
+  { q: "Daw et al. (2006) linked exploratory choices to...", options: ["Frontopolar cortex", "Primary visual cortex", "Cerebellum", "Hippocampus only"], answer: 0, explain: "With striatal prediction errors." },
+]} />
+
+<Flashcards cards={[
+  { front: "Softmax choice?", back: "$p(k) = e^{\\beta Q_k}/\\sum_j e^{\\beta Q_j}$." },
+  { front: "UCB rule?", back: "Choose $\\arg\\max_k Q_k + c\\sqrt{\\ln t/N_k}$: optimism for rarely tried options." },
+  { front: "Random against directed exploration?", back: "Random: noise in choice (softmax, ε). Directed: a bonus for uncertain options (UCB)." },
+  { front: "Choice log-likelihood?", back: "$\\sum_t \\log p(a_t \\mid Q(t), \\beta)$ with $Q$ updated by the observed rewards." },
+  { front: "Parameter recovery?", back: "Simulate with known parameters, fit, and check the fitted values track the true ones." },
+]} />
+
+<Predict revisit question="Will a purely greedy agent, starting from zero estimates, usually find the best of ten arms?" />
+
+<Key title="Before you go">
+<ul>
+<li>Every choice trades reward now against information.</li>
+<li>Random exploration helps; directed exploration (UCB) helps more.</li>
+<li>A learning model assigns a likelihood to any sequence of choices.</li>
+<li>Always check that fitted parameters can be recovered.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Daw, O'Doherty, Dayan, Seymour and Dolan (2006), <em>Cortical substrates for exploratory decisions in humans</em>.</li>
+<li>Wilson, Geana, White, Ludvig and Cohen (2014), <em>Humans use directed and random exploration to solve the explore-exploit dilemma</em>, Journal of Experimental Psychology: General 143(6), 2074 to 2081.</li>
+<li>Sutton and Barto (2018), <em>Reinforcement Learning: An Introduction</em>, Chapter 2.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Pick a real decision you make repeatedly (a café, a route, a news source). Describe your strategy in this week's terms: is it greedy, softmax-like or UCB-like? What would a regret curve for your strategy look like over a year?" />
