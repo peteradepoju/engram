@@ -13,7 +13,7 @@ export default function PapersPage() {
       <div className="eyebrow">Five a week · matched to your lessons</div>
       <h1 className="mt-1 text-3xl font-semibold" style={{ fontFamily: "var(--font-serif)" }}>Papers</h1>
       <p className="mt-2 max-w-3xl text-ink-2">
-        Each week mixes a classic, papers that use the week&apos;s ideas on brains and in AI, and recent work. Every paper has a reading guide; one per week (marked deep read) gets a third pass and a written critique on Day 6.
+        Each week mixes papers that use the week&apos;s ideas on brains and in AI, and recent work. Every paper has a reading guide; one per week (marked deep read) gets a third pass and a written critique on Day 6.
       </p>
       <div className="mt-4 rounded-xl border border-line bg-surface p-4 text-sm">
         <span className="font-semibold">How to read:</span> 30 minutes on Days 1 to 5 for the first and second pass. Write notes in the paper&apos;s page; they are saved to your account. Ideas can go straight to your Research Lab.

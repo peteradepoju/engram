@@ -15,7 +15,7 @@ export default function CurriculumPage() {
         <div className="eyebrow">208 weeks · 8 parts · 6 days a week</div>
         <h1 className="mt-1 text-3xl font-semibold" style={{ fontFamily: "var(--font-serif)" }}>Curriculum</h1>
         <p className="mt-3 max-w-3xl text-[0.95rem] text-ink-2 sm:text-base">
-          Every week has five lesson days and a Day 6 Forge (Years 1 and 2) or Research Day (Years 3 and 4). Each part ends with a project and an exam, and a rest week falls every 13th week. Weeks are written in batches and kept at least two weeks ahead of the schedule.
+          Every week has five lesson days and a Day 6 Forge or Research Day. Each part ends with a project and an exam, and a rest week falls every 13th week.
         </p>
         <OpenOnHash />
         <nav className="scroller -mx-4 mt-5 flex gap-2 px-4 sm:mx-0 sm:mt-6 sm:flex-wrap sm:px-0">

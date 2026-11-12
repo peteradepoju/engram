@@ -1,5 +1,11 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import "@fontsource/cormorant-garamond/500.css";
+import "@fontsource/cormorant-garamond/600.css";
+import "@fontsource/cormorant-garamond/500-italic.css";
+import "@fontsource-variable/jost";
+import "@fontsource-variable/jetbrains-mono";
+import "./atlas.css";
 import { SiteHeader, BottomTabs } from "@/components/nav";
 import { ServiceWorker } from "@/components/service-worker";
 
@@ -27,7 +33,7 @@ export const viewport: Viewport = {
   viewportFit: "cover",
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#f7f5f0" },
-    { media: "(prefers-color-scheme: dark)", color: "#111018" },
+    { media: "(prefers-color-scheme: dark)", color: "#0f1627" },
   ],
 };
 

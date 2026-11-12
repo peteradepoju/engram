@@ -11,10 +11,44 @@ const LINKS = [
   { href: "/review", label: "Review" },
   { href: "/papers", label: "Papers" },
   { href: "/lab", label: "Lab" },
-  { href: "/hub", label: "Hub" },
-  { href: "/career", label: "Career" },
-  { href: "/progress", label: "Progress" },
 ];
+
+const MORE_LINKS = [
+  { href: "/hub", label: "NeuroAI Hub", note: "Books, tools, datasets, communities" },
+  { href: "/career", label: "Career", note: "PhD programmes and applications" },
+  { href: "/progress", label: "Progress", note: "Streaks, hours and mastery" },
+  { href: "/about", label: "About Engram", note: "How the course works" },
+];
+
+function MoreMenu({ path }: { path: string }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => { setOpen(false); }, [path]);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (!(e.target as HTMLElement).closest("[data-more]")) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("click", close); document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("click", close); document.removeEventListener("keydown", esc); };
+  }, [open]);
+  const active = MORE_LINKS.some((l) => path === l.href || path.startsWith(l.href + "/"));
+  return (
+    <div className="relative" data-more>
+      <button onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-current={active ? "page" : undefined} className="nav-link flex items-center gap-1">
+        More<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden><path d="m6 9 6 6 6-6" /></svg>
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full mt-2 w-72 rounded-xl border border-line bg-surface p-1.5 shadow-xl">
+          {MORE_LINKS.map((l) => (
+            <Link key={l.href} href={l.href} className="block rounded-lg px-3 py-2 hover:bg-surface-2">
+              <span className="block text-sm font-medium text-ink">{l.label}</span>
+              <span className="block text-xs text-ink-3">{l.note}</span>
+            </Link>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function LogoMark({ size = 26 }: { size?: number }) {
   return (
@@ -132,16 +166,16 @@ export function SiteHeader() {
       {/* Tablet and desktop */}
       <div className="mx-auto hidden h-14 max-w-6xl items-center gap-4 px-4 md:flex">
         <Logo />
-        <nav className="ml-4 flex items-center gap-1" aria-label="Main">
+        <nav className="ml-6 flex items-center gap-1" aria-label="Main">
           {LINKS.map((l) => {
-            const active = path === l.href || path.startsWith(l.href + "/");
+            const active = path === l.href || path.startsWith(l.href + "/") || (l.href === "/curriculum" && path.startsWith("/learn/"));
             return (
-              <Link key={l.href} href={l.href}
-                className={`rounded-lg px-2.5 py-1.5 text-sm ${active ? "bg-accent-soft font-semibold text-accent" : "text-ink-2 hover:bg-surface-2"}`}>
+              <Link key={l.href} href={l.href} aria-current={active ? "page" : undefined} className="nav-link">
                 {l.label}
               </Link>
             );
           })}
+          <MoreMenu path={path} />
         </nav>
         <div className="ml-auto flex items-center gap-1">{search}<ThemeToggle />{account}</div>
       </div>
