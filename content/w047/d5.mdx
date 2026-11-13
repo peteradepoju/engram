@@ -1,0 +1,255 @@
+export const meta = {
+  title: "Sleep and the slow oscillation: up and down states",
+  intro: "In 1993 Mircea Steriade, Angel Nuñez and Florin Amzica recorded cortical neurons in anaesthetised cats and found a rhythm slower than any described before: below 1 Hz, neurons alternated between depolarised periods of firing and hyperpolarised periods of silence, all together across large areas of cortex. This slow oscillation dominates deep non-REM sleep, it organises the faster spindles and hippocampal ripples that are thought to support memory consolidation (Week 43), and it vanishes on waking. Today you build the simplest circuit that produces it, a population with recurrent excitation and slow adaptation, see why adaptation is needed, and watch arousing input turn the sleeping rhythm into a waking state.",
+  goals: [
+    "Describe up and down states and the slow oscillation of non-REM sleep",
+    "Explain how recurrent excitation creates bistability and adaptation makes it oscillate",
+    "Simulate the transition from a sleep-like to a waking-like state with increasing drive",
+    "Relate the slow oscillation to spindles, ripples and memory consolidation",
+  ],
+  plan: [
+    { label: "Predict and the discovery", minutes: 15 },
+    { label: "Bistability and adaptation", minutes: 35 },
+    { label: "From sleep to waking", minutes: 25 },
+    { label: "The sleeping rhythm in the spectrum", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "steriade-1993",
+};
+
+<Predict question="A population with strong recurrent excitation has two stable states, silent and active. Noise occasionally switches it between them. If you add slow adaptation, which builds up while the population is active, will the switching become faster and more regular, slower, or stop?" />
+
+<Step n={1} title="Up states and down states" minutes={15} />
+
+During the slow oscillation, intracellular recordings show each neuron's membrane potential jumping between a **down state**, hyperpolarised and silent, and an **up state**, depolarised by about 10 to 15 mV, in which the neuron fires irregularly and receives intense, balanced excitation and inhibition. Neighbouring neurons switch nearly together, and the transitions propagate across cortex as travelling waves, mostly from front to back in humans (Massimini, Huber, Ferrarelli, Hill and Tononi, 2004). In the scalp EEG of deep sleep, the down states appear as large slow waves.
+
+Two ingredients explain the alternation (Sanchez-Vives and McCormick, 2000; Compte, Sanchez-Vives, McCormick and Wang, 2003). **Recurrent excitation** makes the cortex bistable: once enough neurons are active, they keep each other active; once silent, they stay silent. **Slow activity-dependent adaptation**, through calcium- and sodium-activated potassium currents and synaptic depression, builds up during an up state until it can no longer be sustained, and recovers during the down state until noise or a small input restarts activity.
+
+<Video id="KKMlWWU83Jg" title="Stability of fixed points" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch analyses when the fixed points of a population model are stable, the analysis behind the bistable silent and active states of today's model." />
+
+<Step n={2} title="Bistability and adaptation" minutes={35} />
+
+One population with activity $x$, recurrent weight $w$, input $I$ and adaptation $a$:
+
+$$
+\tau\,\dot x = -x + f(wx + I - a) + \text{noise}, \qquad \tau_a\,\dot a = -a + b\,x,
+$$
+
+with $f(u) = 1/(1 + e^{-(u - 3)/0.5})$, $w = 6$, $\tau = 10$ ms and $\tau_a = 500$ ms. With $b = 0$ there is no adaptation.
+
+<Figure caption="Up and down states. The trace is population activity; the shaded line is adaptation. Increase adaptation to turn rare, noise-driven switches into a regular slow oscillation, and increase the drive to imitate arousal." credit="Interactive figure by Engram, after Compte et al. (2003).">
+  <UpDownStates />
+</Figure>
+
+<PyCell id="updown" title="Noise-driven switching against a slow oscillation" tests={String.raw`
+  import numpy as np
+  def test_noise_only():
+      "without adaptation, transitions are rare (fewer than 0.3 per second)"
+      assert stats["no adaptation"][3] < 0.3
+  def test_oscillation():
+      "with adaptation and modest drive, the population cycles at 0.4 to 1.5 Hz and spends 30 to 70% of time up"
+      s = stats["adaptation"]
+      assert 0.4 < s[3] < 1.5 and 0.3 < s[0] < 0.7
+`} prompt="Complete run(): Euler steps of both equations with dt = 2 ms, using pre-drawn noise. Then compare b = 0, I = 0 with b = 2, I = 1 over 30 s using updown(), which returns the fraction of time up, mean up and down durations and transitions per second."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  f = lambda u: 1 / (1 + np.exp(-(u - 3) / 0.5))
+
+  def run(I=0.0, b=1.0, w=6.0, tau=0.01, taua=0.5, T=30.0, dt=0.002, noise=0.15, seed=0):
+      g = np.random.default_rng(seed); n = int(T / dt)
+      x, a = 0.0, 0.0; X = np.zeros(n); A = np.zeros(n)
+      nz = noise * np.sqrt(dt / tau) * g.normal(size=n)
+      for k in range(n):
+          ...
+          X[k], A[k] = x, a
+      return X, A
+
+  def updown(X, dt=0.002):
+      up = X > 0.5; ch = np.diff(up.astype(int)); on = np.where(ch == 1)[0]; off = np.where(ch == -1)[0]
+      rate = len(on) / (len(X) * dt)
+      if len(on) < 3 or len(off) < 3:
+          return up.mean(), np.nan, np.nan, rate
+      if off[0] < on[0]:
+          off = off[1:]
+      m = min(len(on), len(off))
+      return up.mean(), ((off[:m] - on[:m]) * dt).mean(), ((on[1:m] - off[: m - 1]) * dt).mean(), rate
+
+  runs = {"no adaptation": run(I=0.0, b=0.0), "adaptation": run(I=1.0, b=2.0)}
+  stats = {k: updown(v[0]) for k, v in runs.items()}
+  for k, s in stats.items():
+      print(f"{k:13s}: up {100 * s[0]:.0f}% of the time, mean up {s[1]:.2f} s, mean down {s[2]:.2f} s, {s[3]:.2f} transitions per second")
+  fig, ax = plt.subplots(2, 1, figsize=(8, 4), sharex=True)
+  for a_, (k, (X, A)) in zip(ax, runs.items()):
+      t = np.arange(len(X)) * 0.002; a_.plot(t, X); a_.plot(t, A / 2, alpha=0.6); a_.set_title(k)
+  ax[-1].set_xlabel("time (s)"); plt.tight_layout(); plt.show()
+`}
+hint="x += dt / tau * (-x + f(w * x + I - a)) + nz[k]; a += dt / taua * (-a + b * x)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  f = lambda u: 1 / (1 + np.exp(-(u - 3) / 0.5))
+
+  def run(I=0.0, b=1.0, w=6.0, tau=0.01, taua=0.5, T=30.0, dt=0.002, noise=0.15, seed=0):
+      g = np.random.default_rng(seed); n = int(T / dt)
+      x, a = 0.0, 0.0; X = np.zeros(n); A = np.zeros(n)
+      nz = noise * np.sqrt(dt / tau) * g.normal(size=n)
+      for k in range(n):
+          x += dt / tau * (-x + f(w * x + I - a)) + nz[k]
+          a += dt / taua * (-a + b * x)
+          X[k], A[k] = x, a
+      return X, A
+
+  def updown(X, dt=0.002):
+      up = X > 0.5; ch = np.diff(up.astype(int)); on = np.where(ch == 1)[0]; off = np.where(ch == -1)[0]
+      rate = len(on) / (len(X) * dt)
+      if len(on) < 3 or len(off) < 3:
+          return up.mean(), np.nan, np.nan, rate
+      if off[0] < on[0]:
+          off = off[1:]
+      m = min(len(on), len(off))
+      return up.mean(), ((off[:m] - on[:m]) * dt).mean(), ((on[1:m] - off[: m - 1]) * dt).mean(), rate
+
+  runs = {"no adaptation": run(I=0.0, b=0.0), "adaptation": run(I=1.0, b=2.0)}
+  stats = {k: updown(v[0]) for k, v in runs.items()}
+  for k, s in stats.items():
+      print(f"{k:13s}: up {100 * s[0]:.0f}% of the time, mean up {s[1]:.2f} s, mean down {s[2]:.2f} s, {s[3]:.2f} transitions per second")
+  fig, ax = plt.subplots(2, 1, figsize=(8, 4), sharex=True)
+  for a_, (k, (X, A)) in zip(ax, runs.items()):
+      t = np.arange(len(X)) * 0.002; a_.plot(t, X); a_.plot(t, A / 2, alpha=0.6); a_.set_title(k)
+  ax[-1].set_xlabel("time (s)"); plt.tight_layout(); plt.show()
+`} />
+
+Without adaptation the population is bistable and noise alone moves it between states, rarely: about one transition every ten seconds, with dwell times of several seconds that vary widely. With adaptation and a modest drive it cycles about 0.7 times per second, with up and down states each lasting around 0.7 s, the timescale of the slow oscillation. Adaptation supplies the clock: each up state builds the current that ends it, and each down state lets it decay until the next up state can start. Up-state durations still vary (a coefficient of variation of about 0.6), because noise decides the exact moment of each transition, as in real recordings.
+
+<Step n={3} title="From sleep to waking" minutes={25} />
+
+Arousal systems, the same neuromodulators as Day 4, depolarise cortical neurons and reduce adaptation currents. In the model the simplest stand-in is the drive $I$.
+
+<PyCell id="arouse" title="More drive, fewer down states" tests={String.raw`
+  import numpy as np
+  def test_sleep():
+      "with no drive the population is almost always down"
+      assert upfrac[0.0] < 0.1
+  def test_wake():
+      "with drive 2 it is up more than 95% of the time"
+      assert upfrac[2.0] > 0.95
+  def test_middle():
+      "with drive 1 it alternates"
+      assert 0.3 < upfrac[1.0] < 0.7
+`} prompt="With b = 2, sweep the drive I over 0, 0.5, 1, 1.5 and 2 and record the fraction of time in the up state."
+code={String.raw`
+  upfrac = {}
+  for I in [0.0, 0.5, 1.0, 1.5, 2.0]:
+      X, _ = ...
+      upfrac[I] = (X > 0.5).mean()
+  print("fraction of time up by drive:", ", ".join(f"I = {I}: {v:.2f}" for I, v in upfrac.items()))
+`}
+hint="X, _ = run(I=I, b=2.0)."
+solution={String.raw`
+  upfrac = {}
+  for I in [0.0, 0.5, 1.0, 1.5, 2.0]:
+      X, _ = run(I=I, b=2.0)
+      upfrac[I] = (X > 0.5).mean()
+  print("fraction of time up by drive:", ", ".join(f"I = {I}: {v:.2f}" for I, v in upfrac.items()))
+`} />
+
+With no drive the population is almost always down; at a drive of 1 it alternates, up about half the time; at 2 it is up 98% of the time and down states have essentially vanished. A single parameter takes the circuit from a sleep-like to a waking-like regime, which is roughly what cholinergic and noradrenergic projections do on waking. In between, at a drive of 1.5, up states dominate but down states still intrude: a description, perhaps, of drowsiness.
+
+<Step n={4} title="The sleeping rhythm in the spectrum" minutes={30} />
+
+<PyCell id="spectrum" title="A peak below 1 Hz" tests={String.raw`
+  import numpy as np
+  def test_peak():
+      "the sleep-like state has a spectral peak between 0.2 and 1.5 Hz"
+      assert 0.2 < peak < 1.5
+  def test_power():
+      "power below 2 Hz is at least 10 times greater in the sleep-like than the waking-like state"
+      assert low_sleep > 10 * low_wake
+`} prompt="Compute the power spectrum of population activity for I = 1 (sleep-like) and I = 2 (waking-like), each over 120 s, and compare the power below 2 Hz. Find the peak frequency of the sleep-like spectrum between 0.1 and 5 Hz."
+code={String.raw`
+  def spectrum(X, dt=0.002):
+      x = X - X.mean()
+      fr = np.fft.rfftfreq(len(x), dt); P = np.abs(np.fft.rfft(x)) ** 2 / len(x)
+      return fr, P
+
+  fr, P_sleep = spectrum(run(I=1.0, b=2.0, T=120)[0])
+  _, P_wake = spectrum(run(I=2.0, b=2.0, T=120)[0])
+  m = (fr > 0.1) & (fr < 5)
+  peak = ...
+  low_sleep, low_wake = ...
+  print(f"sleep-like peak at {peak:.2f} Hz; power below 2 Hz: sleep {low_sleep:.3g}, waking {low_wake:.3g}")
+  plt.semilogy(fr[m], P_sleep[m], label="I = 1"); plt.semilogy(fr[m], P_wake[m], label="I = 2"); plt.xlabel("frequency (Hz)"); plt.legend(); plt.show()
+`}
+hint="peak = fr[m][np.argmax(P_sleep[m])]; low = (fr > 0.1) & (fr < 2); low_sleep, low_wake = P_sleep[low].sum(), P_wake[low].sum()."
+solution={String.raw`
+  def spectrum(X, dt=0.002):
+      x = X - X.mean()
+      fr = np.fft.rfftfreq(len(x), dt); P = np.abs(np.fft.rfft(x)) ** 2 / len(x)
+      return fr, P
+
+  fr, P_sleep = spectrum(run(I=1.0, b=2.0, T=120)[0])
+  _, P_wake = spectrum(run(I=2.0, b=2.0, T=120)[0])
+  m = (fr > 0.1) & (fr < 5)
+  peak = fr[m][np.argmax(P_sleep[m])]
+  low = (fr > 0.1) & (fr < 2)
+  low_sleep, low_wake = P_sleep[low].sum(), P_wake[low].sum()
+  print(f"sleep-like peak at {peak:.2f} Hz; power below 2 Hz: sleep {low_sleep:.3g}, waking {low_wake:.3g}")
+  plt.semilogy(fr[m], P_sleep[m], label="I = 1"); plt.semilogy(fr[m], P_wake[m], label="I = 2"); plt.xlabel("frequency (Hz)"); plt.legend(); plt.show()
+`} />
+
+The sleep-like state has a spectral peak at about 0.5 Hz, the slow oscillation, and nearly twenty times more power below 2 Hz than the waking-like state, whose spectrum is flat. This is how sleep is scored from the EEG: large power at slow frequencies marks deep non-REM sleep. Note the connection to Day 4: the large slow fluctuations of a drowsy animal are the same kind of activity, and they are the background noise that made detection poor at low arousal.
+
+<Callout kind="research">
+
+The slow oscillation coordinates other rhythms. Thalamocortical spindles (11 to 16 Hz) tend to occur on the rising phase of up states, and hippocampal sharp-wave ripples tend to nest within spindles; this nesting is thought to time the transfer of recent memories from hippocampus to cortex (Week 43). Ngo, Martinetz, Born and Mölle (2013) played sounds in phase with the up states of sleeping people and enhanced both slow oscillations and next-day memory. Whether such closed-loop stimulation helps memory reliably, and for whom, is an active question.
+
+</Callout>
+
+<Bridge title="States of a circuit"
+  neuro="Recurrent excitation gives cortex two states; adaptation turns bistability into the slow oscillation of deep sleep; neuromodulatory drive on waking removes the down states. The slow oscillation coordinates spindles and ripples during memory consolidation."
+  ai="Offline phases in learning systems, such as experience replay between episodes and consolidation of fast weights into slow ones, are computational counterparts of sleep. Some continual learning methods schedule explicit sleep-like phases to reduce forgetting.">
+
+Excitation holds the cortex up, fatigue lets it fall, and arousal keeps it from falling.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The slow oscillation discovered by Steriade et al. (1993) has a frequency...", options: ["Below 1 Hz", "Around 40 Hz", "Around 10 Hz", "Above 100 Hz"], answer: 0, explain: "Alternating up and down states." },
+  { q: "During up states, neurons...", options: ["Are depolarised and fire with balanced excitation and inhibition", "Are silent", "Fire only bursts", "Are hyperpolarised"], answer: 0, explain: "About 10 to 15 mV above down states." },
+  { q: "Bistability between up and down states comes from...", options: ["Recurrent excitation", "Adaptation alone", "External rhythm", "Gap junctions only"], answer: 0, explain: "Activity sustains activity." },
+  { q: "Adaptation turns bistability into...", options: ["A regular slow oscillation", "Permanent silence", "Gamma", "Chaos"], answer: 0, explain: "It ends up states and recovers in down states." },
+  { q: "Without adaptation, transitions are...", options: ["Rare and driven by noise", "Regular at 1 Hz", "Absent always", "Very fast"], answer: 0, explain: "Long random dwell times." },
+  { q: "Increasing arousing drive...", options: ["Removes down states", "Lengthens down states", "Has no effect", "Silences cortex"], answer: 0, explain: "Waking-like desynchronised state." },
+  { q: "Spindles tend to occur...", options: ["On the rising phase of up states", "During down states", "Only in REM sleep", "Only when awake"], answer: 0, explain: "Nesting of sleep rhythms." },
+  { q: "Ngo et al. (2013) enhanced slow oscillations by...", options: ["Playing sounds in phase with up states", "Electrical stimulation of hippocampus", "Drugs", "Sleep deprivation"], answer: 0, explain: "Closed-loop acoustic stimulation." },
+]} />
+
+<Flashcards cards={[
+  { front: "Up and down states?", back: "Alternating depolarised, active periods and hyperpolarised, silent periods of cortical neurons, the cellular basis of the slow oscillation." },
+  { front: "Model of the slow oscillation?", back: "$\\tau\\dot x = -x + f(wx + I - a)$, $\\tau_a\\dot a = -a + bx$: recurrent excitation plus slow adaptation." },
+  { front: "Why adaptation matters?", back: "It builds up during up states until they collapse, and decays during down states, giving regular alternation." },
+  { front: "Waking in the model?", back: "Raising the drive keeps the population in the up state, removing slow waves." },
+  { front: "Nesting of sleep rhythms?", back: "Slow oscillation up states organise spindles, which organise hippocampal ripples." },
+]} />
+
+<Predict revisit question="Adding slow adaptation to a bistable population: faster and more regular switching, slower, or none?" />
+
+<Key title="Before you go">
+<ul>
+<li>Deep sleep is dominated by synchronous up and down states below 1 Hz.</li>
+<li>Recurrent excitation gives bistability; adaptation makes it oscillate.</li>
+<li>Arousing drive abolishes down states.</li>
+<li>The slow oscillation coordinates spindles and ripples for consolidation.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Steriade, Nuñez and Amzica (1993), <em>A novel slow (less than 1 Hz) oscillation of neocortical neurons in vivo: depolarizing and hyperpolarizing components</em>.</li>
+<li>Sanchez-Vives and McCormick (2000), <em>Cellular and network mechanisms of rhythmic recurrent activity in neocortex</em>, Nature Neuroscience 3(10), 1027 to 1034.</li>
+<li>Ngo, Martinetz, Born and Mölle (2013), <em>Auditory closed-loop stimulation of the sleep slow oscillation enhances memory</em>, Neuron 78(3), 545 to 553.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Local parts of cortex can fall into down states while the animal is awake, especially after sleep deprivation (local sleep). Using today's model, explain what might cause this, and predict how performance on a task that depends on that area would change." />

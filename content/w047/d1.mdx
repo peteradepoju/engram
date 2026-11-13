@@ -1,0 +1,209 @@
+export const meta = {
+  title: "Where rhythms come from: gamma from excitation and inhibition",
+  intro: "In Week 11 you learned to measure rhythms: power spectra, filtering, phase and phase-amplitude coupling. This week asks where they come from and what they might do. Gamma oscillations, at roughly 30 to 90 Hz, appear in cortex and hippocampus whenever local circuits are strongly driven. In 2003 Nicolas Brunel and Xiao-Jing Wang analysed networks of excitatory and inhibitory spiking neurons and showed that the period of fast oscillations is set mainly by the time constants of synaptic inhibition, and that the population can oscillate while each neuron fires irregularly and skips most cycles. Today you build such a network, change its inhibitory time constant, and see a regular rhythm emerge from irregular cells.",
+  goals: [
+    "Describe the PING mechanism for gamma oscillations",
+    "Simulate an excitatory-inhibitory spiking network and measure its rhythm",
+    "Show that the oscillation frequency is set by inhibitory synaptic decay",
+    "Explain how a population can oscillate while single neurons fire irregularly",
+  ],
+  plan: [
+    { label: "Predict and the mechanism", minutes: 20 },
+    { label: "A spiking E-I network", minutes: 35 },
+    { label: "Irregular cells, regular rhythm", minutes: 30 },
+    { label: "What gamma might do", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "brunel-wang-2003",
+};
+
+<Predict question="In a network that oscillates at 60 Hz through excitatory-inhibitory interaction, the decay time of inhibitory synapses is doubled. Will the oscillation frequency roughly halve, stay the same, or double?" />
+
+<Step n={1} title="Pyramidal-interneuron gamma" minutes={20} />
+
+The best-supported mechanism for cortical gamma is **PING** (pyramidal-interneuron network gamma). Excitatory cells fire and excite fast-spiking inhibitory interneurons, mainly parvalbumin-expressing basket cells; the interneurons fire a volley a few milliseconds later that silences the excitatory cells; as the inhibition decays, the most excitable pyramidal cells fire again, and the cycle repeats. The period is roughly the time for inhibition to decay enough to let excitation through, a few times the GABA-A decay constant, plus the short delays of the loop. A related mechanism, **ING**, needs only mutually inhibiting interneurons driven by tonic excitation. Optogenetically driving parvalbumin interneurons at gamma frequencies amplifies gamma in mouse cortex, while driving them at other frequencies does not (Cardin and colleagues, 2009; Sohal and colleagues, 2009).
+
+Brunel and Wang (2003) analysed both regimes with mean-field theory and simulations. In the sparse, noisy networks that resemble cortex, the population rhythm is fast and regular while individual neurons fire irregularly, at rates well below the oscillation frequency: each cell joins only a fraction of the cycles.
+
+<Video id="p848349hPyw" title="Dynamic networks" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch introduces population models of interacting excitatory and inhibitory neurons, the starting point for understanding how their interaction can make a circuit oscillate." />
+
+<Step n={2} title="A spiking E-I network" minutes={35} />
+
+The network has 400 excitatory and 100 inhibitory leaky integrate-and-fire neurons (membrane time constant 10 ms, threshold 1, reset 0), sparsely connected with probability 0.2. Excitatory cells receive a constant drive above threshold and noise; each spike adds to exponentially decaying synaptic currents with time constant 2 ms for excitation and $\tau_I$ for inhibition.
+
+<Figure caption="A PING network. The raster shows excitatory (pink) and inhibitory (blue) spikes; the trace below is the excitatory population rate. Change the inhibitory decay time and watch the rhythm slow." credit="Interactive figure by Engram, after Brunel and Wang (2003).">
+  <PINGRaster />
+</Figure>
+
+<PyCell id="ping" title="Frequency set by inhibition" tests={String.raw`
+  import numpy as np
+  def test_gamma():
+      "with tau_I = 8 ms the network oscillates in the gamma band (40 to 90 Hz)"
+      assert 40 < freq[8.0] < 90
+  def test_order():
+      "frequency falls as the inhibitory decay time grows"
+      assert freq[4.0] > freq[8.0] > freq[16.0]
+`} prompt="Complete one Euler step of ping(): update membrane potentials (with noise), detect and reset spikes, and update the three synaptic currents (E to I with 2 ms decay, I to E and I to I with tau_I). Then find the peak frequency of the excitatory population rate between 10 and 200 Hz for three values of tau_I."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def ping(tauI=8.0, T=1000.0, dt=0.1, seed=0, NE=400, NI=100, drive=2.2, noise=0.05):
+      g = np.random.default_rng(seed); p = 0.2
+      W_EI = (g.random((NI, NE)) < p) * 0.15         # E -> I
+      W_IE = (g.random((NE, NI)) < p) * 1.2          # I -> E
+      W_II = (g.random((NI, NI)) < p) * 0.4          # I -> I
+      vE, vI = g.random(NE), g.random(NI)
+      xE, xIE, xII = np.zeros(NI), np.zeros(NE), np.zeros(NI)    # synaptic currents
+      steps = int(T / dt); rateE = np.zeros(steps); spikes = []
+      for k in range(steps):
+          ...
+          rateE[k] = fE.mean()
+          spikes.extend((n, k * dt) for n in np.where(fE[:50])[0])   # keep spike times of 50 E cells
+      return rateE, np.array(spikes)
+
+  def peak_freq(rate, dt=0.1):
+      x = rate[2000:] - rate[2000:].mean()
+      f = np.fft.rfftfreq(len(x), dt * 1e-3); P = np.abs(np.fft.rfft(x)) ** 2
+      m = (f > 10) & (f < 200)
+      return f[m][P[m].argmax()]
+
+  freq, runs = {}, {}
+  for tauI in [4.0, 8.0, 16.0]:
+      runs[tauI] = ping(tauI); freq[tauI] = peak_freq(runs[tauI][0])
+      print(f"tau_I = {tauI:4.1f} ms: peak at {freq[tauI]:.0f} Hz, mean E rate {runs[tauI][0].mean() / 1e-4:.1f} Hz")
+  plt.plot(np.arange(3000) * 0.1, runs[8.0][0][:3000] / 1e-4); plt.xlabel("time (ms)"); plt.ylabel("E population rate (Hz)"); plt.show()
+`}
+hint="vE += dt / 10 * (-vE + drive - xIE) + noise * np.sqrt(dt) * g.normal(size=NE); vI += dt / 10 * (-vI + 0.5 + xE - xII) + noise * np.sqrt(dt) * g.normal(size=NI); fE, fI = vE >= 1, vI >= 1; vE[fE] = 0; vI[fI] = 0; xE += -dt * xE / 2.0 + W_EI @ fE; xIE += -dt * xIE / tauI + W_IE @ fI; xII += -dt * xII / tauI + W_II @ fI."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def ping(tauI=8.0, T=1000.0, dt=0.1, seed=0, NE=400, NI=100, drive=2.2, noise=0.05):
+      g = np.random.default_rng(seed); p = 0.2
+      W_EI = (g.random((NI, NE)) < p) * 0.15         # E -> I
+      W_IE = (g.random((NE, NI)) < p) * 1.2          # I -> E
+      W_II = (g.random((NI, NI)) < p) * 0.4          # I -> I
+      vE, vI = g.random(NE), g.random(NI)
+      xE, xIE, xII = np.zeros(NI), np.zeros(NE), np.zeros(NI)    # synaptic currents
+      steps = int(T / dt); rateE = np.zeros(steps); spikes = []
+      for k in range(steps):
+          vE += dt / 10 * (-vE + drive - xIE) + noise * np.sqrt(dt) * g.normal(size=NE)
+          vI += dt / 10 * (-vI + 0.5 + xE - xII) + noise * np.sqrt(dt) * g.normal(size=NI)
+          fE, fI = vE >= 1, vI >= 1
+          vE[fE] = 0; vI[fI] = 0
+          xE += -dt * xE / 2.0 + W_EI @ fE
+          xIE += -dt * xIE / tauI + W_IE @ fI
+          xII += -dt * xII / tauI + W_II @ fI
+          rateE[k] = fE.mean()
+          spikes.extend((n, k * dt) for n in np.where(fE[:50])[0])   # keep spike times of 50 E cells
+      return rateE, np.array(spikes)
+
+  def peak_freq(rate, dt=0.1):
+      x = rate[2000:] - rate[2000:].mean()
+      f = np.fft.rfftfreq(len(x), dt * 1e-3); P = np.abs(np.fft.rfft(x)) ** 2
+      m = (f > 10) & (f < 200)
+      return f[m][P[m].argmax()]
+
+  freq, runs = {}, {}
+  for tauI in [4.0, 8.0, 16.0]:
+      runs[tauI] = ping(tauI); freq[tauI] = peak_freq(runs[tauI][0])
+      print(f"tau_I = {tauI:4.1f} ms: peak at {freq[tauI]:.0f} Hz, mean E rate {runs[tauI][0].mean() / 1e-4:.1f} Hz")
+  plt.plot(np.arange(3000) * 0.1, runs[8.0][0][:3000] / 1e-4); plt.xlabel("time (ms)"); plt.ylabel("E population rate (Hz)"); plt.show()
+`} />
+
+With $\tau_I = 8$ ms the excitatory population rate oscillates at about 61 Hz, in the gamma band. Shorten inhibition to 4 ms and the rhythm speeds up to about 84 Hz; lengthen it to 16 ms and it slows to about 51 Hz. The frequency falls as inhibition lengthens, but by less than a factor of two per doubling, because the period also includes the time for excitatory cells to charge back to threshold and the loop delays, which do not scale with $\tau_I$. This is the behaviour Brunel and Wang predicted, and it is why drugs that prolong GABA-A currents, such as some anaesthetics and benzodiazepines, slow gamma.
+
+<Step n={3} title="Irregular cells, regular rhythm" minutes={30} />
+
+<PyCell id="irregular" title="How often does each cell join in?" tests={String.raw`
+  import numpy as np
+  def test_cv():
+      "single excitatory cells fire irregularly (mean ISI CV above 0.5)"
+      assert np.mean(cvs) > 0.5
+  def test_skip():
+      "each cell fires on fewer than 60% of cycles"
+      assert participation < 0.6
+`} prompt="From the spike times of the first 50 excitatory cells after 200 ms (tau_I = 8 ms), compute each cell's interspike-interval coefficient of variation and its firing rate divided by the oscillation frequency (the fraction of cycles it joins)."
+code={String.raw`
+  spk = runs[8.0][1]; spk = spk[spk[:, 1] > 200]
+  cvs, rates = [], []
+  for n in range(50):
+      t = np.sort(spk[spk[:, 0] == n, 1])
+      if len(t) > 5:
+          ...
+  participation = np.mean(rates) / freq[8.0]
+  print(f"mean ISI CV {np.mean(cvs):.2f}; mean rate {np.mean(rates):.1f} Hz; fraction of cycles joined {participation:.2f}")
+`}
+hint="isi = np.diff(t); cvs.append(isi.std() / isi.mean()); rates.append(len(t) / 0.8)."
+solution={String.raw`
+  spk = runs[8.0][1]; spk = spk[spk[:, 1] > 200]
+  cvs, rates = [], []
+  for n in range(50):
+      t = np.sort(spk[spk[:, 0] == n, 1])
+      if len(t) > 5:
+          isi = np.diff(t)
+          cvs.append(isi.std() / isi.mean()); rates.append(len(t) / 0.8)
+  participation = np.mean(rates) / freq[8.0]
+  print(f"mean ISI CV {np.mean(cvs):.2f}; mean rate {np.mean(rates):.1f} Hz; fraction of cycles joined {participation:.2f}")
+`} />
+
+Each excitatory cell fires at about 29 Hz, so it joins fewer than half the cycles of a 61 Hz rhythm, and its interspike intervals have a coefficient of variation near 0.9, close to that of a Poisson process (CV of 1). A recording from one cell would show irregular firing and no obvious rhythm; the oscillation is a property of the population, visible in the summed activity and in the local field potential. This is the regime Brunel and Wang called sparsely synchronised, and it matches cortical recordings, where cells fire irregularly at low rates while the field shows clear gamma.
+
+<Step n={4} title="What gamma might do" minutes={20} />
+
+Gamma power rises with attention in visual cortex, with stimulus contrast, and during memory encoding in hippocampus. Proposed functions include binding the features of an object by synchrony (Singer and Gray), selective routing of information between areas (Day 3's communication-through-coherence hypothesis), and a clock for temporal codes. Each proposal faces a difficulty: gamma frequency in visual cortex changes with stimulus contrast and differs between neighbouring sites (Ray and Maunsell, 2010), which complicates the idea of a shared clock, and some argue that gamma is a by-product of the E-I balance that any active circuit has, rather than a mechanism the brain uses.
+
+<Callout kind="think">
+
+If gamma is a signature of balanced excitation and inhibition rather than a mechanism, what would you predict for an experiment that abolishes the rhythm without changing firing rates, for example by jittering inhibitory spike times optogenetically? What would the alternative view predict?
+
+</Callout>
+
+<Bridge title="Rhythms from circuits"
+  neuro="Gamma arises from the loop between pyramidal cells and fast-spiking interneurons; its frequency tracks inhibitory kinetics and drive. Gamma deficits are reported in schizophrenia, where parvalbumin interneurons are affected."
+  ai="Most artificial networks have no rhythms because they are not run in continuous time. Spiking neural networks on neuromorphic hardware do, and some proposals use oscillations for time-multiplexing or for routing in such systems.">
+
+Excitation calls inhibition, inhibition silences excitation, and the time it takes to wear off sets the beat.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "PING stands for...", options: ["Pyramidal-interneuron network gamma", "Phase-induced neural gating", "Population inhibition gain", "Periodic input gamma"], answer: 0, explain: "The E-I loop." },
+  { q: "In PING, the oscillation period is set mainly by...", options: ["The decay time of inhibition", "The membrane time constant only", "Axon length", "Dopamine"], answer: 0, explain: "Brunel and Wang (2003)." },
+  { q: "Doubling the inhibitory decay time...", options: ["Lowers the frequency", "Raises it", "Leaves it unchanged", "Stops spiking"], answer: 0, explain: "Inhibition takes longer to wear off." },
+  { q: "The interneurons central to cortical gamma express...", options: ["Parvalbumin", "Somatostatin only", "Dopamine", "Serotonin"], answer: 0, explain: "Fast-spiking basket cells." },
+  { q: "Driving parvalbumin interneurons optogenetically at gamma frequencies...", options: ["Amplifies gamma", "Abolishes all rhythms", "Has no effect", "Produces theta"], answer: 0, explain: "Cardin et al. (2009)." },
+  { q: "In sparse noisy networks, single cells during gamma...", options: ["Fire irregularly and skip most cycles", "Fire on every cycle", "Are silent", "Fire at the network frequency"], answer: 0, explain: "Population rhythm, irregular cells." },
+  { q: "ING requires...", options: ["Mutually inhibiting interneurons with tonic drive", "Pyramidal cells only", "Gap junctions only", "Neuromodulators"], answer: 0, explain: "Interneuron gamma." },
+  { q: "A difficulty for gamma as a shared clock is...", options: ["Its frequency changes with stimulus contrast", "It does not exist in cortex", "It is too slow", "It is identical everywhere"], answer: 0, explain: "Ray and Maunsell (2010)." },
+]} />
+
+<Flashcards cards={[
+  { front: "PING cycle?", back: "E cells fire, excite I cells, I volley silences E cells, inhibition decays, E cells fire again." },
+  { front: "What sets gamma frequency?", back: "Mainly the decay of GABA-A inhibition, plus loop delays and drive." },
+  { front: "Irregular cells in a rhythmic population?", back: "Each cell fires on a random fraction of cycles, so its ISIs are irregular while the population rate oscillates." },
+  { front: "ING against PING?", back: "ING: interneurons alone with tonic drive. PING: the E-I loop." },
+  { front: "Proposed functions of gamma?", back: "Feature binding, routing by coherence, temporal coding; or a by-product of E-I balance." },
+]} />
+
+<Predict revisit question="Doubling the inhibitory decay time: halve, same, or double the frequency?" />
+
+<Key title="Before you go">
+<ul>
+<li>Gamma arises from fast loops between pyramidal cells and interneurons.</li>
+<li>Its frequency is set mostly by inhibitory decay.</li>
+<li>Population rhythms coexist with irregular single-cell firing.</li>
+<li>Whether gamma serves a function or reflects E-I balance is debated.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Brunel and Wang (2003), <em>What determines the frequency of fast network oscillations with irregular neural discharges? I. Synaptic dynamics and excitation-inhibition balance</em>.</li>
+<li>Cardin et al. (2009), <em>Driving fast-spiking cells induces gamma rhythm and controls sensory responses</em>, Nature 459(7247), 663 to 667.</li>
+<li>Buzsáki and Wang (2012), <em>Mechanisms of gamma oscillations</em>, Annual Review of Neuroscience 35, 203 to 225.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Gamma power rises when a monkey attends to a stimulus. Write down two explanations, one in which gamma does something useful for attention and one in which it is a side effect, and describe the measurement that would favour one over the other." />

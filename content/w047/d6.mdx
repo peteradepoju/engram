@@ -1,0 +1,236 @@
+export const meta = {
+  title: "Forge: Week 47 challenge, quiz and deep read",
+  intro: "This week looked behind the rhythms you learned to measure in Week 11. Gamma arises from the loop between pyramidal cells and interneurons, with a frequency set by inhibition; spike-field locking must be measured with care to avoid bias; coherence may route signals between areas, or may be a by-product of their communication; arousal sets cortical state and performance follows an inverted U; and in deep sleep, recurrent excitation and adaptation produce the slow oscillation. Today's challenge turns two of these into analyses: predicting a network's rhythm from a fitted law, and scoring sleep from simulated recordings. Then the quiz, and a critique of Fries's account of communication through coherence.",
+  goals: [
+    "Fit a simple law relating gamma period to inhibitory decay and test its prediction",
+    "Classify brain states from a spectral feature and measure accuracy",
+    "Connect mechanisms of rhythms to their proposed functions",
+    "Critique communication through coherence as a theory of routing",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "fries-2015",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. A neuron fires at 10 spikes per second and participates in a 50 Hz rhythm. On what fraction of cycles does it fire, at most?
+2. For 25 unlocked spikes, roughly what PLV would you expect?
+3. A conduction delay of 5 ms at 40 Hz corresponds to what phase, in radians?
+
+<PyCell code={String.raw`
+  import numpy as np
+  print("1.", 10 / 50)
+  print("2.", round(1 / np.sqrt(25), 2))
+  print("3.", round(2 * np.pi * 40 * 0.005, 2), "rad")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: a law for the gamma period.** Day 1 suggested that the gamma period is roughly a fixed part (charging time and delays) plus a part proportional to the inhibitory decay time: $1/f \approx t_0 + k\,\tau_I$. Simulate Day 1's network for 600 ms at four values of $\tau_I$, fit $t_0$ and $k$ by least squares on $1/f$, predict the frequency at $\tau_I = 12$ ms, and check the prediction with a new simulation.
+
+<PyCell id="partA" title="Part A: fitting and testing the period law" tests={String.raw`
+  import numpy as np
+  def test_slope():
+      "the fitted slope k is positive"
+      assert coef[1] > 0
+  def test_predict():
+      "the predicted frequency at tau_I = 12 ms is within 15% of the simulated one"
+      assert abs(pred - actual) / actual < 0.15
+`} prompt="Simulate the network for tau_I = 3, 5, 8 and 16 ms (600 ms each), find each peak frequency, fit 1/f = t0 + k tau_I with np.linalg.lstsq, and compare the prediction at 12 ms with a fifth simulation."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def ping(tauI=8.0, T=600.0, dt=0.1, seed=0, NE=400, NI=100, drive=2.2, noise=0.05):
+      g = np.random.default_rng(seed); p = 0.2
+      W_EI = (g.random((NI, NE)) < p) * 0.15; W_IE = (g.random((NE, NI)) < p) * 1.2; W_II = (g.random((NI, NI)) < p) * 0.4
+      vE, vI = g.random(NE), g.random(NI); xE, xIE, xII = np.zeros(NI), np.zeros(NE), np.zeros(NI)
+      steps = int(T / dt); rateE = np.zeros(steps)
+      for k in range(steps):
+          vE += dt / 10 * (-vE + drive - xIE) + noise * np.sqrt(dt) * g.normal(size=NE)
+          vI += dt / 10 * (-vI + 0.5 + xE - xII) + noise * np.sqrt(dt) * g.normal(size=NI)
+          fE, fI = vE >= 1, vI >= 1; vE[fE] = 0; vI[fI] = 0
+          xE += -dt * xE / 2.0 + W_EI @ fE; xIE += -dt * xIE / tauI + W_IE @ fI; xII += -dt * xII / tauI + W_II @ fI
+          rateE[k] = fE.mean()
+      return rateE
+
+  def peak_freq(rate, dt=0.1):
+      x = rate[2000:] - rate[2000:].mean(); f = np.fft.rfftfreq(len(x), dt * 1e-3); P = np.abs(np.fft.rfft(x)) ** 2
+      m = (f > 10) & (f < 200)
+      return f[m][P[m].argmax()]
+
+  taus = np.array([3.0, 5.0, 8.0, 16.0])
+  freqs = np.array([peak_freq(ping(t)) for t in taus])
+  coef = ...
+  pred = ...
+  actual = peak_freq(ping(12.0))
+  print(f"frequencies {freqs} Hz; t0 = {1000 * coef[0]:.1f} ms, k = {1000 * coef[1]:.2f} ms per ms; predicted at 12 ms {pred:.0f} Hz, simulated {actual:.0f} Hz")
+  tt = np.linspace(2, 20, 50)
+  plt.plot(taus, freqs, "o", label="simulated"); plt.plot(tt, 1 / (coef[0] + coef[1] * tt), label="fitted law"); plt.plot(12, actual, "s", label="test")
+  plt.xlabel("tau_I (ms)"); plt.ylabel("frequency (Hz)"); plt.legend(); plt.show()
+`}
+hint="coef = np.linalg.lstsq(np.c_[np.ones(4), taus], 1 / freqs, rcond=None)[0]; pred = 1 / (coef[0] + coef[1] * 12)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def ping(tauI=8.0, T=600.0, dt=0.1, seed=0, NE=400, NI=100, drive=2.2, noise=0.05):
+      g = np.random.default_rng(seed); p = 0.2
+      W_EI = (g.random((NI, NE)) < p) * 0.15; W_IE = (g.random((NE, NI)) < p) * 1.2; W_II = (g.random((NI, NI)) < p) * 0.4
+      vE, vI = g.random(NE), g.random(NI); xE, xIE, xII = np.zeros(NI), np.zeros(NE), np.zeros(NI)
+      steps = int(T / dt); rateE = np.zeros(steps)
+      for k in range(steps):
+          vE += dt / 10 * (-vE + drive - xIE) + noise * np.sqrt(dt) * g.normal(size=NE)
+          vI += dt / 10 * (-vI + 0.5 + xE - xII) + noise * np.sqrt(dt) * g.normal(size=NI)
+          fE, fI = vE >= 1, vI >= 1; vE[fE] = 0; vI[fI] = 0
+          xE += -dt * xE / 2.0 + W_EI @ fE; xIE += -dt * xIE / tauI + W_IE @ fI; xII += -dt * xII / tauI + W_II @ fI
+          rateE[k] = fE.mean()
+      return rateE
+
+  def peak_freq(rate, dt=0.1):
+      x = rate[2000:] - rate[2000:].mean(); f = np.fft.rfftfreq(len(x), dt * 1e-3); P = np.abs(np.fft.rfft(x)) ** 2
+      m = (f > 10) & (f < 200)
+      return f[m][P[m].argmax()]
+
+  taus = np.array([3.0, 5.0, 8.0, 16.0])
+  freqs = np.array([peak_freq(ping(t)) for t in taus])
+  coef = np.linalg.lstsq(np.c_[np.ones(4), taus], 1 / freqs, rcond=None)[0]
+  pred = 1 / (coef[0] + coef[1] * 12)
+  actual = peak_freq(ping(12.0))
+  print(f"frequencies {freqs} Hz; t0 = {1000 * coef[0]:.1f} ms, k = {1000 * coef[1]:.2f} ms per ms; predicted at 12 ms {pred:.0f} Hz, simulated {actual:.0f} Hz")
+  tt = np.linspace(2, 20, 50)
+  plt.plot(taus, freqs, "o", label="simulated"); plt.plot(tt, 1 / (coef[0] + coef[1] * tt), label="fitted law"); plt.plot(12, actual, "s", label="test")
+  plt.xlabel("tau_I (ms)"); plt.ylabel("frequency (Hz)"); plt.legend(); plt.show()
+`} />
+
+The frequencies fall from 125 Hz at $\tau_I = 3$ ms to about 48 Hz at 16 ms. The fitted law gives a fixed part of about 5 ms and adds roughly 1 ms of period for each millisecond of inhibitory decay, and it predicts 59 Hz at 12 ms, against 55 Hz simulated: within 7%, from a law with two parameters. The points do not lie perfectly on the curve (5 and 8 ms give similar frequencies here), because the short simulations resolve frequency only to a few hertz and the network can lock to slightly different cycle lengths. A prediction tested on a new condition is still the right way to check a fitted law.
+
+**Part B: scoring sleep.** Sleep scorers classify 10 to 30 second epochs of EEG by their spectra. Simulate 40 epochs of 10 seconds from Day 5's model, each either sleep-like (drive between 0.8 and 1.2) or waking-like (drive between 1.9 and 2.3), and classify each by the fraction of power between 0.1 and 40 Hz that lies below 2 Hz.
+
+<PyCell id="partB" title="Part B: a one-feature sleep scorer" tests={String.raw`
+  import numpy as np
+  def test_separate():
+      "sleep-like epochs have a slow-power fraction above 0.6 on average, waking-like below 0.3"
+      assert feats[labels == 0].mean() > 0.6 and feats[labels == 1].mean() < 0.3
+  def test_accuracy():
+      "a threshold of 0.5 classifies at least 90% of epochs correctly"
+      assert acc >= 0.9
+`} prompt="Write slow_fraction(X): the power of the mean-subtracted epoch between 0.1 and 2 Hz divided by its power between 0.1 and 40 Hz. Compute it for all 40 epochs and classify those above 0.5 as sleep."
+code={String.raw`
+  f_ = lambda u: 1 / (1 + np.exp(-(u - 3) / 0.5))
+  def run(I, b=2.0, T=10.0, dt=0.002, seed=0):
+      g = np.random.default_rng(seed); n = int(T / dt); x = a = 0.0; X = np.zeros(n)
+      nz = 0.15 * np.sqrt(dt / 0.01) * g.normal(size=n)
+      for k in range(n):
+          x += dt / 0.01 * (-x + f_(6 * x + I - a)) + nz[k]; a += dt / 0.5 * (-a + b * x); X[k] = x
+      return X
+
+  def slow_fraction(X, dt=0.002):
+      ...
+
+  g = np.random.default_rng(1)
+  labels = g.integers(0, 2, 40)                 # 0 sleep-like, 1 waking-like
+  feats = np.array([slow_fraction(run(g.uniform(0.8, 1.2) if l == 0 else g.uniform(1.9, 2.3), seed=i)) for i, l in enumerate(labels)])
+  predicted = np.where(feats > 0.5, 0, 1)
+  acc = np.mean(predicted == labels)
+  print(f"mean slow fraction: sleep {feats[labels == 0].mean():.2f}, waking {feats[labels == 1].mean():.2f}; accuracy {acc:.3f}")
+  print("misclassified epochs:", np.where(predicted != labels)[0], "with features", np.round(feats[predicted != labels], 2))
+`}
+hint="x = X - X.mean(); fr = np.fft.rfftfreq(len(x), dt); P = np.abs(np.fft.rfft(x)) ** 2; return P[(fr > 0.1) & (fr < 2)].sum() / P[(fr > 0.1) & (fr < 40)].sum()."
+solution={String.raw`
+  f_ = lambda u: 1 / (1 + np.exp(-(u - 3) / 0.5))
+  def run(I, b=2.0, T=10.0, dt=0.002, seed=0):
+      g = np.random.default_rng(seed); n = int(T / dt); x = a = 0.0; X = np.zeros(n)
+      nz = 0.15 * np.sqrt(dt / 0.01) * g.normal(size=n)
+      for k in range(n):
+          x += dt / 0.01 * (-x + f_(6 * x + I - a)) + nz[k]; a += dt / 0.5 * (-a + b * x); X[k] = x
+      return X
+
+  def slow_fraction(X, dt=0.002):
+      x = X - X.mean(); fr = np.fft.rfftfreq(len(x), dt); P = np.abs(np.fft.rfft(x)) ** 2
+      return P[(fr > 0.1) & (fr < 2)].sum() / P[(fr > 0.1) & (fr < 40)].sum()
+
+  g = np.random.default_rng(1)
+  labels = g.integers(0, 2, 40)                 # 0 sleep-like, 1 waking-like
+  feats = np.array([slow_fraction(run(g.uniform(0.8, 1.2) if l == 0 else g.uniform(1.9, 2.3), seed=i)) for i, l in enumerate(labels)])
+  predicted = np.where(feats > 0.5, 0, 1)
+  acc = np.mean(predicted == labels)
+  print(f"mean slow fraction: sleep {feats[labels == 0].mean():.2f}, waking {feats[labels == 1].mean():.2f}; accuracy {acc:.3f}")
+  print("misclassified epochs:", np.where(predicted != labels)[0], "with features", np.round(feats[predicted != labels], 2))
+`} />
+
+The slow-power fraction separates the states cleanly on average, 0.87 for sleep-like and 0.13 for waking-like epochs, and the 0.5 threshold classifies 39 of 40 epochs correctly. The one error is a waking-like epoch with a fraction of 0.7: with a drive near the lower end of its range, the population dropped into a few down states, and in 10 seconds that is enough to look like sleep. Real scorers face the same problem with drowsy wakefulness and brief arousals, which is why they use longer epochs, several features and the context of neighbouring epochs.
+
+**Part C (written).** Answer in your journal. First, Part A's law saturated at long inhibitory decay times. Using the PING cycle from Day 1, explain what limits the period when inhibition is slow, and how you would test your explanation in the model. Second, in Part B one epoch was misclassified. Real sleep scoring uses more features (spindles, eye movements, muscle tone) and 30-second epochs. Which features would you add to separate drowsy wakefulness from light sleep, and why?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The PPC is unbiased" task="For $n$ independent phases drawn uniformly, show that $\mathbb E\left[\left|\sum_k e^{i\phi_k}\right|^2\right] = n$, and hence that the expected PPC is zero.">
+
+$\left|\sum_k e^{i\phi_k}\right|^2 = \sum_j\sum_k e^{i(\phi_j - \phi_k)} = n + \sum_{j \neq k} e^{i(\phi_j - \phi_k)}$, since the $n$ terms with $j = k$ each equal 1.
+
+For $j \neq k$, the phases are independent and uniform, so $\mathbb E[e^{i(\phi_j - \phi_k)}] = \mathbb E[e^{i\phi_j}]\,\mathbb E[e^{-i\phi_k}] = 0 \times 0 = 0$.
+
+Hence the expectation is $n$, and $\mathbb E[\text{PPC}] = (n - n)/(n(n - 1)) = 0$. The PLV squared, $|\sum e^{i\phi}|^2/n^2$, has expectation $1/n$ instead: the self-pairs are the bias.
+
+</Prove>
+
+<Prove title="2. Gain of a coherent and an incoherent sender" task="A receiver's excitability is $\frac12(1 + \cos\theta)$. Show that spikes arriving at a uniformly random phase have mean gain $\frac12$, and spikes arriving at phases with a normal spread of standard deviation $s$ around $\theta = 0$ have mean gain $\frac12(1 + e^{-s^2/2})$.">
+
+For uniform $\theta$, $\mathbb E[\cos\theta] = 0$, so the mean gain is $\frac12$.
+
+For $\theta \sim \mathcal N(0, s^2)$, $\mathbb E[\cos\theta] = \operatorname{Re}\,\mathbb E[e^{i\theta}] = e^{-s^2/2}$, the characteristic function of the normal distribution at 1.
+
+So the mean gain is $\frac12(1 + e^{-s^2/2})$, which is 1 when spikes are perfectly timed and falls towards $\frac12$ as jitter grows. With 10 ms of jitter at 40 Hz, $s = 2\pi \times 40 \times 0.01 \approx 2.5$ rad, and the gain is about 0.52, as in Day 3.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 47 quiz (15 questions)" questions={[
+  { q: "PING gamma depends on...", options: ["The loop between pyramidal cells and interneurons", "Thalamic pacemakers", "Gap junctions only", "Dopamine"], answer: 0, explain: "Day 1." },
+  { q: "Lengthening inhibitory decay makes gamma...", options: ["Slower", "Faster", "Unchanged", "Disappear always"], answer: 0, explain: "Day 1." },
+  { q: "During gamma, single neurons typically...", options: ["Fire irregularly and skip cycles", "Fire every cycle", "Are silent", "Fire bursts only"], answer: 0, explain: "Day 1." },
+  { q: "The PLV of unlocked spikes is biased by about...", options: ["1/√n", "1/n", "n", "0"], answer: 0, explain: "Day 2." },
+  { q: "The PPC excludes...", options: ["Self-pairs of spikes", "Locked spikes", "High-rate neurons", "The field"], answer: 0, explain: "Day 2." },
+  { q: "Spike phases are usually obtained with...", options: ["The Hilbert transform of the band-passed field", "Counting spikes", "The power spectrum", "PCA"], answer: 0, explain: "Day 2." },
+  { q: "In communication through coherence, effective input arrives...", options: ["At the receiver's excitable phase", "During inhibition", "At random", "Only at alpha peaks"], answer: 0, explain: "Day 3." },
+  { q: "An incoherent sender's mean gain equals...", options: ["The average excitability", "Zero", "One", "The peak excitability"], answer: 0, explain: "Day 3." },
+  { q: "A criticism of CTC is that...", options: ["Gamma frequency varies with the stimulus", "Gamma does not exist", "Coherence never changes with attention", "Delays are zero"], answer: 0, explain: "Day 3." },
+  { q: "McGinley et al. (2015) found best detection at...", options: ["Intermediate arousal", "Lowest arousal", "Highest arousal", "No relation"], answer: 0, explain: "Day 4." },
+  { q: "An inverted U is tested by...", options: ["Adding a squared predictor and comparing fits", "A linear regression only", "A t-test", "Plotting means only"], answer: 0, explain: "Day 4." },
+  { q: "Adaptive gain theory concerns...", options: ["The locus coeruleus", "The cerebellum", "The retina", "The hippocampus"], answer: 0, explain: "Day 4." },
+  { q: "The slow oscillation requires...", options: ["Recurrent excitation plus slow adaptation", "Gamma", "Dopamine", "Fast inhibition only"], answer: 0, explain: "Day 5." },
+  { q: "Increasing drive in the slow oscillation model...", options: ["Abolishes down states", "Lengthens them", "Speeds gamma", "Has no effect"], answer: 0, explain: "Day 5." },
+  { q: "Sleep epochs are classified mainly by...", options: ["Power at slow frequencies", "Gamma power only", "Spike counts", "Pupil size"], answer: 0, explain: "Part B." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Fries (2015) its third pass and write your critique under the five headings. Focus on one question: **does the evidence show that coherence causes effective communication, or only that the two go together?** Consider which findings are correlational (coherence changes with attention) and which are causal or nearly so; the passive account in which coherence is produced by a sender driving a receiver (Schneider and colleagues, 2021); the variability of gamma frequency across stimuli and sites; whether the proposed mechanism needs the precise spike timing your Day 3 simulation required; and the role given to alpha and beta rhythms in feedback. End with an experiment, using stimulation timed to ongoing rhythms, that would distinguish the causal and passive accounts.
+
+<Callout kind="research">
+
+Build two coupled PING networks from Day 1, a sender and a receiver, connected with a 4 ms delay. Does the sender entrain the receiver, and at what phase relation? Then add a second sender at a slightly different frequency, and measure, from the receiver's spikes, how much each sender's input is transmitted. Does the result look like communication through coherence, or like the passive account?
+
+</Callout>
+
+<Key title="Week 47 review checklist">
+<ul>
+<li>I can simulate a PING network and explain what sets its frequency.</li>
+<li>I can measure spike-field locking with the PPC and explain the PLV's bias.</li>
+<li>I can model communication through coherence and state its main criticisms.</li>
+<li>I can model the inverted U of arousal and test it with logistic regression.</li>
+<li>I can simulate up and down states and score sleep from spectra.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then write a paragraph on whether you think brain rhythms are mainly mechanisms or mainly symptoms, using one example from this week on each side." />

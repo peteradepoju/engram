@@ -1,0 +1,194 @@
+export const meta = {
+  title: "Brain states: arousal, neuromodulation and the inverted U",
+  intro: "The same stimulus evokes different responses depending on the state of the brain. When a mouse is drowsy, cortical neurons swing slowly between active and silent periods; when it runs, they are depolarised and fire tonically; in between, when it sits alert, membrane potentials are quiet and sensory responses are large. In 2015 Matthew McGinley, Stephen David and David McCormick tracked these states with pupil diameter, a readout of arousal driven in part by the locus coeruleus, and found that mice detected tones best at intermediate arousal, a modern version of the century-old Yerkes-Dodson law. Today you build a minimal model of their observations, fit the inverted U to simulated behaviour with logistic regression, and discuss how neuromodulators set the gain of whole circuits.",
+  goals: [
+    "Describe how cortical state varies with arousal and how pupil diameter tracks it",
+    "Model detection performance as the ratio of evoked response to state-dependent noise",
+    "Test for an inverted U with a quadratic logistic regression",
+    "Explain the adaptive gain theory of locus coeruleus function",
+  ],
+  plan: [
+    { label: "Predict and cortical states", minutes: 20 },
+    { label: "A model of the inverted U", minutes: 30 },
+    { label: "Testing for an inverted U", minutes: 35 },
+    { label: "Neuromodulators set the gain", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "mcginley-2015",
+};
+
+<Predict question="Detection accuracy is highest at intermediate pupil size. You fit a logistic regression of correct responses on pupil size alone, with no squared term. Will it find a strong effect of pupil, a weak one, or none?" />
+
+<Step n={1} title="Cortical states and arousal" minutes={20} />
+
+In quiet wakefulness or light anaesthesia, cortical neurons alternate between depolarised **up states** and hyperpolarised **down states** every second or so, and the field potential shows large slow waves: a synchronised state. With arousal, the slow fluctuations disappear and the cortex becomes desynchronised. Locomotion adds further depolarisation and changes sensory responses again (Niell and Stryker, 2010, found larger visual responses during running in mouse V1, while auditory responses were often suppressed).
+
+McGinley and colleagues recorded the membrane potential of auditory cortical neurons together with pupil diameter. At small pupil, the potential fluctuated slowly and widely; at large pupil and during locomotion, it was depolarised with fast fluctuations and reduced evoked responses; at intermediate pupil it was hyperpolarised and quiet, and tone-evoked responses were largest and most reliable. In a tone-in-noise detection task, mice performed best at the same intermediate pupil size. Pupil diameter tracks locus coeruleus activity (Joshi, Li, Kalwani and Gold, 2016) and also cholinergic signalling (Reimer and colleagues, 2016).
+
+<Video id="3xyVZ3wGUZE" title="Stochastic Hopfield Model" by="Wulfram Gerstner (EPFL, Neuronal Dynamics)" note="Gerstner adds noise to an attractor network and shows how the level of noise relative to the units' gain changes recall. Neuromodulators are thought to set exactly this balance across whole circuits." />
+
+<Step n={2} title="A model of the inverted U" minutes={30} />
+
+Two observations are enough for an inverted U. The background noise against which a stimulus must be detected, the slow membrane fluctuations, is large at low arousal and falls quickly as arousal rises. The evoked response is large until arousal is high and then shrinks. If detection depends on their ratio, $d' = A(a)/\sigma(a)$, performance peaks in between:
+
+$$
+A(a) = \frac{1}{1 + e^{(a - 0.7)/0.08}}, \qquad \sigma(a) = 0.3 + 1.2\,e^{-a/0.15}.
+$$
+
+This is a description of McGinley and colleagues' measurements, not a mechanism; the mechanisms behind each curve, from thalamic bursting to neuromodulatory effects on inhibition, are research topics in their own right.
+
+<Figure caption="An inverted U. The evoked response (pink) and the background noise (blue) both change with arousal; detection sensitivity (black) is their ratio. Move the two curves and see where performance peaks." credit="Interactive figure by Engram, after McGinley, David and McCormick (2015).">
+  <ArousalInvertedU />
+</Figure>
+
+<PyCell id="model" title="Where performance peaks" tests={String.raw`
+  import numpy as np
+  def test_peak():
+      "sensitivity peaks at intermediate arousal (between 0.3 and 0.65)"
+      assert 0.3 < a[np.argmax(dp)] < 0.65
+  def test_ends():
+      "sensitivity at both extremes is below half the peak"
+      assert dp[0] < 0.5 * dp.max() and dp[-1] < 0.5 * dp.max()
+`} prompt="Compute A, sigma and d' = A / sigma on a grid of arousal from 0 to 1, and find where d' peaks."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  r = np.random.default_rng(2015)
+  a = np.linspace(0, 1, 101)
+  A = ...
+  sigma = ...
+  dp = A / sigma
+  print(f"peak sensitivity {dp.max():.2f} at arousal {a[np.argmax(dp)]:.2f}; at the extremes {dp[0]:.2f} and {dp[-1]:.2f}")
+  plt.plot(a, A, label="evoked response"); plt.plot(a, sigma, label="background noise"); plt.plot(a, dp / dp.max(), "k", label="d' (scaled)")
+  plt.xlabel("arousal (pupil)"); plt.legend(); plt.show()
+`}
+hint="A = 1 / (1 + np.exp((a - 0.7) / 0.08)); sigma = 0.3 + 1.2 * np.exp(-a / 0.15)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  r = np.random.default_rng(2015)
+  a = np.linspace(0, 1, 101)
+  A = 1 / (1 + np.exp((a - 0.7) / 0.08))
+  sigma = 0.3 + 1.2 * np.exp(-a / 0.15)
+  dp = A / sigma
+  print(f"peak sensitivity {dp.max():.2f} at arousal {a[np.argmax(dp)]:.2f}; at the extremes {dp[0]:.2f} and {dp[-1]:.2f}")
+  plt.plot(a, A, label="evoked response"); plt.plot(a, sigma, label="background noise"); plt.plot(a, dp / dp.max(), "k", label="d' (scaled)")
+  plt.xlabel("arousal (pupil)"); plt.legend(); plt.show()
+`} />
+
+Sensitivity peaks at an arousal of about 0.49 with $d' \approx 2.7$, and falls to 0.67 at the lowest arousal and 0.08 at the highest. The two ends fail for different reasons: at low arousal the stimulus is drowned by slow fluctuations, while at high arousal the background is quiet but the response itself has shrunk. That distinction matters, because it predicts different effects of interventions: reducing slow fluctuations should help drowsy animals, and nothing that reduces noise will help an over-aroused one.
+
+<Step n={3} title="Testing for an inverted U" minutes={35} />
+
+In an experiment you do not see $d'$; you see trials, each with a pupil size and a correct or incorrect response. Simulate 3,000 trials of a detection task under the model, with pupil a noisy readout of arousal, and test for the inverted U the way a careful analyst would: compare logistic regressions with and without a squared pupil term.
+
+<PyCell id="logistic" title="Linear against quadratic" tests={String.raw`
+  import numpy as np
+  def test_quadratic():
+      "the quadratic model improves the log-likelihood by more than 20 (likelihood ratio above 40)"
+      assert 2 * (f1.fun - f2.fun) > 40
+  def test_shape():
+      "the squared term is negative and the fitted peak lies between 0.3 and 0.6"
+      b0, b1, b2 = f2.x
+      assert b2 < 0 and 0.3 < -b1 / (2 * b2) < 0.6
+`} prompt="Write nll(w, X, y), the negative log-likelihood of a logistic regression, and fit it with pupil alone (plus intercept) and with pupil and pupil squared. Report the likelihood ratio statistic and the pupil size at which the quadratic peaks."
+code={String.raw`
+  n = 3000
+  arousal = r.uniform(0, 1, n)
+  sig_t = 0.3 + 1.2 * np.exp(-arousal / 0.15); A_t = 1 / (1 + np.exp((arousal - 0.7) / 0.08))
+  stim = r.random(n) < 0.5
+  x = stim * A_t + sig_t * r.normal(size=n)
+  correct = (x > 0.5 * A_t) == stim
+  pupil = arousal + 0.05 * r.normal(size=n)
+
+  def nll(w, X, y):
+      ...
+
+  X1 = np.c_[np.ones(n), pupil]; X2 = np.c_[X1, pupil ** 2]
+  f1 = minimize(nll, np.zeros(2), args=(X1, correct)); f2 = minimize(nll, np.zeros(3), args=(X2, correct))
+  print(f"linear model: slope {f1.x[1]:+.2f}; quadratic model: {np.round(f2.x, 2)}; likelihood ratio {2 * (f1.fun - f2.fun):.1f}; peak at pupil {-f2.x[1] / (2 * f2.x[2]):.2f}")
+  edges = np.linspace(0, 1, 6); idx = np.digitize(pupil, edges)
+  plt.plot([(edges[i] + edges[i + 1]) / 2 for i in range(5)], [correct[idx == i + 1].mean() for i in range(5)], "o-"); plt.xlabel("pupil"); plt.ylabel("proportion correct"); plt.show()
+`}
+hint="z = X @ w; return np.sum(np.logaddexp(0, z) - y * z)."
+solution={String.raw`
+  n = 3000
+  arousal = r.uniform(0, 1, n)
+  sig_t = 0.3 + 1.2 * np.exp(-arousal / 0.15); A_t = 1 / (1 + np.exp((arousal - 0.7) / 0.08))
+  stim = r.random(n) < 0.5
+  x = stim * A_t + sig_t * r.normal(size=n)
+  correct = (x > 0.5 * A_t) == stim
+  pupil = arousal + 0.05 * r.normal(size=n)
+
+  def nll(w, X, y):
+      z = X @ w
+      return np.sum(np.logaddexp(0, z) - y * z)
+
+  X1 = np.c_[np.ones(n), pupil]; X2 = np.c_[X1, pupil ** 2]
+  f1 = minimize(nll, np.zeros(2), args=(X1, correct)); f2 = minimize(nll, np.zeros(3), args=(X2, correct))
+  print(f"linear model: slope {f1.x[1]:+.2f}; quadratic model: {np.round(f2.x, 2)}; likelihood ratio {2 * (f1.fun - f2.fun):.1f}; peak at pupil {-f2.x[1] / (2 * f2.x[2]):.2f}")
+  edges = np.linspace(0, 1, 6); idx = np.digitize(pupil, edges)
+  plt.plot([(edges[i] + edges[i + 1]) / 2 for i in range(5)], [correct[idx == i + 1].mean() for i in range(5)], "o-"); plt.xlabel("pupil"); plt.ylabel("proportion correct"); plt.show()
+`} />
+
+The linear model finds a negative slope, which would suggest that larger pupils are simply bad for performance, missing the rise at small pupil sizes. Adding a squared term improves the fit enormously (a likelihood ratio of 155 for one extra parameter), the squared coefficient is negative, and the fitted peak is at a pupil size of 0.43, close to the model's optimum. A binned plot shows the same shape. For a published claim you would add the cautions below, and check that the peak is not produced by a few sessions with unusual pupil ranges.
+
+<Step n={4} title="Neuromodulators set the gain" minutes={20} />
+
+Aston-Jones and Cohen's (2005) **adaptive gain theory** proposes that the locus coeruleus, the brain's main source of noradrenaline, operates in two modes. In the **phasic** mode, at moderate tonic activity, it fires brief bursts after task-relevant events, increasing the gain of target circuits at the right moments and supporting focused performance (exploitation). In the **tonic** mode, at high baseline activity, the bursts disappear, gain is raised indiscriminately, and behaviour becomes distractible and exploratory. The inverted U of performance against arousal follows naturally. Acetylcholine, from the basal forebrain, has related effects on cortical state and on the balance between bottom-up sensory input and top-down expectations (Yu and Dayan, 2005, proposed that acetylcholine signals expected uncertainty and noradrenaline unexpected uncertainty).
+
+<Callout kind="warning">
+
+Pupil diameter is a convenient readout but not a pure one. It is driven by both noradrenergic and cholinergic systems, responds to luminance and accommodation, and lags neural events by about a second. An inverted U against pupil size can also arise from mixing trials from different behavioural states, such as engaged and disengaged. Control luminance, measure the pupil's derivative as well as its size, and check that the effect survives within sessions.
+
+</Callout>
+
+<Bridge title="State-dependent computation"
+  neuro="Cortical responses depend on arousal, locomotion and attention, which neuromodulators control by changing excitability, inhibition and synaptic gain. Optimal performance at intermediate arousal reflects a balance between background noise and response gain."
+  ai="Temperature in sampling, learning rate schedules and adaptive exploration rates are global gain settings that change a network's behaviour without changing its weights. Gain modulation has also been proposed as a way for one network to switch between tasks.">
+
+How much a stimulus matters depends on the state of the brain that receives it.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "At low arousal, cortical membrane potentials show...", options: ["Large slow fluctuations between up and down states", "Constant depolarisation", "No activity", "Fast gamma only"], answer: 0, explain: "A synchronised state." },
+  { q: "McGinley et al. (2015) found best detection at...", options: ["Intermediate pupil size", "The smallest pupil", "The largest pupil", "No relation to pupil"], answer: 0, explain: "An inverted U." },
+  { q: "Pupil diameter tracks activity in...", options: ["Locus coeruleus and cholinergic systems", "The retina only", "The cerebellum", "The hippocampus"], answer: 0, explain: "Joshi et al. (2016); Reimer et al. (2016)." },
+  { q: "In the simple model, performance is low at high arousal because...", options: ["Evoked responses shrink", "Noise grows without limit", "The stimulus disappears", "Pupil is constricted"], answer: 0, explain: "A(a) falls." },
+  { q: "A linear logistic regression on pupil, for an inverted U, tends to show...", options: ["A monotonic effect that misrepresents the shape", "The inverted U itself", "A perfect fit", "No information at all"], answer: 0, explain: "A straight line cannot bend." },
+  { q: "The quadratic logistic model's peak is at...", options: ["−b₁/(2b₂)", "b₁/b₂", "b₀", "0.5 always"], answer: 0, explain: "Vertex of the parabola." },
+  { q: "In adaptive gain theory, the phasic LC mode supports...", options: ["Focused exploitation", "Distractibility", "Sleep", "Motor learning only"], answer: 0, explain: "Aston-Jones and Cohen (2005)." },
+  { q: "Yu and Dayan (2005) proposed noradrenaline signals...", options: ["Unexpected uncertainty", "Expected uncertainty", "Reward", "Time"], answer: 0, explain: "With acetylcholine for expected uncertainty." },
+]} />
+
+<Flashcards cards={[
+  { front: "Cortical states?", back: "Synchronised (slow up and down states) at low arousal; desynchronised, depolarised at high arousal and during locomotion." },
+  { front: "Inverted U in McGinley et al. (2015)?", back: "Tone detection best at intermediate pupil size, where membrane potential is quiet and evoked responses large." },
+  { front: "Testing an inverted U?", back: "Compare logistic regressions with and without a squared predictor using a likelihood ratio; locate the peak at −b₁/(2b₂)." },
+  { front: "Adaptive gain theory?", back: "Phasic LC bursts raise gain at relevant moments (exploitation); high tonic LC raises gain indiscriminately (exploration)." },
+  { front: "Pupil caveats?", back: "Luminance effects, slow lag, mixed noradrenergic and cholinergic drive, and confounds from behavioural engagement." },
+]} />
+
+<Predict revisit question="Performance peaks at intermediate pupil; a logistic regression with pupil only: strong effect, weak, or none?" />
+
+<Key title="Before you go">
+<ul>
+<li>Arousal changes cortical state, background noise and evoked responses.</li>
+<li>Their ratio predicts an inverted U in performance.</li>
+<li>A quadratic term in a logistic regression tests for it.</li>
+<li>Neuromodulators such as noradrenaline set circuit gain globally.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: McGinley, David and McCormick (2015), <em>Cortical membrane potential signature of optimal states for sensory signal detection</em>.</li>
+<li>Aston-Jones and Cohen (2005), <em>An integrative theory of locus coeruleus-norepinephrine function: adaptive gain and optimal performance</em>, Annual Review of Neuroscience 28, 403 to 450.</li>
+<li>Joshi, Li, Kalwani and Gold (2016), <em>Relationships between pupil diameter and neuronal activity in the locus coeruleus, colliculi, and cingulate cortex</em>, Neuron 89(1), 221 to 234.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Think of a time your own performance followed an inverted U with arousal, for example in an exam or a sport. Which of today's two curves, background noise or evoked response, do you think changed at each end, and how could you measure it?" />

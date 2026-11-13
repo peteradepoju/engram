@@ -1,0 +1,238 @@
+export const meta = {
+  title: "Spikes and fields: measuring phase locking without bias",
+  intro: "A rhythm in the local field potential matters for computation only if neurons' spikes respect it. The standard question is therefore how strongly a neuron's spikes lock to the phase of a field oscillation. The obvious measure, the length of the mean resultant vector of spike phases, has a flaw that has misled many studies: it is biased upwards when there are few spikes, so neurons that fire rarely, or conditions with fewer trials, look more locked than they are. In 2010 Martin Vinck, Marijn van Wingerden, Thilo Womelsdorf, Pascal Fries and Cyriel Pennartz introduced the pairwise phase consistency, a measure whose expected value does not depend on the number of spikes. Today you extract spike phases from a simulated field, see the bias, remove it, and use the corrected measure to compare neurons fairly.",
+  goals: [
+    "Extract the phase of a field oscillation at each spike time",
+    "Compute the phase-locking value and explain its dependence on spike count",
+    "Derive and compute the pairwise phase consistency",
+    "Compare neurons with different firing rates without bias",
+  ],
+  plan: [
+    { label: "Predict and the problem", minutes: 15 },
+    { label: "Spike phases", minutes: 30 },
+    { label: "The bias", minutes: 30 },
+    { label: "Comparing neurons fairly", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "vinck-2010",
+};
+
+<Predict question="A neuron fires with no relation at all to a theta rhythm. You collect 10 of its spikes and compute the phase-locking value. Will it be close to 0, or noticeably above 0?" />
+
+<Step n={1} title="Locking to a rhythm" minutes={15} />
+
+Given the phases $\phi_1, \dots, \phi_n$ of the field oscillation at each of a neuron's spikes, the phase-locking value (PLV) is the length of their mean resultant vector:
+
+$$
+\text{PLV} = \left|\frac{1}{n}\sum_{k=1}^{n} e^{i\phi_k}\right|.
+$$
+
+It is 1 if every spike falls at the same phase and close to 0 if phases are uniform. But "close to 0" depends on $n$: the sum of $n$ random unit vectors has length about $\sqrt n$, so for unlocked spikes the PLV is about $1/\sqrt n$. With 10 spikes that is 0.3, which would look like strong locking.
+
+Vinck and colleagues' fix is to compare spikes in pairs. For any two spikes with phases $\phi_j$ and $\phi_k$, $\cos(\phi_j - \phi_k)$ measures whether they agree. Averaging over all distinct pairs gives the **pairwise phase consistency**, which has an expectation of zero for unlocked spikes whatever $n$ is, and of $\text{PLV}_\infty^2$ (the square of the population value) for locked spikes:
+
+$$
+\text{PPC} = \frac{2}{n(n - 1)}\sum_{j \lt k}\cos(\phi_j - \phi_k) = \frac{\left|\sum_k e^{i\phi_k}\right|^2 - n}{n(n - 1)}.
+$$
+
+<Video id="vO9h5ePvCUY" title="Hilbert Analysis" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch shows how the Hilbert transform turns a band-passed signal into instantaneous amplitude and phase, which is how spike phases are measured today." />
+
+<Step n={2} title="Spike phases" minutes={30} />
+
+Simulate 60 seconds of a field with a drifting 8 Hz theta rhythm plus noise, and a neuron whose firing probability rises at one theta phase: $\lambda(t) \propto e^{\kappa\cos\theta(t)}$ with $\kappa = 1$, at 5 spikes per second on average.
+
+<Figure caption="Phase locking with few and many spikes. The arrows are spike phases; the bar shows the PLV and the PPC as the number of spikes changes. For an unlocked neuron the PLV falls slowly towards zero as spikes are added; the PPC stays near zero throughout." credit="Interactive figure by Engram, after Vinck et al. (2010).">
+  <PhaseLocking />
+</Figure>
+
+<PyCell id="phase" title="Phases from a filtered field" tests={String.raw`
+  import numpy as np
+  def test_locked():
+      "the PLV of the locked neuron is between 0.3 and 0.5"
+      assert 0.3 < plv(p) < 0.5
+  def test_ppc():
+      "its PPC is close to the PLV squared"
+      assert abs(ppc(p) - plv(p) ** 2) < 0.02
+`} prompt="Band-pass the field between 6 and 10 Hz (third-order Butterworth, filtfilt), take the phase of its Hilbert transform, and read it at the spike times. Write plv(phases) and ppc(phases) using the second form of the PPC formula."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.signal import butter, filtfilt, hilbert
+  r = np.random.default_rng(2010)
+  fs, T = 1000, 60
+  t = np.arange(T * fs) / fs
+  theta = 2 * np.pi * 8 * t + np.cumsum(0.05 * r.normal(size=len(t)))      # a slightly wandering rhythm
+  lfp = np.cos(theta) + 0.8 * r.normal(size=len(t))
+
+  def spikes(rate, kappa, pref=0.0):
+      lam = rate * np.exp(kappa * np.cos(theta - pref)) / np.i0(kappa) / fs
+      return np.where(r.random(len(t)) < lam)[0]
+
+  b, a = butter(3, [6 / (fs / 2), 10 / (fs / 2)], "band")
+  phase = ...
+
+  def plv(ph):
+      return ...
+
+  def ppc(ph):
+      n = len(ph)
+      return ...
+
+  s = spikes(5, 1.0); p = phase[s]
+  print(f"{len(s)} spikes: PLV {plv(p):.3f}, PPC {ppc(p):.3f}, PLV squared {plv(p) ** 2:.3f}")
+  plt.hist(p, 24); plt.xlabel("theta phase at spike (rad)"); plt.show()
+`}
+hint="phase = np.angle(hilbert(filtfilt(b, a, lfp))); plv: np.abs(np.mean(np.exp(1j * ph))); ppc: (np.abs(np.exp(1j * ph).sum()) ** 2 - n) / (n * (n - 1))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.signal import butter, filtfilt, hilbert
+  r = np.random.default_rng(2010)
+  fs, T = 1000, 60
+  t = np.arange(T * fs) / fs
+  theta = 2 * np.pi * 8 * t + np.cumsum(0.05 * r.normal(size=len(t)))      # a slightly wandering rhythm
+  lfp = np.cos(theta) + 0.8 * r.normal(size=len(t))
+
+  def spikes(rate, kappa, pref=0.0):
+      lam = rate * np.exp(kappa * np.cos(theta - pref)) / np.i0(kappa) / fs
+      return np.where(r.random(len(t)) < lam)[0]
+
+  b, a = butter(3, [6 / (fs / 2), 10 / (fs / 2)], "band")
+  phase = np.angle(hilbert(filtfilt(b, a, lfp)))
+
+  def plv(ph):
+      return np.abs(np.mean(np.exp(1j * ph)))
+
+  def ppc(ph):
+      n = len(ph)
+      return (np.abs(np.exp(1j * ph).sum()) ** 2 - n) / (n * (n - 1))
+
+  s = spikes(5, 1.0); p = phase[s]
+  print(f"{len(s)} spikes: PLV {plv(p):.3f}, PPC {ppc(p):.3f}, PLV squared {plv(p) ** 2:.3f}")
+  plt.hist(p, 24); plt.xlabel("theta phase at spike (rad)"); plt.show()
+`} />
+
+The neuron's 281 spikes have a PLV of about 0.41, a little below the 0.45 its firing rule implies, because filtering and noise blur the measured phases. The PPC, 0.164, is very close to the PLV squared, 0.167: with this many spikes the bias is small and the two measures agree. The histogram shows the spikes concentrated near phase zero, the peak of the simulated theta cosine.
+
+<Step n={3} title="The bias" minutes={30} />
+
+<PyCell id="bias" title="Unlocked spikes, few and many" tests={String.raw`
+  import numpy as np
+  def test_plv_bias():
+      "for unlocked spikes, the PLV with 10 spikes exceeds 0.2 and falls with n"
+      assert mean_plv[10] > 0.2 and mean_plv[10] > mean_plv[100] > mean_plv[1000]
+  def test_ppc_unbiased():
+      "the PPC averages within 0.02 of zero at every n"
+      assert all(abs(mean_ppc[n]) < 0.02 for n in mean_ppc)
+`} prompt="For n in 10, 30, 100 and 1000, draw 200 sets of n uniformly random phases and average the PLV and PPC over sets."
+code={String.raw`
+  mean_plv, mean_ppc = {}, {}
+  for n in [10, 30, 100, 1000]:
+      sets = [r.uniform(-np.pi, np.pi, n) for _ in range(200)]
+      mean_plv[n] = ...
+      mean_ppc[n] = ...
+      print(f"n = {n:4d}: mean PLV {mean_plv[n]:.3f} (1/sqrt(n) = {1 / np.sqrt(n):.3f}), mean PPC {mean_ppc[n]:+.4f}")
+`}
+hint="mean_plv[n] = np.mean([plv(q) for q in sets]); mean_ppc[n] = np.mean([ppc(q) for q in sets])."
+solution={String.raw`
+  mean_plv, mean_ppc = {}, {}
+  for n in [10, 30, 100, 1000]:
+      sets = [r.uniform(-np.pi, np.pi, n) for _ in range(200)]
+      mean_plv[n] = np.mean([plv(q) for q in sets])
+      mean_ppc[n] = np.mean([ppc(q) for q in sets])
+      print(f"n = {n:4d}: mean PLV {mean_plv[n]:.3f} (1/sqrt(n) = {1 / np.sqrt(n):.3f}), mean PPC {mean_ppc[n]:+.4f}")
+`} />
+
+For random phases the PLV is 0.30 with 10 spikes and still 0.09 with 100, tracking $1/\sqrt n$. A study comparing two conditions with 10 and 100 spikes per neuron would find "stronger locking" in the first, from the bias alone. The PPC averages essentially zero at every $n$. Its estimates are noisier with few spikes, and can be negative, but they are centred on the truth, which is what matters when averaging across neurons or comparing conditions.
+
+<Step n={4} title="Comparing neurons fairly" minutes={30} />
+
+Now the trap in practice. Two neurons lock to theta with exactly the same strength, $\kappa = 0.3$, but one fires at 0.5 spikes per second and the other at 20. Over a 20-second recording, which looks more locked?
+
+<PyCell id="compare" title="Same locking, different rates" tests={String.raw`
+  import numpy as np
+  def test_plv_misleads():
+      "the PLV makes the low-rate neuron look more locked"
+      assert res["0.5 Hz"][0] > res["20 Hz"][0] + 0.1
+  def test_ppc_fair():
+      "the PPCs agree within 0.04"
+      assert abs(res["0.5 Hz"][1] - res["20 Hz"][1]) < 0.02
+`} prompt="Using the first 20 seconds of the field, simulate both neurons 200 times each with kappa 0.3 and average their PLV and PPC."
+code={String.raw`
+  t20 = 20 * fs
+  res = {}
+  for name, rate in [("0.5 Hz", 0.5), ("20 Hz", 20.0)]:
+      vals = []
+      for _ in range(200):
+          s = spikes(rate, 0.3); s = s[s < t20]
+          ...
+      res[name] = np.mean(vals, 0)
+      print(f"{name:5s}: PLV {res[name][0]:.3f}, PPC {res[name][1]:.3f}")
+`}
+hint="vals.append((plv(phase[s]), ppc(phase[s])))."
+solution={String.raw`
+  t20 = 20 * fs
+  res = {}
+  for name, rate in [("0.5 Hz", 0.5), ("20 Hz", 20.0)]:
+      vals = []
+      for _ in range(200):
+          s = spikes(rate, 0.3); s = s[s < t20]
+          vals.append((plv(phase[s]), ppc(phase[s])))
+      res[name] = np.mean(vals, 0)
+      print(f"{name:5s}: PLV {res[name][0]:.3f}, PPC {res[name][1]:.3f}")
+`} />
+
+The two neurons are locked equally, yet the PLV says the 0.5 Hz neuron, with about ten spikes in 20 seconds, is more than twice as locked as the 20 Hz neuron (0.32 against 0.14). The PPC gives both about 0.02, the square of their true locking. Studies of interneurons against pyramidal cells, or of attended against unattended conditions with different rates, have exactly this problem, and the PPC, or a PLV computed on equal numbers of spikes subsampled from each group, is the remedy.
+
+<Callout kind="warning">
+
+The PPC removes the bias from spike count, but not every problem. Spikes within the same trial share that trial's rhythm and may share its phase drift; the PPC variants of Vinck and colleagues (2012) compare only spikes from different trials to avoid this. And if the spike itself contaminates the field recorded on the same electrode, the spike's own waveform creates artefactual locking at high frequencies. Use fields from a neighbouring electrode or remove the spike waveform first.
+
+</Callout>
+
+<Bridge title="Measuring synchrony honestly"
+  neuro="Spike-field locking reveals which neurons participate in which rhythms, and changes in locking with attention or memory load are central evidence for theories of oscillatory communication. Bias-free measures are essential when comparing conditions with different firing rates."
+  ai="The same bias affects any estimate built from the length of a mean of noisy unit vectors, including measures of alignment between gradient directions or attention patterns computed from few samples. The pairwise trick, averaging over distinct pairs, is a general way to remove such bias.">
+
+Few spikes always look aligned; compare them in pairs.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The PLV of n unlocked spikes is about...", options: ["1/√n", "0", "1", "n"], answer: 0, explain: "The length of a random walk divided by n." },
+  { q: "The PPC averages...", options: ["cos(φⱼ − φₖ) over distinct pairs of spikes", "The phases themselves", "The PLV over trials", "Spike counts"], answer: 0, explain: "Vinck et al. (2010)." },
+  { q: "For unlocked spikes, the expected PPC is...", options: ["Zero for any n", "1/n", "1", "Positive"], answer: 0, explain: "Unbiased." },
+  { q: "For locked spikes, the PPC estimates...", options: ["The square of the population PLV", "The PLV", "The preferred phase", "The rate"], answer: 0, explain: "PPC = PLV∞²." },
+  { q: "Spike phases are usually taken from...", options: ["The Hilbert transform of the band-passed field", "The raw field", "The spike waveform", "The power spectrum"], answer: 0, explain: "Instantaneous phase." },
+  { q: "With equal locking, a low-rate neuron's PLV is...", options: ["Inflated relative to a high-rate neuron's", "Smaller", "The same", "Zero"], answer: 0, explain: "Fewer spikes, more bias." },
+  { q: "Spike-field contamination can create...", options: ["Artefactual locking at high frequencies", "Lower firing rates", "Theta oscillations", "Negative PPC"], answer: 0, explain: "Use a neighbouring electrode." },
+  { q: "PPC variants comparing spikes across trials avoid...", options: ["Within-trial dependencies", "Spike count bias", "Filtering artefacts", "All noise"], answer: 0, explain: "Vinck et al. (2012)." },
+]} />
+
+<Flashcards cards={[
+  { front: "PLV?", back: "$|\\frac1n\\sum_k e^{i\\phi_k}|$; biased upwards by about $1/\\sqrt n$ for unlocked spikes." },
+  { front: "PPC formula?", back: "$(|\\sum_k e^{i\\phi_k}|^2 - n)/(n(n-1))$, the mean of $\\cos(\\phi_j - \\phi_k)$ over distinct pairs." },
+  { front: "Why PPC is unbiased?", back: "Distinct pairs of independent uniform phases have $\\mathbb E[\\cos(\\phi_j - \\phi_k)] = 0$; self-pairs, which give the bias, are excluded." },
+  { front: "Spike phase extraction?", back: "Band-pass the field, take the angle of its Hilbert transform at each spike time." },
+  { front: "Pitfalls beyond count bias?", back: "Within-trial dependencies and spike waveform contamination of the field." },
+]} />
+
+<Predict revisit question="Ten spikes unrelated to theta: PLV near 0 or noticeably above?" />
+
+<Key title="Before you go">
+<ul>
+<li>Spike phases come from the Hilbert transform of a band-passed field.</li>
+<li>The PLV is biased upwards when spikes are few.</li>
+<li>The PPC removes this bias by excluding self-pairs.</li>
+<li>Comparing neurons or conditions with different spike counts needs the PPC.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Vinck, van Wingerden, Womelsdorf, Fries and Pennartz (2010), <em>The pairwise phase consistency: a bias-free measure of rhythmic neuronal synchronization</em>.</li>
+<li>Vinck, Battaglia, Womelsdorf and Pennartz (2012), <em>Improved measures of phase-coupling between spikes and the local field potential</em>, Journal of Computational Neuroscience 33(1), 53 to 75.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A paper reports that interneurons are more strongly locked to gamma than pyramidal cells, using the PLV. Interneurons fire at higher rates. Does the bias make the reported difference larger or smaller than the truth? What would you ask the authors to recompute?" />

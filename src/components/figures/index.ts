@@ -214,3 +214,8 @@ export { CrossTemporal } from "./cross-temporal";
 export { CapacityModels } from "./capacity-models";
 export { AttentionNormalisation } from "./attention-normalisation";
 export { ContextNetwork } from "./context-network";
+export { PINGRaster } from "./ping-raster";
+export { PhaseLocking } from "./phase-locking";
+export { CoherenceRouting } from "./coherence-routing";
+export { ArousalInvertedU } from "./arousal-inverted-u";
+export { UpDownStates } from "./up-down-states";
