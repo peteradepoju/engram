@@ -1,0 +1,241 @@
+export const meta = {
+  title: "Limits and flexibility: capacity and mixed selectivity",
+  intro: "Working memory is small. Ask people to remember the colours of several squares and their reports degrade quickly beyond three or four. Whether that limit is a fixed number of slots or a resource spread ever thinner has been argued over for twenty years, and the answer depends on models fitted to the distribution of errors. Prefrontal neurons, meanwhile, are notorious for responding to odd combinations of task variables rather than to one thing each. Rigotti, Barak, Warden, Wang, Daw, Miller and Fusi showed in 2013 that this mixed selectivity is not noise but an asset: it makes the population's representation high-dimensional, so that a simple readout can compute almost any function of the task variables. Today you fit mixture models to memory errors and measure what mixed selectivity buys.",
+  goals: [
+    "Simulate slot and resource models of working memory capacity",
+    "Fit a uniform-plus-normal mixture to recall errors by expectation maximisation",
+    "Explain nonlinear mixed selectivity and why it raises dimensionality",
+    "Show that mixed selectivity makes arbitrary classifications linearly readable",
+  ],
+  plan: [
+    { label: "Predict and the capacity debate", minutes: 15 },
+    { label: "Slots or resources?", minutes: 35 },
+    { label: "Mixed selectivity", minutes: 20 },
+    { label: "Dimensionality and readout", minutes: 35 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "rigotti-2013",
+};
+
+<Predict question="Eight task conditions are made from three binary variables. Fifty neurons each respond to a weighted sum of the three variables. What fraction of all possible ways of splitting the eight conditions into two groups can a linear readout of these neurons implement?" />
+
+<Step n={1} title="The capacity debate" minutes={15} />
+
+In a **continuous report** task, a participant sees several coloured squares, then after a delay is cued to one location and picks its colour on a colour wheel. The error, reported minus true colour, is an angle. Zhang and Luck (2008) found that as the number of items grew beyond about three, errors became a mixture of two kinds: reports close to the true colour with roughly constant precision, plus a growing fraction spread uniformly around the wheel, as if those items were not stored and the participant guessed. They argued for a small number of discrete **slots**.
+
+Bays and Husain (2008) and van den Berg, Shin, Chou, George and Ma (2012) argued for a continuous **resource**: every item is stored, but with precision that falls as the resource is shared among more items, and with variability in precision from item to item, which can mimic guesses. The two accounts make different predictions about how precision and guessing change with set size, and testing them is an exercise in model comparison.
+
+<Video id="yCnl8eNsfYY" title="Storage Capacity" by="Wulfram Gerstner (EPFL, Neuronal Dynamics)" note="Gerstner works out how many patterns an attractor memory can hold before recall fails, a network-level view of why memory capacity is limited." />
+
+<Step n={2} title="Slots or resources?" minutes={35} />
+
+The standard analysis fits each set size's errors with a mixture of a normal distribution centred on zero (remembered items) and a uniform distribution (guesses), giving a guess rate $g$ and a precision $\sigma$. Expectation maximisation alternates between assigning each error a probability of being remembered and re-estimating $g$ and $\sigma$.
+
+<Figure caption="Recall errors in the slot and resource models. Increase the set size and compare how the error distribution changes: a growing uniform floor for slots, a widening peak for resources." credit="Interactive figure by Engram, after Zhang and Luck (2008) and Bays and Husain (2008).">
+  <CapacityModels />
+</Figure>
+
+<PyCell id="em" title="Mixture fits to slot and resource data" tests={String.raw`
+  import numpy as np
+  def test_slots():
+      "slot data: guess rate near zero for 1 and 2 items and near 1 - 3/N for 4 and 6"
+      assert fits["slots"][1][0] < 0.05 and abs(fits["slots"][6][0] - 0.5) < 0.08 and abs(fits["slots"][4][0] - 0.25) < 0.08
+  def test_slots_sd():
+      "slot data: precision roughly constant across set sizes"
+      sds = [fits["slots"][N][1] for N in sizes]
+      assert max(sds) - min(sds) < 0.06
+  def test_resource():
+      "resource data: no guessing, but the error spread grows with set size"
+      assert all(fits["resource"][N][0] < 0.05 for N in sizes) and fits["resource"][6][1] > 2 * fits["resource"][1][1]
+`} prompt="Write em(err): start from g = 0.3 and sigma = 0.3; repeat 200 times: compute each error's probability under the normal (weighted by 1 - g) and the uniform (density g / 2 pi), set w to the normal's share, then g = 1 - mean(w) and sigma = sqrt(sum(w err^2) / sum(w))."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2008)
+  wrap = lambda x: np.angle(np.exp(1j * x))
+  sd1 = np.deg2rad(15)
+
+  def slots(N, n=1000, K=3):
+      stored = r.random(n) < min(1, K / N)
+      return np.where(stored, sd1 * r.normal(size=n), r.uniform(-np.pi, np.pi, n))
+
+  def resource(N, n=1000):
+      return wrap(sd1 * np.sqrt(N) * r.normal(size=n))       # precision 1/sd^2 shared among N items
+
+  def em(err, iters=200):
+      g, sd = 0.3, 0.3
+      for _ in range(iters):
+          ...
+      return g, sd
+
+  sizes = [1, 2, 4, 6]
+  fits = {"slots": {N: em(slots(N)) for N in sizes}, "resource": {N: em(resource(N)) for N in sizes}}
+  for model in fits:
+      print(f"{model:8s}", "; ".join(f"{N} items: guess {g:.2f}, sd {np.rad2deg(s_):.1f} deg" for N, (g, s_) in fits[model].items()))
+`}
+hint="pv = (1 - g) * np.exp(-err ** 2 / (2 * sd ** 2)) / np.sqrt(2 * np.pi * sd ** 2); pu = g / (2 * np.pi); w = pv / (pv + pu); g = 1 - w.mean(); sd = np.sqrt((w * err ** 2).sum() / w.sum())."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2008)
+  wrap = lambda x: np.angle(np.exp(1j * x))
+  sd1 = np.deg2rad(15)
+
+  def slots(N, n=1000, K=3):
+      stored = r.random(n) < min(1, K / N)
+      return np.where(stored, sd1 * r.normal(size=n), r.uniform(-np.pi, np.pi, n))
+
+  def resource(N, n=1000):
+      return wrap(sd1 * np.sqrt(N) * r.normal(size=n))       # precision 1/sd^2 shared among N items
+
+  def em(err, iters=200):
+      g, sd = 0.3, 0.3
+      for _ in range(iters):
+          pv = (1 - g) * np.exp(-err ** 2 / (2 * sd ** 2)) / np.sqrt(2 * np.pi * sd ** 2)
+          pu = g / (2 * np.pi)
+          w = pv / (pv + pu)
+          g = 1 - w.mean(); sd = np.sqrt((w * err ** 2).sum() / w.sum())
+      return g, sd
+
+  sizes = [1, 2, 4, 6]
+  fits = {"slots": {N: em(slots(N)) for N in sizes}, "resource": {N: em(resource(N)) for N in sizes}}
+  for model in fits:
+      print(f"{model:8s}", "; ".join(f"{N} items: guess {g:.2f}, sd {np.rad2deg(s_):.1f} deg" for N, (g, s_) in fits[model].items()))
+`} />
+
+For the slot data, the fitted guess rate is zero for one and two items, 0.26 for four and 0.50 for six, matching $1 - 3/N$, while the precision stays at about 15 degrees throughout: items are either stored well or not at all. For the resource data there is no guessing at any set size, but the spread grows from 15 to 37 degrees, as $\sqrt N$. Real data have looked like a mixture of both patterns, and van den Berg and colleagues showed that a resource model with variable precision from item to item fits as well or better than slots, because a few very imprecise memories look like guesses. The lesson is that the guess rate of a mixture fit is a description, not a mechanism.
+
+<Step n={3} title="Mixed selectivity" minutes={20} />
+
+In Rigotti and colleagues' task, monkeys saw two visual cues in sequence and, depending on a rule, had to recognise the sequence or recall it. Recording from prefrontal neurons, they found that many responded to particular combinations: a neuron might fire for one cue, but only under one rule and only in one task epoch. This **nonlinear mixed selectivity** cannot be described as a sum of separate responses to each variable. Rigotti and colleagues measured the dimensionality of the population's responses across task conditions and found it near the maximum possible, and found that it collapsed on error trials.
+
+Why would that matter? A downstream neuron is, to a first approximation, a linear readout followed by a threshold. If the population's responses to $C$ conditions span only a few dimensions, many ways of grouping the conditions cannot be read out linearly. If they span $C - 1$ dimensions, every grouping can be.
+
+<Step n={4} title="Dimensionality and readout" minutes={35} />
+
+<PyCell id="mixed" title="Pure against mixed selectivity" tests={String.raw`
+  import numpy as np
+  def test_rank():
+      "pure selectivity spans 3 dimensions across 8 conditions; mixed selectivity spans 7"
+      assert rank["pure"] == 3 and rank["mixed"] == 7
+  def test_sep():
+      "mixed selectivity makes every sampled dichotomy linearly separable, pure selectivity under half"
+      assert sep["mixed"] > 0.98 and sep["pure"] < 0.5
+`} prompt="Build 50 neurons of each kind for the 8 conditions: pure (a weighted sum of the three variables) and mixed (the same weighted sum, doubled, minus a random threshold, rectified). Compute the rank of the mean-subtracted response matrix and the fraction of 200 random dichotomies a perceptron can separate."
+code={String.raw`
+  import itertools
+  conds = np.array(list(itertools.product([0, 1], [0, 1], [0, 1])))   # 8 conditions x 3 variables
+
+  def pure(n_neurons):
+      W = r.normal(size=(n_neurons, 3))
+      return ...
+
+  def mixed(n_neurons):
+      W = r.normal(size=(n_neurons, 3)); b = r.normal(size=n_neurons)
+      return ...
+
+  def separable_fraction(R, trials=200):
+      X = np.c_[R, np.ones(len(R))]; ok = 0
+      for _ in range(trials):
+          y = r.choice([-1, 1], 8)
+          if abs(y.sum()) == 8:
+              y[0] *= -1
+          w = np.linalg.lstsq(X, y, rcond=None)[0]
+          for _ in range(500):                                     # perceptron, starting from least squares
+              wrong = np.sign(X @ w) != y
+              if not wrong.any():
+                  break
+              w += 0.1 * (y[wrong][:, None] * X[wrong]).sum(0)
+          ok += not (np.sign(X @ w) != y).any()
+      return ok / trials
+
+  rank, sep = {}, {}
+  for name, fn in [("pure", pure), ("mixed", mixed)]:
+      R = fn(50)
+      rank[name] = np.linalg.matrix_rank(R - R.mean(0)); sep[name] = separable_fraction(R)
+      print(f"{name:5s}: dimensionality {rank[name]}, separable dichotomies {sep[name]:.2f}")
+`}
+hint="pure: return conds @ W.T. mixed: return np.maximum(0, 2 * conds @ W.T - b)."
+solution={String.raw`
+  import itertools
+  conds = np.array(list(itertools.product([0, 1], [0, 1], [0, 1])))   # 8 conditions x 3 variables
+
+  def pure(n_neurons):
+      W = r.normal(size=(n_neurons, 3))
+      return conds @ W.T
+
+  def mixed(n_neurons):
+      W = r.normal(size=(n_neurons, 3)); b = r.normal(size=n_neurons)
+      return np.maximum(0, 2 * conds @ W.T - b)
+
+  def separable_fraction(R, trials=200):
+      X = np.c_[R, np.ones(len(R))]; ok = 0
+      for _ in range(trials):
+          y = r.choice([-1, 1], 8)
+          if abs(y.sum()) == 8:
+              y[0] *= -1
+          w = np.linalg.lstsq(X, y, rcond=None)[0]
+          for _ in range(500):                                     # perceptron, starting from least squares
+              wrong = np.sign(X @ w) != y
+              if not wrong.any():
+                  break
+              w += 0.1 * (y[wrong][:, None] * X[wrong]).sum(0)
+          ok += not (np.sign(X @ w) != y).any()
+      return ok / trials
+
+  rank, sep = {}, {}
+  for name, fn in [("pure", pure), ("mixed", mixed)]:
+      R = fn(50)
+      rank[name] = np.linalg.matrix_rank(R - R.mean(0)); sep[name] = separable_fraction(R)
+      print(f"{name:5s}: dimensionality {rank[name]}, separable dichotomies {sep[name]:.2f}")
+`} />
+
+The purely selective population spans only 3 dimensions across the 8 conditions, however many neurons it has, and a linear readout can implement only about 37% of the random dichotomies tried (the others include XOR-like groupings, such as "rule A with cue 1, or rule B with cue 2"). The mixed population, the same weighted sums passed through a threshold, spans the full 7 dimensions and every dichotomy is separable. The threshold is what does it: it turns a sum of variables into a response to their conjunction. Rigotti and colleagues argued that this is why prefrontal neurons look so idiosyncratic, and that a random, high-dimensional code is a cheap way to make any rule learnable downstream.
+
+<Bridge title="Small memory, flexible code"
+  neuro="Working memory holds few items, and whether its limit is a number of slots or a shared resource is decided by fitting models to error distributions. Prefrontal neurons mix task variables nonlinearly, giving high-dimensional codes that support flexible, context-dependent behaviour."
+  ai="Random nonlinear features, as in kernel machines, extreme learning machines and the expansion layers of transformers, make many functions linearly readable. Bernardi and colleagues (2020) showed that brains and networks can balance high dimensionality with abstract, low-dimensional structure that generalises.">
+
+Capacity limits show in the shape of errors; flexibility comes from neurons that mix what they represent.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In continuous report, errors from unstored items are...", options: ["Uniform around the wheel", "Centred on zero", "Always positive", "Bimodal"], answer: 0, explain: "Guesses." },
+  { q: "The slot model predicts that beyond capacity...", options: ["The guess rate grows while precision stays roughly constant", "Precision falls with no guessing", "Nothing changes", "Errors become negative"], answer: 0, explain: "Zhang and Luck (2008)." },
+  { q: "The resource model predicts...", options: ["Precision falls as items are added, all items stored", "A fixed number of perfect memories", "No effect of set size", "Only guessing"], answer: 0, explain: "Bays and Husain (2008)." },
+  { q: "EM for a mixture model alternates between...", options: ["Assigning responsibilities and re-estimating parameters", "Sampling and rejecting", "Gradient steps on the data", "Clustering and smoothing"], answer: 0, explain: "E step and M step." },
+  { q: "Nonlinear mixed selectivity means a neuron's response...", options: ["Cannot be written as a sum of responses to single variables", "Depends on one variable", "Is random", "Is linear"], answer: 0, explain: "Rigotti et al. (2013)." },
+  { q: "Pure selectivity to three binary variables gives a dimensionality of at most...", options: ["3", "7", "8", "1"], answer: 0, explain: "A linear function of three variables." },
+  { q: "High dimensionality matters because...", options: ["More groupings of conditions become linearly readable", "It uses less energy", "It reduces noise", "It makes neurons silent"], answer: 0, explain: "Separable dichotomies." },
+  { q: "On error trials, Rigotti et al. found dimensionality...", options: ["Collapsed", "Increased", "Was unchanged", "Was zero on correct trials"], answer: 0, explain: "Linking dimensionality to performance." },
+]} />
+
+<Flashcards cards={[
+  { front: "Slot model?", back: "A fixed number of items stored with good precision; the rest are guessed." },
+  { front: "Resource model?", back: "All items stored, with precision falling as a shared resource is divided among more items." },
+  { front: "Mixture model of errors?", back: "$(1 - g)\\,\\mathcal N(0, \\sigma^2) + g/(2\\pi)$, fitted by EM to estimate guess rate and precision." },
+  { front: "Nonlinear mixed selectivity?", back: "Responses to combinations of task variables that are not sums of single-variable responses; raises dimensionality." },
+  { front: "Why dimensionality helps?", back: "With $C$ conditions spanning $C - 1$ dimensions, every dichotomy is linearly separable." },
+]} />
+
+<Predict revisit question="Fifty linearly tuned neurons, eight conditions from three variables: what fraction of dichotomies can a linear readout implement?" />
+
+<Key title="Before you go">
+<ul>
+<li>Fitting a mixture to recall errors separates guessing from imprecision.</li>
+<li>Slot and resource models predict different set-size effects.</li>
+<li>Mixed selectivity raises the dimensionality of population codes.</li>
+<li>High dimensionality makes many task rules linearly readable.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Rigotti, Barak, Warden, Wang, Daw, Miller and Fusi (2013), <em>The importance of mixed selectivity in complex cognitive tasks</em>.</li>
+<li>Zhang and Luck (2008), <em>Discrete fixed-resolution representations in visual working memory</em>, Nature 453(7192), 233 to 235.</li>
+<li>Bays and Husain (2008), <em>Dynamic shifts of limited working memory resources in human vision</em>, Science 321(5890), 851 to 854.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A resource model with variable precision across items can produce error distributions that look like slots plus guesses. Describe an experiment, or an analysis, that would distinguish the two even so." />

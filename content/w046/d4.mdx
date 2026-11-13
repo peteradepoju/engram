@@ -1,0 +1,225 @@
+export const meta = {
+  title: "Attention as normalisation",
+  intro: "Attending to something makes neurons that respond to it fire more and makes us see it better. But the details of how attention changes responses were confusing: some studies found that attention shifted a neuron's contrast-response curve to the left, as if the stimulus had been made stronger, while others found that it scaled the whole curve up. In 2009 John Reynolds and David Heeger showed that both follow from one model, in which attention multiplies a neuron's input before divisive normalisation, the operation you met in vision in Week 38. Which effect appears depends on the size of the stimulus relative to the size of the attended region. Today you build their model, reproduce both effects and the biased competition between two stimuli, and compare it with the attention of transformers.",
+  goals: [
+    "Write the normalisation model of attention",
+    "Show how the relative sizes of stimulus and attention field give contrast gain or response gain",
+    "Reproduce biased competition between two stimuli in one receptive field",
+    "Compare normalised attention in the brain with softmax attention in transformers",
+  ],
+  plan: [
+    { label: "Predict and the puzzle", minutes: 15 },
+    { label: "The model", minutes: 30 },
+    { label: "Contrast gain and response gain", minutes: 30 },
+    { label: "Biased competition and transformers", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "reynolds-heeger-2009",
+};
+
+<Predict question="Two stimuli sit in a neuron's receptive field: one it likes (alone, 60 spikes per second) and one it does not (alone, 10). Shown together, it fires at about 35. If the monkey attends to the preferred stimulus, will the response move towards 60, stay at 35, or exceed 60?" />
+
+<Step n={1} title="Two kinds of attentional modulation" minutes={15} />
+
+Measured across contrasts, a visual neuron's response rises sigmoidally and saturates. Attention can change this curve in two ways. **Contrast gain**: the curve shifts left, so attention acts like an increase in contrast and has little effect at saturation (Reynolds, Pasternak and Desimone, 2000; Martínez-Trujillo and Treue, 2002). **Response gain**: the curve is multiplied, with the largest effect at high contrast (Williford and Maunsell, 2006). The two patterns were taken as evidence for different mechanisms until Reynolds and Heeger noticed that the experiments differed in a detail: the size of the stimulus relative to the region the monkey was attending.
+
+Desimone and Duncan's (1995) **biased competition** account came from a different observation. When two stimuli fall in one receptive field, the response is roughly their average; attending to one of them drives the response towards what that stimulus would evoke alone (Reynolds, Chelazzi and Desimone, 1999). The stimuli compete, and attention biases the competition.
+
+<Video id="eMlx5fFNoYc" title="Attention in transformers, step-by-step" by="Grant Sanderson (3Blue1Brown)" note="How attention works in transformer networks: queries, keys and a softmax that weights each input by its relevance. Watch it with today's model in mind; the softmax is a divisive normalisation." />
+
+<Step n={2} title="The model" minutes={30} />
+
+For a population of neurons indexed by receptive field position $x$, the **stimulus drive** $E(x)$ is the input each would receive without normalisation. The **attention field** $A(x)$ equals 1 outside the attended region and is larger inside it. Attention multiplies the drive, and the result is divided by a **suppressive drive**, the attended drive pooled over a wider neighbourhood:
+
+$$
+R(x) = \frac{A(x)E(x)}{S(x) + \sigma}, \qquad S(x) = \big[k * (A E)\big](x),
+$$
+
+where $k$ is a broad pooling kernel and $\sigma$ sets the contrast at which responses saturate. The key is that attention enters both numerator and denominator. If the attention field is large and covers the whole pool, it scales numerator and denominator alike, which acts like multiplying the contrast. If it is small, it boosts the numerator for the attended neuron but barely changes the pooled denominator, which acts like multiplying the response.
+
+<Figure caption="The normalisation model of attention. Change the stimulus size and the attention field size and watch the contrast-response function shift (contrast gain) or scale (response gain)." credit="Interactive figure by Engram, after Reynolds and Heeger (2009).">
+  <AttentionNormalisation />
+</Figure>
+
+<Step n={3} title="Contrast gain and response gain" minutes={30} />
+
+<PyCell id="gain" title="Two regimes of one model" tests={String.raw`
+  import numpy as np
+  def test_contrast_gain():
+      "small stimulus, large attention field: c50 at least halves while Rmax rises by under 25%"
+      assert c50_ratio["small stimulus"] < 0.6 and rmax_ratio["small stimulus"] < 1.25
+  def test_response_gain():
+      "large stimulus, small attention field: Rmax rises by more than 60%"
+      assert rmax_ratio["large stimulus"] > 1.6
+`} prompt="Complete model(): compute the attended drive A E, the suppressive drive by convolving it with the normalised pooling kernel, and the response of the central neuron. Then compute contrast-response functions with and without attention in both configurations."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  x = np.linspace(-10, 10, 201)
+  k = np.exp(-x ** 2 / (2 * 5.0 ** 2)); k /= k.sum()
+
+  def model(c, stim_w, att_w, attend=True, sigma=0.05, att_gain=3.0):
+      E = c * np.exp(-x ** 2 / (2 * stim_w ** 2))
+      A = 1 + (att_gain - 1) * np.exp(-x ** 2 / (2 * att_w ** 2)) if attend else np.ones_like(x)
+      ...
+      return R[100]                                        # the neuron at the centre
+
+  cs = np.logspace(-3, 0, 31)
+  c50 = lambda R: np.interp(R.max() / 2, R, cs)
+  c50_ratio, rmax_ratio = {}, {}
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3.5))
+  for a_, (name, sw, aw) in zip(ax, [("small stimulus", 1.0, 6.0), ("large stimulus", 6.0, 1.0)]):
+      un = np.array([model(c, sw, aw, False) for c in cs]); at = np.array([model(c, sw, aw, True) for c in cs])
+      c50_ratio[name], rmax_ratio[name] = c50(at) / c50(un), at.max() / un.max()
+      a_.semilogx(cs, un, label="unattended"); a_.semilogx(cs, at, label="attended"); a_.set_title(name); a_.set_xlabel("contrast"); a_.legend()
+      print(f"{name}: c50 ratio {c50_ratio[name]:.2f}, Rmax ratio {rmax_ratio[name]:.2f}")
+  plt.tight_layout(); plt.show()
+`}
+hint="EA = E * A; S = np.convolve(EA, k, mode='same'); R = EA / (S + sigma)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  x = np.linspace(-10, 10, 201)
+  k = np.exp(-x ** 2 / (2 * 5.0 ** 2)); k /= k.sum()
+
+  def model(c, stim_w, att_w, attend=True, sigma=0.05, att_gain=3.0):
+      E = c * np.exp(-x ** 2 / (2 * stim_w ** 2))
+      A = 1 + (att_gain - 1) * np.exp(-x ** 2 / (2 * att_w ** 2)) if attend else np.ones_like(x)
+      EA = E * A
+      S = np.convolve(EA, k, mode="same")
+      R = EA / (S + sigma)
+      return R[100]                                        # the neuron at the centre
+
+  cs = np.logspace(-3, 0, 31)
+  c50 = lambda R: np.interp(R.max() / 2, R, cs)
+  c50_ratio, rmax_ratio = {}, {}
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3.5))
+  for a_, (name, sw, aw) in zip(ax, [("small stimulus", 1.0, 6.0), ("large stimulus", 6.0, 1.0)]):
+      un = np.array([model(c, sw, aw, False) for c in cs]); at = np.array([model(c, sw, aw, True) for c in cs])
+      c50_ratio[name], rmax_ratio[name] = c50(at) / c50(un), at.max() / un.max()
+      a_.semilogx(cs, un, label="unattended"); a_.semilogx(cs, at, label="attended"); a_.set_title(name); a_.set_xlabel("contrast"); a_.legend()
+      print(f"{name}: c50 ratio {c50_ratio[name]:.2f}, Rmax ratio {rmax_ratio[name]:.2f}")
+  plt.tight_layout(); plt.show()
+`} />
+
+With a small stimulus inside a large attention field, attention more than halves the contrast needed for a half-maximal response (c50 ratio 0.43) and raises the maximum by only 16%: contrast gain. With a large stimulus and a small attention field, the maximum response doubles: response gain. One model, two regimes, depending only on geometry. Herrmann, Montaser-Kouhsari, Carrasco and Heeger (2010) then tested the prediction in human psychophysics by manipulating the size of the attended region and the stimulus, and found the switch between the two kinds of effect on contrast sensitivity that the model predicts.
+
+<Step n={4} title="Biased competition and transformers" minutes={30} />
+
+For two stimuli in one receptive field, write the response as normalised, attention-weighted drive. If the neuron's input weights for the preferred and non-preferred stimulus are $w_1$ and $w_2$, each stimulus also contributes to the suppressive pool, and attention multiplies a stimulus's contribution to both:
+
+$$
+R = \frac{a_1 w_1 c_1 + a_2 w_2 c_2}{a_1 c_1 + a_2 c_2 + \sigma}.
+$$
+
+Compare a transformer's attention head: the output at one position is $\sum_j \frac{e^{q\cdot k_j}}{\sum_l e^{q\cdot k_l}}\,v_j$, a weighted average of values in which each weight is divided by the sum over all inputs. Both are divisive normalisations; in the brain, the attention gain $a$ comes from top-down signals, and in a transformer, the weights $e^{q \cdot k}$ come from the match between a query and each input.
+
+<PyCell id="compete" title="Attention biases the competition" tests={String.raw`
+  import numpy as np
+  def test_pair():
+      "without attention, the pair response lies between the single responses"
+      assert resp["non-preferred alone"] < resp["pair"] < resp["preferred alone"]
+  def test_bias():
+      "attending to the preferred stimulus moves the pair response at least two thirds of the way to its single response"
+      assert (resp["attend preferred"] - resp["pair"]) > (2 / 3) * (resp["preferred alone"] - resp["pair"])
+  def test_bias_other():
+      "attending to the non-preferred stimulus moves it towards the non-preferred response"
+      assert resp["attend non-preferred"] < resp["pair"] - 10
+`} prompt="Write pair_response(c1, c2, a1=1, a2=1) from the formula with w1 = 60, w2 = 10, sigma = 0.05, and evaluate the five conditions at contrast 0.5 with an attention gain of 4."
+code={String.raw`
+  def pair_response(c1, c2, a1=1.0, a2=1.0, w1=60.0, w2=10.0, sigma=0.05):
+      return ...
+
+  resp = {
+      "preferred alone": pair_response(0.5, 0.0),
+      "non-preferred alone": pair_response(0.0, 0.5),
+      "pair": pair_response(0.5, 0.5),
+      "attend preferred": pair_response(0.5, 0.5, a1=4.0),
+      "attend non-preferred": pair_response(0.5, 0.5, a2=4.0),
+  }
+  for k_, v in resp.items():
+      print(f"{k_:22s} {v:5.1f} spikes/s")
+
+  def softmax_attention(q, K, V):
+      s = K @ q; w = np.exp(s - s.max()); w /= w.sum()      # divisive normalisation of the weights
+      return w @ V, w
+  _, w = softmax_attention(np.array([2.0, 0.0]), np.array([[1.0, 0.0], [0.0, 1.0]]), np.array([[60.0], [10.0]]))
+  print("softmax weights when the query matches the first key:", np.round(w, 2))
+`}
+hint="return (a1 * w1 * c1 + a2 * w2 * c2) / (a1 * c1 + a2 * c2 + sigma)."
+solution={String.raw`
+  def pair_response(c1, c2, a1=1.0, a2=1.0, w1=60.0, w2=10.0, sigma=0.05):
+      return (a1 * w1 * c1 + a2 * w2 * c2) / (a1 * c1 + a2 * c2 + sigma)
+
+  resp = {
+      "preferred alone": pair_response(0.5, 0.0),
+      "non-preferred alone": pair_response(0.0, 0.5),
+      "pair": pair_response(0.5, 0.5),
+      "attend preferred": pair_response(0.5, 0.5, a1=4.0),
+      "attend non-preferred": pair_response(0.5, 0.5, a2=4.0),
+  }
+  for k_, v in resp.items():
+      print(f"{k_:22s} {v:5.1f} spikes/s")
+
+  def softmax_attention(q, K, V):
+      s = K @ q; w = np.exp(s - s.max()); w /= w.sum()      # divisive normalisation of the weights
+      return w @ V, w
+  _, w = softmax_attention(np.array([2.0, 0.0]), np.array([[1.0, 0.0], [0.0, 1.0]]), np.array([[60.0], [10.0]]))
+  print("softmax weights when the query matches the first key:", np.round(w, 2))
+`} />
+
+Alone, the preferred stimulus evokes about 55 spikes per second and the non-preferred about 9; together, about 33, close to their average, because each adds to the suppressive pool as well as to the drive. Attending to the preferred stimulus brings the pair response to 49, most of the way to its single response; attending to the non-preferred brings it down to 20. This is biased competition, with no separate competition mechanism: attention gives one stimulus a larger share of a normalised total. The softmax in the last lines does the same thing to its inputs, giving 88% of the weight to the matching key.
+
+<Callout kind="think">
+
+Normalisation explains how attention changes responses, not where the attention signal comes from or why attending improves perception. Candidate sources include the frontal eye fields, whose microstimulation produces attention-like effects in visual cortex (Moore and Armstrong, 2003), and the pulvinar. Improved perception may come less from larger responses than from reduced variability and reduced noise correlations between neurons (Cohen and Maunsell, 2009), which make the population code more informative (Week 35).
+
+</Callout>
+
+<Bridge title="Attention in brains and machines"
+  neuro="Attention multiplies the stimulus drive before divisive normalisation; the relative sizes of stimulus and attention field decide whether this looks like contrast gain or response gain, and the same model gives biased competition."
+  ai="Transformer attention is a softmax-normalised weighting of inputs by their relevance to a query. The resemblance to normalisation is real but partial: transformer attention routes information between positions, while biological attention mainly changes the gain of sensory responses.">
+
+Divide by the neighbourhood, and attention's many effects become one mechanism.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Contrast gain means attention...", options: ["Shifts the contrast-response curve to lower contrasts", "Multiplies the whole curve", "Has no effect", "Lowers the maximum"], answer: 0, explain: "Like an increase in contrast." },
+  { q: "Response gain means attention...", options: ["Scales the curve, most at high contrast", "Shifts it left", "Removes saturation", "Reduces responses"], answer: 0, explain: "Williford and Maunsell (2006)." },
+  { q: "In the normalisation model, attention multiplies...", options: ["The stimulus drive, in both numerator and suppressive pool", "Only the output", "Only σ", "Only the pool"], answer: 0, explain: "Reynolds and Heeger (2009)." },
+  { q: "A small stimulus with a large attention field gives...", options: ["Contrast gain", "Response gain", "No effect", "Suppression"], answer: 0, explain: "Attention scales numerator and pool alike." },
+  { q: "A large stimulus with a small attention field gives...", options: ["Response gain", "Contrast gain", "No effect", "Suppression"], answer: 0, explain: "The pool barely changes." },
+  { q: "Two stimuli in one receptive field evoke...", options: ["Roughly an average of their single responses", "Their sum", "The maximum", "Zero"], answer: 0, explain: "Normalisation." },
+  { q: "Attending to one of the two moves the response...", options: ["Towards that stimulus's single response", "Away from it", "To zero", "To the sum"], answer: 0, explain: "Biased competition." },
+  { q: "The softmax in transformer attention is a form of...", options: ["Divisive normalisation", "Subtractive inhibition", "Hebbian learning", "Pooling by max"], answer: 0, explain: "Weights divided by their sum." },
+]} />
+
+<Flashcards cards={[
+  { front: "Normalisation model of attention?", back: "$R = AE/(k * (AE) + \\sigma)$: attention multiplies the drive before divisive normalisation." },
+  { front: "Contrast against response gain?", back: "Contrast gain: curve shifts left (small stimulus, large attention field). Response gain: curve scales (large stimulus, small attention field)." },
+  { front: "Biased competition?", back: "With two stimuli in a receptive field, attention pushes the response towards that of the attended stimulus alone." },
+  { front: "Two-stimulus formula?", back: "$R = (a_1w_1c_1 + a_2w_2c_2)/(a_1c_1 + a_2c_2 + \\sigma)$." },
+  { front: "Transformer attention?", back: "Output = softmax-weighted average of values; the softmax divides each weight by the sum over inputs." },
+]} />
+
+<Predict revisit question="Preferred alone 60, non-preferred 10, pair 35. Attend preferred: towards 60, stay, or exceed?" />
+
+<Key title="Before you go">
+<ul>
+<li>Attention multiplies stimulus drive before normalisation.</li>
+<li>Stimulus and attention-field sizes decide contrast gain against response gain.</li>
+<li>The same model gives biased competition.</li>
+<li>Transformer attention shares the divisive form but serves a different purpose.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Reynolds and Heeger (2009), <em>The normalization model of attention</em>.</li>
+<li>Reynolds, Chelazzi and Desimone (1999), <em>Competitive mechanisms subserve attention in macaque areas V2 and V4</em>, Journal of Neuroscience 19(5), 1736 to 1753.</li>
+<li>Carandini and Heeger (2012), <em>Normalization as a canonical neural computation</em>, Nature Reviews Neuroscience 13(1), 51 to 62.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="The normalisation model predicts that attending to a small region and showing a large stimulus gives response gain. Design a behavioural experiment in humans that would test this prediction using contrast discrimination thresholds rather than neural recordings." />

@@ -1,0 +1,218 @@
+export const meta = {
+  title: "Holding a location in mind: persistent activity and bump attractors",
+  intro: "Working memory is the ability to hold information for a few seconds after it has gone, long enough to use it. In 1989 Shintaro Funahashi, Charles Bruce and Patricia Goldman-Rakic trained monkeys to remember where a light had flashed and, after a delay of several seconds, to look there. Neurons in dorsolateral prefrontal cortex fired throughout the delay, each for its own remembered location. In 2000 Albert Compte, Nicolas Brunel, Patricia Goldman-Rakic and Xiao-Jing Wang showed that a recurrent network with structured connections can hold such a memory as a bump of activity, and that the model predicts how the memory degrades: it drifts like a random walk, and it is pulled by distractors that resemble it. Last week's decision network held a binary choice; today's holds a continuous quantity.",
+  goals: [
+    "Describe the oculomotor delayed response task and delay-period activity",
+    "Show that noise makes a remembered location diffuse, with error variance growing linearly with delay",
+    "Explain why nearby distractors attract the memory and distant ones are ignored",
+    "Relate the strength of recurrent excitation to the existence of persistent activity",
+  ],
+  plan: [
+    { label: "Predict and delay activity", minutes: 15 },
+    { label: "A memory that diffuses", minutes: 35 },
+    { label: "Distractors", minutes: 30 },
+    { label: "How much recurrence?", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "compte-2000",
+};
+
+<Predict question="A remembered location is held as a bump of activity that wanders randomly. If the typical error after 1 second is 4 degrees, what will it be after 4 seconds?" />
+
+<Step n={1} title="Delay activity in prefrontal cortex" minutes={15} />
+
+In the oculomotor delayed response task a monkey fixates, a cue flashes briefly at one of several locations, and after a delay of a few seconds the fixation point goes out and the monkey must look where the cue was. Funahashi, Bruce and Goldman-Rakic (1989) found that many dorsolateral prefrontal neurons fired persistently during the delay, with tuning curves over remembered location, a "memory field". The activity predicted performance: on error trials it was weaker or wrong. Similar delay activity has since been found in parietal cortex, in the frontal eye fields and elsewhere.
+
+The bump attractor model of Compte and colleagues explains this activity with the ring architecture you met for head direction in Week 43: pyramidal neurons with similar preferred locations excite one another, through slow NMDA synapses, and broad inhibition keeps the activity local. A brief cue starts a bump at the cued location; the bump persists without input. Because nothing pins it in place, noise moves it, and the remembered location drifts.
+
+<Video id="f2tadlvuhcg" title="Spatial Continuum (Model)" by="Wulfram Gerstner (EPFL, Neuronal Dynamics)" note="Gerstner analyses a continuum of neurons with distance-dependent excitation and inhibition, the field model behind bump attractors, including when a localised bump of activity is a stable solution." />
+
+<Step n={2} title="A memory that diffuses" minutes={35} />
+
+The network below has 60 rate neurons on a ring with connections $W_{ij} = (J_0 + J_1\cos(\theta_i - \theta_j))/N$, a uniform background input, and a cue presented for the first 300 steps. During the delay each neuron also receives independent noise.
+
+<Figure caption="A bump attractor holding a location. Each row is a neuron ordered by preferred location; the bump is held after the cue and wanders with noise. Add a distractor and move it closer to or further from the memory." credit="Interactive figure by Engram, after Compte et al. (2000).">
+  <BumpMemory />
+</Figure>
+
+<PyCell id="diffuse" title="Error variance grows with delay" tests={String.raw`
+  import numpy as np
+  def test_linear():
+      "the variance of the remembered location grows roughly linearly with delay"
+      ratio = var[-1] / var[0]
+      assert 4 < ratio < 9
+  def test_mean():
+      "the memory is unbiased on average"
+      assert abs(np.angle(np.exp(1j * cen[-1])).mean()) < 0.05
+`} prompt="Complete run(): on each step update every trial's activity u by dt (-u + W f(u) + input) plus noise of size noise times sqrt(dt); record the bump centre of every trial every 500 delay steps. Then compute the variance of the remembered location at each recorded delay."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2000)
+  N = 60; th = np.linspace(-np.pi, np.pi, N, endpoint=False); D = th[:, None] - th[None, :]
+  f = lambda x: np.clip(x, 0, 1)
+
+  def ring(J1=6.0, J0=-2.0):
+      return (J0 + J1 * np.cos(D)) / N
+
+  def run(W, cue=0.0, delay=3000, noise=0.05, trials=80, dist=None, amp=0.3, dt=0.1):
+      U = np.zeros((trials, N)); cen = []
+      for k in range(300 + delay):
+          inp = 0.1 + (0.5 * np.cos(th - cue) if k < 300 else 0)
+          if dist is not None and 300 + dist[1] <= k < 400 + dist[1]:
+              inp = inp + amp * np.exp(5 * (np.cos(th - dist[0]) - 1))
+          ...
+          if k >= 300 and (k - 300) % 500 == 499:
+              cen.append(np.angle((f(U) * np.exp(1j * th)).sum(1)))
+      return np.array(cen), f(U)
+
+  cen, _ = run(ring())
+  var = np.var(np.angle(np.exp(1j * cen)), 1)
+  delays = 50 * np.arange(1, len(var) + 1)       # in units of tau: 500 steps of 0.1
+  print("variance of remembered location by delay:", np.round(var, 4))
+  plt.plot(delays, var, "o-"); plt.xlabel("delay (units of tau)"); plt.ylabel("variance (rad^2)"); plt.show()
+`}
+hint="U += dt * (-U + f(U) @ W.T + inp) + noise * np.sqrt(dt) * r.normal(size=U.shape)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2000)
+  N = 60; th = np.linspace(-np.pi, np.pi, N, endpoint=False); D = th[:, None] - th[None, :]
+  f = lambda x: np.clip(x, 0, 1)
+
+  def ring(J1=6.0, J0=-2.0):
+      return (J0 + J1 * np.cos(D)) / N
+
+  def run(W, cue=0.0, delay=3000, noise=0.05, trials=80, dist=None, amp=0.3, dt=0.1):
+      U = np.zeros((trials, N)); cen = []
+      for k in range(300 + delay):
+          inp = 0.1 + (0.5 * np.cos(th - cue) if k < 300 else 0)
+          if dist is not None and 300 + dist[1] <= k < 400 + dist[1]:
+              inp = inp + amp * np.exp(5 * (np.cos(th - dist[0]) - 1))
+          U += dt * (-U + f(U) @ W.T + inp) + noise * np.sqrt(dt) * r.normal(size=U.shape)
+          if k >= 300 and (k - 300) % 500 == 499:
+              cen.append(np.angle((f(U) * np.exp(1j * th)).sum(1)))
+      return np.array(cen), f(U)
+
+  cen, _ = run(ring())
+  var = np.var(np.angle(np.exp(1j * cen)), 1)
+  delays = 50 * np.arange(1, len(var) + 1)       # in units of tau: 500 steps of 0.1
+  print("variance of remembered location by delay:", np.round(var, 4))
+  plt.plot(delays, var, "o-"); plt.xlabel("delay (units of tau)"); plt.ylabel("variance (rad^2)"); plt.show()
+`} />
+
+The variance of the remembered location grows steadily with delay, from about 0.016 to 0.12 rad² over six recorded delays, close to linear (a sixfold increase in time gives roughly a sevenfold increase here, within sampling noise). So the typical error grows like the square root of the delay: four times the delay, twice the error. Human and monkey errors in delayed-response tasks grow with delay in this way, and the bump model gives a mechanism for it: there is nothing to pull the bump back, because every location is equally stable.
+
+<Step n={3} title="Distractors" minutes={30} />
+
+During the delay, a brief, weaker stimulus appears somewhere else. What happens to the memory depends on where.
+
+<PyCell id="distract" title="Near and far distractors" tests={String.raw`
+  import numpy as np
+  def test_near():
+      "a distractor 0.3 rad away pulls the memory more than 0.15 rad towards it"
+      assert shift[0.3] > 0.15
+  def test_far():
+      "a distractor 2.5 rad away leaves the memory within 0.15 rad of the cue"
+      assert abs(shift[2.5]) < 0.15
+`} prompt="For distractors at 0.3, 0.6, 1.2 and 2.5 rad, presented 1,000 steps into the delay with amplitude 0.3, run 60 trials with noise 0.02 and record the median final location."
+code={String.raw`
+  shift = {}
+  for d in [0.3, 0.6, 1.2, 2.5]:
+      c, _ = ...
+      shift[d] = np.median(np.angle(np.exp(1j * c[-1])))
+      print(f"distractor at {d:.1f} rad: memory ends at {shift[d]:+.2f} rad")
+`}
+hint="c, _ = run(ring(), dist=(d, 1000), trials=60, noise=0.02)."
+solution={String.raw`
+  shift = {}
+  for d in [0.3, 0.6, 1.2, 2.5]:
+      c, _ = run(ring(), dist=(d, 1000), trials=60, noise=0.02)
+      shift[d] = np.median(np.angle(np.exp(1j * c[-1])))
+      print(f"distractor at {d:.1f} rad: memory ends at {shift[d]:+.2f} rad")
+`} />
+
+A distractor 0.3 rad from the memory pulls it almost all the way there, and one at 0.6 or 1.2 rad does much the same: these distractors overlap the existing bump, so the network merges them into it and the bump settles in between or on the distractor. A distractor 2.5 rad away leaves the memory where it was. There, the global inhibition generated by the existing bump suppresses the new input before it can build a second bump. Compte and colleagues described this distance dependence, and it is one reason people are worse at ignoring distractors that resemble what they are trying to remember.
+
+<Step n={4} title="How much recurrence?" minutes={25} />
+
+<PyCell id="recur" title="Below the critical strength" tests={String.raw`
+  import numpy as np
+  def test_hold():
+      "with J1 = 6 the bump persists through the delay"
+      assert peak[6.0] > 0.4
+  def test_fade():
+      "with J1 = 2.5 the activity has decayed to near background"
+      assert peak[2.5] < 0.15
+`} prompt="Run 20 noiseless trials with J1 = 6 and with J1 = 2.5 and record the mean peak activity at the end of the delay."
+code={String.raw`
+  peak = {}
+  for J1 in [6.0, 2.5]:
+      _, R = ...
+      peak[J1] = R.max(1).mean()
+      print(f"J1 = {J1}: peak activity at the end of the delay {peak[J1]:.3f}")
+`}
+hint="_, R = run(ring(J1), trials=20, noise=0.0)."
+solution={String.raw`
+  peak = {}
+  for J1 in [6.0, 2.5]:
+      _, R = run(ring(J1), trials=20, noise=0.0)
+      peak[J1] = R.max(1).mean()
+      print(f"J1 = {J1}: peak activity at the end of the delay {peak[J1]:.3f}")
+`} />
+
+With strong recurrent excitation ($J_1 = 6$) the bump is still at full height at the end of the delay; with $J_1 = 2.5$ it has decayed to the background level. Below a critical strength the recurrent input cannot replace the cue, and the network has only one stable state, the uniform one. Persistent activity therefore depends on the strength of excitatory connections, which dopamine and NMDA receptor function modulate, and it is fragile in exactly the conditions, such as ageing and schizophrenia, in which working memory is impaired (Arnsten and colleagues have studied these links in prefrontal cortex).
+
+<Callout kind="research">
+
+Bump attractor models make a testable prediction about errors: the remembered location should drift over the delay, and the drift should be visible in the population activity. Wimmer, Nykamp, Constantinidis and Compte (2014) found exactly this in prefrontal recordings: when the population's bump was displaced late in the delay, the monkey's saccade erred in the same direction. Kilpatrick, Ermentrout and others have studied how short-term plasticity or heterogeneity can slow the drift. And serial dependence, the bias of a memory towards the previous trial's stimulus, may arise from the same attracting dynamics carried across trials.
+
+</Callout>
+
+<Bridge title="A continuous memory"
+  neuro="Bump attractors account for delay activity, for errors that grow with delay, and for attraction towards nearby distractors. They need strong, slow recurrent excitation, which links working memory to NMDA receptors and to the effects of dopamine on prefrontal circuits."
+  ai="Recurrent networks hold information in their state; when trained to remember a continuous variable they develop ring- or line-shaped attractors. Transformers avoid the problem by keeping past inputs in a context window instead of a decaying state, at the cost of memory that grows with the sequence.">
+
+A ring of mutually exciting neurons can hold any location, and noise makes that memory diffuse.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In the oculomotor delayed response task, delay activity in prefrontal cortex...", options: ["Is tuned to the remembered location", "Encodes only the saccade", "Is absent", "Is identical for all locations"], answer: 0, explain: "Funahashi, Bruce and Goldman-Rakic (1989)." },
+  { q: "In a bump attractor, noise makes the remembered location...", options: ["Diffuse like a random walk", "Stay fixed", "Jump to zero", "Oscillate"], answer: 0, explain: "No restoring force along the ring." },
+  { q: "Error variance in a diffusing memory grows...", options: ["Linearly with delay", "Exponentially", "Not at all", "With the square of delay"], answer: 0, explain: "Like any random walk." },
+  { q: "A distractor near the remembered location...", options: ["Attracts the memory", "Is ignored", "Erases the memory", "Repels it"], answer: 0, explain: "It overlaps the bump." },
+  { q: "A distractor far from the memory...", options: ["Is suppressed by inhibition and ignored", "Captures the memory", "Doubles the bump", "Has the same effect as a near one"], answer: 0, explain: "Compte et al. (2000)." },
+  { q: "Persistent activity requires...", options: ["Recurrent excitation above a critical strength", "No inhibition", "Constant input", "Fast synapses"], answer: 0, explain: "Below it, activity decays." },
+  { q: "Wimmer et al. (2014) found that late-delay bump position...", options: ["Predicted the direction of the saccade error", "Was unrelated to behaviour", "Was always at the cue", "Only coded reward"], answer: 0, explain: "A test of drift." },
+  { q: "The ring architecture for working memory is the same as for...", options: ["Head direction (Week 43)", "Place cells", "Grid modules", "Dopamine"], answer: 0, explain: "A continuous attractor." },
+]} />
+
+<Flashcards cards={[
+  { front: "Oculomotor delayed response?", back: "Remember a briefly cued location over a delay, then saccade to it; prefrontal neurons fire persistently with memory fields." },
+  { front: "Bump attractor?", back: "A localised bump of activity in a ring network with local excitation and broad inhibition, stable at any position." },
+  { front: "Diffusion of a memory?", back: "Noise moves the bump; error variance grows linearly with delay." },
+  { front: "Distractor effects?", back: "Near distractors attract the memory; far ones are suppressed by inhibition." },
+  { front: "Requirement for persistence?", back: "Recurrent excitation strong enough to sustain the bump without input, helped by slow NMDA synapses." },
+]} />
+
+<Predict revisit question="Error after 1 s is 4 degrees for a diffusing memory. What after 4 s?" />
+
+<Key title="Before you go">
+<ul>
+<li>Prefrontal delay activity carries remembered locations.</li>
+<li>A bump attractor holds them, and noise makes them diffuse.</li>
+<li>Nearby distractors pull the memory; distant ones do not.</li>
+<li>Persistence needs strong recurrent excitation.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Compte, Brunel, Goldman-Rakic and Wang (2000), <em>Synaptic mechanisms and network dynamics underlying spatial working memory in a cortical network model</em>.</li>
+<li>Funahashi, Bruce and Goldman-Rakic (1989), <em>Mnemonic coding of visual space in the monkey's dorsolateral prefrontal cortex</em>, Journal of Neurophysiology 61(2), 331 to 349.</li>
+<li>Wimmer, Nykamp, Constantinidis and Compte (2014), <em>Bump attractor dynamics in prefrontal cortex explains behavioral precision in spatial working memory</em>, Nature Neuroscience 17(3), 431 to 439.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If remembered locations drift like a random walk, your memory of where you put something should get worse steadily over seconds, but long-term memory does not work like that. Describe how a brain might hand a working memory over to a more stable store, and what would be lost in the transfer." />

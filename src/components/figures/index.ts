@@ -209,3 +209,8 @@ export { LIPRamps } from "./lip-ramps";
 export { WangAttractor } from "./wang-attractor";
 export { BiasSignatures } from "./bias-signatures";
 export { ConfidenceMap } from "./confidence-map";
+export { BumpMemory } from "./bump-memory";
+export { CrossTemporal } from "./cross-temporal";
+export { CapacityModels } from "./capacity-models";
+export { AttentionNormalisation } from "./attention-normalisation";
+export { ContextNetwork } from "./context-network";

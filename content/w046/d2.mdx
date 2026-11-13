@@ -1,0 +1,268 @@
+export const meta = {
+  title: "Beyond persistent activity: dynamic and activity-silent memory",
+  intro: "The bump attractor stores a memory in a fixed pattern of persistent firing. Two lines of evidence have complicated that picture. First, when many neurons are recorded at once, the pattern that encodes a remembered item often changes over the delay: a decoder trained early fails later, even though the item can be decoded at every moment. Second, memories can sometimes be recovered after delay activity has fallen to baseline, as if they were stored in the synapses rather than the spikes. Mark Stokes's 2015 review drew these findings together into a dynamic coding framework. Today you learn the method that revealed dynamic codes, cross-temporal decoding, find a stable subspace inside a changing code, and simulate a memory held silently in short-term facilitation and read out by a ping.",
+  goals: [
+    "Compute and interpret a cross-temporal decoding matrix",
+    "Distinguish stable, dynamic and mixed codes from their decoding matrices",
+    "Find a stable coding subspace within a dynamic population code",
+    "Explain activity-silent storage in short-term synaptic facilitation and how a ping reveals it",
+  ],
+  plan: [
+    { label: "Predict and the evidence", minutes: 15 },
+    { label: "Cross-temporal decoding", minutes: 35 },
+    { label: "A stable subspace", minutes: 25 },
+    { label: "Memory in the synapses", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "stokes-2015",
+};
+
+<Predict question="A remembered item can be decoded from a neural population at every moment of a delay with 95% accuracy. A decoder trained at the start of the delay is tested at the end. Must it also be 95% accurate?" />
+
+<Step n={1} title="Three challenges to persistent activity" minutes={15} />
+
+Stokes (2015) summarised three kinds of evidence. **Dynamics**: in prefrontal recordings, the population pattern that distinguishes remembered items often evolves through the delay (Meyers, Freedman, Kreiman, Miller and Poggio, 2008; Stokes and colleagues, 2013). **Sparseness**: in single trials, delay activity can be bursty rather than sustained, with brief bouts of gamma and beta activity (Lundqvist and colleagues, 2016). **Silence**: information about an unattended memory item can disappear from measured activity and then reappear when it becomes relevant, or when the brain is pinged with a neutral stimulus (Wolff, Jochim, Akyürek and Stokes, 2017).
+
+Mongillo, Barak and Tsodyks (2008), whose model you met in Week 33, had proposed a mechanism: short-term synaptic facilitation, lasting about a second, can hold a memory in the strengthened synapses of the neurons that were recently active, with occasional reactivations refreshing it. Persistent activity and synaptic storage are not exclusive; the brain may use both, for different purposes.
+
+<Video id="xwr6lerXbMk" title="Transients" by="Wulfram Gerstner (EPFL, Neuronal Dynamics)" note="Gerstner analyses how a population's activity evolves in time in response to input, the transient dynamics that today's dynamic coding view says may carry information as much as stable states do." />
+
+<Step n={2} title="Cross-temporal decoding" minutes={35} />
+
+Train a decoder on the population activity at one time, $t_1$, and test it at another, $t_2$. Repeat for all pairs and you get a matrix of accuracies. A stable code gives a square block: any decoder works at any time. A dynamic code gives a narrow diagonal: a decoder works only near the time it was trained, even if each time is decodable.
+
+<Figure caption="Cross-temporal decoding matrices for stable, dynamic and mixed codes. Rows: time the decoder was trained; columns: time it was tested. Brightness is accuracy." credit="Interactive figure by Engram, after Stokes (2015) and Meyers et al. (2008).">
+  <CrossTemporal />
+</Figure>
+
+<PyCell id="ctd" title="Stable and dynamic codes" tests={String.raw`
+  import numpy as np
+  def test_diag():
+      "every code is decodable at every time (diagonal accuracy above 0.95)"
+      assert all(np.diag(M[k]).mean() > 0.95 for k in M)
+  def test_stable():
+      "the stable code generalises across time (accuracy above 0.95 for gaps of 8 bins or more)"
+      assert far(M["stable"]) > 0.95
+  def test_dynamic():
+      "the dynamic code does not generalise (below 0.65 for long gaps)"
+      assert far(M["dynamic"]) < 0.65
+`} prompt="Write ctd(X, lab): split the trials in half at random; for each training time, take the difference of class means as the decoder; test it on the other half at every time by the sign of the projection. Apply it to three simulated populations."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2015)
+  N, T, n = 80, 20, 100
+
+  def make(kind):
+      m1, m2, ms = r.normal(size=(3, N))
+      pats = []
+      for t in range(T):
+          ph = 2 * np.pi * t / T * 1.5
+          dyn = np.cos(ph) * m1 + np.sin(ph) * m2
+          pats.append({"stable": ms, "dynamic": dyn, "mixed": 0.6 * ms + 0.8 * dyn}[kind])
+      pats = 0.25 * np.array(pats)
+      lab = np.r_[np.ones(n), -np.ones(n)]
+      X = lab[:, None, None] * pats[None] + r.normal(size=(2 * n, T, N))
+      return X, lab
+
+  def ctd(X, lab):
+      idx = r.permutation(len(lab)); tr, te = idx[: len(lab) // 2], idx[len(lab) // 2 :]
+      A = np.zeros((T, T))
+      for t1 in range(T):
+          w = ...
+          for t2 in range(T):
+              A[t1, t2] = ...
+      return A
+
+  def far(A):
+      gap = np.abs(np.subtract.outer(np.arange(T), np.arange(T)))
+      return A[gap >= 8].mean()
+
+  data = {k: make(k) for k in ["stable", "dynamic", "mixed"]}
+  M = {k: ctd(*data[k]) for k in data}
+  fig, ax = plt.subplots(1, 3, figsize=(10, 3.4))
+  for a_, k in zip(ax, M):
+      a_.imshow(M[k], vmin=0.5, vmax=1, origin="lower"); a_.set_title(f"{k}: far {far(M[k]):.2f}"); a_.set_xlabel("test time"); a_.set_ylabel("train time")
+  plt.tight_layout(); plt.show()
+  print("mean accuracy for gaps of 8 or more bins:", ", ".join(f"{k} {far(v):.2f}" for k, v in M.items()))
+`}
+hint="w = X[tr][lab[tr] > 0, t1].mean(0) - X[tr][lab[tr] < 0, t1].mean(0); A[t1, t2] = np.mean(np.sign(X[te][:, t2] @ w) == lab[te])."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2015)
+  N, T, n = 80, 20, 100
+
+  def make(kind):
+      m1, m2, ms = r.normal(size=(3, N))
+      pats = []
+      for t in range(T):
+          ph = 2 * np.pi * t / T * 1.5
+          dyn = np.cos(ph) * m1 + np.sin(ph) * m2
+          pats.append({"stable": ms, "dynamic": dyn, "mixed": 0.6 * ms + 0.8 * dyn}[kind])
+      pats = 0.25 * np.array(pats)
+      lab = np.r_[np.ones(n), -np.ones(n)]
+      X = lab[:, None, None] * pats[None] + r.normal(size=(2 * n, T, N))
+      return X, lab
+
+  def ctd(X, lab):
+      idx = r.permutation(len(lab)); tr, te = idx[: len(lab) // 2], idx[len(lab) // 2 :]
+      A = np.zeros((T, T))
+      for t1 in range(T):
+          w = X[tr][lab[tr] > 0, t1].mean(0) - X[tr][lab[tr] < 0, t1].mean(0)
+          for t2 in range(T):
+              A[t1, t2] = np.mean(np.sign(X[te][:, t2] @ w) == lab[te])
+      return A
+
+  def far(A):
+      gap = np.abs(np.subtract.outer(np.arange(T), np.arange(T)))
+      return A[gap >= 8].mean()
+
+  data = {k: make(k) for k in ["stable", "dynamic", "mixed"]}
+  M = {k: ctd(*data[k]) for k in data}
+  fig, ax = plt.subplots(1, 3, figsize=(10, 3.4))
+  for a_, k in zip(ax, M):
+      a_.imshow(M[k], vmin=0.5, vmax=1, origin="lower"); a_.set_title(f"{k}: far {far(M[k]):.2f}"); a_.set_xlabel("test time"); a_.set_ylabel("train time")
+  plt.tight_layout(); plt.show()
+  print("mean accuracy for gaps of 8 or more bins:", ", ".join(f"{k} {far(v):.2f}" for k, v in M.items()))
+`} />
+
+All three populations are decodable at every moment, with diagonal accuracy near 0.98. Off the diagonal they differ completely. The stable code's decoders work across the whole delay. The dynamic code's decoders work only near their training time; for gaps of 8 bins or more they are barely above chance, at 0.57, because the coding direction has rotated away. The mixed code sits in between at about 0.69. This is why single-time decoding cannot tell you whether a memory is held in a fixed pattern: you need the off-diagonal.
+
+<Step n={3} title="A stable subspace" minutes={25} />
+
+Murray, Bernacchia, Roy, Constantinidis, Romo and Wang (2017) found that prefrontal codes in working-memory tasks are mixtures like the third population: much of the activity changes through the delay, but a subspace of the population carries the memory stably. A decoder restricted to that subspace generalises across the whole delay. The simplest estimate of it is the class difference averaged over all delay times, which cancels the parts that rotate.
+
+<PyCell id="subspace" title="Finding the stable part" tests={String.raw`
+  import numpy as np
+  def test_general():
+      "the time-averaged decoder exceeds 0.75 accuracy at every time bin of the mixed code"
+      assert acc_avg.min() > 0.75
+  def test_better():
+      "it beats a decoder trained at the first time bin, averaged over all test times"
+      assert acc_avg.mean() > acc_first.mean() + 0.1
+`} prompt="For the mixed population, build w_avg from the class-mean difference averaged over all time bins of the training half, and w_first from time 0 only. Test both at every time on the other half."
+code={String.raw`
+  X, lab = data["mixed"]
+  idx = r.permutation(len(lab)); tr, te = idx[:n], idx[n:]
+  diff = X[tr][lab[tr] > 0].mean(0) - X[tr][lab[tr] < 0].mean(0)     # T x N class difference
+  w_avg = ...
+  w_first = ...
+  acc_avg = np.array([np.mean(np.sign(X[te][:, t] @ w_avg) == lab[te]) for t in range(T)])
+  acc_first = np.array([np.mean(np.sign(X[te][:, t] @ w_first) == lab[te]) for t in range(T)])
+  print(f"time-averaged decoder: min {acc_avg.min():.2f}, mean {acc_avg.mean():.2f};  first-bin decoder: mean {acc_first.mean():.2f}")
+  plt.plot(acc_avg, label="time-averaged decoder"); plt.plot(acc_first, label="trained at t = 0"); plt.ylim(0.4, 1.02); plt.xlabel("test time bin"); plt.legend(); plt.show()
+`}
+hint="w_avg = diff.mean(0); w_first = diff[0]."
+solution={String.raw`
+  X, lab = data["mixed"]
+  idx = r.permutation(len(lab)); tr, te = idx[:n], idx[n:]
+  diff = X[tr][lab[tr] > 0].mean(0) - X[tr][lab[tr] < 0].mean(0)     # T x N class difference
+  w_avg = diff.mean(0)
+  w_first = diff[0]
+  acc_avg = np.array([np.mean(np.sign(X[te][:, t] @ w_avg) == lab[te]) for t in range(T)])
+  acc_first = np.array([np.mean(np.sign(X[te][:, t] @ w_first) == lab[te]) for t in range(T)])
+  print(f"time-averaged decoder: min {acc_avg.min():.2f}, mean {acc_avg.mean():.2f};  first-bin decoder: mean {acc_first.mean():.2f}")
+  plt.plot(acc_avg, label="time-averaged decoder"); plt.plot(acc_first, label="trained at t = 0"); plt.ylim(0.4, 1.02); plt.xlabel("test time bin"); plt.legend(); plt.show()
+`} />
+
+Averaging the class difference over time keeps the stable component and partly cancels the rotating one, and the resulting decoder works at every time bin, never below about 0.76 and 0.88 on average. A decoder trained at the first bin averages only 0.65, because most of what it learned rotates away. The same population can thus look dynamic or stable depending on which directions you read: a downstream area needs only the stable subspace to read the memory at any moment, while the dynamic part may carry time or task information.
+
+<Step n={4} title="Memory in the synapses" minutes={30} />
+
+In the Mongillo model, presenting an item drives its neurons and raises the utilisation $u$ of their outgoing synapses, which then decays back to baseline $U$ with a facilitation time constant $\tau_F$ of about 1.5 s. Spiking can stop entirely while $u$ stays raised. A brief, non-specific input, a ping, then drives every neuron equally, but the neurons with facilitated synapses respond more, through recurrent connections, and the memory reappears in the activity. Wolff and colleagues used exactly this logic with EEG in humans: a task-irrelevant visual impulse during the delay evoked a response from which an unattended item could be decoded.
+
+<PyCell id="ping" title="Reading out a silent memory" tests={String.raw`
+  import numpy as np
+  def test_early():
+      "half a second after the cue, the ping response decodes the item above 85%"
+      assert acc[0] > 0.85
+  def test_decay():
+      "decoding falls towards chance as facilitation decays"
+      assert all(np.diff(acc) <= 0.02) and acc[-1] < 0.6
+`} prompt="For each delay, compute the facilitation of the cued pool, U + (1 - U) exp(-delay / tauF), and of the other pool (U). Simulate ping responses proportional to facilitation plus noise for 400 trials, decode the item as the pool with the larger response, and record accuracy."
+code={String.raw`
+  tauF, U0, noise = 1.5, 0.2, 0.3
+  delays = np.array([0.5, 1, 2, 4, 8])
+  acc = []
+  for d in delays:
+      u_cued = ...
+      item = r.integers(0, 2, 400)
+      resp = np.full((400, 2), U0)
+      resp[np.arange(400), item] = u_cued
+      resp = resp + noise * r.normal(size=resp.shape)
+      acc.append(...)
+  acc = np.array(acc)
+  print("decoding accuracy from the ping response:", ", ".join(f"{d:g} s: {a_:.2f}" for d, a_ in zip(delays, acc)))
+`}
+hint="u_cued = U0 + (1 - U0) * np.exp(-d / tauF); acc.append(np.mean(np.argmax(resp, 1) == item))."
+solution={String.raw`
+  tauF, U0, noise = 1.5, 0.2, 0.3
+  delays = np.array([0.5, 1, 2, 4, 8])
+  acc = []
+  for d in delays:
+      u_cued = U0 + (1 - U0) * np.exp(-d / tauF)
+      item = r.integers(0, 2, 400)
+      resp = np.full((400, 2), U0)
+      resp[np.arange(400), item] = u_cued
+      resp = resp + noise * r.normal(size=resp.shape)
+      acc.append(np.mean(np.argmax(resp, 1) == item))
+  acc = np.array(acc)
+  print("decoding accuracy from the ping response:", ", ".join(f"{d:g} s: {a_:.2f}" for d, a_ in zip(delays, acc)))
+`} />
+
+Half a second after the cue, the ping response identifies the item on 92% of trials; after 2 s, 68%; by 8 s, chance. The memory fades with the facilitation time constant unless something refreshes it, which in the Mongillo model is a brief population spike that resets facilitation, and in the brain may be attention returning to the item. Two features distinguish this from persistent activity: nothing in the firing rates carries the memory between pings, and the readout is driven by a probe that itself contains no information about the item.
+
+<Callout kind="warning">
+
+"Activity-silent" means silent to the measurement, not necessarily to the brain. EEG and fMRI average over millions of neurons, and a code carried by a small or sparse population can be invisible to them while still being present in spikes. Barbosa and colleagues (2020) found that prefrontal activity in monkeys carried weak but real information through delays where human EEG had suggested silence, and that its reactivation predicted serial biases. Treat claims of silence as claims about a particular signal.
+
+</Callout>
+
+<Bridge title="Where is a memory kept?"
+  neuro="Working memory may combine persistent activity for attended items with synaptic or dynamic storage for items held in reserve. Cross-temporal decoding and pings have become standard tools for telling these apart."
+  ai="Fast weights, weights that change quickly during a single sequence, store recent information in connections rather than activations (Ba, Hinton and colleagues, 2016), and linear attention can be written as a fast-weight memory. They are the machine analogue of activity-silent storage.">
+
+A memory can live in a stable pattern, a changing one, or in synapses waiting to be pinged.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A cross-temporal decoding matrix shows...", options: ["Accuracy of decoders trained at one time and tested at another", "Firing rates over time", "Correlations between neurons", "Reaction times"], answer: 0, explain: "Train at t₁, test at t₂." },
+  { q: "A stable code gives...", options: ["A square block of high accuracy", "A narrow diagonal", "Chance everywhere", "A checkerboard"], answer: 0, explain: "Any decoder works at any time." },
+  { q: "A dynamic code gives...", options: ["A narrow diagonal", "A square block", "Chance on the diagonal", "Perfect accuracy everywhere"], answer: 0, explain: "Decodable at each time, but by different patterns." },
+  { q: "Murray et al. (2017) found in prefrontal cortex...", options: ["A stable subspace within dynamic activity", "Only stable codes", "No memory information", "Only silent codes"], answer: 0, explain: "Mixed codes." },
+  { q: "In the Mongillo model, a memory is held in...", options: ["Short-term facilitation of synapses", "Long-term potentiation", "Gene expression", "Dendritic spikes only"], answer: 0, explain: "Week 33." },
+  { q: "A ping reveals a silent memory because...", options: ["Facilitated synapses make cued neurons respond more", "It contains the memory", "It erases other memories", "It triggers LTP"], answer: 0, explain: "Wolff et al. (2017)." },
+  { q: "Silent memory decays with...", options: ["The facilitation time constant", "The membrane time constant", "The reward rate", "The number of neurons"], answer: 0, explain: "About 1.5 s in the model." },
+  { q: "The AI analogue of synaptic storage is...", options: ["Fast weights", "Dropout", "Batch normalisation", "Pooling"], answer: 0, explain: "Ba et al. (2016)." },
+]} />
+
+<Flashcards cards={[
+  { front: "Cross-temporal decoding?", back: "Train a decoder at each time and test at every other; the matrix shows whether the code is stable or dynamic." },
+  { front: "Dynamic coding?", back: "The population pattern that encodes an item changes over the delay, though the item is decodable throughout." },
+  { front: "Stable subspace?", back: "A direction in population space that carries the memory throughout a dynamic delay; estimated by averaging class differences over time." },
+  { front: "Activity-silent memory?", back: "Information held in short-term synaptic changes without elevated firing, readable by reactivation." },
+  { front: "Ping or impulse method?", back: "A neutral stimulus during the delay whose evoked response reveals the hidden memory." },
+]} />
+
+<Predict revisit question="Decodable at 95% at every moment: must a decoder trained early work late?" />
+
+<Key title="Before you go">
+<ul>
+<li>Cross-temporal decoding separates stable from dynamic codes.</li>
+<li>Dynamic codes can contain stable subspaces.</li>
+<li>Short-term facilitation can store a memory without activity.</li>
+<li>Pings reveal silent memories, and silence depends on the measurement.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Stokes (2015), <em>'Activity-silent' working memory in prefrontal cortex: a dynamic coding framework</em>.</li>
+<li>Murray, Bernacchia, Roy, Constantinidis, Romo and Wang (2017), <em>Stable population coding for working memory coexists with heterogeneous neural dynamics in prefrontal cortex</em>, PNAS 114(2), 394 to 399.</li>
+<li>Wolff, Jochim, Akyürek and Stokes (2017), <em>Dynamic hidden states underlying working-memory-guided behavior</em>, Nature Neuroscience 20(6), 864 to 871.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Why might a brain prefer to hold some memories silently? List one advantage and one cost of synaptic storage compared with persistent firing, considering energy, interference and speed of access." />
