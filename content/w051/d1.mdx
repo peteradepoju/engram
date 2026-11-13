@@ -1,0 +1,268 @@
+export const meta = {
+  title: "Meet the data: 18 mice in the IBL task",
+  intro: "Part 2 ends, as Part 1 did, with a project on real data. This week you take the choices of 18 mice from nine laboratories of the International Brain Laboratory, about 70,000 trials in all, and ask one question with the tools of the last six months: when the side of the stimulus is predictable, how do mice learn and use that prediction? Today you meet the data: the task, what was recorded, how accuracy and speed depend on the stimulus, and the first sign that the mice know which block they are in.",
+  goals: [
+    "Understand the IBL task, the block structure and the structure of the dataset",
+    "Load the data and summarise accuracy and response times by contrast",
+    "Fit psychometric functions to each mouse in each block and measure the shift",
+    "Find a first clue in the response times about how the prior enters the decision",
+  ],
+  plan: [
+    { label: "The project and the task", minutes: 20 },
+    { label: "Loading and exploring", minutes: 30 },
+    { label: "Psychometric curves by block", minutes: 35 },
+    { label: "Response times", minutes: 20 },
+    { label: "Plan, quiz and journal", minutes: 15 },
+  ],
+  paper: "burgess-2017",
+};
+
+<Predict question="At zero contrast there is nothing on the screen to see, and the mouse must guess. In blocks where the stimulus appears on the right 80% of the time, how often do mice choose right on these trials: about 50%, about 60%, or about 80%?" />
+
+<Step n={1} title="The project and the task" minutes={20} />
+
+A mouse is head-fixed in front of three screens, its front paws on a small wheel. A grating appears on the left or the right screen, and the mouse turns the wheel to move it to the centre. A correct turn earns a drop of water; a wrong one earns a burst of noise and a longer wait. The grating's contrast varies from trial to trial: 100%, 25%, 12.5%, 6.25% or 0%, where nothing is shown and the mouse is rewarded at random for one side. Burgess and colleagues (2017) developed this task at University College London, and the International Brain Laboratory (IBL) standardised it so that it could be run identically in laboratories on three continents.
+
+Once trained, the mice move on to a **biased** version. Each session starts with 90 trials in which both sides are equally likely. After that, trials come in blocks in which the stimulus is on the left 80% of the time, alternating with blocks in which it is on the right 80% of the time. Blocks last between 20 and 100 trials, and nothing signals a switch. A mouse that tracks which block it is in can do better on hard trials, and at zero contrast it can do better than chance only by using that knowledge.
+
+The data are from the IBL's 2019 public release, which accompanied their 2021 paper on reproducibility (Week 3's deep read). Engram's file holds the first five biased sessions (with at least 400 trials each) of two mice from each of the nine laboratories: 18 mice, 90 sessions and 70,402 trials. For every trial it records the signed contrast (negative on the left, positive on the right), the choice (1 for right, 0 for left, −1 when the mouse made no choice within the time limit), whether it was rewarded, the block's probability of a left stimulus, and the time from stimulus onset to the response.
+
+<Callout kind="note">
+
+**Your project brief.** By the end of Day 6, produce a notebook that runs from top to bottom and a two-page report with four figures: (1) psychometric curves by block for all mice, (2) the effect of trial history, (3) a model comparison of how mice track the block across all 18 mice, and (4) at least two controls. The report should answer, with numbers: how strongly do mice use the block prior, which model of the prior describes them best, how fast does their prior adapt compared with what is optimal, and which simpler explanations can you rule out? Each day builds one piece.
+
+</Callout>
+
+<Video id="4Gl8X_y_uoA" title="Asking a question" by="Neuromatch Academy" note="Neuromatch's tutorial video on the first step of a modelling project: turning a phenomenon into a precise question that a model can answer. Use it to sharpen your own question for this week." />
+
+<Step n={2} title="Loading and exploring" minutes={30} />
+
+The data are on the Engram site; `dataset()` fetches them (in Colab, the notebook's first cell does this). Each array has one entry per trial, in time order within each session.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  d = np.load(dataset("ibl_biased.npz"))
+  mouse, session = d["mouse"].astype(int), d["session"].astype(int)
+  contrast = d["contrast"].astype(float)      # signed: negative left, positive right
+  choice = d["choice"].astype(float)          # 1 right, 0 left, -1 no choice
+  reward = d["reward"].astype(int)
+  p_left = d["p_left"].astype(float).round(2) # 0.5, 0.2 (right block) or 0.8 (left block)
+  rt = d["rt"].astype(float)                  # seconds from stimulus onset to response
+  included = d["included"]; mice, labs = d["mice"], d["labs"]
+  ok = (choice >= 0) & included & np.isfinite(rt)   # trials with a choice and a response time, kept by the experimenters
+  print(f"{len(choice)} trials, {len(mice)} mice from {len(set(labs))} laboratories, {ok.mean():.1%} usable")
+  print("contrasts:", np.unique(contrast))
+`} />
+
+<PyCell id="explore" title="A first look at 70,000 trials" tests={String.raw`
+  import numpy as np
+  def test_counts():
+      "n_trials counts the usable trials of each mouse"
+      assert n_trials.shape == (18,) and np.all(n_trials == np.bincount(mouse[ok], minlength=18))
+  def test_acc():
+      "acc holds the fraction rewarded at each absolute contrast, over usable trials"
+      exp = np.array([reward[ok & (np.abs(contrast) == a)].mean() for a in levels])
+      assert np.allclose(acc, exp)
+  def test_rt():
+      "med_rt holds the median response time at each absolute contrast"
+      exp = np.array([np.median(rt[ok & (np.abs(contrast) == a)]) for a in levels])
+      assert np.allclose(med_rt, exp)
+`} prompt="Count the usable trials of each mouse in `n_trials`. Then, for each absolute contrast in `levels`, compute the fraction of usable trials that were rewarded (`acc`) and their median response time (`med_rt`)."
+code={String.raw`
+  levels = np.array([0, 0.0625, 0.125, 0.25, 1])
+  n_trials = ...
+  acc = ...
+  med_rt = ...
+  print("usable trials per mouse:", n_trials.min(), "to", n_trials.max())
+  for a, p, t in zip(levels, acc, med_rt):
+      print(f"contrast {a:6.4f}: {p:.1%} correct, median response time {1000 * t:.0f} ms")
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(levels, acc, "o-"); ax[0].set_xscale("symlog", linthresh=0.05); ax[0].set_xlabel("contrast"); ax[0].set_ylabel("fraction correct")
+  ax[1].plot(levels, 1000 * med_rt, "o-"); ax[1].set_xscale("symlog", linthresh=0.05); ax[1].set_xlabel("contrast"); ax[1].set_ylabel("median RT (ms)"); plt.show()
+`}
+hint="n_trials = np.bincount(mouse[ok], minlength=18); acc = np.array([reward[ok & (np.abs(contrast) == a)].mean() for a in levels]); med_rt likewise with np.median(rt[...])."
+solution={String.raw`
+  levels = np.array([0, 0.0625, 0.125, 0.25, 1])
+  n_trials = np.bincount(mouse[ok], minlength=18)
+  acc = np.array([reward[ok & (np.abs(contrast) == a)].mean() for a in levels])
+  med_rt = np.array([np.median(rt[ok & (np.abs(contrast) == a)]) for a in levels])
+  print("usable trials per mouse:", n_trials.min(), "to", n_trials.max())
+  for a, p, t in zip(levels, acc, med_rt):
+      print(f"contrast {a:6.4f}: {p:.1%} correct, median response time {1000 * t:.0f} ms")
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+  ax[0].plot(levels, acc, "o-"); ax[0].set_xscale("symlog", linthresh=0.05); ax[0].set_xlabel("contrast"); ax[0].set_ylabel("fraction correct")
+  ax[1].plot(levels, 1000 * med_rt, "o-"); ax[1].set_xscale("symlog", linthresh=0.05); ax[1].set_xlabel("contrast"); ax[1].set_ylabel("median RT (ms)"); plt.show()
+`} />
+
+Each mouse contributes between 2,532 and 5,918 usable trials. Accuracy climbs from 73% at 6.25% contrast to 94.5% at full contrast, and the median response time falls from 415 to 284 ms: harder trials are slower, as the diffusion models of Week 45 predict. Two numbers deserve a second look. Even at full contrast the mice are wrong on more than 5% of trials, the lapses you will meet again on Day 5. And at zero contrast, where there is nothing to see, they are right on 56.4% of trials, above the 50% that guessing would give. The only way to do that is to use the block.
+
+<Step n={3} title="Psychometric curves by block" minutes={35} />
+
+In Week 37 you fitted a psychometric function with lapses to simulated IBL choices. Now fit it to the real ones. The probability of choosing right at signed contrast $c$ is
+
+$$
+P(\text{right}\mid c) = \gamma + (1 - \gamma - \lambda)\,\Phi\!\left(\frac{c - \mu}{\sigma}\right),
+$$
+
+where $\Phi$ is the standard normal cumulative distribution, $\mu$ is the bias (the contrast at which the mouse is indifferent, apart from lapses), $\sigma$ the threshold, and $\gamma$ and $\lambda$ the lapse rates on the left and right. If a mouse uses the block, its curve should move: in left blocks it needs more evidence to choose right, so $\mu$ should be larger.
+
+<Figure caption="Psychometric data from the IBL mice in the two kinds of block and the unbiased start of each session. Choose a mouse, or all 18 pooled." credit="Interactive figure by Engram. Data: The International Brain Laboratory (2021), public behavioural data release, CC BY 4.0.">
+  <IBLPsychometric />
+</Figure>
+
+<PyCell id="psy" title="How far does the block move each mouse?" tests={String.raw`
+  import numpy as np
+  def test_psy():
+      "psychometric matches the formula with an erf"
+      from scipy.special import erf
+      c = np.linspace(-1, 1, 9); p = [0.05, 0.2, 0.1, 0.05]
+      assert np.allclose(psychometric(p, c), 0.1 + 0.85 * 0.5 * (1 + erf((c - 0.05) / (0.2 * np.sqrt(2)))))
+  def test_shift():
+      "shift has one value per mouse and every mouse is shifted towards the likely side"
+      assert shift.shape == (18,) and np.all(shift > 0)
+  def test_size():
+      "the median shift lies between 0.03 and 0.15"
+      assert 0.03 < np.median(shift) < 0.15
+`} prompt="Write psychometric(params, c) for params = (mu, sigma, gamma, lam). The negative log-likelihood and the fitting loop are written for you: fill in mu for the left block minus mu for the right block, for each mouse, in shift."
+code={String.raw`
+  from scipy.special import erf
+  from scipy.optimize import minimize
+
+  def psychometric(params, c):
+      mu, sigma, gamma, lam = params
+      return ...
+
+  def nll(params, c, y):
+      p = np.clip(psychometric(params, c), 1e-9, 1 - 1e-9)
+      return -np.sum(y * np.log(p) + (1 - y) * np.log(1 - p))
+
+  def fit_psy(c, y):
+      res = minimize(nll, [0, 0.1, 0.05, 0.05], args=(c, y), method="L-BFGS-B",
+                     bounds=[(-0.5, 0.5), (0.005, 1), (0, 0.5), (0, 0.5)])
+      return res.x
+
+  fits = {}
+  shift = np.zeros(18)
+  for m in range(18):
+      for p in [0.2, 0.8]:
+          k = ok & (mouse == m) & (p_left == p)
+          fits[m, p] = fit_psy(contrast[k], choice[k])
+      shift[m] = ...
+  print("bias shift (left block minus right block) per mouse:", np.round(shift, 3))
+  print(f"median shift {np.median(shift):.3f}; positive for {np.sum(shift > 0)} of 18 mice")
+`}
+hint="return gamma + (1 - gamma - lam) * 0.5 * (1 + erf((c - mu) / (sigma * np.sqrt(2)))); shift[m] = fits[m, 0.8][0] - fits[m, 0.2][0]."
+solution={String.raw`
+  from scipy.special import erf
+  from scipy.optimize import minimize
+
+  def psychometric(params, c):
+      mu, sigma, gamma, lam = params
+      return gamma + (1 - gamma - lam) * 0.5 * (1 + erf((c - mu) / (sigma * np.sqrt(2))))
+
+  def nll(params, c, y):
+      p = np.clip(psychometric(params, c), 1e-9, 1 - 1e-9)
+      return -np.sum(y * np.log(p) + (1 - y) * np.log(1 - p))
+
+  def fit_psy(c, y):
+      res = minimize(nll, [0, 0.1, 0.05, 0.05], args=(c, y), method="L-BFGS-B",
+                     bounds=[(-0.5, 0.5), (0.005, 1), (0, 0.5), (0, 0.5)])
+      return res.x
+
+  fits = {}
+  shift = np.zeros(18)
+  for m in range(18):
+      for p in [0.2, 0.8]:
+          k = ok & (mouse == m) & (p_left == p)
+          fits[m, p] = fit_psy(contrast[k], choice[k])
+      shift[m] = fits[m, 0.8][0] - fits[m, 0.2][0]
+  print("bias shift (left block minus right block) per mouse:", np.round(shift, 3))
+  print(f"median shift {np.median(shift):.3f}; positive for {np.sum(shift > 0)} of 18 mice")
+`} />
+
+Every one of the 18 mice moves its curve towards the likely side, by a median of 0.066 in contrast units: roughly the size of the weakest visible stimulus, 0.0625. The shifts vary more than tenfold, from 0.009 for SWC_013 to 0.228 for KS003, so the mice differ a great deal in how much they rely on the prior. That variation is something the models of Days 3 and 4 will need to explain. The answer to the prediction is in the figure: at zero contrast, mice choose right on 61% of trials in right blocks and 37% in left blocks, far less than the 80% that the block would justify if the mice knew it perfectly. A mouse that always chose the likely side at zero contrast would earn more reward, so either the mice are uncertain which block they are in, or they do not use what they know in the optimal way. Telling these apart is the core of the project.
+
+<Step n={4} title="Response times" minutes={20} />
+
+A prior can enter a decision in two ways you met in Week 45. It can move the **starting point** of evidence accumulation towards the likely bound, or it can add a constant **drift** towards the likely side. With a starting-point shift, choices towards the likely side are reached sooner, so at zero contrast they should be faster than choices against it. With a pure drift bias and an unbiased starting point, the diffusion model makes a surprising prediction: the two choices have identical response time distributions, however unequal their probabilities. Check which pattern the mice show.
+
+<PyCell id="rtprior" title="Are choices that agree with the block faster?" tests={String.raw`
+  import numpy as np
+  def test_cong():
+      "congruent marks choices towards the likely side, in biased blocks only"
+      exp = (choice == 1) == (p_left == 0.2)
+      assert np.all(congruent[biased] == exp[biased])
+  def test_mice():
+      "med holds each mouse's median zero-contrast RT for congruent and incongruent choices"
+      k = ok & biased & (contrast == 0)
+      m3 = np.median(rt[k & (mouse == 3) & ~congruent])
+      assert med.shape == (18, 2) and abs(med[3, 1] - m3) < 1e-9
+  def test_count():
+      "n_faster counts mice whose congruent median is shorter"
+      assert n_faster == np.sum(med[:, 0] < med[:, 1]) and n_faster >= 14
+`} prompt="Mark each choice as congruent if it goes towards the block's likely side (right in blocks with p_left 0.2, left in blocks with p_left 0.8). Then, for zero-contrast trials in biased blocks, store each mouse's median RT for congruent and incongruent choices in med and count the mice that are faster when congruent."
+code={String.raw`
+  biased = p_left != 0.5
+  congruent = ...
+  k = ok & biased & (contrast == 0)
+  med = np.zeros((18, 2))
+  for m in range(18):
+      med[m] = ...
+  n_faster = ...
+  print(f"pooled medians: congruent {1000 * np.median(rt[k & congruent]):.0f} ms, incongruent {1000 * np.median(rt[k & ~congruent]):.0f} ms")
+  print(f"{n_faster} of 18 mice are faster when their choice agrees with the block")
+  print(f"responses slower than 2 s: {np.mean(rt[ok] > 2):.1%} of trials")
+`}
+hint="congruent = (choice == 1) == (p_left == 0.2); med[m] = [np.median(rt[k & (mouse == m) & congruent]), np.median(rt[k & (mouse == m) & ~congruent])]; n_faster = np.sum(med[:, 0] < med[:, 1])."
+solution={String.raw`
+  biased = p_left != 0.5
+  congruent = (choice == 1) == (p_left == 0.2)
+  k = ok & biased & (contrast == 0)
+  med = np.zeros((18, 2))
+  for m in range(18):
+      med[m] = [np.median(rt[k & (mouse == m) & congruent]), np.median(rt[k & (mouse == m) & ~congruent])]
+  n_faster = np.sum(med[:, 0] < med[:, 1])
+  print(f"pooled medians: congruent {1000 * np.median(rt[k & congruent]):.0f} ms, incongruent {1000 * np.median(rt[k & ~congruent]):.0f} ms")
+  print(f"{n_faster} of 18 mice are faster when their choice agrees with the block")
+  print(f"responses slower than 2 s: {np.mean(rt[ok] > 2):.1%} of trials")
+`} />
+
+At zero contrast, choices that agree with the block take a median of 435 ms and choices against it 535 ms, and 16 of the 18 mice show the same ordering. This is the signature of a starting-point shift. Hold it loosely, though: 13.8% of all responses take longer than 2 s, a tail that no simple diffusion model produces, and part of the difference comes from these slow trials, when a mouse may not be engaged with the task at all. The response times recorded here also include the time to turn the wheel, not only the time to decide. For these reasons the rest of the project models choices, and treats response times as a check rather than as data to fit.
+
+<Bridge title="Priors in brains and machines"
+  neuro="The block task makes the prior an experimental variable: the stimulus statistics change, and the change in behaviour measures how the animal's expectation changed. Because the prior is invisible on any single trial, every claim about it is a claim about a model, which is why this project is about fitting and testing models of choice."
+  ai="A classifier trained on balanced data and deployed where one class is common should shift its threshold, just as the mice do. Methods for label shift estimate the new class frequencies from unlabelled predictions and adjust the outputs, which is the machine learning version of inferring the block.">
+
+A prior that cannot be seen directly must be inferred from behaviour, and the inference depends on a model.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In the IBL task the mouse reports its choice by...", options: ["Turning a wheel", "Licking left or right", "Pressing a lever", "Running"], answer: 0, explain: "The wheel moves the grating to the centre." },
+  { q: "In a block with p_left = 0.2, the stimulus is on the right...", options: ["80% of the time", "20% of the time", "50% of the time", "Always"], answer: 0, explain: "p_left is the probability of a left stimulus." },
+  { q: "Each biased session begins with...", options: ["90 unbiased trials", "A left block", "A right block", "Zero-contrast trials only"], answer: 0, explain: "Then blocks of 20 to 100 trials alternate." },
+  { q: "On zero-contrast trials a mouse can beat chance only by...", options: ["Using the block", "Looking harder", "Responding faster", "Licking"], answer: 0, explain: "There is no stimulus to see." },
+  { q: "In a left block, the psychometric bias μ...", options: ["Increases", "Decreases", "Stays the same", "Becomes negative infinity"], answer: 0, explain: "More evidence is needed to choose right." },
+  { q: "A starting-point bias predicts that at zero contrast, choices towards the likely side are...", options: ["Faster", "Slower", "Equally fast", "Never made"], answer: 0, explain: "They start closer to their bound." },
+]} />
+
+<Predict revisit question="At zero contrast, in blocks where right is 80% likely, how often do mice choose right?" />
+
+<Key title="Before you go">
+<ul>
+<li>The data: 18 mice, 90 sessions, 70,402 trials of the IBL biased-block task.</li>
+<li>Accuracy rises and response times fall as contrast increases.</li>
+<li>Every mouse shifts its psychometric curve towards the likely side of the block.</li>
+<li>At zero contrast, choices that agree with the block are faster, consistent with a starting-point shift, but the long tail of slow responses calls for caution.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Burgess and colleagues (2017), <em>High-yield methods for accurate two-alternative visual psychophysics in head-fixed mice</em>, the origin of the task.</li>
+<li>The International Brain Laboratory and colleagues (2021), <em>Standardized and reproducible measurement of decision-making in mice</em>, eLife 10, e63711, the source of the data (<a href="https://doi.org/10.7554/eLife.63711">doi</a>; data on <a href="https://doi.org/10.6084/m9.figshare.11636748">figshare</a>, CC BY 4.0).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Write the first paragraph of your project report: the question, why it matters, and what this dataset can and cannot tell you. Think about what the mice can know on each trial, and what only the experimenter knows." />

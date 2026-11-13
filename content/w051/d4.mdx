@@ -1,0 +1,284 @@
+export const meta = {
+  title: "How fast should the prior adapt?",
+  intro: "Yesterday the action kernel won: mice keep a leaky running average of their recent choices, with a memory of about five trials. Is that memory too short, too long or about right? A leaky average faces a trade-off. Remember too little and the prior is noisy; remember too much and it lags behind every block switch. Today you find the best possible memory for this task, compare it with the mice's, look at behaviour around block switches, and add up what the mice's strategy costs them in reward.",
+  goals: [
+    "Explain the trade-off between noise and lag in a leaky estimate of a changing quantity",
+    "Find the optimal rate of a leaky average for the IBL block statistics",
+    "Compare behaviour around block switches with the predictions of fitted models",
+    "Decompose the reward lost on zero-contrast trials into its sources",
+  ],
+  plan: [
+    { label: "Set up and the trade-off", minutes: 20 },
+    { label: "The best leaky average", minutes: 30 },
+    { label: "Behaviour around block switches", minutes: 35 },
+    { label: "What the strategy costs", minutes: 20 },
+    { label: "Quiz and journal", minutes: 15 },
+  ],
+  paper: "glaze-2015",
+};
+
+<Predict question="Blocks last about 50 trials on average. If you could only keep a leaky running average of past stimulus sides, how many trials should it effectively remember to predict the next stimulus best: about 2, about 5, about 20 or about 50?" />
+
+<Step n={1} title="Set up and the trade-off" minutes={20} />
+
+The setup cell rebuilds yesterday's ingredients and refits the Bayesian and action-kernel models to every mouse.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  from scipy.signal import lfilter
+  d = np.load(dataset("ibl_biased.npz"))
+  mouse, session = d["mouse"].astype(int), d["session"].astype(int)
+  contrast, choice, reward = d["contrast"].astype(float), d["choice"].astype(float), d["reward"].astype(int)
+  p_left, rt = d["p_left"].astype(float).round(2), d["rt"].astype(float)
+  ok = (choice >= 0) & d["included"] & np.isfinite(rt)
+  sess = 10 * mouse + session
+  f_c = np.tanh(5 * contrast) / np.tanh(5)
+  c_pm = np.where(choice >= 0, 2 * choice - 1, 0.0)
+  side = np.where(contrast != 0, np.sign(contrast), np.where(reward == 1, c_pm, -c_pm))
+  biased = p_left != 0.5
+
+  def kernel(x, alpha, sess_ids):
+      out = np.zeros(len(x))
+      for s in np.unique(sess_ids):
+          k = sess_ids == s
+          out[k] = lfilter([alpha], [1, -(1 - alpha)], np.r_[0, x[k][:-1]])
+      return out
+
+  def bayes_prior(side, sess_ids, h=0.02):
+      out = np.zeros(len(side))
+      for s in np.unique(sess_ids):
+          b = np.array([0.5, 0.5])
+          for t in np.flatnonzero(sess_ids == s):
+              pr = 0.8 * b[0] + 0.2 * b[1]; out[t] = np.log(pr / (1 - pr))
+              b = b * (np.array([0.8, 0.2]) if side[t] > 0 else np.array([0.2, 0.8])); b = b / b.sum()
+              b = np.array([(1 - h) * b[0] + h * b[1], (1 - h) * b[1] + h * b[0]])
+      return out
+
+  prior_bayes = bayes_prior(side, sess)
+  p_action, p_bayes, alphas = np.zeros(len(choice)), np.zeros(len(choice)), np.zeros(18)
+  for m in range(18):
+      k = mouse == m; use = ok[k]; y = choice[k][use]
+      def fit(make):
+          f = lambda p: np.sum(np.logaddexp(0, make(p)[use]) - y * make(p)[use])
+          return f
+      act = lambda p: p[0] * f_c[k] + p[1] + p[2] * kernel(c_pm[k], p[3], sess[k])
+      bay = lambda p: p[0] * f_c[k] + p[1] + p[2] * prior_bayes[k]
+      pa = minimize(fit(act), [3, 0, 1, 0.2], method="L-BFGS-B", bounds=[(-20, 20)] * 3 + [(0.01, 1)]).x
+      pb = minimize(fit(bay), [3, 0, 1], method="L-BFGS-B", bounds=[(-20, 20)] * 3).x
+      p_action[k], p_bayes[k], alphas[m] = 1 / (1 + np.exp(-act(pa))), 1 / (1 + np.exp(-bay(pb))), pa[3]
+  print(f"mice's kernel rates: median {np.median(alphas):.2f}, range {alphas.min():.2f} to {alphas.max():.2f}")
+`} />
+
+Suppose a mouse estimates the block by a leaky average of past stimulus sides, $\pi_t = (1 - \alpha)\pi_{t-1} + \alpha s_{t-1}$. Within a block, the sides are random, $+1$ with probability 0.8, so the average is noisy: its variance is $\alpha/(2 - \alpha)$ times the variance of a single side. A small $\alpha$ averages over many trials and is precise. But after a switch the average approaches its new value only as $(1 - \alpha)^n$, taking about $1/\alpha$ trials, so a small $\alpha$ is slow. The best $\alpha$ balances the two, and it depends on how often the world changes. Glaze, Kable and Gold (2015) showed that people adjust their integration timescale in just this way when the rate of change, the hazard rate, is varied.
+
+<Video id="XOec560m61o" title="Forgetting in a changing world" by="Neuromatch Academy" note="Neuromatch's tutorial video on why an observer of a hidden state that switches must forget old evidence at the right rate, the idea behind today's lesson." />
+
+<Step n={2} title="The best leaky average" minutes={30} />
+
+The task defines what is optimal. For each rate $\alpha$, compute the stimulus kernel over the real sequences of sides, fit a single weight $w$ so that $\sigma(w\,\pi_t)$ predicts the next side, and measure the negative log-likelihood per trial in the biased blocks. The rate with the lowest value is the best a leaky average can do.
+
+<PyCell id="optimal" title="The rate that predicts the next stimulus best" tests={String.raw`
+  import numpy as np
+  def test_curve():
+      "loss has one value per rate in grid, each below log 2"
+      assert loss.shape == grid.shape and np.all(loss < np.log(2))
+  def test_best():
+      "best_alpha minimises loss and lies between 0.15 and 0.35"
+      assert best_alpha == grid[np.argmin(loss)] and 0.15 <= best_alpha <= 0.35
+  def test_bayes():
+      "the Bayesian observer predicts better than the best leaky average"
+      assert loss_bayes < loss.min()
+`} prompt="For each alpha in grid, compute the stimulus kernel, fit one weight w by minimising the mean negative log-likelihood of y (1 for a right stimulus) over biased trials, and store the minimum in loss. Then compute loss_bayes, the same quantity with prior_bayes used directly as the log-odds."
+code={String.raw`
+  grid = np.array([0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5])
+  y = (side > 0).astype(float)[biased]
+  loss = np.zeros(len(grid))
+  for i, a in enumerate(grid):
+      K = kernel(side, a, sess)[biased]
+      loss[i] = ...
+  best_alpha = grid[np.argmin(loss)]
+  z = prior_bayes[biased]
+  loss_bayes = ...
+  print("loss per trial:", {float(a): round(float(v), 4) for a, v in zip(grid, loss)})
+  print(f"best rate {best_alpha} (memory about {1 / best_alpha:.0f} trials); the mice's median {np.median(alphas):.2f}")
+  print(f"Bayesian observer: {loss_bayes:.4f}, better than the best leaky average by {loss.min() - loss_bayes:.4f} nats per trial")
+  plt.plot(grid, loss, "o-", label="leaky average"); plt.axhline(loss_bayes, color="k", ls="--", label="Bayesian observer")
+  for a in alphas:
+      plt.axvline(a, color="tab:pink", alpha=0.25)
+  plt.xlabel("rate alpha"); plt.ylabel("loss per trial (nats)"); plt.legend(); plt.show()
+`}
+hint="loss[i] = minimize(lambda w: np.mean(np.logaddexp(0, w[0] * K) - y * w[0] * K), [1.0]).fun; loss_bayes = np.mean(np.logaddexp(0, z) - y * z)."
+solution={String.raw`
+  grid = np.array([0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5])
+  y = (side > 0).astype(float)[biased]
+  loss = np.zeros(len(grid))
+  for i, a in enumerate(grid):
+      K = kernel(side, a, sess)[biased]
+      loss[i] = minimize(lambda w: np.mean(np.logaddexp(0, w[0] * K) - y * w[0] * K), [1.0]).fun
+  best_alpha = grid[np.argmin(loss)]
+  z = prior_bayes[biased]
+  loss_bayes = np.mean(np.logaddexp(0, z) - y * z)
+  print("loss per trial:", {float(a): round(float(v), 4) for a, v in zip(grid, loss)})
+  print(f"best rate {best_alpha} (memory about {1 / best_alpha:.0f} trials); the mice's median {np.median(alphas):.2f}")
+  print(f"Bayesian observer: {loss_bayes:.4f}, better than the best leaky average by {loss.min() - loss_bayes:.4f} nats per trial")
+  plt.plot(grid, loss, "o-", label="leaky average"); plt.axhline(loss_bayes, color="k", ls="--", label="Bayesian observer")
+  for a in alphas:
+      plt.axvline(a, color="tab:pink", alpha=0.25)
+  plt.xlabel("rate alpha"); plt.ylabel("loss per trial (nats)"); plt.legend(); plt.show()
+`} />
+
+The loss is lowest at $\alpha = 0.25$, a memory of about four trials, and is nearly flat between 0.2 and 0.3. That answers the prediction, and it may surprise you: with blocks of 50 trials, the best leaky average remembers only four or five. A longer memory would be more precise within a block, but each block switch would leave it on the wrong side for many trials, and with only 80% of stimuli on the likely side the precision gained is not worth the lag. The mice's rates, the pink lines, cluster around this optimum, with a median of 0.21. So the mice forget at almost exactly the right rate for a leaky average. What they average is a different matter: the Bayesian observer, which uses the task's structure, still predicts better than the best leaky average by 0.009 nats per trial, and the mice average their actions, not the stimuli.
+
+<Step n={3} title="Behaviour around block switches" minutes={35} />
+
+Fitting by likelihood uses every trial. A complementary view, closer to how the experiment is designed, aligns trials to block switches and plots how often the mouse chooses the side that has just become likely. Use the hard trials, at 0% and 6.25% contrast, where the prior matters most, and compare the mice with the average prediction of each fitted model at each lag.
+
+<Figure caption="Choices around block switches on hard trials, from all 18 IBL mice, and the prediction of a leaky average of past choices. Change the rate and the weight, and see which values reproduce the curve." credit="Interactive figure by Engram. Data: The International Brain Laboratory (2021), public behavioural data release, CC BY 4.0.">
+  <SwitchCurve />
+</Figure>
+
+<PyCell id="switch" title="Switch-aligned choices" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "curves has one row per lag from -5 to 30 and three columns"
+      assert curves.shape == (36, 3)
+  def test_data():
+      "before the switch, mice favour the old side; 20 trials after, the new one"
+      assert curves[lags == -1, 0][0] < 0.35 and curves[lags == 20, 0][0] > 0.65
+  def test_models():
+      "both models track the data within 0.1 at every lag from 0 to 20"
+      k = (lags >= 0) & (lags <= 20)
+      assert np.abs(curves[k, 1] - curves[k, 0]).max() < 0.1 and np.abs(curves[k, 2] - curves[k, 0]).max() < 0.1
+`} prompt="For every switch between biased blocks in every session, and every lag from -5 to 30, collect hard usable trials. For each, record whether the mouse chose the new block's likely side, and each model's probability of that choice. Average them at each lag into curves (columns: data, action model, Bayesian model)."
+code={String.raw`
+  hard = ok & (np.abs(contrast) <= 0.0625)
+  lags = np.arange(-5, 31)
+  rows, n_sw = [], 0
+  for s in np.unique(sess):
+      idx = np.flatnonzero(sess == s); p = p_left[idx]
+      switches = np.flatnonzero((p[1:] != p[:-1]) & (p[:-1] != 0.5)) + 1
+      n_sw += len(switches)
+      for j in switches:
+          new_right = p[j] == 0.2
+          for lg in lags:
+              t = j + lg
+              if 0 <= t < len(idx) and hard[idx[t]]:
+                  i = idx[t]
+                  rows.append(...)
+  rows = np.array(rows, dtype=float)
+  curves = np.array([rows[rows[:, 0] == lg, 1:].mean(0) for lg in lags])
+  print(f"{len(rows)} hard trials around {n_sw} block switches")
+  for lg in [-5, -1, 0, 1, 2, 5, 10, 20, 30]:
+      print(f"lag {lg:3d}: data {curves[lags == lg, 0][0]:.2f}, action {curves[lags == lg, 1][0]:.2f}, Bayes {curves[lags == lg, 2][0]:.2f}")
+  plt.plot(lags, curves[:, 0], "o", label="mice"); plt.plot(lags, curves[:, 1], label="action kernel"); plt.plot(lags, curves[:, 2], label="Bayesian observer")
+  plt.axvline(0, color="grey"); plt.xlabel("trials since switch"); plt.ylabel("P(choose new likely side)"); plt.legend(); plt.show()
+`}
+hint="rows.append((lg, choice[i] == new_right, p_action[i] if new_right else 1 - p_action[i], p_bayes[i] if new_right else 1 - p_bayes[i]))."
+solution={String.raw`
+  hard = ok & (np.abs(contrast) <= 0.0625)
+  lags = np.arange(-5, 31)
+  rows, n_sw = [], 0
+  for s in np.unique(sess):
+      idx = np.flatnonzero(sess == s); p = p_left[idx]
+      switches = np.flatnonzero((p[1:] != p[:-1]) & (p[:-1] != 0.5)) + 1
+      n_sw += len(switches)
+      for j in switches:
+          new_right = p[j] == 0.2
+          for lg in lags:
+              t = j + lg
+              if 0 <= t < len(idx) and hard[idx[t]]:
+                  i = idx[t]
+                  rows.append((lg, choice[i] == new_right, p_action[i] if new_right else 1 - p_action[i], p_bayes[i] if new_right else 1 - p_bayes[i]))
+  rows = np.array(rows, dtype=float)
+  curves = np.array([rows[rows[:, 0] == lg, 1:].mean(0) for lg in lags])
+  print(f"{len(rows)} hard trials around {n_sw} block switches")
+  for lg in [-5, -1, 0, 1, 2, 5, 10, 20, 30]:
+      print(f"lag {lg:3d}: data {curves[lags == lg, 0][0]:.2f}, action {curves[lags == lg, 1][0]:.2f}, Bayes {curves[lags == lg, 2][0]:.2f}")
+  plt.plot(lags, curves[:, 0], "o", label="mice"); plt.plot(lags, curves[:, 1], label="action kernel"); plt.plot(lags, curves[:, 2], label="Bayesian observer")
+  plt.axvline(0, color="grey"); plt.xlabel("trials since switch"); plt.ylabel("P(choose new likely side)"); plt.legend(); plt.show()
+`} />
+
+Around 1,167 block switches, the 14,663 hard trials show the mice favouring the old side (about 0.25 to 0.3 of choices go to the new side) until the switch. At lag 0 the curve jumps to 0.42, not because the mice anticipate the switch but because the first trial of the new block already has its stimulus drawn from the new side, and 6.25% stimuli are partly visible. The curve then rises over five to ten trials to about 0.7. Both fitted models follow the data within a few percentage points at every lag. That is a lesson in itself: the switch-aligned curve, the figure most papers on this task show, cannot tell the action kernel from the Bayesian observer, while the likelihood, which uses every trial, separates them by about 1,960 nats. Average curves hide trial-by-trial structure, here the effect of the mouse's own errors, that the models disagree about. Note, too, the dip after lag 20: by then some blocks have already switched back, so the curve mixes blocks.
+
+<Step n={4} title="What the strategy costs" minutes={20} />
+
+On zero-contrast trials the only route to reward is the prior. Compare four policies on the same trials: always choose the block's likely side (an oracle that knows the block), choose the side favoured by the Bayesian observer, choose the side favoured by the mouse's own fitted action kernel, and what the mice actually did.
+
+<PyCell id="cost" title="A ladder of reward rates" tests={String.raw`
+  import numpy as np
+  def test_values():
+      "the four reward rates are computed on usable zero-contrast trials in biased blocks"
+      z = ok & (contrast == 0) & biased
+      assert abs(r_mice - reward[z].mean()) < 1e-12 and abs(r_oracle - np.mean(np.where(p_left[z] == 0.2, 1, -1) == side[z])) < 1e-12
+  def test_order():
+      "oracle, Bayes, own kernel and mice are in decreasing order"
+      assert r_oracle > r_bayes > r_kernel > r_mice
+`} prompt="On usable zero-contrast trials in biased blocks, compute the fraction rewarded for each policy: r_oracle (the block's likely side), r_bayes (the sign of prior_bayes), r_kernel (the sign of each mouse's own action kernel, already computed in ka) and r_mice (the actual reward)."
+code={String.raw`
+  ka = np.zeros(len(choice))
+  for m in range(18):
+      k = mouse == m
+      ka[k] = kernel(c_pm[k], alphas[m], sess[k])
+  z = ok & (contrast == 0) & biased
+  r_oracle = ...
+  r_bayes = ...
+  r_kernel = ...
+  r_mice = ...
+  for name, v in [("oracle", r_oracle), ("Bayesian observer", r_bayes), ("own action kernel", r_kernel), ("mice", r_mice)]:
+      print(f"{name:18s} {v:.1%}")
+`}
+hint="r_oracle = np.mean(np.where(p_left[z] == 0.2, 1, -1) == side[z]); r_bayes = np.mean(np.sign(prior_bayes[z]) == side[z]); r_kernel = np.mean(np.sign(ka[z]) == side[z]); r_mice = reward[z].mean()."
+solution={String.raw`
+  ka = np.zeros(len(choice))
+  for m in range(18):
+      k = mouse == m
+      ka[k] = kernel(c_pm[k], alphas[m], sess[k])
+  z = ok & (contrast == 0) & biased
+  r_oracle = np.mean(np.where(p_left[z] == 0.2, 1, -1) == side[z])
+  r_bayes = np.mean(np.sign(prior_bayes[z]) == side[z])
+  r_kernel = np.mean(np.sign(ka[z]) == side[z])
+  r_mice = reward[z].mean()
+  for name, v in [("oracle", r_oracle), ("Bayesian observer", r_bayes), ("own action kernel", r_kernel), ("mice", r_mice)]:
+      print(f"{name:18s} {v:.1%}")
+`} />
+
+An oracle that knew the block would earn 80.2% at zero contrast. The Bayesian observer, which must infer the block from the stimuli, reaches 73.9%. Choosing by the sign of each mouse's own action kernel would give 66.6%, and the mice actually earn 57.4%. The largest single loss, about nine percentage points, is the last step: the mice do not choose the side their own prior favours on every zero-contrast trial, but only somewhat more often than not. Their prior weight is modest, so they behave probabilistically, close to matching rather than maximising. The second-largest loss, about seven points, comes from averaging actions rather than inferring the block from the stimuli. The forgetting rate itself, as Step 2 showed, costs almost nothing. One caution: this analysis treats a correct choice at zero contrast as reward earned, but in the experiment the mice cannot know that these trials are different, and a strategy tuned to the whole session may sensibly weigh the prior less.
+
+<Bridge title="Learning rates in brains and machines"
+  neuro="How quickly to forget is itself something brains appear to adjust. People integrate evidence over shorter windows when the world changes more often, and Behrens and colleagues (Week 19) showed that the learning rate tracks volatility, with activity in anterior cingulate cortex following the estimated volatility. The IBL mice, tested with one block statistic, happen to sit near the optimal rate for it."
+  ai="The same trade-off sets the learning rate of any online learner and the decay of momentum and moving averages in optimisers such as Adam. Exponential moving averages of past values are everywhere in machine learning, and their decay constant is chosen, as here, by balancing noise against lag.">
+
+The right memory length is set by how fast the world changes.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A leaky average with a small α is...", options: ["Precise but slow", "Fast but noisy", "Both fast and precise", "Neither"], answer: 0, explain: "It averages many trials." },
+  { q: "The best α for this task was found by...", options: ["Predicting the next stimulus side", "Fitting the mice", "Guessing", "Using response times"], answer: 0, explain: "The task defines the optimum." },
+  { q: "The Bayesian observer predicts the next side...", options: ["Better than any leaky average", "Worse", "Equally", "Only at the start"], answer: 0, explain: "It knows the task's structure." },
+  { q: "The jump in choices at lag 0 comes from...", options: ["Visible 6.25% stimuli", "Clairvoyance", "Lapses", "Response times"], answer: 0, explain: "The new block's stimulus is already drawn on that trial." },
+  { q: "On zero-contrast trials, the mice earn less than their own kernel would because...", options: ["They use the prior probabilistically", "They cannot see", "The oracle cheats", "Of lapses only"], answer: 0, explain: "They often choose against it." },
+  { q: "Glaze and colleagues showed that people adapt their integration timescale to...", options: ["The hazard rate", "The reward size", "The contrast", "The time of day"], answer: 0, explain: "Faster change, shorter memory." },
+]} />
+
+<Predict revisit question="How many trials should the best leaky average remember?" />
+
+<Key title="Before you go">
+<ul>
+<li>A leaky average trades noise against lag; the best rate depends on how often the world changes.</li>
+<li>For the IBL blocks the best rate is about 0.25, and the mice's median of 0.21 is close to it.</li>
+<li>Switch-aligned curves are reproduced by both the action kernel and the Bayesian model: aggregate curves can miss differences that the likelihood detects.</li>
+<li>Zero-contrast reward falls from 80% (oracle) to 74% (Bayes) to 67% (own kernel) to 57% (mice).</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Glaze, Kable and Gold (2015), <em>Normative evidence accumulation in unpredictable environments</em>.</li>
+<li>Behrens, Woolrich, Walton and Rushworth (2007), <em>Learning the value of information in an uncertain world</em>, Week 19's paper on volatility and learning rates.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Write the section of your report on adaptation: the optimal rate, the mice's rates, the switch-aligned curves, and the ladder of reward rates. Which rung of the ladder loses the most reward, and what does that suggest about where the mice fall short of optimal?" />

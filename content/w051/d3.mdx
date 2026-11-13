@@ -1,0 +1,353 @@
+export const meta = {
+  title: "Models of the block prior: a Bayesian observer against simple kernels",
+  intro: "Today is the centre of the project. You write down four models of how a mouse could turn its history into an expectation about the next stimulus: no prior at all; a Bayesian observer that knows the structure of the task and infers the block from the stimuli it has seen; a leaky average of past stimulus sides; and a leaky average of its own past choices. You fit all four to every mouse, compare them with the random-effects method of Week 50, and find out which kind of learner the mice are.",
+  goals: [
+    "Derive and implement the Bayes-optimal block observer as a two-state hidden Markov filter",
+    "Express stimulus and action kernels as exponential filters with one rate parameter",
+    "Fit four models to 18 mice and approximate their evidence with BIC",
+    "Estimate how common each model is in the population with random-effects selection",
+  ],
+  plan: [
+    { label: "Four models of the prior", minutes: 30 },
+    { label: "Fitting every model to every mouse", minutes: 35 },
+    { label: "Comparing across the group", minutes: 20 },
+    { label: "Reading the parameters", minutes: 20 },
+    { label: "Quiz and journal", minutes: 15 },
+  ],
+  paper: "adams-mackay-2007",
+};
+
+<Predict question="Four models compete to explain how mice track the block: no prior, a Bayesian observer that knows the task's structure, a leaky average of past stimulus sides, and a leaky average of the mouse's own past choices. Which do you expect to win for most mice?" />
+
+<Step n={1} title="Four models of the prior" minutes={30} />
+
+All four models share the same decision stage, a logistic function of the stimulus and a bias, and differ only in the prior term $\pi_t$ added to it:
+
+$$
+P(\text{right}_t) = \sigma\!\left(w_c f(c_t) + b + w_p\,\pi_t\right).
+$$
+
+**No prior.** $\pi_t = 0$. Two parameters, $w_c$ and $b$.
+
+**Bayesian observer.** The mouse knows that the block is either a right block (stimulus on the right with probability 0.8) or a left block, and that blocks switch with a small probability $h$ on each trial. After each trial's feedback it knows where the stimulus was. Its belief $q_t$ that the current block is a right block is then updated exactly as in the hidden Markov models of Week 50, with the switch probability playing the role of the transition matrix. Before trial $t$ the predicted probability that the stimulus is on the right is $0.8\,q_t + 0.2\,(1 - q_t)$, and $\pi_t$ is its log-odds. The mouse's switch rate is fixed at $h = 0.02$, close to the true average of one switch every 50 trials, so the model has three parameters: $w_c$, $b$ and $w_p$. The same filter is the simplest case of the online change-point detection of Adams and MacKay (2007).
+
+**Stimulus kernel.** $\pi_t$ is an exponentially weighted average of past stimulus sides $s_{t'} = \pm 1$: $\pi_t = (1 - \alpha)\,\pi_{t-1} + \alpha\, s_{t-1}$. Four parameters, adding the rate $\alpha$.
+
+**Action kernel.** The same, but averaging the mouse's own past choices $a_{t'} = \pm 1$ instead of the stimulus sides. Four parameters.
+
+The last two differ only after errors, and Day 2 has already hinted which way the data lean.
+
+<Video id="z6KbKILMIPU" title="Binary HMM with Gaussian measurements" by="Neuromatch Academy" note="Neuromatch's tutorial video on inferring a binary hidden state from noisy observations, the same computation as the Bayesian block observer you build today." />
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  from scipy.signal import lfilter
+  from scipy.special import digamma
+  d = np.load(dataset("ibl_biased.npz"))
+  mouse, session = d["mouse"].astype(int), d["session"].astype(int)
+  contrast, choice, reward = d["contrast"].astype(float), d["choice"].astype(float), d["reward"].astype(int)
+  p_left, rt = d["p_left"].astype(float).round(2), d["rt"].astype(float)
+  ok = (choice >= 0) & d["included"] & np.isfinite(rt)
+  sess = 10 * mouse + session
+  f_c = np.tanh(5 * contrast) / np.tanh(5)
+  c_pm = np.where(choice >= 0, 2 * choice - 1, 0.0)
+  # the stimulus side, +1 right and -1 left; at zero contrast it is revealed by the feedback
+  side = np.where(contrast != 0, np.sign(contrast), np.where(reward == 1, c_pm, -c_pm))
+
+  def kernel(x, alpha, sess_ids):
+      """pi_t = (1 - alpha) pi_{t-1} + alpha x_{t-1}, restarted at zero in every session."""
+      out = np.zeros(len(x))
+      for s in np.unique(sess_ids):
+          k = sess_ids == s
+          out[k] = lfilter([alpha], [1, -(1 - alpha)], np.r_[0, x[k][:-1]])
+      return out
+  print(f"stimulus side known on {np.mean(side != 0):.2%} of trials")
+`} />
+
+<PyCell id="bayes" title="The Bayesian block observer" tests={String.raw`
+  import numpy as np
+  def test_first():
+      "the prior is zero on the first trial of every session"
+      first = np.r_[True, sess[1:] != sess[:-1]]
+      assert np.allclose(prior_bayes[first], 0)
+  def test_range():
+      "the prior log-odds stays within plus and minus log 4"
+      assert np.all(np.abs(prior_bayes) <= np.log(4) + 1e-9)
+  def test_update():
+      "after three right stimuli from an even belief, the prior is as computed by hand"
+      b = np.array([0.5, 0.5])
+      for _ in range(3):
+          b = b * np.array([0.8, 0.2]); b = b / b.sum(); b = np.array([0.98 * b[0] + 0.02 * b[1], 0.98 * b[1] + 0.02 * b[0]])
+      pr = 0.8 * b[0] + 0.2 * b[1]
+      out = bayes_prior(np.array([1.0, 1, 1, 1]), np.zeros(4, int))
+      assert abs(out[3] - np.log(pr / (1 - pr))) < 1e-9
+  def test_tracks():
+      "the prior is higher in right blocks than in left blocks"
+      assert prior_bayes[p_left == 0.2].mean() > 0.5 and prior_bayes[p_left == 0.8].mean() < -0.5
+`} prompt="Complete bayes_prior. Before each trial, record the log-odds of a right stimulus; then update the belief b = [P(right block), P(left block)] with the likelihood of the observed side (0.8 and 0.2, or 0.2 and 0.8), normalise, and apply the switch probability h."
+code={String.raw`
+  def bayes_prior(side, sess_ids, h=0.02):
+      out = np.zeros(len(side))
+      for s in np.unique(sess_ids):
+          b = np.array([0.5, 0.5])                       # belief at the start of a session
+          for t in np.flatnonzero(sess_ids == s):
+              pr = 0.8 * b[0] + 0.2 * b[1]               # predicted P(stimulus on the right)
+              out[t] = ...
+              like = np.array([0.8, 0.2]) if side[t] > 0 else np.array([0.2, 0.8])
+              b = ...                                     # Bayes' rule, normalised
+              b = ...                                     # a switch may occur before the next trial
+      return out
+
+  prior_bayes = bayes_prior(side, sess)
+  for p in [0.2, 0.5, 0.8]:
+      print(f"p_left = {p}: mean Bayesian prior {prior_bayes[p_left == p].mean():+.2f}")
+`}
+hint="out[t] = np.log(pr / (1 - pr)); b = b * like; b = b / b.sum(); b = np.array([(1 - h) * b[0] + h * b[1], (1 - h) * b[1] + h * b[0]])."
+solution={String.raw`
+  def bayes_prior(side, sess_ids, h=0.02):
+      out = np.zeros(len(side))
+      for s in np.unique(sess_ids):
+          b = np.array([0.5, 0.5])                       # belief at the start of a session
+          for t in np.flatnonzero(sess_ids == s):
+              pr = 0.8 * b[0] + 0.2 * b[1]               # predicted P(stimulus on the right)
+              out[t] = np.log(pr / (1 - pr))
+              like = np.array([0.8, 0.2]) if side[t] > 0 else np.array([0.2, 0.8])
+              b = b * like
+              b = b / b.sum()                             # Bayes' rule, normalised
+              b = np.array([(1 - h) * b[0] + h * b[1], (1 - h) * b[1] + h * b[0]])   # a switch may occur before the next trial
+      return out
+
+  prior_bayes = bayes_prior(side, sess)
+  for p in [0.2, 0.5, 0.8]:
+      print(f"p_left = {p}: mean Bayesian prior {prior_bayes[p_left == p].mean():+.2f}")
+`} />
+
+The observer's prior averages +0.94 in right blocks and −0.95 in left blocks, out of a possible ±1.39 (the log-odds of 0.8). It does not reach the maximum because every block starts with the observer still believing in the previous one, and it needs several trials of evidence to change its mind. In the unbiased first 90 trials of each session it hovers around zero, as it should. This is what an ideal mouse that knew the rules of the task would expect on every trial.
+
+<Step n={2} title="Fitting every model to every mouse" minutes={35} />
+
+<Figure caption="Simulated stretch of a session with its blocks, and the prior each model computes from it: the Bayesian observer, a stimulus kernel and an action kernel. Change the kernel rate and the observer's switch rate, and watch how each model reacts to errors and to block switches." credit="Interactive figure by Engram, after Adams and MacKay (2007) and the IBL task design.">
+  <PriorModels />
+</Figure>
+
+Each model is fitted by maximum likelihood on each mouse's usable trials. The kernels are computed over all trials, including the few without a choice, so that the time between trials is respected; only the likelihood is restricted to usable trials. Evidence is approximated by $-\text{BIC}/2$, as in Week 50.
+
+<PyCell id="fit" title="Four models, 18 mice" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "lme has one row per mouse and one column per model"
+      assert lme.shape == (18, 4) and np.all(np.isfinite(lme))
+  def test_nested():
+      "every model with a prior fits at least as well as no prior"
+      assert np.all(lme_raw[:, 1:] >= lme_raw[:, :1] - 1e-6)
+  def test_winner():
+      "the action kernel has the most evidence for at least 15 mice"
+      assert np.sum(lme.argmax(1) == 3) >= 15
+`} prompt="Complete nll so that it builds the logit for each model (add w_p times the model's prior to w_c f_c + b) and returns the negative Bernoulli log-likelihood over the selected trials. Then store the maximised log-likelihood in lme_raw and -BIC/2 in lme."
+code={String.raw`
+  models = ["none", "bayes", "stimulus", "action"]
+  x0 = {"none": [3, 0], "bayes": [3, 0, 1], "stimulus": [3, 0, 1, 0.2], "action": [3, 0, 1, 0.2]}
+  bounds = {"none": [(-20, 20)] * 2, "bayes": [(-20, 20)] * 3,
+            "stimulus": [(-20, 20)] * 3 + [(0.01, 1)], "action": [(-20, 20)] * 3 + [(0.01, 1)]}
+
+  def logit(model, p, m):
+      """The logit of P(right) on every trial of mouse m (all trials, usable or not)."""
+      k = mouse == m
+      z = p[0] * f_c[k] + p[1]
+      if model == "bayes":
+          z = z + p[2] * prior_bayes[k]
+      if model == "stimulus":
+          z = z + ...
+      if model == "action":
+          z = z + ...
+      return z
+
+  def nll(p, model, m):
+      use = ok[mouse == m]
+      z, y = logit(model, p, m)[use], choice[mouse == m][use]
+      return ...
+
+  lme_raw, lme, params = np.zeros((18, 4)), np.zeros((18, 4)), {}
+  for m in range(18):
+      n = np.sum(ok & (mouse == m))
+      for j, mod in enumerate(models):
+          res = minimize(nll, x0[mod], args=(mod, m), method="L-BFGS-B", bounds=bounds[mod])
+          params[m, mod] = res.x
+          lme_raw[m, j] = ...
+          lme[m, j] = ...
+  best = lme.argmax(1)
+  print("models with the most evidence:", {mod: int(np.sum(best == j)) for j, mod in enumerate(models)})
+  print("summed log evidence relative to the best:", np.round(lme.sum(0) - lme.sum(0).max(), 1))
+`}
+hint="Stimulus: p[2] * kernel(side[k], p[3], sess[k]); action: p[2] * kernel(c_pm[k], p[3], sess[k]). nll returns np.sum(np.logaddexp(0, z) - y * z). lme_raw[m, j] = -res.fun; lme[m, j] = -(2 * res.fun + len(x0[mod]) * np.log(n)) / 2."
+solution={String.raw`
+  models = ["none", "bayes", "stimulus", "action"]
+  x0 = {"none": [3, 0], "bayes": [3, 0, 1], "stimulus": [3, 0, 1, 0.2], "action": [3, 0, 1, 0.2]}
+  bounds = {"none": [(-20, 20)] * 2, "bayes": [(-20, 20)] * 3,
+            "stimulus": [(-20, 20)] * 3 + [(0.01, 1)], "action": [(-20, 20)] * 3 + [(0.01, 1)]}
+
+  def logit(model, p, m):
+      """The logit of P(right) on every trial of mouse m (all trials, usable or not)."""
+      k = mouse == m
+      z = p[0] * f_c[k] + p[1]
+      if model == "bayes":
+          z = z + p[2] * prior_bayes[k]
+      if model == "stimulus":
+          z = z + p[2] * kernel(side[k], p[3], sess[k])
+      if model == "action":
+          z = z + p[2] * kernel(c_pm[k], p[3], sess[k])
+      return z
+
+  def nll(p, model, m):
+      use = ok[mouse == m]
+      z, y = logit(model, p, m)[use], choice[mouse == m][use]
+      return np.sum(np.logaddexp(0, z) - y * z)
+
+  lme_raw, lme, params = np.zeros((18, 4)), np.zeros((18, 4)), {}
+  for m in range(18):
+      n = np.sum(ok & (mouse == m))
+      for j, mod in enumerate(models):
+          res = minimize(nll, x0[mod], args=(mod, m), method="L-BFGS-B", bounds=bounds[mod])
+          params[m, mod] = res.x
+          lme_raw[m, j] = -res.fun
+          lme[m, j] = -(2 * res.fun + len(x0[mod]) * np.log(n)) / 2
+  best = lme.argmax(1)
+  print("models with the most evidence:", {mod: int(np.sum(best == j)) for j, mod in enumerate(models)})
+  print("summed log evidence relative to the best:", np.round(lme.sum(0) - lme.sum(0).max(), 1))
+`} />
+
+The action kernel has the most evidence for 17 of the 18 mice. The exception is SWC_013, the mouse that switched after errors on Day 2, for which the stimulus kernel wins narrowly. Summed over mice, the action kernel leads the stimulus kernel by about 1,830 nats and the Bayesian observer by about 1,960. Strikingly, the optimal observer does slightly *worse* than a leaky average of stimulus sides, despite knowing the structure of the task: with one fewer parameter it cannot adjust how quickly it forgets. Both are far ahead of the model with no prior, by about 3,800 nats: whatever the mice do, they do track the block.
+
+<Step n={3} title="Comparing across the group" minutes={20} />
+
+The summed evidence is a fixed-effects comparison, which Week 50 showed can be dominated by a few mice. Use random-effects model selection to estimate how common each model is among mice, and the exceedance probability that each is the most common, by sampling from the fitted Dirichlet distribution.
+
+<PyCell id="rfx" title="How common is each kind of learner?" tests={String.raw`
+  import numpy as np
+  def test_freq():
+      "freq is the expected frequency of each model and sums to 1"
+      assert freq.shape == (4,) and abs(freq.sum() - 1) < 1e-9 and freq[3] > 0.7
+  def test_xp():
+      "xp is estimated from 20,000 Dirichlet samples and the action kernel's exceeds 0.99"
+      assert abs(xp.sum() - 1) < 1e-9 and xp[3] > 0.99
+`} prompt="Run rfx_bms on lme, convert alpha into expected frequencies, and estimate the exceedance probabilities: draw 20,000 samples from Dirichlet(alpha) with a seeded generator and count how often each model has the largest frequency."
+code={String.raw`
+  def rfx_bms(lme, iters=200):
+      a0 = np.ones(lme.shape[1]); a = a0.copy()
+      for _ in range(iters):
+          lu = lme + digamma(a) - digamma(a.sum()); lu -= lu.max(1, keepdims=True)
+          u = np.exp(lu); g = u / u.sum(1, keepdims=True); a = a0 + g.sum(0)
+      return a, g
+
+  alpha_d, g = rfx_bms(lme)
+  freq = ...
+  samples = np.random.default_rng(0).dirichlet(alpha_d, 20000)
+  xp = ...
+  for mod, f, x in zip(models, freq, xp):
+      print(f"{mod:9s} expected frequency {f:.3f}, exceedance probability {x:.3f}")
+`}
+hint="freq = alpha_d / alpha_d.sum(); xp = np.bincount(samples.argmax(1), minlength=4) / len(samples)."
+solution={String.raw`
+  def rfx_bms(lme, iters=200):
+      a0 = np.ones(lme.shape[1]); a = a0.copy()
+      for _ in range(iters):
+          lu = lme + digamma(a) - digamma(a.sum()); lu -= lu.max(1, keepdims=True)
+          u = np.exp(lu); g = u / u.sum(1, keepdims=True); a = a0 + g.sum(0)
+      return a, g
+
+  alpha_d, g = rfx_bms(lme)
+  freq = alpha_d / alpha_d.sum()
+  samples = np.random.default_rng(0).dirichlet(alpha_d, 20000)
+  xp = np.bincount(samples.argmax(1), minlength=4) / len(samples)
+  for mod, f, x in zip(models, freq, xp):
+      print(f"{mod:9s} expected frequency {f:.3f}, exceedance probability {x:.3f}")
+`} />
+
+Random effects agree: the expected frequency of the action kernel in the population is 0.86, and its exceedance probability is effectively 1, since it is the most common model in every one of the 20,000 samples. The other three models share the remaining 0.14 almost equally, and most of that is the Dirichlet prior's pull towards equal frequencies with only 18 mice, not evidence for them. For the report, the claim is: most IBL mice in this task behave as though they keep a leaky running average of their own recent choices, not as Bayesian observers of the block.
+
+<Step n={4} title="Reading the parameters" minutes={20} />
+
+A winning model is only useful if its parameters mean something. Collect each mouse's action-kernel rate $\alpha$ and prior weight $w_p$, compare the rates with Day 2's estimate from the ten-lag kernel, and ask whether the model's prior weight explains the individual differences in block shift you measured on Day 1.
+
+<PyCell id="params" title="Rates and weights" tests={String.raw`
+  import numpy as np
+  def test_arrays():
+      "alphas and wps hold the action model's rate and prior weight for each mouse"
+      assert np.allclose(alphas, [params[m, "action"][3] for m in range(18)]) and np.allclose(wps, [params[m, "action"][2] for m in range(18)])
+  def test_shift():
+      "zero_shift is each mouse's P(right) at zero contrast in right blocks minus left blocks"
+      k = ok & (contrast == 0) & (mouse == 4)
+      exp = choice[k & (p_left == 0.2)].mean() - choice[k & (p_left == 0.8)].mean()
+      assert abs(zero_shift[4] - exp) < 1e-12
+  def test_r():
+      "r is the correlation across mice between wps and zero_shift"
+      assert abs(r - np.corrcoef(wps, zero_shift)[0, 1]) < 1e-12 and r > 0.4
+`} prompt="Collect the action model's rate and prior weight for each mouse into alphas and wps. Compute zero_shift, each mouse's P(right) at zero contrast in right blocks minus that in left blocks, and its correlation r with wps."
+code={String.raw`
+  alphas = ...
+  wps = ...
+  zero_shift = np.zeros(18)
+  for m in range(18):
+      k = ok & (contrast == 0) & (mouse == m)
+      zero_shift[m] = ...
+  r = ...
+  print(f"rate alpha: median {np.median(alphas):.2f} (range {alphas.min():.2f} to {alphas.max():.2f}); timescale about {1 / np.median(alphas):.1f} trials")
+  print(f"prior weight w_p: median {np.median(wps):.2f}")
+  print(f"correlation between w_p and the zero-contrast block effect: r = {r:.2f}")
+  plt.scatter(wps, zero_shift); plt.xlabel("fitted prior weight w_p"); plt.ylabel("zero-contrast block effect"); plt.show()
+`}
+hint="alphas = np.array([params[m, 'action'][3] for m in range(18)]), wps likewise with [2]; zero_shift[m] = choice[k & (p_left == 0.2)].mean() - choice[k & (p_left == 0.8)].mean(); r = np.corrcoef(wps, zero_shift)[0, 1]."
+solution={String.raw`
+  alphas = np.array([params[m, "action"][3] for m in range(18)])
+  wps = np.array([params[m, "action"][2] for m in range(18)])
+  zero_shift = np.zeros(18)
+  for m in range(18):
+      k = ok & (contrast == 0) & (mouse == m)
+      zero_shift[m] = choice[k & (p_left == 0.2)].mean() - choice[k & (p_left == 0.8)].mean()
+  r = np.corrcoef(wps, zero_shift)[0, 1]
+  print(f"rate alpha: median {np.median(alphas):.2f} (range {alphas.min():.2f} to {alphas.max():.2f}); timescale about {1 / np.median(alphas):.1f} trials")
+  print(f"prior weight w_p: median {np.median(wps):.2f}")
+  print(f"correlation between w_p and the zero-contrast block effect: r = {r:.2f}")
+  plt.scatter(wps, zero_shift); plt.xlabel("fitted prior weight w_p"); plt.ylabel("zero-contrast block effect"); plt.show()
+`} />
+
+The fitted rates have a median of 0.21, a memory of about five trials, and range from 0.08 to 0.34. That is close to the 0.28 that Day 2's ten-lag kernel suggested from the first six lags, and a little slower, because the single exponential must also account for the flatter tail. The prior weight correlates with the zero-contrast block effect across mice ($r = 0.54$), so the model's parameters do capture part of the individual differences. They cannot capture all of it, because the block effect also depends on the rate: a mouse with a short memory follows the block less faithfully even with a large weight. Day 4 asks how the rate compares with the rate the task demands, and Day 5 whether the model reproduces the behaviour it was fitted to explain.
+
+<Bridge title="Inferring hidden causes in brains and machines"
+  neuro="The Bayesian observer is what an ideal animal would do with the stimuli it sees; the action kernel is a much cheaper computation that only needs a memory of recent actions. Finding that the cheap computation fits better is a common result in studies of learning, and it changes where to look in the brain: for a running average of choices rather than for a belief about a hidden block."
+  ai="The same contrast appears in reinforcement learning between model-based agents, which infer hidden states of the world, and model-free ones, which cache values or habits from experience. Many agents, natural and artificial, fall back on cheap model-free summaries when the model-based computation is costly and the gain is small.">
+
+The best model of a behaviour is not always the optimal one, and the difference is informative.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The four models differ only in...", options: ["The prior term added to the logit", "The contrast transform", "The likelihood", "The data"], answer: 0, explain: "The decision stage is shared." },
+  { q: "The Bayesian observer updates its belief using...", options: ["The stimulus side revealed by feedback", "Its own choices", "Response times", "Nothing"], answer: 0, explain: "Then a switch may occur with probability h." },
+  { q: "Stimulus and action kernels differ only on trials where...", options: ["The mouse was wrong", "The contrast is high", "The block switches", "There is no choice"], answer: 0, explain: "On correct trials, choice and side agree." },
+  { q: "Kernels are computed over all trials because...", options: ["Trials without a choice still happen in time", "It is faster", "BIC requires it", "Lapses are useful"], answer: 0, explain: "Only the likelihood is restricted." },
+  { q: "The exceedance probability is estimated by...", options: ["Sampling from the fitted Dirichlet", "Counting best models", "A t test", "BIC"], answer: 0, explain: "The fraction of samples in which each model is most frequent." },
+  { q: "A rate α = 0.2 corresponds to a memory of about...", options: ["5 trials", "50 trials", "0.2 trials", "1 trial"], answer: 0, explain: "1/α." },
+]} />
+
+<Predict revisit question="Which model of the prior wins for most mice?" />
+
+<Key title="Before you go">
+<ul>
+<li>The Bayesian block observer is a two-state hidden Markov filter driven by the stimulus sides.</li>
+<li>Stimulus and action kernels are exponential filters that differ only after errors.</li>
+<li>The action kernel wins for most mice, by a wide margin in fixed and random effects.</li>
+<li>Its parameters are interpretable: a memory of a few trials, and a prior weight that tracks each mouse's block effect.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Adams and MacKay (2007), <em>Bayesian online changepoint detection</em>.</li>
+<li>Pisupati, Chartarifsky-Lynn, Khanal and Churchland (2021), <em>Lapses in perceptual decisions reflect exploration</em>, eLife 10, e55490, for another account of how mice weigh past outcomes (<a href="https://doi.org/10.7554/eLife.55490">doi</a>).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Write the model comparison section of your report: the four models with their parameter counts, the number of mice for which each wins, the random-effects frequencies with exceedance probabilities, and the parameters of the winner. Then write the strongest objection a sceptical reader could raise to the claim that mice use an action kernel rather than a Bayesian prior." />

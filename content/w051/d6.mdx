@@ -1,0 +1,284 @@
+export const meta = {
+  title: "Project report and deep read",
+  intro: "Five days ago you had 70,000 rows of choices. Now you have an analysis: every one of 18 mice uses the block, the mice weight their own past actions rather than past stimuli, a leaky average of those actions beats a Bayesian observer for 17 of the 18, it forgets at close to the optimal rate for the task, and it alone reproduces the mice's habit of repeating a choice after an error. Today you check that the conclusion does not hinge on your analysis choices, gather every number into one function, write the report, and read the source of the data again, now as someone who has analysed it.",
+  goals: [
+    "Test whether the model comparison is robust to the contrast transform, the trials used and the observer's switch rate",
+    "Collect every number in the report from one reproducible function",
+    "Write a two-page report with four figures",
+    "Critique the IBL's 2021 paper in light of your own analysis",
+  ],
+  plan: [
+    { label: "Robustness", minutes: 30 },
+    { label: "One function, every number", minutes: 25 },
+    { label: "Writing the report", minutes: 30 },
+    { label: "Project quiz", minutes: 10 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "ibl-2021",
+};
+
+<Step n={1} title="Robustness" minutes={30} />
+
+Three choices could have shaped the result: the contrast transform $\tanh(5c)/\tanh(5)$, the decision to fit all trials including the unbiased first 90 of each session, and the Bayesian observer's switch rate $h = 0.02$. A conclusion worth reporting should survive sensible alternatives. The setup cell rebuilds the models of Days 3 and 5.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  from scipy.signal import lfilter
+  from scipy.special import erf
+  d = np.load(dataset("ibl_biased.npz"))
+  mouse, session = d["mouse"].astype(int), d["session"].astype(int)
+  contrast, choice, reward = d["contrast"].astype(float), d["choice"].astype(float), d["reward"].astype(int)
+  p_left, rt = d["p_left"].astype(float).round(2), d["rt"].astype(float)
+  ok = (choice >= 0) & d["included"] & np.isfinite(rt)
+  sess = 10 * mouse + session
+  c_pm = np.where(choice >= 0, 2 * choice - 1, 0.0)
+  side = np.where(contrast != 0, np.sign(contrast), np.where(reward == 1, c_pm, -c_pm))
+
+  def kernel(x, alpha, sess_ids):
+      out = np.zeros(len(x))
+      for s in np.unique(sess_ids):
+          k = sess_ids == s
+          out[k] = lfilter([alpha], [1, -(1 - alpha)], np.r_[0, x[k][:-1]])
+      return out
+
+  def bayes_prior(side, sess_ids, h=0.02):
+      out = np.zeros(len(side))
+      for s in np.unique(sess_ids):
+          b = np.array([0.5, 0.5])
+          for t in np.flatnonzero(sess_ids == s):
+              pr = 0.8 * b[0] + 0.2 * b[1]; out[t] = np.log(pr / (1 - pr))
+              b = b * (np.array([0.8, 0.2]) if side[t] > 0 else np.array([0.2, 0.8])); b = b / b.sum()
+              b = np.array([(1 - h) * b[0] + h * b[1], (1 - h) * b[1] + h * b[0]])
+      return out
+
+  models = ["bayes", "stimulus", "action"]
+  x0 = {"bayes": [3, 0, 1], "stimulus": [3, 0, 1, 0.2], "action": [3, 0, 1, 0.2]}
+  bounds = {"bayes": [(-20, 20)] * 3, "stimulus": [(-20, 20)] * 3 + [(0.01, 1)], "action": [(-20, 20)] * 3 + [(0.01, 1)]}
+  prior_cache = {0.02: bayes_prior(side, sess)}
+
+  def compare(scale=5, use=None, h=0.02):
+      """-BIC/2 of the three models for every mouse, under a contrast transform tanh(scale c), a trial mask and a switch rate h."""
+      use = ok if use is None else ok & use
+      fc = np.tanh(scale * contrast) / np.tanh(scale)
+      if h not in prior_cache:
+          prior_cache[h] = bayes_prior(side, sess, h)
+      pb = prior_cache[h]
+      lme = np.zeros((18, 3))
+      for m in range(18):
+          k = mouse == m; u = use[k]; y = choice[k][u]; n = u.sum()
+          for j, mod in enumerate(models):
+              def f(p):
+                  z = p[0] * fc[k] + p[1]
+                  if mod == "bayes":
+                      z = z + p[2] * pb[k]
+                  else:
+                      z = z + p[2] * kernel(side[k] if mod == "stimulus" else c_pm[k], p[3], sess[k])
+                  z = z[u]
+                  return np.sum(np.logaddexp(0, z) - y * z)
+              res = minimize(f, x0[mod], method="L-BFGS-B", bounds=bounds[mod])
+              lme[m, j] = -res.fun - len(x0[mod]) * np.log(n) / 2
+      return lme
+  print("ready")
+`} />
+
+<PyCell id="robust" title="Does the result depend on my choices?" tests={String.raw`
+  import numpy as np
+  def test_keys():
+      "results holds the counts and margins for the three variants"
+      assert set(results) == {"scale 2", "scale 10", "biased trials only"}
+  def test_counts():
+      "in every variant the action kernel wins for at least 15 mice"
+      assert all(v[0] >= 15 for v in results.values())
+  def test_margin():
+      "in every variant the action kernel leads the next best model by more than 1,000 nats"
+      assert all(v[1] > 1000 for v in results.values())
+`} prompt="Run compare for three variants: a gentler transform (scale 2), a harsher one (scale 10), and fitting only trials in biased blocks. For each, store in results the number of mice for which the action kernel wins and its summed lead over the next best model."
+code={String.raw`
+  variants = {"scale 2": dict(scale=2), "scale 10": dict(scale=10), "biased trials only": dict(use=p_left != 0.5)}
+  results = {}
+  for name, kw in variants.items():
+      lme = compare(**kw)
+      wins = ...
+      tot = lme.sum(0)
+      lead = ...
+      results[name] = (wins, lead)
+      print(f"{name:20s} action kernel best for {wins} of 18 mice, leading by {lead:.0f} nats")
+`}
+hint="wins = int(np.sum(lme.argmax(1) == 2)); lead = tot[2] - max(tot[0], tot[1])."
+solution={String.raw`
+  variants = {"scale 2": dict(scale=2), "scale 10": dict(scale=10), "biased trials only": dict(use=p_left != 0.5)}
+  results = {}
+  for name, kw in variants.items():
+      lme = compare(**kw)
+      wins = int(np.sum(lme.argmax(1) == 2))
+      tot = lme.sum(0)
+      lead = tot[2] - max(tot[0], tot[1])
+      results[name] = (wins, lead)
+      print(f"{name:20s} action kernel best for {wins} of 18 mice, leading by {lead:.0f} nats")
+`} />
+
+The action kernel wins for 17 of 18 mice under every variant, and leads the next best model by 1,545 to 1,801 nats. A gentler or harsher contrast transform changes the fit of every model a little but not their order. Fitting only the biased blocks shrinks the lead, as it should with fewer trials, but leaves the winner unchanged. The same holds for the Bayesian observer's switch rate: with $h = 0.01$ or $h = 0.04$ instead of 0.02 the observer still trails the action kernel by about 1,940 to 2,010 nats (you can check this with `compare(h=0.04)`, which takes a few seconds). The conclusion does not hinge on these choices.
+
+<Step n={2} title="One function, every number" minutes={25} />
+
+A report whose numbers come from scattered cells is hard to check and easy to get wrong. Gather the headline numbers into one function that runs from the raw data. Anyone, including you in six months, can then rerun it and see the same report.
+
+<PyCell id="summary" title="The report's numbers" tests={String.raw`
+  import numpy as np
+  def test_keys():
+      "summary has the required keys"
+      need = {"n_trials", "n_mice", "p_right_zero_rightblock", "p_right_zero_leftblock", "mice_shifted", "action_wins", "action_freq_simple", "lead_over_stimulus", "lead_over_bayes"}
+      assert need <= set(summary)
+  def test_values():
+      "the numbers match the week's results"
+      assert summary["n_trials"] == 70402 and summary["n_mice"] == 18 and summary["mice_shifted"] == 18
+      assert summary["action_wins"] == 17 and summary["lead_over_stimulus"] > 1500
+      assert 0.55 < summary["p_right_zero_rightblock"] < 0.65 and 0.33 < summary["p_right_zero_leftblock"] < 0.42
+`} prompt="Complete project_summary: the zero-contrast choice rates in each block, the number of mice whose psychometric bias moves towards the likely side, and, from compare(), the number of mice for which the action kernel wins, the fraction of mice it wins for, and its summed lead over each rival."
+code={String.raw`
+  def psychometric(q, c):
+      return q[2] + (1 - q[2] - q[3]) * 0.5 * (1 + erf((c - q[0]) / (q[1] * np.sqrt(2))))
+
+  def fit_mu(c, y):
+      f = lambda q: -np.sum(y * np.log(np.clip(psychometric(q, c), 1e-9, 1 - 1e-9)) + (1 - y) * np.log(np.clip(1 - psychometric(q, c), 1e-9, 1 - 1e-9)))
+      return minimize(f, [0, 0.1, 0.05, 0.05], method="L-BFGS-B", bounds=[(-0.5, 0.5), (0.005, 1), (0, 0.5), (0, 0.5)]).x[0]
+
+  def project_summary():
+      z = ok & (contrast == 0)
+      shifts = [fit_mu(contrast[ok & (mouse == m) & (p_left == 0.8)], choice[ok & (mouse == m) & (p_left == 0.8)])
+                - fit_mu(contrast[ok & (mouse == m) & (p_left == 0.2)], choice[ok & (mouse == m) & (p_left == 0.2)]) for m in range(18)]
+      lme = compare()
+      tot = lme.sum(0)
+      return {
+          "n_trials": len(choice),
+          "n_mice": len(np.unique(mouse)),
+          "p_right_zero_rightblock": ...,
+          "p_right_zero_leftblock": ...,
+          "mice_shifted": ...,
+          "action_wins": ...,
+          "action_freq_simple": ...,
+          "lead_over_stimulus": ...,
+          "lead_over_bayes": ...,
+      }
+
+  summary = project_summary()
+  for k, v in summary.items():
+      print(f"{k:24s} {v:.3f}" if isinstance(v, float) else f"{k:24s} {v}")
+`}
+hint="p_right_zero_rightblock = float(choice[z & (p_left == 0.2)].mean()), likewise 0.8; mice_shifted = int(np.sum(np.array(shifts) > 0)); action_wins = int(np.sum(lme.argmax(1) == 2)); action_freq_simple = action_wins / 18; lead_over_stimulus = float(tot[2] - tot[1]); lead_over_bayes = float(tot[2] - tot[0])."
+solution={String.raw`
+  def psychometric(q, c):
+      return q[2] + (1 - q[2] - q[3]) * 0.5 * (1 + erf((c - q[0]) / (q[1] * np.sqrt(2))))
+
+  def fit_mu(c, y):
+      f = lambda q: -np.sum(y * np.log(np.clip(psychometric(q, c), 1e-9, 1 - 1e-9)) + (1 - y) * np.log(np.clip(1 - psychometric(q, c), 1e-9, 1 - 1e-9)))
+      return minimize(f, [0, 0.1, 0.05, 0.05], method="L-BFGS-B", bounds=[(-0.5, 0.5), (0.005, 1), (0, 0.5), (0, 0.5)]).x[0]
+
+  def project_summary():
+      z = ok & (contrast == 0)
+      shifts = [fit_mu(contrast[ok & (mouse == m) & (p_left == 0.8)], choice[ok & (mouse == m) & (p_left == 0.8)])
+                - fit_mu(contrast[ok & (mouse == m) & (p_left == 0.2)], choice[ok & (mouse == m) & (p_left == 0.2)]) for m in range(18)]
+      lme = compare()
+      tot = lme.sum(0)
+      return {
+          "n_trials": len(choice),
+          "n_mice": len(np.unique(mouse)),
+          "p_right_zero_rightblock": float(choice[z & (p_left == 0.2)].mean()),
+          "p_right_zero_leftblock": float(choice[z & (p_left == 0.8)].mean()),
+          "mice_shifted": int(np.sum(np.array(shifts) > 0)),
+          "action_wins": int(np.sum(lme.argmax(1) == 2)),
+          "action_freq_simple": int(np.sum(lme.argmax(1) == 2)) / 18,
+          "lead_over_stimulus": float(tot[2] - tot[1]),
+          "lead_over_bayes": float(tot[2] - tot[0]),
+      }
+
+  summary = project_summary()
+  for k, v in summary.items():
+      print(f"{k:24s} {v:.3f}" if isinstance(v, float) else f"{k:24s} {v}")
+`} />
+
+Every headline number now comes from one function: 70,402 trials from 18 mice; zero-contrast choices to the right on 60.8% of trials in right blocks and 37.2% in left blocks; all 18 mice shifted towards the likely side; the action kernel best for 17 of 18 (94%), leading the stimulus kernel by about 1,830 nats and the Bayesian observer by about 1,960. The random-effects frequencies, rates and controls from Days 3 to 5 can be added in the same way. Rerun it whenever you change anything upstream.
+
+<Step n={3} title="Writing the report" minutes={30} />
+
+<Callout kind="note">
+
+**Report structure (two pages, four figures).**
+
+1. **Question** (one paragraph): when the side of a stimulus is predictable, how do mice learn and use the prediction?
+2. **Data**: the task, the blocks, the 18 mice from nine laboratories, the exclusions. Credit the International Brain Laboratory and the data release.
+3. **The block effect** (Figure 1): psychometric curves by block, the shift for every mouse, zero-contrast choice rates, and the response time observation with its caveats.
+4. **History** (Figure 2): the GLM weights after rewards and errors, the held-out gain, the history kernel and its timescale.
+5. **Models of the prior** (Figure 3): the four models, the comparison by mouse, the random-effects frequencies, the fitted rates against the optimal rate, the switch-aligned curves and the ladder of reward rates.
+6. **Controls and robustness** (Figure 4): perseveration, falsification by the after-error signature, model recovery, slow drift, and today's robustness checks.
+7. **Limitations**: five early sessions per mouse, choice-only models, BIC as an approximation to evidence, a Bayesian observer with a fixed switch rate and a simplified block structure, response times not modelled.
+8. **Conclusion** in two sentences, with the main numbers.
+
+Every number should come from `project_summary()` or from a cell you can rerun.
+
+</Callout>
+
+Two short derivations belong in an appendix, because they justify steps of the analysis.
+
+<Prove title="1. The noise of a leaky average" task="Let $s_t$ be independent with mean $\mu$ and variance $v$, and $\pi_t = (1 - \alpha)\pi_{t-1} + \alpha s_{t-1}$. Show that in the steady state $\pi_t$ has mean $\mu$ and variance $\frac{\alpha}{2 - \alpha}v$, and that after a change in $\mu$ the mean approaches its new value as $(1-\alpha)^n$.">
+
+Unrolling the recursion, $\pi_t = \alpha\sum_{j \ge 0}(1 - \alpha)^j s_{t-1-j}$.
+
+The weights sum to $\alpha \cdot \frac{1}{1 - (1 - \alpha)} = 1$, so the mean is $\mu$.
+
+The terms are independent, so the variance is $v\,\alpha^2\sum_j (1 - \alpha)^{2j} = v\,\frac{\alpha^2}{1 - (1 - \alpha)^2} = v\,\frac{\alpha^2}{\alpha(2 - \alpha)} = \frac{\alpha}{2 - \alpha}v$.
+
+If the mean changes from $\mu_0$ to $\mu_1$ at trial 0, then $\mathbb E[\pi_n] - \mu_1 = (1 - \alpha)\left(\mathbb E[\pi_{n-1}] - \mu_1\right)$, so the gap shrinks by a factor $1 - \alpha$ each trial. A small $\alpha$ gives low variance and a slow approach: the trade-off of Day 4.
+
+</Prove>
+
+<Prove title="2. Why a stimulus learner must switch after errors" task="Show that on a trial where the mouse chose $a_t = \pm 1$ and was wrong, a stimulus kernel moves away from the chosen side, while an action kernel moves towards it.">
+
+An error means the stimulus was on the other side: $s_t = -a_t$.
+
+The stimulus kernel updates as $\pi_{t+1} = (1 - \alpha)\pi_t + \alpha s_t = (1 - \alpha)\pi_t - \alpha a_t$, so relative to simple decay it moves by $-\alpha a_t$, away from the chosen side, making a repeat less likely.
+
+The action kernel updates as $\pi_{t+1} = (1 - \alpha)\pi_t + \alpha a_t$, moving towards the chosen side whatever the outcome.
+
+So any positive weight on the stimulus kernel predicts switching after errors, which is why no parameter setting could make the stimulus kernel reproduce the mice's repetition after errors on Day 5.
+
+</Prove>
+
+<Step n={4} title="Project quiz" minutes={10} />
+
+<Quiz id="weekly" title="Week 51 project quiz" questions={[
+  { q: "The dataset comes from...", options: ["18 mice in nine laboratories of the IBL", "One mouse", "Monkeys", "A simulation"], answer: 0, explain: "The 2019 public behavioural release." },
+  { q: "At zero contrast, mice chose right in right blocks on about...", options: ["61% of trials", "80%", "50%", "95%"], answer: 0, explain: "And 37% in left blocks." },
+  { q: "How many mice shifted their psychometric bias towards the likely side?", options: ["All 18", "9", "None", "3"], answer: 0, explain: "Day 1." },
+  { q: "After an error, most mice...", options: ["Repeat their choice", "Switch", "Stop", "Respond faster"], answer: 0, explain: "Day 2: positive after-error weight." },
+  { q: "The model with the most evidence for most mice was...", options: ["The action kernel", "The Bayesian observer", "The stimulus kernel", "No prior"], answer: 0, explain: "17 of 18." },
+  { q: "The mice's median kernel rate was close to...", options: ["The optimal rate for a leaky average in this task", "Zero", "One", "The block length"], answer: 0, explain: "About 0.21 against an optimum near 0.25." },
+  { q: "Switch-aligned curves...", options: ["Could not separate the action kernel from the Bayesian model", "Separated them clearly", "Were flat", "Were not computed"], answer: 0, explain: "The likelihood could." },
+  { q: "The largest loss of zero-contrast reward came from...", options: ["Using the prior probabilistically", "Forgetting too fast", "Lapses", "Response times"], answer: 0, explain: "67% from the kernel's sign, 57% actually earned." },
+  { q: "Simulated stimulus-kernel mice after errors...", options: ["Switched", "Repeated", "Matched the mice", "Did not respond"], answer: 0, explain: "The falsifying signature." },
+  { q: "Adding a slow kernel...", options: ["Helped a little but left most of the fast kernel's weight", "Removed the fast kernel", "Changed nothing", "Made Bayes win"], answer: 0, explain: "Two timescales." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+You first read the International Brain Laboratory's 2021 paper in Week 3, before you could analyse a choice. Give it a third pass now and write your critique under the five headings, focusing on one question: **what can a standardised task tell us about how mice use prior information, and what does standardisation leave out?** Consider how the paper measured the block effect (psychometric shifts) and what your model comparison adds to that; whether reproducibility across laboratories in psychometric parameters implies the same computation in every mouse, given the individual differences you found; how the block design (80:20 blocks of 20 to 100 trials, unsignalled) constrains which models can be told apart; the choice of the first sessions with biased blocks, and what might change with more training; and what the release of the data made possible, including this project.
+
+<Callout kind="research">
+
+Two natural extensions would make this a publishable analysis. First, add the action kernel as a regressor in a GLM-HMM (Week 50) and ask whether the remaining hidden states are engagement states or further block tracking; with the prior modelled, the gain from a second state is small for most mice, which is itself a finding worth testing carefully. Second, model the response times jointly with choices, with the prior entering as a starting-point or a drift bias, after dealing with the long tail of slow responses. The IBL's later Brain Wide Map recordings pair this task with neural data, so a model that predicts the prior on every trial can be used to look for where in the brain it is represented.
+
+</Callout>
+
+<Key title="Part 2 project checklist">
+<ul>
+<li>My notebook runs from top to bottom and regenerates every number in the report.</li>
+<li>I can describe the block effect for every mouse, with psychometric fits and zero-contrast choice rates.</li>
+<li>I can report the history GLM, its held-out gain and the kernel's timescale.</li>
+<li>I can compare four models of the prior across mice, with fixed and random effects, and interpret the winner's parameters.</li>
+<li>I can name each control, what it rules out and what it leaves open, and show the result is robust to my analysis choices.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Write the two-sentence conclusion of your report, with numbers. Then, in the critique, say which single additional experiment would most sharply distinguish an action kernel from a Bayesian prior, and why." />

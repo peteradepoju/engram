@@ -1,0 +1,354 @@
+export const meta = {
+  title: "Controls: is the winning model right for the right reasons?",
+  intro: "The action kernel won the model comparison for 17 of 18 mice. Before you believe it, Week 50's rules demand more. Could it be winning only because mice repeat their last choice, a habit any model could absorb with one extra term? Does it reproduce the behaviour that set it apart, and do its rivals fail to? Could the comparison have picked the right model at all, given these data? And is it a block-tracking computation, or just slow drift in each mouse's bias? Today you run each of these controls.",
+  goals: [
+    "Test whether the winning model survives adding one-trial perseveration to all its rivals",
+    "Falsify models by simulating them and measuring the after-error signature",
+    "Check model recovery on simulated mice with realistic parameters",
+    "Separate fast block tracking from slow drift with a second kernel",
+  ],
+  plan: [
+    { label: "Set up and the logic of controls", minutes: 20 },
+    { label: "Is it just perseveration?", minutes: 25 },
+    { label: "Falsification by simulation", minutes: 30 },
+    { label: "Recovery and slow drift", minutes: 30 },
+    { label: "Quiz and journal", minutes: 15 },
+  ],
+  paper: "roy-2021",
+};
+
+<Predict question="Suppose mice really used a leaky average of past stimulus sides, not past choices. If you simulated such mice and fitted Day 2's GLM to their choices, would the weight of an unrewarded previous choice come out positive (repeat after errors), negative (switch after errors), or near zero?" />
+
+<Step n={1} title="Set up and the logic of controls" minutes={20} />
+
+A control asks whether a simpler or different explanation could produce the same result. Each of today's four controls targets one way the conclusion could be wrong:
+
+1. **Perseveration.** The action kernel contains the previous choice; its rivals do not. Give all of them a one-trial previous-choice term and compare again.
+2. **Falsification.** Simulate each fitted model and check which reproduces the signature that distinguishes them: repeating a choice after an error.
+3. **Recovery.** Simulate mice from each model with fitted parameters and check that the comparison recovers the model that generated them.
+4. **Slow drift.** Mice's biases may wander over tens of trials for reasons unrelated to the blocks. Roy and colleagues (2021) built a method to track such drifting weights across training. Here a cheaper test suffices: add a slow kernel and see whether the fast one survives.
+
+The setup cell rebuilds Day 3's models and refits the three models with a prior to every mouse.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  from scipy.signal import lfilter
+  d = np.load(dataset("ibl_biased.npz"))
+  mouse, session = d["mouse"].astype(int), d["session"].astype(int)
+  contrast, choice, reward = d["contrast"].astype(float), d["choice"].astype(float), d["reward"].astype(int)
+  p_left, rt = d["p_left"].astype(float).round(2), d["rt"].astype(float)
+  ok = (choice >= 0) & d["included"] & np.isfinite(rt)
+  sess = 10 * mouse + session
+  f_c = np.tanh(5 * contrast) / np.tanh(5)
+  c_pm = np.where(choice >= 0, 2 * choice - 1, 0.0)
+  side = np.where(contrast != 0, np.sign(contrast), np.where(reward == 1, c_pm, -c_pm))
+
+  def kernel(x, alpha, sess_ids):
+      out = np.zeros(len(x))
+      for s in np.unique(sess_ids):
+          k = sess_ids == s
+          out[k] = lfilter([alpha], [1, -(1 - alpha)], np.r_[0, x[k][:-1]])
+      return out
+
+  def lag1(x, sess_ids):
+      out = np.r_[0, x[:-1]]; out[np.r_[True, sess_ids[1:] != sess_ids[:-1]]] = 0
+      return out
+
+  def bayes_prior(side, sess_ids, h=0.02):
+      out = np.zeros(len(side))
+      for s in np.unique(sess_ids):
+          b = np.array([0.5, 0.5])
+          for t in np.flatnonzero(sess_ids == s):
+              pr = 0.8 * b[0] + 0.2 * b[1]; out[t] = np.log(pr / (1 - pr))
+              b = b * (np.array([0.8, 0.2]) if side[t] > 0 else np.array([0.2, 0.8])); b = b / b.sum()
+              b = np.array([(1 - h) * b[0] + h * b[1], (1 - h) * b[1] + h * b[0]])
+      return out
+
+  prior_bayes = bayes_prior(side, sess)
+  models = ["bayes", "stimulus", "action"]
+  x0 = {"bayes": [3, 0, 1], "stimulus": [3, 0, 1, 0.2], "action": [3, 0, 1, 0.2]}
+  bounds = {"bayes": [(-20, 20)] * 3, "stimulus": [(-20, 20)] * 3 + [(0.01, 1)], "action": [(-20, 20)] * 3 + [(0.01, 1)]}
+
+  def logit(model, p, k, actions):
+      """Logit of P(right) on the trials selected by k, given the +-1 actions that drive an action kernel."""
+      z = p[0] * f_c[k] + p[1]
+      if model == "bayes":
+          return z + p[2] * prior_bayes[k]
+      x = side[k] if model == "stimulus" else actions
+      return z + p[2] * kernel(x, p[3], sess[k])
+
+  def fit(model, k, y_all, extra=None):
+      """Fit a model to the trials selected by k, with choices y_all (0/1, all trials of k). Returns (params, max log-lik)."""
+      use = ok[k]; y = y_all[use]; a = np.where(y_all >= 0, 2 * y_all - 1, 0.0)
+      n_extra = 0 if extra is None else 1
+      def f(p):
+          z = logit(model, p, k, a)
+          if extra is not None:
+              z = z + p[-1] * extra
+          z = z[use]
+          return np.sum(np.logaddexp(0, z) - y * z)
+      res = minimize(f, x0[model] + [0.0] * n_extra, method="L-BFGS-B", bounds=bounds[model] + [(-20, 20)] * n_extra)
+      return res.x, -res.fun
+
+  params, loglik = {}, np.zeros((18, 3))
+  for m in range(18):
+      k = mouse == m
+      for j, mod in enumerate(models):
+          params[m, mod], loglik[m, j] = fit(mod, k, choice[k])
+  n_m = np.array([np.sum(ok & (mouse == m)) for m in range(18)])
+  print("refitted three models to 18 mice; action kernel best for", np.sum(loglik.argmax(1) == 2), "mice by likelihood")
+`} />
+
+<Video id="XpEj-p7JkFE" title="Determining basic ingredients" by="Neuromatch Academy" note="Neuromatch's tutorial video on deciding which ingredients a model needs to answer a question, and which alternatives it must be tested against: the reasoning behind today's controls." />
+
+<Step n={2} title="Is it just perseveration?" minutes={25} />
+
+<PyCell id="persev" title="Giving every model the previous choice" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "lme_p has one row per mouse and one column per model, using BIC with the extra parameter"
+      assert lme_p.shape == (18, 3) and np.all(np.isfinite(lme_p))
+  def test_bic():
+      "each entry is -BIC/2 with one more parameter than the base model"
+      m = 2; k = mouse == m; _, L = fit("bayes", k, choice[k], extra=prev[k])
+      assert abs(lme_p[m, 0] - (L - 4 * np.log(n_m[m]) / 2)) < 1e-3
+  def test_winner():
+      "the action kernel still wins for at least 15 mice"
+      assert np.sum(lme_p.argmax(1) == 2) >= 15
+`} prompt="Compute prev, each trial's previous choice (+1, -1 or 0) within its session. Then refit every model with prev as an extra regressor and store -BIC/2 (counting the extra parameter) in lme_p."
+code={String.raw`
+  prev = ...
+  lme_p = np.zeros((18, 3))
+  for m in range(18):
+      k = mouse == m
+      for j, mod in enumerate(models):
+          p, L = fit(mod, k, choice[k], extra=prev[k])
+          lme_p[m, j] = ...
+  print("with one-trial perseveration in every model, best model counts:", {mod: int(np.sum(lme_p.argmax(1) == j)) for j, mod in enumerate(models)})
+  print("summed evidence relative to the best:", np.round(lme_p.sum(0) - lme_p.sum(0).max(), 1))
+`}
+hint="prev = lag1(c_pm, sess); lme_p[m, j] = L - (len(x0[mod]) + 1) * np.log(n_m[m]) / 2."
+solution={String.raw`
+  prev = lag1(c_pm, sess)
+  lme_p = np.zeros((18, 3))
+  for m in range(18):
+      k = mouse == m
+      for j, mod in enumerate(models):
+          p, L = fit(mod, k, choice[k], extra=prev[k])
+          lme_p[m, j] = L - (len(x0[mod]) + 1) * np.log(n_m[m]) / 2
+  print("with one-trial perseveration in every model, best model counts:", {mod: int(np.sum(lme_p.argmax(1) == j)) for j, mod in enumerate(models)})
+  print("summed evidence relative to the best:", np.round(lme_p.sum(0) - lme_p.sum(0).max(), 1))
+`} />
+
+With a previous-choice term in every model, the action kernel still has the most evidence for 17 of the 18 mice, and it leads the stimulus kernel by about 1,060 nats summed over mice (down from about 1,830 without the term). So one-trial perseveration explains part of the advantage, but less than half of it. The rest comes from the longer reach of the kernel: the mice's choices are pulled by their actions two, three and five trials back, in proportion, and a single extra weight on the last choice cannot mimic that. The one mouse that now prefers the Bayesian model shows that the comparison is sensitive to individual differences, not fixed in favour of the action kernel.
+
+<Step n={3} title="Falsification by simulation" minutes={30} />
+
+Day 2 found that 17 of 18 mice repeat a choice after an error. Which models can produce that? Simulate each fitted model on each mouse's real sequence of stimuli, letting the model make its own choices, then fit Day 2's GLM to the simulated choices and read off the after-error weight. For the action kernel, the simulated choices must feed back into the kernel trial by trial, so the simulation has to run as a loop.
+
+<Figure caption="The after-reward and after-error weights of Day 2's GLM, fitted to the real mice and to simulations of each fitted model. Choose a mouse, or the mean over all 18." credit="Interactive figure by Engram, after Palminteri, Wyart and Koechlin (2017). Data: The International Brain Laboratory (2021), CC BY 4.0.">
+  <ErrorSignature />
+</Figure>
+
+<PyCell id="falsify" title="Who repeats after errors?" tests={String.raw`
+  import numpy as np
+  def test_sim():
+      "simulate returns 0/1 choices for every trial of the mouse"
+      a = simulate("action", params[0, "action"], 0, np.random.default_rng(0))
+      assert a.shape == (np.sum(mouse == 0),) and set(np.unique(a)) <= {0.0, 1.0}
+  def test_signature():
+      "simulated action-kernel mice repeat after errors, simulated Bayesian and stimulus-kernel mice do not"
+      assert np.sum(lose["action"] > 0) >= 15 and np.sum(lose["bayes"] > 0) <= 3 and np.sum(lose["stimulus"] > 0) <= 3
+`} prompt="Complete simulate. On each trial compute the logit from the stimulus, the bias and the model's prior; draw the choice; and, for the action kernel, update the running kernel with the simulated choice (resetting it at the start of each session). The GLM fit is written for you."
+code={String.raw`
+  def simulate(model, p, m, rng):
+      k = np.flatnonzero(mouse == m)
+      fc, sd, ss = f_c[k], side[k], sess[k]
+      fixed = prior_bayes[k] if model == "bayes" else kernel(sd, p[3], ss) if model == "stimulus" else None
+      y = np.zeros(len(k)); kern = 0.0
+      for i in range(len(k)):
+          if i == 0 or ss[i] != ss[i - 1]:
+              kern = 0.0
+          prior = kern if model == "action" else fixed[i]
+          z = ...
+          y[i] = rng.random() < 1 / (1 + np.exp(-z))
+          if model == "action":
+              kern = ...
+      return y
+
+  def after_weights(y, m):
+      """Day 2's GLM fitted to choices y of mouse m: returns (after-reward, after-error) weights."""
+      k = mouse == m; a = 2 * y - 1; rew = (a == side[k]).astype(float); use = ok[k]
+      X = np.c_[f_c[k], lag1(a * rew, sess[k]), lag1(a * (1 - rew), sess[k]), np.ones(k.sum())][use]; yy = y[use]
+      w = np.zeros(4)
+      for _ in range(25):
+          q = 1 / (1 + np.exp(-X @ w))
+          w -= np.linalg.solve(-(X * (q * (1 - q))[:, None]).T @ X - 1e-3 * np.eye(4), X.T @ (yy - q) - 1e-3 * w)
+      return w[1], w[2]
+
+  rng = np.random.default_rng(1)
+  win, lose = {}, {}
+  for mod in ["data"] + models:
+      ws = np.array([after_weights(choice[mouse == m].clip(0) if mod == "data" else simulate(mod, params[m, mod], m, rng), m) for m in range(18)])
+      win[mod], lose[mod] = ws[:, 0], ws[:, 1]
+      print(f"{mod:9s} after reward {win[mod].mean():+.2f}, after error {lose[mod].mean():+.2f} (positive for {np.sum(lose[mod] > 0)} of 18)")
+`}
+hint="z = p[0] * fc[i] + p[1] + p[2] * prior; kern = (1 - p[3]) * kern + p[3] * (2 * y[i] - 1)."
+solution={String.raw`
+  def simulate(model, p, m, rng):
+      k = np.flatnonzero(mouse == m)
+      fc, sd, ss = f_c[k], side[k], sess[k]
+      fixed = prior_bayes[k] if model == "bayes" else kernel(sd, p[3], ss) if model == "stimulus" else None
+      y = np.zeros(len(k)); kern = 0.0
+      for i in range(len(k)):
+          if i == 0 or ss[i] != ss[i - 1]:
+              kern = 0.0
+          prior = kern if model == "action" else fixed[i]
+          z = p[0] * fc[i] + p[1] + p[2] * prior
+          y[i] = rng.random() < 1 / (1 + np.exp(-z))
+          if model == "action":
+              kern = (1 - p[3]) * kern + p[3] * (2 * y[i] - 1)
+      return y
+
+  def after_weights(y, m):
+      """Day 2's GLM fitted to choices y of mouse m: returns (after-reward, after-error) weights."""
+      k = mouse == m; a = 2 * y - 1; rew = (a == side[k]).astype(float); use = ok[k]
+      X = np.c_[f_c[k], lag1(a * rew, sess[k]), lag1(a * (1 - rew), sess[k]), np.ones(k.sum())][use]; yy = y[use]
+      w = np.zeros(4)
+      for _ in range(25):
+          q = 1 / (1 + np.exp(-X @ w))
+          w -= np.linalg.solve(-(X * (q * (1 - q))[:, None]).T @ X - 1e-3 * np.eye(4), X.T @ (yy - q) - 1e-3 * w)
+      return w[1], w[2]
+
+  rng = np.random.default_rng(1)
+  win, lose = {}, {}
+  for mod in ["data"] + models:
+      ws = np.array([after_weights(choice[mouse == m].clip(0) if mod == "data" else simulate(mod, params[m, mod], m, rng), m) for m in range(18)])
+      win[mod], lose[mod] = ws[:, 0], ws[:, 1]
+      print(f"{mod:9s} after reward {win[mod].mean():+.2f}, after error {lose[mod].mean():+.2f} (positive for {np.sum(lose[mod] > 0)} of 18)")
+`} />
+
+This is the clearest result of the week. The real mice repeat after rewards (+0.67) and after errors (+0.50, positive for 17 of 18). Simulated action-kernel mice reproduce both, with +0.64 and +0.55, positive after errors for all 18. Simulated Bayesian and stimulus-kernel mice repeat after rewards but *switch* after errors, with weights of −0.17 and −0.20, and only 0 and 2 of 18 show a positive weight. That answers the prediction, and it falsifies both rivals in the sense of Week 50: with their best-fitting parameters, they produce the opposite of a robust feature of the data. No amount of parameter tuning would fix this, because switching after errors is built into any model that learns from where the stimulus was.
+
+<Step n={4} title="Recovery and slow drift" minutes={30} />
+
+Could the comparison have found a Bayesian mouse if one existed? Simulate six mice from each model with their fitted parameters, fit all three models to each simulated mouse, and count which wins.
+
+<PyCell id="recover" title="Model recovery with realistic parameters" tests={String.raw`
+  import numpy as np
+  def test_conf():
+      "conf is a 3 by 3 matrix of fractions whose rows sum to 1"
+      assert conf.shape == (3, 3) and np.allclose(conf.sum(1), 1)
+  def test_diag():
+      "each model is recovered for at least two thirds of its simulated mice"
+      assert np.all(np.diag(conf) >= 2 / 3)
+`} prompt="For each generating model and each mouse in subset, simulate choices, fit all three models to them, and add one to conf at (generating model, model with the highest -BIC/2). Normalise each row."
+code={String.raw`
+  subset = [0, 3, 6, 9, 12, 15]
+  conf = np.zeros((3, 3))
+  rng = np.random.default_rng(2)
+  for g, gen in enumerate(models):
+      for m in subset:
+          k = mouse == m
+          y = simulate(gen, params[m, gen], m, rng)
+          scores = [fit(mod, k, y)[1] - len(x0[mod]) * np.log(n_m[m]) / 2 for mod in models]
+          ...
+  conf = conf / conf.sum(1, keepdims=True)
+  print("rows: generating model; columns: model selected")
+  for g, gen in enumerate(models):
+      print(f"{gen:9s}", np.round(conf[g], 2))
+`}
+hint="conf[g, np.argmax(scores)] += 1."
+solution={String.raw`
+  subset = [0, 3, 6, 9, 12, 15]
+  conf = np.zeros((3, 3))
+  rng = np.random.default_rng(2)
+  for g, gen in enumerate(models):
+      for m in subset:
+          k = mouse == m
+          y = simulate(gen, params[m, gen], m, rng)
+          scores = [fit(mod, k, y)[1] - len(x0[mod]) * np.log(n_m[m]) / 2 for mod in models]
+          conf[g, np.argmax(scores)] += 1
+  conf = conf / conf.sum(1, keepdims=True)
+  print("rows: generating model; columns: model selected")
+  for g, gen in enumerate(models):
+      print(f"{gen:9s}", np.round(conf[g], 2))
+`} />
+
+All six Bayesian mice and all six action-kernel mice are recovered correctly, and five of six stimulus-kernel mice, with one mistaken for a Bayesian observer (the two make the same predictions except in how fast they forget). So the comparison is capable of finding a Bayesian or a stimulus-tracking mouse when the data come from one, and the action kernel's victory is not an artefact of the method. Recovery used six mice per model to keep the computation short; for the report, running all 18 is a worthwhile overnight job.
+
+Finally, slow drift. If a mouse's bias wandered over tens of trials for reasons of its own, a leaky average of its choices would pick that up whether or not the mouse tracked the block. Add a second, slow kernel of past choices with a fixed rate of 0.02 (a memory of about 50 trials) to the action model, and see whether the fast kernel keeps its weight.
+
+<PyCell id="drift" title="A fast and a slow kernel" tests={String.raw`
+  import numpy as np
+  def test_cols():
+      "drift_res has, per mouse, the fast weight before and after, the new fast rate, the slow weight and the gain in log-likelihood"
+      assert drift_res.shape == (18, 5) and np.all(drift_res[:, 4] > -1e-3)
+  def test_fast():
+      "the fast kernel keeps most of its weight in the median mouse"
+      assert np.median(drift_res[:, 1] / drift_res[:, 0]) > 0.5
+`} prompt="For each mouse, compute the slow kernel of its choices with rate 0.02, refit the action model with it as an extra regressor, and store the old fast weight, the new fast weight, the new fast rate, the slow weight and the gain in log-likelihood."
+code={String.raw`
+  drift_res = np.zeros((18, 5))
+  for m in range(18):
+      k = mouse == m
+      slow = ...
+      p2, L2 = fit("action", k, choice[k], extra=slow)
+      drift_res[m] = ...
+  print(f"fast weight keeps a median {np.median(drift_res[:, 1] / drift_res[:, 0]):.0%} of its value; fast rate now {np.median(drift_res[:, 2]):.2f}")
+  print(f"slow weight: median {np.median(drift_res[:, 3]):.2f}; gain in log-likelihood: median {np.median(drift_res[:, 4]):.1f} nats")
+  print(f"mice for which the slow kernel is worth its parameter by BIC: {np.sum(drift_res[:, 4] > np.log(n_m) / 2)} of 18")
+`}
+hint="slow = kernel(c_pm[k], 0.02, sess[k]); drift_res[m] = [params[m, 'action'][2], p2[2], p2[3], p2[4], L2 - loglik[m, 2]]."
+solution={String.raw`
+  drift_res = np.zeros((18, 5))
+  for m in range(18):
+      k = mouse == m
+      slow = kernel(c_pm[k], 0.02, sess[k])
+      p2, L2 = fit("action", k, choice[k], extra=slow)
+      drift_res[m] = [params[m, "action"][2], p2[2], p2[3], p2[4], L2 - loglik[m, 2]]
+  print(f"fast weight keeps a median {np.median(drift_res[:, 1] / drift_res[:, 0]):.0%} of its value; fast rate now {np.median(drift_res[:, 2]):.2f}")
+  print(f"slow weight: median {np.median(drift_res[:, 3]):.2f}; gain in log-likelihood: median {np.median(drift_res[:, 4]):.1f} nats")
+  print(f"mice for which the slow kernel is worth its parameter by BIC: {np.sum(drift_res[:, 4] > np.log(n_m) / 2)} of 18")
+`} />
+
+The slow kernel earns its parameter for 13 of 18 mice, with a median gain of 6.9 nats, so there is a slower component in the choices: the flat tail of Day 2's history kernel. But it does not replace the fast kernel, which keeps a median 73% of its weight, and whose rate rises from 0.21 to 0.28 now that it no longer has to account for the slow tail. The block tracking is not slow drift in disguise. A fuller analysis would let weights drift freely, as Roy and colleagues' PsyTrack does, and ask whether the drift lines up with the blocks; the Research callout in tomorrow's lesson suggests how.
+
+<Bridge title="Controls in brains and machines"
+  neuro="A model comparison answers which of the models you wrote down fits best, not whether any of them is right. Controls widen the set of alternatives: perseveration, slow drift and simulation checks each rule out a way of winning for the wrong reasons. Roy and colleagues' PsyTrack makes the drift explicit, letting every weight wander across trials, which is the natural next step for a dataset like this."
+  ai="Machine learning has the same failure modes under other names: a model can win a benchmark through a shortcut feature rather than the intended skill. Ablations, adversarial test sets and checks that a model reproduces known behaviours are the controls that expose shortcuts.">
+
+A model earns trust by reproducing the behaviour that distinguishes it from its rivals, and by surviving the strongest alternatives you can think of.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Adding the previous choice to every model tests whether...", options: ["The action kernel wins only through one-trial perseveration", "The data are noisy", "BIC is correct", "Mice see the block"], answer: 0, explain: "It levels the field." },
+  { q: "Simulated Bayesian and stimulus-kernel mice, after an error...", options: ["Tend to switch", "Repeat", "Stop", "Lapse"], answer: 0, explain: "An error is evidence for the other side." },
+  { q: "Falsification here uses...", options: ["A behavioural signature not used directly in fitting", "BIC", "Response times", "The number of trials"], answer: 0, explain: "The after-error weight of a separate GLM." },
+  { q: "Model recovery checks...", options: ["Whether the comparison can find the true model", "Whether parameters are large", "Whether mice learn", "Nothing useful"], answer: 0, explain: "Week 50, Day 1." },
+  { q: "A slow kernel of past choices is a control for...", options: ["Slow drift in bias", "Lapses", "Contrast", "Response times"], answer: 0, explain: "Wandering bias unrelated to blocks." },
+  { q: "If the fast kernel lost all its weight when the slow one was added, you would conclude...", options: ["The block effect might be slow drift", "The model is perfect", "Mice are Bayesian", "Nothing"], answer: 0, explain: "It did not: most of its weight survived." },
+]} />
+
+<Predict revisit question="Would simulated stimulus-kernel mice repeat, switch or do neither after an error?" />
+
+<Key title="Before you go">
+<ul>
+<li>With one-trial perseveration in every model, the action kernel still wins for almost every mouse.</li>
+<li>Only the simulated action-kernel mice repeat after errors, as the real mice do: its rivals are falsified by this signature.</li>
+<li>Model recovery with realistic parameters is good, so the comparison could have found a Bayesian or stimulus-tracking mouse.</li>
+<li>A slow kernel adds a little, but the fast kernel keeps most of its weight: the mice track the blocks, with an extra slow component.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Roy, Bak, Akrami, Brody and Pillow (2021), <em>Extracting the dynamics of behavior in sensory decision-making experiments</em>.</li>
+<li>Palminteri, Wyart and Koechlin (2017), <em>The importance of falsification in computational cognitive modeling</em>, Week 50's paper on today's main idea.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Write the controls section of your report: each control, why it is a fair alternative, the numbers, and a one-sentence verdict. Then name one alternative explanation that none of today's controls addresses." />

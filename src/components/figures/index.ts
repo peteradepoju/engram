@@ -234,3 +234,8 @@ export { PosteriorPredictive } from "./posterior-predictive";
 export { GroupBMS } from "./group-bms";
 export { DDMDensity } from "./ddm-density";
 export { GLMHMMStates } from "./glmhmm-states";
+export { IBLPsychometric } from "./ibl-psychometric";
+export { HistoryWeights } from "./history-weights";
+export { PriorModels } from "./prior-models";
+export { SwitchCurve } from "./switch-curve";
+export { ErrorSignature } from "./error-signature";

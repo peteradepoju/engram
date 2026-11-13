@@ -1,0 +1,246 @@
+export const meta = {
+  title: "History: what the last trials do to the next",
+  intro: "Yesterday showed that every mouse leans towards the likely side of the block. But a mouse never sees the block: it sees stimuli, makes choices and receives rewards, one trial at a time. Whatever it knows about the block must be built from that history. Today you fit logistic regression models in which the choice depends on the stimulus and on what happened on previous trials, test them on a session they were not fitted to, and measure how far back the mice's memory reaches. The answer sets up tomorrow's comparison of models.",
+  goals: [
+    "Build a design matrix of stimulus and trial-history regressors that respects session boundaries",
+    "Fit history GLMs to each mouse and interpret the weights",
+    "Test whether history predicts choices in a held-out session",
+    "Estimate the timescale of the choice history kernel",
+  ],
+  plan: [
+    { label: "Set up and the idea", minutes: 15 },
+    { label: "A GLM of trial history", minutes: 35 },
+    { label: "Does history predict a new session?", minutes: 25 },
+    { label: "How far back?", minutes: 30 },
+    { label: "Quiz and journal", minutes: 15 },
+  ],
+  paper: "urai-2019",
+};
+
+<Predict question="A mouse chose right on the last trial and was wrong: the stimulus was on the left. On the next trial, is it more likely to choose right again, more likely to switch to left, or neither?" />
+
+<Step n={1} title="Set up and the idea" minutes={15} />
+
+Load the data as on Day 1. Two new arrays help: the choice coded as +1 for right and −1 for left (0 for no choice), and a function that shifts any array back by $k$ trials, filling with zeros where the earlier trial belongs to a different session. Without that, the last trial of one session would wrongly predict the first trial of the next.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  d = np.load(dataset("ibl_biased.npz"))
+  mouse, session = d["mouse"].astype(int), d["session"].astype(int)
+  contrast, choice, reward = d["contrast"].astype(float), d["choice"].astype(float), d["reward"].astype(int)
+  p_left, rt = d["p_left"].astype(float).round(2), d["rt"].astype(float)
+  ok = (choice >= 0) & d["included"] & np.isfinite(rt)
+  sess = 10 * mouse + session                       # a unique id for each session
+  c_pm = np.where(choice >= 0, 2 * choice - 1, 0.0) # +1 right, -1 left, 0 no choice
+  f_c = np.tanh(5 * contrast) / np.tanh(5)          # the IBL's compressed contrast regressor
+
+  def lag(x, k):
+      """x shifted back by k trials, with zeros where trial t - k is in another session."""
+      out = np.zeros_like(x, dtype=float); out[k:] = x[:-k]
+      same = np.r_[np.zeros(k, bool), sess[k:] == sess[:-k]]
+      return np.where(same, out, 0.0)
+
+  def logreg(X, y, l2=1e-3):
+      """Logistic regression by Newton's method with a tiny ridge penalty."""
+      w = np.zeros(X.shape[1])
+      for _ in range(25):
+          p = 1 / (1 + np.exp(-X @ w))
+          g = X.T @ (y - p) - l2 * w
+          H = -(X * (p * (1 - p))[:, None]).T @ X - l2 * np.eye(len(w))
+          w -= np.linalg.solve(H, g)
+      return w
+  print("choices on the first six trials:", c_pm[:6], "\nthe same, one trial back:", lag(c_pm, 1)[:6])
+`} />
+
+The stimulus enters through $\tanh(5c)/\tanh(5)$, the transformation the IBL used in their own GLMs. It compresses contrast so that 25% and 100% have similar effects, which matches the psychometric curves of Day 1 better than contrast itself.
+
+The model is the logistic regression of Week 35, now with behaviour as the output:
+
+$$
+P(\text{right}_t) = \sigma\!\left(w_c f(c_t) + w_r\, r_{t-1} + w_u\, u_{t-1} + b\right),
+$$
+
+where $r_{t-1}$ is the previous choice ($\pm 1$) if it was rewarded and 0 otherwise, and $u_{t-1}$ the previous choice if it was not. Splitting the previous choice by its outcome separates two ideas. A learner that tracks the stimulus side should repeat a rewarded choice ($w_r \gt 0$) but switch after an error ($w_u \lt 0$), because an error means the stimulus was on the other side. A mouse that simply repeats its actions should have both weights positive.
+
+<Video id="qfXFrUnLU0o" title="Logistic regression" by="Neuromatch Academy" note="Neuromatch's tutorial video on logistic regression for binary outcomes, the model you fit to every mouse today." />
+
+<Step n={2} title="A GLM of trial history" minutes={35} />
+
+<Figure caption="History weights for each mouse from today's GLMs: the effect of a rewarded and an unrewarded previous choice, and the weights of the last ten choices with an exponential fit. Choose a mouse." credit="Interactive figure by Engram. Data: The International Brain Laboratory (2021), public behavioural data release, CC BY 4.0.">
+  <HistoryWeights />
+</Figure>
+
+<PyCell id="glm" title="Win-stay, lose-what?" tests={String.raw`
+  import numpy as np
+  def test_X():
+      "X has columns f_c, previous rewarded choice, previous unrewarded choice and a constant"
+      exp = np.c_[f_c, lag(c_pm * reward, 1), lag(c_pm * (1 - reward), 1), np.ones(len(f_c))]
+      assert X.shape == exp.shape and np.allclose(X, exp)
+  def test_W():
+      "W holds one weight vector per mouse, fitted on that mouse's usable trials"
+      k = ok & (mouse == 5)
+      assert W.shape == (18, 4) and np.allclose(W[5], logreg(X[k], choice[k]), atol=1e-6)
+  def test_signs():
+      "every mouse repeats rewarded choices, and most repeat unrewarded ones too"
+      assert np.all(W[:, 1] > 0) and np.sum(W[:, 2] > 0) >= 15
+`} prompt="Build X with the four columns described above, using lag and the coded choice c_pm. Then fit logreg to each mouse's usable trials and store the weights in W."
+code={String.raw`
+  X = ...
+  W = np.zeros((18, 4))
+  for m in range(18):
+      k = ok & (mouse == m)
+      W[m] = ...
+  names = ["contrast", "rewarded prev", "unrewarded prev", "bias"]
+  print("mean weights:", {n: round(float(w), 2) for n, w in zip(names, W.mean(0))})
+  print(f"repeat after reward: {np.sum(W[:, 1] > 0)} of 18 mice; repeat after error: {np.sum(W[:, 2] > 0)} of 18")
+  plt.scatter(W[:, 1], W[:, 2]); plt.axhline(0, color="grey"); plt.axvline(0, color="grey")
+  plt.xlabel("weight of a rewarded previous choice"); plt.ylabel("weight of an unrewarded previous choice"); plt.show()
+`}
+hint="X = np.c_[f_c, lag(c_pm * reward, 1), lag(c_pm * (1 - reward), 1), np.ones(len(f_c))]; W[m] = logreg(X[k], choice[k])."
+solution={String.raw`
+  X = np.c_[f_c, lag(c_pm * reward, 1), lag(c_pm * (1 - reward), 1), np.ones(len(f_c))]
+  W = np.zeros((18, 4))
+  for m in range(18):
+      k = ok & (mouse == m)
+      W[m] = logreg(X[k], choice[k])
+  names = ["contrast", "rewarded prev", "unrewarded prev", "bias"]
+  print("mean weights:", {n: round(float(w), 2) for n, w in zip(names, W.mean(0))})
+  print(f"repeat after reward: {np.sum(W[:, 1] > 0)} of 18 mice; repeat after error: {np.sum(W[:, 2] > 0)} of 18")
+  plt.scatter(W[:, 1], W[:, 2]); plt.axhline(0, color="grey"); plt.axvline(0, color="grey")
+  plt.xlabel("weight of a rewarded previous choice"); plt.ylabel("weight of an unrewarded previous choice"); plt.show()
+`} />
+
+Every mouse repeats a rewarded choice, with a mean weight of 0.67. The surprise is the error trials: 17 of the 18 mice also tend to repeat a choice that was *not* rewarded, with a mean weight of 0.50, which answers the prediction. That is the opposite of what a learner tracking the stimulus side would do. After an error, the stimulus was on the other side, which is evidence for the other block. The mice instead behave as though their own previous action, rewarded or not, pulls the next choice towards it. Only SWC_013 switches after errors, and it is also the mouse with the smallest block shift on Day 1. Hold on to this observation: it is the clue that decides tomorrow's model comparison.
+
+<Step n={3} title="Does history predict a new session?" minutes={25} />
+
+With tens of thousands of trials, almost any regressor will improve the fit a little. The honest test, as in Week 50, is prediction: fit on each mouse's first four sessions and measure the log-likelihood per trial on the fifth, with and without the history terms.
+
+<PyCell id="cv" title="Held-out gain from history" tests={String.raw`
+  import numpy as np
+  def test_ll():
+      "mean_ll is the mean Bernoulli log-likelihood per trial"
+      Xt = np.c_[np.ones(4), [0, 1, 2, 3]]; yt = np.array([0, 1, 1, 0.0]); w = np.array([0.1, 0.3])
+      z = Xt @ w; assert abs(mean_ll(Xt, yt, w) - np.mean(yt * z - np.log1p(np.exp(z)))) < 1e-12
+  def test_gain():
+      "gain has one value per mouse and history helps at least 15 of them on held-out data"
+      assert gain.shape == (18,) and np.sum(gain > 0) >= 15
+`} prompt="Write mean_ll(X, y, w), the mean log-likelihood per trial of a logistic model (use np.logaddexp(0, z) for log(1 + e^z)). Then, for each mouse, fit the stimulus-only model (columns 0 and 3) and the full model on sessions 0 to 3, and store the difference in held-out log-likelihood on session 4 in gain."
+code={String.raw`
+  def mean_ll(X, y, w):
+      z = X @ w
+      return ...
+
+  gain = np.zeros(18)
+  for m in range(18):
+      tr = ok & (mouse == m) & (session < 4)
+      te = ok & (mouse == m) & (session == 4)
+      base = mean_ll(X[te][:, [0, 3]], choice[te], logreg(X[tr][:, [0, 3]], choice[tr]))
+      full = ...
+      gain[m] = full - base
+  print("held-out gain per trial (nats):", np.round(gain, 3))
+  print(f"history helps {np.sum(gain > 0)} of 18 mice; median gain {np.median(gain):.3f} nats per trial")
+`}
+hint="return np.mean(y * z - np.logaddexp(0, z)); full = mean_ll(X[te], choice[te], logreg(X[tr], choice[tr]))."
+solution={String.raw`
+  def mean_ll(X, y, w):
+      z = X @ w
+      return np.mean(y * z - np.logaddexp(0, z))
+
+  gain = np.zeros(18)
+  for m in range(18):
+      tr = ok & (mouse == m) & (session < 4)
+      te = ok & (mouse == m) & (session == 4)
+      base = mean_ll(X[te][:, [0, 3]], choice[te], logreg(X[tr][:, [0, 3]], choice[tr]))
+      full = mean_ll(X[te], choice[te], logreg(X[tr], choice[tr]))
+      gain[m] = full - base
+  print("held-out gain per trial (nats):", np.round(gain, 3))
+  print(f"history helps {np.sum(gain > 0)} of 18 mice; median gain {np.median(gain):.3f} nats per trial")
+`} />
+
+History improves prediction on the held-out session for 17 of the 18 mice, by a median of 0.032 nats per trial. That sounds small, but over a session of 800 trials it is about 26 nats, a likelihood ratio of more than $10^{11}$ in favour of the model with history. The gains vary widely: ZM_1743 gains 0.14 nats per trial, while CSH_ZAD_002 gains nothing. These are also among the mice with the most and least history-dependent choices, so the individual differences are consistent across analyses, which is what you would want before interpreting them.
+
+<Step n={4} title="How far back?" minutes={30} />
+
+The block lasts tens of trials, so a mouse that tracks it should be influenced by more than the last trial. Replace the two one-trial regressors by the last ten choices, each with its own weight. The weights as a function of lag form a **history kernel**, the behavioural counterpart of the spike-history filters of Week 35.
+
+<PyCell id="lags" title="The choice history kernel" tests={String.raw`
+  import numpy as np
+  def test_XL():
+      "XL has f_c, the ten lagged choices and a constant"
+      assert XL.shape == (len(f_c), 12) and np.allclose(XL[:, 3], lag(c_pm, 3)) and np.allclose(XL[:, -1], 1)
+  def test_kernel():
+      "kernel is the mean over mice of the ten lag weights, and it decays"
+      assert kernel.shape == (10,) and kernel[0] > kernel[4] > 0
+  def test_alpha():
+      "alpha comes from the slope of log weight against lag over the first six lags"
+      slope = np.polyfit(np.arange(1, 7), np.log(kernel[:6]), 1)[0]
+      assert abs(alpha - (1 - np.exp(slope))) < 1e-9 and 0.1 < alpha < 0.4
+`} prompt="Build XL from f_c, lag(c_pm, k) for k = 1 to 10, and a constant. Fit each mouse, average the ten lag weights over mice into kernel, and estimate the decay: fit a straight line to log(kernel) against lag for lags 1 to 6, and convert its slope s into alpha = 1 - exp(s)."
+code={String.raw`
+  XL = ...
+  WL = np.array([logreg(XL[ok & (mouse == m)], choice[ok & (mouse == m)]) for m in range(18)])
+  kernel = ...
+  slope = ...
+  alpha = 1 - np.exp(slope)
+  print("mean kernel:", np.round(kernel, 3))
+  print(f"each step back multiplies the weight by about {np.exp(slope):.2f}: alpha = {alpha:.2f}, a timescale of {1 / alpha:.1f} trials")
+  lags_ = np.arange(1, 11)
+  plt.plot(lags_, kernel, "o-", label="mean over mice")
+  plt.plot(lags_, kernel[0] * (1 - alpha) ** (lags_ - 1), "--", label="exponential")
+  plt.xlabel("trials back"); plt.ylabel("weight"); plt.legend(); plt.show()
+`}
+hint="XL = np.column_stack([f_c] + [lag(c_pm, k) for k in range(1, 11)] + [np.ones(len(f_c))]); kernel = WL[:, 1:11].mean(0); slope = np.polyfit(np.arange(1, 7), np.log(kernel[:6]), 1)[0]."
+solution={String.raw`
+  XL = np.column_stack([f_c] + [lag(c_pm, k) for k in range(1, 11)] + [np.ones(len(f_c))])
+  WL = np.array([logreg(XL[ok & (mouse == m)], choice[ok & (mouse == m)]) for m in range(18)])
+  kernel = WL[:, 1:11].mean(0)
+  slope = np.polyfit(np.arange(1, 7), np.log(kernel[:6]), 1)[0]
+  alpha = 1 - np.exp(slope)
+  print("mean kernel:", np.round(kernel, 3))
+  print(f"each step back multiplies the weight by about {np.exp(slope):.2f}: alpha = {alpha:.2f}, a timescale of {1 / alpha:.1f} trials")
+  lags_ = np.arange(1, 11)
+  plt.plot(lags_, kernel, "o-", label="mean over mice")
+  plt.plot(lags_, kernel[0] * (1 - alpha) ** (lags_ - 1), "--", label="exponential")
+  plt.xlabel("trials back"); plt.ylabel("weight"); plt.legend(); plt.show()
+`} />
+
+The weights fall from 0.39 one trial back to 0.14 four trials back. Over the first six lags each step multiplies the weight by about 0.72, so $\alpha \approx 0.28$, and the mice's memory of their choices has a timescale of about 3.6 trials. The tail, though, is flatter than an exponential: lags 7 to 10 still carry weights of 0.06 to 0.1. A single exponential is therefore an approximation, and a slower component may be tracking the block itself. Ten free weights per mouse are also a lot to estimate. A model that summarises the kernel by a single rate $\alpha$ and a single weight would be far more economical, and it is the first of the models you will compare tomorrow.
+
+<Bridge title="History in brains and machines"
+  neuro="Choice history biases are found in rats, mice, monkeys and people, even when trials are independent and history should be ignored. Urai and colleagues showed in humans that such biases act on the accumulation of evidence itself, not only on a starting point, and they vary widely between individuals. In the IBL task history is useful, because the blocks make the past informative, and the question becomes whether the mice use it well."
+  ai="An exponentially decaying kernel over past inputs is the simplest recurrent memory: a single unit with a self-connection of strength 1 − α. Gated recurrent networks learn such time constants from data, and analyses of trained networks often find exactly this kind of leaky integration of past outputs.">
+
+A history kernel summarises what the past does to the next choice; the next step is to ask what computation produces it.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The lag function sets a lagged value to zero when...", options: ["The earlier trial is in another session", "The choice was wrong", "The contrast is zero", "The mouse is fast"], answer: 0, explain: "Sessions are separate days." },
+  { q: "A learner that tracks the stimulus side should, after an error...", options: ["Switch", "Repeat", "Stop responding", "Respond faster"], answer: 0, explain: "The error means the stimulus was on the other side." },
+  { q: "Most IBL mice, after an error...", options: ["Repeat the choice", "Switch", "Show no effect", "Lapse"], answer: 0, explain: "The unrewarded-choice weight is positive." },
+  { q: "History weights should be judged by...", options: ["Held-out log-likelihood", "Their size alone", "In-sample fit", "p values"], answer: 0, explain: "Prediction on a new session." },
+  { q: "A history kernel that decays by 0.75 per trial has α equal to...", options: ["0.25", "0.75", "4", "1.33"], answer: 0, explain: "α = 1 − 0.75; timescale about 4 trials." },
+  { q: "tanh(5c)/tanh(5) is used because...", options: ["The effect of contrast saturates", "Contrast is negative", "It removes lapses", "It is faster"], answer: 0, explain: "25% and 100% have similar effects." },
+]} />
+
+<Predict revisit question="After a wrong right choice, do mice repeat right, switch, or neither?" />
+
+<Key title="Before you go">
+<ul>
+<li>History regressors must respect session boundaries.</li>
+<li>Every mouse repeats rewarded choices, and almost every mouse repeats unrewarded ones too: the mice weight their past actions, not only past stimuli.</li>
+<li>History improves held-out prediction for nearly all mice.</li>
+<li>The choice kernel decays roughly exponentially, with a timescale of a few trials.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Urai, de Gee, Tsetsos and Donner (2019), <em>Choice history biases subsequent evidence accumulation</em>.</li>
+<li>Busse and colleagues (2011), <em>The detection of visual contrast in the behaving mouse</em>, Journal of Neuroscience 31(31), 11351 to 11361, an early analysis of history effects in mouse psychophysics.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Write the history section of your report: the regressors, the weights with how many mice share each sign, the held-out gain, and the kernel's timescale. End with one sentence on what the positive weight after errors suggests about how mice track the block." />
