@@ -1,0 +1,304 @@
+export const meta = {
+  title: "Review V: modelling behaviour, and Year 1 in one view",
+  intro: "The last review day covers Weeks 50 and 51, the modelling of behaviour and the project, and then steps back to see the whole first year at once. Part 1 gave you mathematics; Part 2 used it at every level from ion channels to mice choosing under uncertainty. The three problems run the modelling workflow once more, and the third joins the year end to end: from Poisson spikes, through Fisher information, to the psychometric curve of an animal.",
+  goals: [
+    "Recall the modelling workflow of Weeks 50 and 51",
+    "Check parameter recovery for a reinforcement learning model",
+    "Compare BIC with cross-validation as ways to choose a model",
+    "Derive a psychometric threshold from the Fisher information of a neural population",
+  ],
+  plan: [
+    { label: "Year 1 in one grid", minutes: 15 },
+    { label: "Recap sheet", minutes: 20 },
+    { label: "Mixed problems", minutes: 60 },
+    { label: "Proof practice", minutes: 10 },
+    { label: "Mock quiz and plan", minutes: 15 },
+  ],
+  paper: "krakauer-2017",
+};
+
+<Predict question="A population of 50 Poisson neurons encodes the contrast of a stimulus, and an ideal observer reads them out to decide left or right. If you double the number of neurons, by what factor does the psychometric threshold (the contrast needed for reliable choices) change: halve, shrink by about 30%, or stay the same?" />
+
+<Step n={1} title="Year 1 in one grid" minutes={15} />
+
+Every tool from Part 1 reappeared in Part 2, often in places you might not have expected. Seeing the grid whole is the best summary of what the first year was for.
+
+<Figure caption="Year 1 in one grid: rows are the tools of Part 1, columns the levels of Part 2. Tap a cell to see where that tool was used at that level." credit="Interactive figure by Engram.">
+  <YearOneThreads />
+</Figure>
+
+<Video id="KgqR_jbjMQg" title="What models" by="Neuromatch Academy" note="Neuromatch's opening video on descriptive models, the first of the three kinds of model (what, how and why) that this course has used throughout. Watch it as a look back over the year." />
+
+<Step n={2} title="Recap sheet" minutes={20} />
+
+**Modelling behaviour (Week 50).** Wilson and Collins's rules: design the experiment so the models make different predictions; simulate before collecting data; check parameter and model recovery; fit by maximum likelihood with care; compare by held-out likelihood or an approximation to evidence such as $-\text{BIC}/2$; and validate the winner by simulating it (Palminteri's falsification). Across a group, random-effects selection estimates how common each model is. Diffusion models can be fitted to every response time with series for the first-passage density; GLM-HMMs reveal hidden strategies.
+
+**The project (Week 51).** In 18 IBL mice, the block prior shifted every mouse's psychometric curve; mice repeated their choices even after errors; a leaky average of past actions beat a Bayesian observer and a stimulus kernel for 17 of 18 mice; its rate was close to the optimal one for a leaky average; and only it reproduced the after-error signature, the decisive falsification test.
+
+**The year.** Part 1: arrays, linear algebra, calculus, Fourier analysis, optimisation, probability, statistics, Bayesian inference, information theory, dynamics and stochastic processes, ending with a population analysis of motor cortex. Part 2: membranes to synapses, coding and decoding, senses, movement, plasticity, memory, reward, decisions, cognition and behaviour, ending with a model comparison on real mice.
+
+<Step n={3} title="Mixed problems" minutes={60} />
+
+<PyCell id="recovery" title="Problem 1: can the parameters be recovered?" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "fitted holds alpha and beta for every simulated agent, within bounds"
+      assert fitted.shape == (30, 2) and np.all(fitted[:, 0] >= 0.01) and np.all(fitted[:, 0] <= 1)
+  def test_recovery():
+      "both parameters are recovered with correlations above 0.6"
+      assert r_alpha > 0.6 and r_beta > 0.6
+`} prompt="Thirty agents with known learning rates and inverse temperatures play 300 trials of a two-armed bandit with a reversal. Write nll(params, a, rw), the negative log-likelihood of a Q-learner's choices, fit every agent with L-BFGS-B, and correlate fitted with true parameters."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  g = np.random.default_rng(50)
+  T, mu = 300, np.array([0.25, 0.75])
+  true = np.c_[g.uniform(0.1, 0.6, 30), g.uniform(2, 8, 30)]
+
+  def simulate(alpha, beta):
+      Q, a, rw = np.zeros(2), np.zeros(T, int), np.zeros(T)
+      for t in range(T):
+          a[t] = g.random() < 1 / (1 + np.exp(-beta * (Q[1] - Q[0])))
+          rw[t] = g.random() < (mu if t < T // 2 else mu[::-1])[a[t]]
+          Q[a[t]] += alpha * (rw[t] - Q[a[t]])
+      return a, rw
+
+  def nll(params, a, rw):
+      alpha, beta = params
+      Q, L = np.zeros(2), 0.0
+      for t in range(T):
+          p1 = 1 / (1 + np.exp(-beta * (Q[1] - Q[0])))
+          L -= ...
+          Q[a[t]] += alpha * (rw[t] - Q[a[t]])
+      return L
+
+  fitted = np.zeros((30, 2))
+  for i, (al, be) in enumerate(true):
+      a, rw = simulate(al, be)
+      fitted[i] = ...
+  r_alpha = np.corrcoef(true[:, 0], fitted[:, 0])[0, 1]
+  r_beta = np.corrcoef(true[:, 1], fitted[:, 1])[0, 1]
+  print(f"recovery: r = {r_alpha:.2f} for alpha, r = {r_beta:.2f} for beta")
+  fig, ax = plt.subplots(1, 2, figsize=(8, 3))
+  ax[0].scatter(true[:, 0], fitted[:, 0]); ax[0].set_xlabel("true alpha"); ax[0].set_ylabel("fitted")
+  ax[1].scatter(true[:, 1], fitted[:, 1]); ax[1].set_xlabel("true beta"); plt.show()
+`}
+hint="L -= np.log(max(p1 if a[t] == 1 else 1 - p1, 1e-9)); fitted[i] = minimize(nll, [0.3, 3.0], args=(a, rw), method='L-BFGS-B', bounds=[(0.01, 1), (0.1, 30)]).x."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  g = np.random.default_rng(50)
+  T, mu = 300, np.array([0.25, 0.75])
+  true = np.c_[g.uniform(0.1, 0.6, 30), g.uniform(2, 8, 30)]
+
+  def simulate(alpha, beta):
+      Q, a, rw = np.zeros(2), np.zeros(T, int), np.zeros(T)
+      for t in range(T):
+          a[t] = g.random() < 1 / (1 + np.exp(-beta * (Q[1] - Q[0])))
+          rw[t] = g.random() < (mu if t < T // 2 else mu[::-1])[a[t]]
+          Q[a[t]] += alpha * (rw[t] - Q[a[t]])
+      return a, rw
+
+  def nll(params, a, rw):
+      alpha, beta = params
+      Q, L = np.zeros(2), 0.0
+      for t in range(T):
+          p1 = 1 / (1 + np.exp(-beta * (Q[1] - Q[0])))
+          L -= np.log(max(p1 if a[t] == 1 else 1 - p1, 1e-9))
+          Q[a[t]] += alpha * (rw[t] - Q[a[t]])
+      return L
+
+  fitted = np.zeros((30, 2))
+  for i, (al, be) in enumerate(true):
+      a, rw = simulate(al, be)
+      fitted[i] = minimize(nll, [0.3, 3.0], args=(a, rw), method="L-BFGS-B", bounds=[(0.01, 1), (0.1, 30)]).x
+  r_alpha = np.corrcoef(true[:, 0], fitted[:, 0])[0, 1]
+  r_beta = np.corrcoef(true[:, 1], fitted[:, 1])[0, 1]
+  print(f"recovery: r = {r_alpha:.2f} for alpha, r = {r_beta:.2f} for beta")
+  fig, ax = plt.subplots(1, 2, figsize=(8, 3))
+  ax[0].scatter(true[:, 0], fitted[:, 0]); ax[0].set_xlabel("true alpha"); ax[0].set_ylabel("fitted")
+  ax[1].scatter(true[:, 1], fitted[:, 1]); ax[1].set_xlabel("true beta"); plt.show()
+`} />
+
+Both parameters are recovered well, with correlations of 0.95 for the learning rate and 0.94 for the inverse temperature, from 300 trials per agent. This is the check Week 50 asked for before any real data are fitted: had the correlations been low, differences between people or animals in fitted parameters would mean little. Recovery depends on the design as much as the model; without the reversal, or with fewer trials, the learning rate in particular is much harder to pin down, because many combinations of the two parameters predict similar choices.
+
+<PyCell id="bic" title="Problem 2: BIC against cross-validation" tests={String.raw`
+  import numpy as np
+  def test_bic():
+      "bic(ll, k, n) is k log n minus twice the log-likelihood"
+      assert abs(bic(-100.0, 3, 50) - (3 * np.log(50) + 200)) < 1e-12
+  def test_agree():
+      "with a real history effect both criteria prefer the history model in at least 18 of 20 datasets"
+      assert agree_bic[0.5] >= 18 and agree_cv[0.5] >= 18
+  def test_null():
+      "with no history effect BIC prefers the simpler model more often than cross-validation"
+      assert agree_bic[0.0] <= agree_cv[0.0]
+`} prompt="For each of 20 simulated datasets, with a true history weight of 0.5 and then 0, fit logistic models with and without the previous choice. Count how often BIC prefers the history model, and how often the history model has the higher log-likelihood on held-out trials (train on the first 600 trials, test on the last 400)."
+code={String.raw`
+  def bic(ll, k, n):
+      return ...
+
+  def logreg(X, y):
+      w = np.zeros(X.shape[1])
+      for _ in range(25):
+          p = 1 / (1 + np.exp(-X @ w)); w -= np.linalg.solve(-(X * (p * (1 - p))[:, None]).T @ X - 1e-6 * np.eye(len(w)), X.T @ (y - p))
+      return w
+
+  def ll(X, y, w):
+      z = X @ w; return np.sum(y * z - np.logaddexp(0, z))
+
+  agree_bic, agree_cv = {}, {}
+  for wh in [0.5, 0.0]:
+      nb = nc = 0
+      for rep in range(20):
+          c = g.choice([-1, -0.5, -0.25, 0, 0.25, 0.5, 1], 1000); y = np.zeros(1000); prev = 0.0
+          for t in range(1000):
+              y[t] = g.random() < 1 / (1 + np.exp(-(3 * c[t] + wh * prev))); prev = 2 * y[t] - 1
+          Xf = np.c_[c, np.r_[0, 2 * y[:-1] - 1], np.ones(1000)]; Xs = Xf[:, [0, 2]]
+          nb += ...
+          tr, te = slice(0, 600), slice(600, 1000)
+          nc += ll(Xf[te], y[te], logreg(Xf[tr], y[tr])) > ll(Xs[te], y[te], logreg(Xs[tr], y[tr]))
+      agree_bic[wh], agree_cv[wh] = nb, nc
+      print(f"true history weight {wh}: BIC prefers history in {nb}/20, cross-validation in {nc}/20")
+`}
+hint="return k * np.log(n) - 2 * ll; nb += bic(ll(Xf, y, logreg(Xf, y)), 3, 1000) < bic(ll(Xs, y, logreg(Xs, y)), 2, 1000)."
+solution={String.raw`
+  def bic(ll, k, n):
+      return k * np.log(n) - 2 * ll
+
+  def logreg(X, y):
+      w = np.zeros(X.shape[1])
+      for _ in range(25):
+          p = 1 / (1 + np.exp(-X @ w)); w -= np.linalg.solve(-(X * (p * (1 - p))[:, None]).T @ X - 1e-6 * np.eye(len(w)), X.T @ (y - p))
+      return w
+
+  def ll(X, y, w):
+      z = X @ w; return np.sum(y * z - np.logaddexp(0, z))
+
+  agree_bic, agree_cv = {}, {}
+  for wh in [0.5, 0.0]:
+      nb = nc = 0
+      for rep in range(20):
+          c = g.choice([-1, -0.5, -0.25, 0, 0.25, 0.5, 1], 1000); y = np.zeros(1000); prev = 0.0
+          for t in range(1000):
+              y[t] = g.random() < 1 / (1 + np.exp(-(3 * c[t] + wh * prev))); prev = 2 * y[t] - 1
+          Xf = np.c_[c, np.r_[0, 2 * y[:-1] - 1], np.ones(1000)]; Xs = Xf[:, [0, 2]]
+          nb += bic(ll(Xf, y, logreg(Xf, y)), 3, 1000) < bic(ll(Xs, y, logreg(Xs, y)), 2, 1000)
+          tr, te = slice(0, 600), slice(600, 1000)
+          nc += ll(Xf[te], y[te], logreg(Xf[tr], y[tr])) > ll(Xs[te], y[te], logreg(Xs[tr], y[tr]))
+      agree_bic[wh], agree_cv[wh] = nb, nc
+      print(f"true history weight {wh}: BIC prefers history in {nb}/20, cross-validation in {nc}/20")
+`} />
+
+When the history effect is real (weight 0.5 in 1,000 trials), both criteria choose the history model in all 20 datasets. When it is absent, BIC never chooses it, while cross-validation chooses it in 8 of 20, close to the half you would expect when two models predict new data about equally well and noise decides. The two criteria answer different questions: BIC approximates which model is more probable given the data, and penalises the extra parameter by $\log n$, while cross-validation asks which predicts new data better, and with a single held-out split it is noisy. In Week 51 they agreed because the effects were large; with small effects, report both and prefer repeated cross-validation over a single split.
+
+<PyCell id="spikes2choice" title="Problem 3: from spikes to a psychometric curve" tests={String.raw`
+  import numpy as np
+  def test_fisher():
+      "I0 is the Fisher information at zero contrast, T r0 times the sum of k squared"
+      assert abs(I0 - Tw * r0 * np.sum(k ** 2)) < 1e-9
+  def test_curve():
+      "p_right rises from below 0.1 to above 0.9 across the contrasts"
+      assert p_right[0] < 0.1 and p_right[-1] > 0.9
+  def test_threshold():
+      "the fitted psychometric sigma is within 15% of 1 over the square root of I0"
+      assert abs(sigma_fit * np.sqrt(I0) - 1) < 0.15
+`} prompt="Fifty neurons fire Poisson counts with rates r0 exp(k_i c), half preferring right (k positive) and half left. The ideal observer chooses right when sum_i k_i (n_i - Tw r0) is positive. Simulate 4,000 trials at each contrast, fit a cumulative Gaussian with no lapses to the choices, and compare its sigma with 1 over the square root of the Fisher information at zero contrast."
+code={String.raw`
+  from scipy.special import erf
+  g = np.random.default_rng(51)
+  N, r0, Tw = 50, 10.0, 0.2
+  k = np.r_[g.uniform(0.5, 3, N // 2), -g.uniform(0.5, 3, N // 2)]
+  I0 = ...
+  contrasts = np.array([-0.3, -0.2, -0.1, -0.05, 0, 0.05, 0.1, 0.2, 0.3])
+  p_right = np.zeros(len(contrasts))
+  for j, c in enumerate(contrasts):
+      n = g.poisson(Tw * r0 * np.exp(k * c), (4000, N))
+      p_right[j] = ...
+  nll_psy = lambda s: -np.sum(4000 * (p_right * np.log(np.clip(0.5 * (1 + erf(contrasts / (s * np.sqrt(2)))), 1e-9, 1))
+                                    + (1 - p_right) * np.log(np.clip(0.5 * (1 - erf(contrasts / (s * np.sqrt(2)))), 1e-9, 1))))
+  sigma_fit = minimize(lambda s: nll_psy(s[0]), [0.1], bounds=[(0.005, 2)]).x[0]
+  print(f"Fisher information at zero contrast: {I0:.1f}; predicted threshold 1/sqrt(I) = {1 / np.sqrt(I0):.4f}")
+  print(f"fitted psychometric sigma: {sigma_fit:.4f}")
+  print("P(right):", np.round(p_right, 3))
+`}
+hint="I0 = Tw * r0 * np.sum(k ** 2); p_right[j] = np.mean((n - Tw * r0) @ k > 0)."
+solution={String.raw`
+  from scipy.special import erf
+  g = np.random.default_rng(51)
+  N, r0, Tw = 50, 10.0, 0.2
+  k = np.r_[g.uniform(0.5, 3, N // 2), -g.uniform(0.5, 3, N // 2)]
+  I0 = Tw * r0 * np.sum(k ** 2)
+  contrasts = np.array([-0.3, -0.2, -0.1, -0.05, 0, 0.05, 0.1, 0.2, 0.3])
+  p_right = np.zeros(len(contrasts))
+  for j, c in enumerate(contrasts):
+      n = g.poisson(Tw * r0 * np.exp(k * c), (4000, N))
+      p_right[j] = np.mean((n - Tw * r0) @ k > 0)
+  nll_psy = lambda s: -np.sum(4000 * (p_right * np.log(np.clip(0.5 * (1 + erf(contrasts / (s * np.sqrt(2)))), 1e-9, 1))
+                                    + (1 - p_right) * np.log(np.clip(0.5 * (1 - erf(contrasts / (s * np.sqrt(2)))), 1e-9, 1))))
+  sigma_fit = minimize(lambda s: nll_psy(s[0]), [0.1], bounds=[(0.005, 2)]).x[0]
+  print(f"Fisher information at zero contrast: {I0:.1f}; predicted threshold 1/sqrt(I) = {1 / np.sqrt(I0):.4f}")
+  print(f"fitted psychometric sigma: {sigma_fit:.4f}")
+  print("P(right):", np.round(p_right, 3))
+`} />
+
+The fitted psychometric threshold, 0.0535, matches the prediction from the Fisher information, $1/\sqrt{351.3} = 0.0534$, to three significant figures. The choices of an ideal observer reading 50 Poisson neurons are therefore fully described by one number computed from their tuning curves. This joins the year end to end: Poisson variability and the central limit theorem (Part 1), Fisher information of a population code (Week 36), and the psychometric curves you fitted to real mice (Week 51). Doubling the number of neurons doubles the information and shrinks the threshold by $\sqrt 2$, about 30%, which answers the prediction. Real animals are far worse than this bound would suggest from the number of neurons they have, because noise correlations limit the information a large population can carry (Week 34) and because decisions add their own noise and lapses.
+
+<Step n={4} title="Proof practice" minutes={10} />
+
+<Prove title="A psychometric threshold from Fisher information" task="With rates $r_0 e^{k_i c}$ and the decision statistic $D = \sum_i k_i(n_i - Tr_0)$, show that for small $c$, $D$ is approximately Gaussian with mean $Ic$ and variance $I$, where $I = Tr_0\sum_i k_i^2$ is the Fisher information at $c = 0$. Deduce that $P(\text{right}) \approx \Phi(c\sqrt I)$, so the threshold is $\sigma = 1/\sqrt I$.">
+
+Each count has mean and variance $Tr_0e^{k_ic} \approx Tr_0(1 + k_ic)$ for small $c$.
+
+So $\mathbb E[D] = \sum_i k_i\,Tr_0(e^{k_ic} - 1) \approx Tr_0c\sum_i k_i^2 = Ic$.
+
+The counts are independent, so $\text{Var}(D) = \sum_i k_i^2\,Tr_0e^{k_ic} \approx Tr_0\sum_i k_i^2 = I$.
+
+With many neurons $D$ is approximately Gaussian by the central limit theorem (Week 15), so $P(D \gt 0) = \Phi\!\left(\frac{Ic}{\sqrt I}\right) = \Phi(c\sqrt I)$, a cumulative Gaussian with $\sigma = 1/\sqrt I$.
+
+The Fisher information from $I = T\sum_i f_i'^2/f_i$ with $f_i = r_0e^{k_ic}$ is $T\sum_i r_0k_i^2$ at $c = 0$, the same $I$. Doubling the number of neurons doubles $I$ and shrinks the threshold by $\sqrt 2$, about 30%.
+
+</Prove>
+
+<Step n={5} title="Mock quiz and plan" minutes={15} />
+
+<Quiz id="quiz" questions={[
+  { q: "Parameter recovery tests whether...", options: ["Fitting simulated data returns the parameters that generated it", "The model wins", "The data are clean", "The experiment is ethical"], answer: 0, explain: "Week 50." },
+  { q: "BIC penalises each parameter by...", options: ["log n", "2", "n", "Nothing"], answer: 0, explain: "k log n − 2 log L." },
+  { q: "Falsification checks whether a fitted model...", options: ["Reproduces the key effects in the data when simulated", "Has the best BIC", "Converges", "Has few parameters"], answer: 0, explain: "Palminteri and colleagues." },
+  { q: "In the IBL mice, the decisive signature against the stimulus kernel was...", options: ["Repeating choices after errors", "The psychometric shift", "Response times", "Lapses"], answer: 0, explain: "Week 51, Day 5." },
+  { q: "Random-effects model selection estimates...", options: ["How common each model is in the population", "One winner for everyone", "Parameters", "Response times"], answer: 0, explain: "Week 50." },
+  { q: "An ideal observer's psychometric threshold scales with Fisher information as...", options: ["1/√I", "1/I", "√I", "I"], answer: 0, explain: "Problem 3." },
+  { q: "Doubling the number of independent neurons changes the threshold by...", options: ["1/√2", "1/2", "2", "Nothing"], answer: 0, explain: "I doubles." },
+  { q: "Krakauer and colleagues argue that neuroscience...", options: ["Needs careful study of behaviour before explaining it with circuits", "Should ignore behaviour", "Is finished", "Should only use fMRI"], answer: 0, explain: "Today's paper." },
+]} />
+
+<Flashcards cards={[
+  { front: "Wilson and Collins in four words?", back: "Simulate, recover, compare, validate." },
+  { front: "BIC?", back: "$k\\log n - 2\\log\\hat L$; −BIC/2 approximates log evidence." },
+  { front: "Psychometric threshold of an ideal observer?", back: "$\\sigma = 1/\\sqrt{I}$, with I the population Fisher information." },
+  { front: "Action kernel?", back: "$\\pi_t = (1 - \\alpha)\\pi_{t-1} + \\alpha a_{t-1}$: a leaky average of past choices." },
+  { front: "Three kinds of model?", back: "What (descriptive), how (mechanistic) and why (normative)." },
+]} />
+
+<Predict revisit question="Doubling the number of neurons changed the psychometric threshold by what factor?" />
+
+<Key title="Before you go">
+<ul>
+<li>Recovery and falsification are as much a part of modelling as fitting.</li>
+<li>BIC and cross-validation usually agree when an effect is real; BIC is more conservative when it is not.</li>
+<li>The threshold of an ideal observer is set by the Fisher information of the population: Part 1's statistics, Part 2's coding and the project's psychometric curves are one story.</li>
+<li>Note what you got wrong this week and revisit those weeks before tomorrow's exam.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Krakauer, Ghazanfar, Gomez-Marin, MacIver and Poeppel (2017), <em>Neuroscience needs behavior: correcting a reductionist bias</em>, also tomorrow's critique.</li>
+<li>Wilson and Collins (2019), <em>Ten simple rules for the computational modeling of behavioral data</em>, Week 50's deep read.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Write a one-page summary of the whole first year from memory: one paragraph for Part 1 and one for Part 2, then three sentences on how they connect. Check it against the two maps and this week's recap sheets, and mark the gaps: they are your plan for the rest week." />

@@ -1,0 +1,273 @@
+export const meta = {
+  title: "Review II: coding, decoding and real data",
+  intro: "Today covers Weeks 34 to 37: how spike trains carry information, how encoding models from linear-nonlinear-Poisson to GLMs describe it, how decoders read it back and how well they can possibly do, and how to treat real recordings honestly. The three problems join these together: the statistics of a spike train, a GLM that recovers a neuron's refractoriness, and a decoder tested against the Fisher information bound.",
+  goals: [
+    "Recall the key ideas and formulas of Weeks 34 to 37",
+    "Relate the interval statistics of a spike train to its count variability",
+    "Fit a Poisson GLM with a spike-history filter and interpret it",
+    "Check a maximum-likelihood decoder against the Cramér-Rao bound",
+  ],
+  plan: [
+    { label: "Encoding and decoding in one picture", minutes: 15 },
+    { label: "Recap sheet", minutes: 20 },
+    { label: "Mixed problems", minutes: 60 },
+    { label: "Proof practice", minutes: 10 },
+    { label: "Mock quiz and plan", minutes: 15 },
+  ],
+  paper: "kass-2005",
+};
+
+<Predict question="A neuron fires with gamma-distributed intervals that are more regular than a Poisson process: their coefficient of variation is 0.5. In long counting windows, will its Fano factor be about 1, about 0.5, or about 0.25?" />
+
+<Step n={1} title="Encoding and decoding in one picture" minutes={15} />
+
+An encoding model says how a stimulus produces spikes; a decoder runs the model backwards. How well any unbiased decoder can do is limited by the Fisher information, which depends on how steeply the tuning curves change with the stimulus, not on how strongly the neurons fire at their peak.
+
+<Figure caption="Week 36 revisited: a population of tuning curves and each neuron's contribution to the Fisher information at the chosen stimulus. Neurons on the flanks of their tuning curves, where a small change in the stimulus changes the rate most, contribute most." credit="Interactive figure by Engram.">
+  <FisherInfo />
+</Figure>
+
+<Video id="m1w7oywzwpA" title="Generalized linear models: introduction" by="Neuromatch Academy" note="Neuromatch's introduction to their day on generalised linear models, the encoding models of Week 35 that today's second problem fits." />
+
+<Step n={2} title="Recap sheet" minutes={20} />
+
+**Spike trains (Week 34).** A PSTH averages spikes over trials; a tuning curve averages over time for each stimulus. A Poisson process has exponential intervals, a coefficient of variation (CV) of 1 and a Fano factor of 1. For any renewal process the Fano factor in long windows approaches $\text{CV}^2$. Real cortical neurons are often close to Poisson in variability, and noise correlations between them shape what a population can encode.
+
+**Encoding models (Week 35).** The LNP model filters the stimulus linearly, passes the result through a nonlinearity and draws Poisson spikes. The Poisson GLM, $\lambda_t = \exp(\mathbf k \cdot \mathbf x_t + \mathbf h \cdot \mathbf y_{\text{past}} + b)$, adds a spike-history filter that captures refractoriness, bursting and adaptation; its log-likelihood is concave, so Newton's method finds the maximum. The spike-triggered average estimates the linear filter for white-noise stimuli.
+
+**Decoding (Week 36).** The population vector, linear decoders, Bayesian decoders and the Kalman filter read stimuli or movements from populations. The Fisher information of independent Poisson neurons is $I(s) = T\sum_i f_i'(s)^2/f_i(s)$, and no unbiased decoder can have variance below $1/I(s)$.
+
+**Real data (Week 37).** NWB files and DANDI share recordings; quality metrics (refractory violations, presence ratio) filter units; analyses must respect the nesting of trials in sessions in animals, or they pseudoreplicate.
+
+<Step n={3} title="Mixed problems" minutes={60} />
+
+<PyCell id="renewal" title="Problem 1: intervals and counts" tests={String.raw`
+  import numpy as np
+  def test_cv():
+      "cv holds the interval CV of the Poisson and gamma trains, near 1 and 0.5"
+      assert abs(cv["poisson"] - 1) < 0.05 and abs(cv["gamma"] - 0.5) < 0.03
+  def test_ff():
+      "ff holds the Fano factor of counts in 1 s windows, near CV squared"
+      assert abs(ff["poisson"] - 1) < 0.1 and abs(ff["gamma"] - 0.25) < 0.05
+`} prompt="Generate 2,000 s of spikes at 20 Hz from a Poisson process (exponential intervals) and from a gamma renewal process with shape 4 (same mean interval). For each, compute the CV of the intervals and the Fano factor of spike counts in 1 s windows."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(34)
+  rate, T = 20.0, 2000.0
+  isis = {"poisson": r.exponential(1 / rate, int(rate * T * 1.2)),
+          "gamma": r.gamma(4, 1 / (4 * rate), int(rate * T * 1.2))}
+  cv, ff = {}, {}
+  for name, isi in isis.items():
+      t = np.cumsum(isi); t = t[t < T]
+      cv[name] = ...
+      counts = np.histogram(t, bins=np.arange(0, T + 1, 1.0))[0]
+      ff[name] = ...
+      print(f"{name:8s}: CV {cv[name]:.3f}, CV squared {cv[name] ** 2:.3f}, Fano factor {ff[name]:.3f}")
+`}
+hint="cv[name] = np.std(np.diff(t)) / np.mean(np.diff(t)); ff[name] = counts.var() / counts.mean()."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(34)
+  rate, T = 20.0, 2000.0
+  isis = {"poisson": r.exponential(1 / rate, int(rate * T * 1.2)),
+          "gamma": r.gamma(4, 1 / (4 * rate), int(rate * T * 1.2))}
+  cv, ff = {}, {}
+  for name, isi in isis.items():
+      t = np.cumsum(isi); t = t[t < T]
+      cv[name] = np.std(np.diff(t)) / np.mean(np.diff(t))
+      counts = np.histogram(t, bins=np.arange(0, T + 1, 1.0))[0]
+      ff[name] = counts.var() / counts.mean()
+      print(f"{name:8s}: CV {cv[name]:.3f}, CV squared {cv[name] ** 2:.3f}, Fano factor {ff[name]:.3f}")
+`} />
+
+Both trains have the same rate, but their counts differ greatly in reliability. The Poisson train has a CV and Fano factor of 1.0; the gamma train has a CV of 0.50 and a Fano factor of 0.25, its CV squared, which answers the prediction. Regular intervals make counts four times less variable than Poisson counts at the same rate, which would quadruple the Fisher information of a rate code. Cortical neurons in vivo usually have Fano factors near or above 1, which is why the Poisson model works as well as it does; the drop in Fano factor at stimulus onset (Week 34) is one of the few places where they become more regular.
+
+<PyCell id="glm" title="Problem 2: a GLM that finds refractoriness" tests={String.raw`
+  import numpy as np
+  def test_design():
+      "X has the stimulus, five lagged spike counts and a constant"
+      assert X.shape == (T2, 7) and np.allclose(X[:, 2], np.r_[0, 0, y[:-2]]) and np.allclose(X[:, -1], 1)
+  def test_fit():
+      "the fitted weights are within 0.3 of the true ones"
+      assert np.abs(w_hat - w_true).max() < 0.3
+  def test_ll():
+      "the history terms raise the log-likelihood by more than 100"
+      assert ll_full - ll_stim > 100
+`} prompt="Build the design matrix with the stimulus, the spike counts 1 to 5 bins back and a constant. Write poisson_newton(X, y), Newton's method for the Poisson GLM with log link, and compare the log-likelihood with and without the history columns."
+code={String.raw`
+  T2 = 20000
+  r = np.random.default_rng(35)
+  stim = r.normal(0, 1, T2)
+  w_true = np.array([0.8, -3.0, -1.5, -0.6, -0.2, 0.0, -2.5])   # stimulus, history lags 1 to 5, bias
+  y = np.zeros(T2)
+  for t in range(T2):
+      past = [y[t - k] if t - k >= 0 else 0 for k in range(1, 6)]
+      y[t] = r.poisson(np.exp(w_true[0] * stim[t] + np.dot(w_true[1:6], past) + w_true[6]))
+  X = ...
+
+  def poisson_newton(X, y, iters=20):
+      w = np.zeros(X.shape[1])
+      for _ in range(iters):
+          lam = np.exp(X @ w)
+          g = ...
+          H = ...
+          w -= np.linalg.solve(H, g)
+      return w
+
+  def loglik(X, y, w):
+      z = X @ w
+      return np.sum(y * z - np.exp(z))
+
+  w_hat = poisson_newton(X, y)
+  w_stim = poisson_newton(X[:, [0, 6]], y)
+  ll_full, ll_stim = loglik(X, y, w_hat), loglik(X[:, [0, 6]], y, w_stim)
+  print("true:  ", np.round(w_true, 2)); print("fitted:", np.round(w_hat, 2))
+  print(f"log-likelihood gain from history: {ll_full - ll_stim:.0f}; spikes: {int(y.sum())}")
+`}
+hint="X = np.c_[stim] then np.r_[np.zeros(k), y[:-k]] for k = 1 to 5, then np.ones(T2), via np.column_stack; g = X.T @ (y - lam); H = -(X * lam[:, None]).T @ X."
+solution={String.raw`
+  T2 = 20000
+  r = np.random.default_rng(35)
+  stim = r.normal(0, 1, T2)
+  w_true = np.array([0.8, -3.0, -1.5, -0.6, -0.2, 0.0, -2.5])   # stimulus, history lags 1 to 5, bias
+  y = np.zeros(T2)
+  for t in range(T2):
+      past = [y[t - k] if t - k >= 0 else 0 for k in range(1, 6)]
+      y[t] = r.poisson(np.exp(w_true[0] * stim[t] + np.dot(w_true[1:6], past) + w_true[6]))
+  X = np.column_stack([stim] + [np.r_[np.zeros(k), y[:-k]] for k in range(1, 6)] + [np.ones(T2)])
+
+  def poisson_newton(X, y, iters=20):
+      w = np.zeros(X.shape[1])
+      for _ in range(iters):
+          lam = np.exp(X @ w)
+          g = X.T @ (y - lam)
+          H = -(X * lam[:, None]).T @ X
+          w -= np.linalg.solve(H, g)
+      return w
+
+  def loglik(X, y, w):
+      z = X @ w
+      return np.sum(y * z - np.exp(z))
+
+  w_hat = poisson_newton(X, y)
+  w_stim = poisson_newton(X[:, [0, 6]], y)
+  ll_full, ll_stim = loglik(X, y, w_hat), loglik(X[:, [0, 6]], y, w_stim)
+  print("true:  ", np.round(w_true, 2)); print("fitted:", np.round(w_hat, 2))
+  print(f"log-likelihood gain from history: {ll_full - ll_stim:.0f}; spikes: {int(y.sum())}")
+`} />
+
+The fitted weights are within 0.07 of the true ones: a stimulus weight of 0.78 (true 0.8), and history weights of −3.02, −1.57, −0.60 and −0.23 one to four bins back, which recover the refractory period and its recovery. Adding the five history terms raises the log-likelihood by 230 for only 1,818 spikes. Without them the GLM would have to explain the gaps after each spike as chance, and its stimulus weight would be biased. This is the same logic as Week 51's history GLM of mouse choices: past outputs are among the most informative regressors of any system with memory.
+
+<PyCell id="fisher" title="Problem 3: a decoder against its bound" tests={String.raw`
+  import numpy as np
+  def test_fi():
+      "fisher matches T times the sum of f' squared over f"
+      s = 10.0; fp = (tuning(s + 1e-4) - tuning(s - 1e-4)) / 2e-4
+      assert abs(fisher(s) - Tw * np.sum(fp ** 2 / tuning(s))) / fisher(s) < 1e-4
+  def test_ml():
+      "the decoder is nearly unbiased"
+      assert abs(est.mean() - s0) < 0.3
+  def test_bound():
+      "the decoder's variance is within 20% above the bound and never far below it"
+      assert 0.9 < est.var() * fisher(s0) < 1.2
+`} prompt="Write fisher(s) for 40 Poisson neurons with Gaussian tuning observed for Tw seconds (differentiate the tuning curves analytically or numerically). Then decode 2,000 simulated trials at s0 = 10 degrees by maximum likelihood on a fine grid, and compare the variance of the estimates with 1/fisher(s0)."
+code={String.raw`
+  r = np.random.default_rng(36)
+  pref = np.linspace(-90, 90, 40); width, peak, base, Tw = 20.0, 20.0, 2.0, 0.5
+
+  def tuning(s):
+      return base + peak * np.exp(-0.5 * ((s - pref) / width) ** 2)
+
+  def fisher(s):
+      f = tuning(s)
+      fprime = ...
+      return ...
+
+  s0, grid = 10.0, np.linspace(-20, 40, 1201)
+  F = np.array([tuning(g) for g in grid])            # grid x neurons
+  counts = r.poisson(tuning(s0) * Tw, (2000, 40))
+  loglik_grid = counts @ np.log(F * Tw).T - (F * Tw).sum(1)
+  est = ...
+  print(f"Fisher information at {s0} degrees: {fisher(s0):.3f} per degree squared; bound on SD {1 / np.sqrt(fisher(s0)):.2f} degrees")
+  print(f"ML decoder: mean {est.mean():.2f}, SD {est.std():.2f}; variance times Fisher information {est.var() * fisher(s0):.2f}")
+`}
+hint="fprime = -peak * np.exp(-0.5 * ((s - pref) / width) ** 2) * (s - pref) / width ** 2; return Tw * np.sum(fprime ** 2 / f); est = grid[np.argmax(loglik_grid, axis=1)]."
+solution={String.raw`
+  r = np.random.default_rng(36)
+  pref = np.linspace(-90, 90, 40); width, peak, base, Tw = 20.0, 20.0, 2.0, 0.5
+
+  def tuning(s):
+      return base + peak * np.exp(-0.5 * ((s - pref) / width) ** 2)
+
+  def fisher(s):
+      f = tuning(s)
+      fprime = -peak * np.exp(-0.5 * ((s - pref) / width) ** 2) * (s - pref) / width ** 2
+      return Tw * np.sum(fprime ** 2 / f)
+
+  s0, grid = 10.0, np.linspace(-20, 40, 1201)
+  F = np.array([tuning(g) for g in grid])            # grid x neurons
+  counts = r.poisson(tuning(s0) * Tw, (2000, 40))
+  loglik_grid = counts @ np.log(F * Tw).T - (F * Tw).sum(1)
+  est = grid[np.argmax(loglik_grid, axis=1)]
+  print(f"Fisher information at {s0} degrees: {fisher(s0):.3f} per degree squared; bound on SD {1 / np.sqrt(fisher(s0)):.2f} degrees")
+  print(f"ML decoder: mean {est.mean():.2f}, SD {est.std():.2f}; variance times Fisher information {est.var() * fisher(s0):.2f}")
+`} />
+
+The Fisher information at 10 degrees is 0.182 per degree squared, so no unbiased decoder can achieve a standard deviation below 2.34 degrees. The maximum-likelihood decoder is essentially unbiased (mean 9.95) with a standard deviation of 2.44 degrees: its variance is only 8% above the bound. Maximum likelihood is asymptotically efficient, and 40 neurons in half a second, with about 20 spikes from the most responsive cells, are already enough to come close. With fewer spikes, the decoder would fall further from the bound, and with correlated noise the bound itself would change (Week 34).
+
+<Step n={4} title="Proof practice" minutes={10} />
+
+<Prove title="The Fisher information of a Poisson population" task="Neurons $i = 1, \dots, N$ fire independent Poisson counts $n_i$ with means $T f_i(s)$. Show that the Fisher information about $s$ is $I(s) = T\sum_i f_i'(s)^2/f_i(s)$.">
+
+The log-likelihood is $\ell(s) = \sum_i \left[n_i\log(Tf_i(s)) - Tf_i(s) - \log n_i!\right]$.
+
+Its derivative is $\ell'(s) = \sum_i \left[n_i\frac{f_i'}{f_i} - Tf_i'\right] = \sum_i \frac{f_i'}{f_i}(n_i - Tf_i)$.
+
+The Fisher information is the variance of the score: $I(s) = \text{Var}(\ell'(s)) = \sum_i \left(\frac{f_i'}{f_i}\right)^2\text{Var}(n_i)$, because the neurons are independent and the score has mean zero.
+
+For Poisson counts $\text{Var}(n_i) = Tf_i$, so $I(s) = \sum_i \frac{f_i'^2}{f_i^2}Tf_i = T\sum_i\frac{f_i'(s)^2}{f_i(s)}$. Neurons at the peak of their tuning, where $f_i' = 0$, contribute nothing; the flanks carry the information.
+
+</Prove>
+
+<Step n={5} title="Mock quiz and plan" minutes={15} />
+
+<Quiz id="quiz" questions={[
+  { q: "For a renewal process, the Fano factor in long windows approaches...", options: ["CV²", "CV", "1", "0"], answer: 0, explain: "Problem 1." },
+  { q: "A negative spike-history weight at lag 1 captures...", options: ["Refractoriness", "Bursting", "Stimulus tuning", "Noise correlation"], answer: 0, explain: "A spike makes the next bin less likely." },
+  { q: "The Poisson GLM's log-likelihood with log link is...", options: ["Concave in the weights", "Convex", "Periodic", "Flat"], answer: 0, explain: "So Newton's method converges to the maximum." },
+  { q: "The spike-triggered average estimates the linear filter when the stimulus is...", options: ["White noise", "A grating", "Natural images without correction", "Constant"], answer: 0, explain: "Week 35." },
+  { q: "Neurons carry most Fisher information about s where their tuning curve is...", options: ["Steepest", "At its peak", "Flat", "Zero"], answer: 0, explain: "f′² / f." },
+  { q: "The Cramér-Rao bound limits...", options: ["The variance of unbiased estimators", "The mean of all estimators", "Firing rates", "Correlations"], answer: 0, explain: "Var ≥ 1/I." },
+  { q: "The Kalman filter decodes by...", options: ["Combining a dynamical prior with each new observation", "Averaging spikes", "Thresholding", "Sorting"], answer: 0, explain: "Week 36." },
+  { q: "Treating neurons from two mice as independent samples is...", options: ["Pseudoreplication", "Cross-validation", "Bootstrapping", "Correct"], answer: 0, explain: "Week 37." },
+]} />
+
+<Flashcards cards={[
+  { front: "Poisson process statistics?", back: "Exponential intervals, CV = 1, Fano factor = 1." },
+  { front: "Poisson GLM?", back: "$\\lambda_t = \\exp(\\mathbf k \\cdot \\mathbf x_t + \\mathbf h \\cdot \\mathbf y_{past} + b)$, concave log-likelihood." },
+  { front: "Population Fisher information?", back: "$I(s) = T\\sum_i f_i'(s)^2 / f_i(s)$ for independent Poisson neurons." },
+  { front: "Cramér-Rao bound?", back: "$\\text{Var}(\\hat s) \\ge 1/I(s)$ for unbiased estimators." },
+  { front: "Newton step for the Poisson GLM?", back: "$\\mathbf w \\leftarrow \\mathbf w - H^{-1}\\mathbf g$ with $\\mathbf g = X^\\top(\\mathbf y - \\boldsymbol\\lambda)$, $H = -X^\\top\\text{diag}(\\boldsymbol\\lambda)X$." },
+]} />
+
+<Predict revisit question="With interval CV 0.5, what Fano factor did the gamma process show in long windows?" />
+
+<Key title="Before you go">
+<ul>
+<li>Interval regularity sets count variability: Fano factor near CV² in long windows.</li>
+<li>A Poisson GLM with history recovers refractoriness, and history terms improve the likelihood greatly.</li>
+<li>A maximum-likelihood decoder of a large population nearly reaches the Cramér-Rao bound.</li>
+<li>Note what you got wrong today and revisit those weeks before Day 6.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Kass, Ventura and Brown (2005), <em>Statistical issues in the analysis of neuronal data</em>.</li>
+<li>Dayan and Abbott, <em>Theoretical Neuroscience</em>, chapters 1 to 3, for any gaps.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Write a one-page summary of Weeks 34 to 37 from memory, without notes, then check it against the recap sheet. Mark every gap or error in a different colour: that list is your revision plan." />

@@ -7,6 +7,17 @@ import { useLesson } from "./context";
 
 export type QuizQuestion = { q: string; options: string[]; answer: number; explain: string };
 
+/** A fixed shuffle of the options, seeded by the question text, so the correct answer is not always in the same place
+ *  and the order is identical on the server and in the browser. */
+function optionOrder(seedText: string, n: number): number[] {
+  let h = 2166136261;
+  for (let i = 0; i < seedText.length; i++) { h ^= seedText.charCodeAt(i); h = Math.imul(h, 16777619); }
+  const rand = (): number => { h = (h + 0x6d2b79f5) | 0; let t = Math.imul(h ^ (h >>> 15), 1 | h); t ^= t + Math.imul(t ^ (t >>> 7), 61 | t); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const order = Array.from({ length: n }, (_, i): number => i);
+  for (let i = n - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+  return order;
+}
+
 export function Quiz({ id = "quiz", title = "Quiz", questions }: { id?: string; title?: string; questions: QuizQuestion[] }) {
   const { lessonId } = useLesson();
   const [picked, setPicked] = useState<(number | null)[]>(() => questions.map(() => null));
@@ -30,7 +41,8 @@ export function Quiz({ id = "quiz", title = "Quiz", questions }: { id?: string; 
           <li key={qi} className="px-4 py-4 sm:px-5">
             <div className="font-medium"><span className="mr-2 text-ink-3">{qi + 1}.</span><Tex>{item.q}</Tex></div>
             <div className="mt-3 grid gap-2">
-              {item.options.map((opt, oi) => {
+              {optionOrder(`${id}|${item.q}`, item.options.length).map((oi) => {
+                const opt = item.options[oi];
                 const chosen = picked[qi] === oi;
                 const right = oi === item.answer;
                 let cls = "border-line hover:border-ink-3";

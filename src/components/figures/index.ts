@@ -239,3 +239,5 @@ export { HistoryWeights } from "./history-weights";
 export { PriorModels } from "./prior-models";
 export { SwitchCurve } from "./switch-curve";
 export { ErrorSignature } from "./error-signature";
+export { PartTwoMap } from "./part-two-map";
+export { YearOneThreads } from "./year-one-threads";

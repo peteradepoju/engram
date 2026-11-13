@@ -1,0 +1,254 @@
+export const meta = {
+  title: "Review III: senses, movement, plasticity and memory",
+  intro: "Today covers Weeks 38 to 43: how sensory systems encode the world efficiently, how the motor system plans and corrects movements, how synapses change with experience, and how the hippocampus stores and recalls memories. The three problems cross these weeks: a plasticity rule that discovers the main direction of its inputs, a two-process model of motor adaptation that explains a surprising recovery, and an attractor memory pushed to its capacity.",
+  goals: [
+    "Recall the key ideas and formulas of Weeks 38 to 43",
+    "Show that Oja's Hebbian rule finds the first principal component",
+    "Reproduce spontaneous recovery with a two-rate model of adaptation",
+    "Measure the storage capacity of a Hopfield network",
+  ],
+  plan: [
+    { label: "Stabilising Hebb", minutes: 15 },
+    { label: "Recap sheet", minutes: 20 },
+    { label: "Mixed problems", minutes: 60 },
+    { label: "Proof practice", minutes: 10 },
+    { label: "Mock quiz and plan", minutes: 15 },
+  ],
+  paper: "marder-goaillard-2006",
+};
+
+<Predict question="A Hopfield network of 200 neurons stores random patterns with the Hebbian rule. Roughly how many patterns can it store before recall from a slightly corrupted cue starts to fail: about 10, about 30, about 100 or about 200?" />
+
+<Step n={1} title="Stabilising Hebb" minutes={15} />
+
+Pure Hebbian learning is unstable: correlated activity strengthens synapses, which increases activity, which strengthens them further. Every plasticity rule in Week 42 is, in part, an answer to this. BCM adds a sliding threshold, synaptic scaling normalises total strength, and Oja's rule subtracts a decay proportional to the square of the output. Marder and Goaillard's review, today's paper, makes the same point at the level of whole neurons: homeostasis keeps function stable while the parts vary.
+
+<Figure caption="Week 42 revisited: the BCM function φ(y) = y(y − θ) and the effect of the sliding threshold. Change θ and see which activity levels potentiate and which depress." credit="Interactive figure by Engram, after Bienenstock, Cooper and Munro (1982).">
+  <BCMRule />
+</Figure>
+
+<Video id="HOoqM7kBWSY" title="Tracking a moving goal" by="Neuromatch Academy" note="Neuromatch's tutorial video on controlling a system to follow a moving target with feedback, a review of the optimal feedback control ideas of Week 41." />
+
+<Step n={2} title="Recap sheet" minutes={20} />
+
+**Vision (Week 38).** Retinal ganglion cells have centre-surround receptive fields (differences of Gaussians); V1 simple cells are Gabor-like; complex cells pool over phase (the energy model); the ventral stream builds invariance, and deep networks trained on object recognition predict its responses.
+
+**Other senses and efficient coding (Week 39).** The cochlea is a filter bank; sound localisation uses interaural time differences; the fly olfactory system expands and sparsifies. Efficient coding (Barlow; Atick and Redlich) predicts that early sensory stages whiten their inputs where signal is strong and smooth them where noise dominates.
+
+**Motor control (Week 41).** Movements are smooth (minimum jerk) and their noise grows with the command (signal-dependent noise). Optimal feedback control corrects only errors that matter for the goal (minimal intervention); forward models predict the consequences of commands; adaptation has fast and slow processes.
+
+**Plasticity (Week 42).** Hebbian rules strengthen correlated synapses; STDP depends on the relative timing of pre- and postsynaptic spikes; BCM and Oja's rule stabilise Hebbian growth; synaptic scaling keeps rates in range; eligibility traces bridge the gap between activity and later reward.
+
+**Memory (Week 43).** Place cells and grid cells represent space; ring and continuous attractors hold a remembered variable; the dentate gyrus separates similar patterns and CA3 completes partial ones; replay during rest may consolidate memories into cortex. A Hopfield network stores patterns as fixed points of $\mathbf x \leftarrow \text{sign}(W\mathbf x)$ with $W = \frac1N\sum_\mu \boldsymbol\xi^\mu\boldsymbol\xi^{\mu\top}$.
+
+<Step n={3} title="Mixed problems" minutes={60} />
+
+<PyCell id="oja" title="Problem 1: Hebbian learning finds the principal component" tests={String.raw`
+  import numpy as np
+  def test_norm():
+      "the weight vector converges to unit length"
+      assert abs(np.linalg.norm(w) - 1) < 0.05
+  def test_pc():
+      "the weight vector is aligned with the top eigenvector of the input covariance"
+      assert abs(np.dot(w, pc1)) / np.linalg.norm(w) > 0.99
+  def test_hebb():
+      "plain Hebbian learning on the same inputs grows without bound"
+      assert np.linalg.norm(w_hebb) > 100
+`} prompt="Apply Oja's rule, w += eta * y * (x - y * w) with y = w . x, to 5,000 inputs drawn from a correlated Gaussian, and compare the result with the top eigenvector of the input covariance. Run plain Hebbian learning, w += eta * y * x, for comparison."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(42)
+  C = np.array([[3.0, 1.2], [1.2, 1.0]])
+  xs = r.multivariate_normal([0, 0], C, 5000)
+  evals, evecs = np.linalg.eigh(C); pc1 = evecs[:, -1]
+  eta = 0.005
+  w = r.normal(0, 0.1, 2); w_hebb = w.copy()
+  for x in xs:
+      y = w @ x
+      w = ...
+      y_h = w_hebb @ x
+      w_hebb = ...
+  print(f"Oja: w = {np.round(w, 3)}, length {np.linalg.norm(w):.3f}; top eigenvector {np.round(pc1, 3)}")
+  print(f"alignment |cos| = {abs(w @ pc1) / np.linalg.norm(w):.4f}; plain Hebb length {np.linalg.norm(w_hebb):.3g}")
+`}
+hint="w = w + eta * y * (x - y * w); w_hebb = w_hebb + eta * y_h * x."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(42)
+  C = np.array([[3.0, 1.2], [1.2, 1.0]])
+  xs = r.multivariate_normal([0, 0], C, 5000)
+  evals, evecs = np.linalg.eigh(C); pc1 = evecs[:, -1]
+  eta = 0.005
+  w = r.normal(0, 0.1, 2); w_hebb = w.copy()
+  for x in xs:
+      y = w @ x
+      w = w + eta * y * (x - y * w)
+      y_h = w_hebb @ x
+      w_hebb = w_hebb + eta * y_h * x
+  print(f"Oja: w = {np.round(w, 3)}, length {np.linalg.norm(w):.3f}; top eigenvector {np.round(pc1, 3)}")
+  print(f"alignment |cos| = {abs(w @ pc1) / np.linalg.norm(w):.4f}; plain Hebb length {np.linalg.norm(w_hebb):.3g}")
+`} />
+
+Oja's rule ends with a weight vector of length 1.001 pointing along the top eigenvector of the input covariance, with an alignment of 0.9999 (the sign is arbitrary: $\mathbf w$ and $-\mathbf w$ are equally good). Plain Hebbian learning on the same inputs finds the same direction but its length explodes to $10^{35}$. A single neuron with a stabilised Hebbian rule therefore performs PCA on its inputs, projecting them onto their direction of greatest variance: a link between Week 42's plasticity, Week 39's efficient coding and Week 7's principal components.
+
+<PyCell id="tworate" title="Problem 2: spontaneous recovery from two processes" tests={String.raw`
+  import numpy as np
+  def test_learn():
+      "net adaptation reaches 70% of the perturbation by the end of the first phase"
+      assert x_net[199] > 0.7
+  def test_washout():
+      "after the reverse phase net adaptation is near zero"
+      assert abs(x_net[204]) < 0.15
+  def test_rebound():
+      "in the error clamp, net adaptation rebounds above 0.2 while the fast process decays"
+      assert x_net[205:].max() > 0.2 and abs(xf[-1]) < 0.05
+`} prompt="Simulate the two-rate model: on each trial the error is e = p - (xf + xs), then xf = Af xf + Bf e and xs = As xs + Bs e. Use 200 trials with p = 1, 5 with p = -1, then 100 error-clamp trials in which the error is forced to zero."
+code={String.raw`
+  Af, Bf, As, Bs = 0.59, 0.21, 0.992, 0.02          # Smith, Ghazizadeh and Shadmehr (2006)
+  p = np.r_[np.ones(200), -np.ones(5), np.zeros(100)]
+  clamp = np.r_[np.zeros(205, bool), np.ones(100, bool)]
+  xf, xs = np.zeros(306), np.zeros(306)
+  for n in range(305):
+      e = 0.0 if clamp[n] else ...
+      xf[n + 1] = ...
+      xs[n + 1] = ...
+  x_net = (xf + xs)[1:]; xf, xs = xf[1:], xs[1:]
+  print(f"end of learning: {x_net[199]:.2f}; after the reverse phase: {x_net[204]:.2f}; peak in the clamp: {x_net[205:].max():.2f} at trial {205 + np.argmax(x_net[205:])}")
+  plt.plot(x_net, label="net"); plt.plot(xf, label="fast"); plt.plot(xs, label="slow"); plt.axvline(205, color="grey")
+  plt.xlabel("trial"); plt.ylabel("adaptation"); plt.legend(); plt.show()
+`}
+hint="e = p[n] - (xf[n] + xs[n]); xf[n + 1] = Af * xf[n] + Bf * e; xs[n + 1] = As * xs[n] + Bs * e."
+solution={String.raw`
+  Af, Bf, As, Bs = 0.59, 0.21, 0.992, 0.02          # Smith, Ghazizadeh and Shadmehr (2006)
+  p = np.r_[np.ones(200), -np.ones(5), np.zeros(100)]
+  clamp = np.r_[np.zeros(205, bool), np.ones(100, bool)]
+  xf, xs = np.zeros(306), np.zeros(306)
+  for n in range(305):
+      e = 0.0 if clamp[n] else p[n] - (xf[n] + xs[n])
+      xf[n + 1] = Af * xf[n] + Bf * e
+      xs[n + 1] = As * xs[n] + Bs * e
+  x_net = (xf + xs)[1:]; xf, xs = xf[1:], xs[1:]
+  print(f"end of learning: {x_net[199]:.2f}; after the reverse phase: {x_net[204]:.2f}; peak in the clamp: {x_net[205:].max():.2f} at trial {205 + np.argmax(x_net[205:])}")
+  plt.plot(x_net, label="net"); plt.plot(xf, label="fast"); plt.plot(xs, label="slow"); plt.axvline(205, color="grey")
+  plt.xlabel("trial"); plt.ylabel("adaptation"); plt.legend(); plt.show()
+`} />
+
+After 200 trials the net adaptation has reached 0.75 of the perturbation, mostly carried by the slow process. Five trials of the opposite perturbation bring the net back to −0.04, apparently erasing the learning, but only because the fast process has swung negative while the slow process still holds most of the original adaptation. In the error clamp, nothing is learned and both processes simply decay; the fast one forgets within a few trials, unmasking the slow one, and the net adaptation rebounds to 0.43 by trial 212. Smith, Ghazizadeh and Shadmehr (2006) predicted and found this spontaneous recovery in people adapting to force fields (Week 41). Behaviour that looks like one memory can be the sum of two with different timescales, the same moral as the fast and slow kernels in Week 51's mice.
+
+<PyCell id="hopfield" title="Problem 3: how many memories?" tests={String.raw`
+  import numpy as np
+  def test_recall():
+      "recall returns the fraction of patterns recovered with overlap above 0.95"
+      assert 0 <= recall(10) <= 1 and recall(5) > 0.9
+  def test_capacity():
+      "capacity is the largest P tested with at least 90% recall, between 15 and 35"
+      assert 15 <= capacity <= 35 and recall(60) < 0.5
+`} prompt="Complete recall(P): store P random patterns of N = 200 units with the Hebbian rule (zero diagonal), corrupt each by flipping 10% of its units, run 20 synchronous updates x = sign(Wx) for all cues at once, and return the fraction whose overlap with the stored pattern exceeds 0.95."
+code={String.raw`
+  N = 200
+
+  def recall(P, seed=0):
+      g = np.random.default_rng(seed)
+      xi = g.choice([-1.0, 1.0], (P, N))
+      W = ...
+      np.fill_diagonal(W, 0)
+      cues = xi.copy()
+      flip = g.random((P, N)) < 0.1
+      cues[flip] *= -1
+      X = cues.T                                   # N x P, one cue per column
+      for _ in range(20):
+          X = ...
+      overlap = np.sum(X.T * xi, axis=1) / N
+      return np.mean(overlap > 0.95)
+
+  Ps = np.array([5, 10, 15, 20, 25, 30, 35, 40, 50, 60])
+  fr = np.array([recall(P) for P in Ps])
+  capacity = Ps[fr >= 0.9].max()
+  for P, f in zip(Ps, fr):
+      print(f"P = {P:2d} (P/N = {P / N:.3f}): {f:.0%} recalled")
+  print(f"largest P with at least 90% recall: {capacity} (P/N = {capacity / N:.3f}; theory about 0.14)")
+`}
+hint="W = xi.T @ xi / N; X = np.sign(W @ X), replacing zeros by 1 with np.where(X == 0, 1.0, X) if you like."
+solution={String.raw`
+  N = 200
+
+  def recall(P, seed=0):
+      g = np.random.default_rng(seed)
+      xi = g.choice([-1.0, 1.0], (P, N))
+      W = xi.T @ xi / N
+      np.fill_diagonal(W, 0)
+      cues = xi.copy()
+      flip = g.random((P, N)) < 0.1
+      cues[flip] *= -1
+      X = cues.T                                   # N x P, one cue per column
+      for _ in range(20):
+          X = np.sign(W @ X); X = np.where(X == 0, 1.0, X)
+      overlap = np.sum(X.T * xi, axis=1) / N
+      return np.mean(overlap > 0.95)
+
+  Ps = np.array([5, 10, 15, 20, 25, 30, 35, 40, 50, 60])
+  fr = np.array([recall(P) for P in Ps])
+  capacity = Ps[fr >= 0.9].max()
+  for P, f in zip(Ps, fr):
+      print(f"P = {P:2d} (P/N = {P / N:.3f}): {f:.0%} recalled")
+  print(f"largest P with at least 90% recall: {capacity} (P/N = {capacity / N:.3f}; theory about 0.14)")
+`} />
+
+Recall is perfect up to 20 patterns, then fails progressively: 76% at 25, 57% at 30, 15% at 40 and none at 60. With the strict criterion used here (90% of patterns recovered with overlap above 0.95), capacity is 20 patterns, a load of 0.10; the classical figure of about 0.14N, which answers the prediction (about 28 for 200 neurons), is the load at which the stored patterns stop being stable fixed points in very large networks, and a small network with 10% corrupted cues falls short of it. Either way capacity grows in proportion to the number of neurons, but only with a small constant, and it collapses when the patterns are correlated. This is one reason why the dentate gyrus is thought to decorrelate inputs before they reach CA3 (Week 43).
+
+<Step n={4} title="Proof practice" minutes={10} />
+
+<Prove title="Oja's rule converges to a unit eigenvector" task="For inputs with covariance $C$ and small learning rate, Oja's rule follows on average $\dot{\mathbf w} = C\mathbf w - (\mathbf w^\top C\mathbf w)\mathbf w$. Show that its fixed points are unit eigenvectors of $C$, and that the length of $\mathbf w$ is driven towards 1.">
+
+Averaging $y(\mathbf x - y\mathbf w)$ with $y = \mathbf w^\top\mathbf x$ gives $C\mathbf w - (\mathbf w^\top C\mathbf w)\mathbf w$.
+
+At a fixed point $C\mathbf w = (\mathbf w^\top C\mathbf w)\mathbf w$, so $\mathbf w$ is an eigenvector with eigenvalue $\lambda = \mathbf w^\top C\mathbf w$. Writing $\mathbf w = a\mathbf u$ with $\mathbf u$ a unit eigenvector, $\lambda a\mathbf u = a^2\lambda\, a\mathbf u$, so $a^2 = 1$.
+
+For the length, $\frac{\mathrm d}{\mathrm dt}\lVert\mathbf w\rVert^2 = 2\mathbf w^\top\dot{\mathbf w} = 2(\mathbf w^\top C\mathbf w)(1 - \lVert\mathbf w\rVert^2)$. Since $\mathbf w^\top C\mathbf w \gt 0$, the length grows when it is below 1 and shrinks when it is above 1.
+
+A stability analysis (not needed here) shows that only the eigenvector with the largest eigenvalue is stable, which is why Problem 1 found the first principal component.
+
+</Prove>
+
+<Step n={5} title="Mock quiz and plan" minutes={15} />
+
+<Quiz id="quiz" questions={[
+  { q: "A retinal ganglion cell's receptive field is well described by...", options: ["A difference of Gaussians", "A Gabor", "A sine wave", "A step"], answer: 0, explain: "Centre-surround." },
+  { q: "Efficient coding predicts that early vision...", options: ["Whitens strong signals and smooths noisy ones", "Copies the image", "Adds noise", "Ignores contrast"], answer: 0, explain: "Atick and Redlich." },
+  { q: "Minimal intervention means a controller corrects...", options: ["Only errors that affect the goal", "Every error equally", "No errors", "Only large errors"], answer: 0, explain: "Todorov and Jordan (Week 41)." },
+  { q: "Spontaneous recovery in the error clamp happens because...", options: ["The fast process decays while the slow one remains", "Learning restarts", "Errors return", "Of fatigue"], answer: 0, explain: "Problem 2." },
+  { q: "STDP potentiates a synapse when...", options: ["The presynaptic spike precedes the postsynaptic one", "The postsynaptic spike comes first", "Both are silent", "Rates are low"], answer: 0, explain: "Week 42." },
+  { q: "Oja's rule converges to...", options: ["The first principal component", "The mean", "A random vector", "Zero"], answer: 0, explain: "Problem 1." },
+  { q: "Grid cells fire...", options: ["At the vertices of a triangular lattice across space", "In one place", "Only during sleep", "At random"], answer: 0, explain: "Week 43." },
+  { q: "A Hopfield network's capacity for random patterns is about...", options: ["0.14 N", "N", "N²", "2 patterns"], answer: 0, explain: "Problem 3." },
+]} />
+
+<Flashcards cards={[
+  { front: "Oja's rule?", back: "$\\Delta\\mathbf w = \\eta y(\\mathbf x - y\\mathbf w)$: Hebbian growth with a decay that normalises the weights." },
+  { front: "BCM rule?", back: "$\\Delta w \\propto x\\,y(y - \\theta)$ with a threshold θ that slides with average activity." },
+  { front: "Two-rate adaptation?", back: "Fast process learns and forgets quickly, slow process learns and forgets slowly; their sum is the behaviour." },
+  { front: "Hopfield weights?", back: "$W = \\frac1N\\sum_\\mu \\boldsymbol\\xi^\\mu\\boldsymbol\\xi^{\\mu\\top}$, zero diagonal; capacity about 0.14N." },
+  { front: "Efficient coding in one line?", back: "Remove predictable structure where the signal is strong; average where noise dominates." },
+]} />
+
+<Predict revisit question="How many random patterns could the 200-neuron Hopfield network store?" />
+
+<Key title="Before you go">
+<ul>
+<li>Stabilised Hebbian learning extracts the dominant correlation in its inputs.</li>
+<li>Two processes with different rates explain savings and spontaneous recovery.</li>
+<li>Attractor memories have a capacity proportional to the number of neurons, about 0.14N for random patterns.</li>
+<li>Note what you got wrong today and revisit those weeks before Day 6.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Marder and Goaillard (2006), <em>Variability, compensation and homeostasis in neuron and network function</em>.</li>
+<li>Gerstner, Kistler, Naud and Paninski, <em>Neuronal Dynamics</em>, chapters 17 and 19, on memory and plasticity, for any gaps.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Write a one-page summary of Weeks 38 to 43 from memory, without notes, then check it against the recap sheet. Mark every gap or error in a different colour: that list is your revision plan." />

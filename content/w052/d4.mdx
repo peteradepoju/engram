@@ -1,0 +1,291 @@
+export const meta = {
+  title: "Review IV: reward, decisions and cognition",
+  intro: "Today covers Weeks 44 to 49: dopamine and reward prediction errors, evidence accumulation and confidence, working memory and attention, oscillations and brain states, perception as inference, and large-scale networks and language. These weeks share one idea in different costumes: the brain predicts, compares the prediction with what happens, and uses the difference. The three problems follow that thread through learning, deciding and perceiving.",
+  goals: [
+    "Recall the key ideas and formulas of Weeks 44 to 49",
+    "Show how the TD error moves from reward to cue over learning",
+    "Find the decision bound that maximises reward rate in the drift diffusion model",
+    "Fit the width of a prior from biased perceptual judgements",
+  ],
+  plan: [
+    { label: "Prediction errors everywhere", minutes: 15 },
+    { label: "Recap sheet", minutes: 20 },
+    { label: "Mixed problems", minutes: 60 },
+    { label: "Proof practice", minutes: 10 },
+    { label: "Mock quiz and plan", minutes: 15 },
+  ],
+  paper: "botvinick-2020",
+};
+
+<Predict question="A drift diffusion decision-maker can choose its bound. A higher bound means more accurate but slower decisions. If each trial is followed by a 2-second wait whatever the choice, should the bound that maximises reward per second be low (fast and sloppy), high (slow and careful), or somewhere in between?" />
+
+<Step n={1} title="Prediction errors everywhere" minutes={15} />
+
+Dopamine neurons fire for unexpected reward and, after learning, for the cue that predicts it: the temporal difference error of Week 44. Evidence accumulation in Week 45 sums noisy differences until they cross a bound. Predictive coding in Week 48 passes forward only what higher areas failed to predict. Botvinick and colleagues' review, today's paper, follows the same ideas into deep reinforcement learning, where prediction errors train networks that then show brain-like representations.
+
+<Figure caption="Week 44 revisited: TD learning of a cue that predicts reward. Each row is a trial; colour shows the TD error at each time step. Over training the error moves from the reward to the cue. Remove the reward on the last trial to see the dip." credit="Interactive figure by Engram, after Schultz, Dayan and Montague (1997).">
+  <TDError />
+</Figure>
+
+<Video id="Hcx2_JTpf2M" title="Introduction to Bayesian statistics and decisions" by="Neuromatch Academy" note="Neuromatch's introduction to combining prior beliefs with evidence and choosing actions by their expected value, the thread running through Weeks 45 and 48." />
+
+<Step n={2} title="Recap sheet" minutes={20} />
+
+**Reward (Week 44).** Rescorla-Wagner updates a prediction by a fraction of the error, $V \leftarrow V + \alpha(r - V)$. Temporal difference learning extends this through time with $\delta_t = r_t + \gamma V_{t+1} - V_t$, which matches phasic dopamine. Q-learning learns action values; bandits trade exploration against exploitation; distributional TD learns a whole distribution of returns.
+
+**Decisions (Week 45).** The drift diffusion model accumulates evidence with drift $v$ and noise $\sigma$ until a bound $\pm a$: accuracy $1/(1 + e^{-2va/\sigma^2})$ and mean decision time $\frac{a}{v}\tanh\frac{va}{\sigma^2}$. LIP neurons ramp like accumulators; attractor networks (Wang) implement the decision; confidence reflects the distance from the bound or the posterior.
+
+**Working memory and attention (Week 46).** Bump attractors hold a remembered location; activity-silent mechanisms may store memories in synapses; capacity limits are set by resource sharing; attention acts like normalisation with an attention field; prefrontal networks switch tasks by context.
+
+**Oscillations and states (Week 47).** Gamma rhythms arise from interacting excitation and inhibition (PING); phase locking and coherence may route communication; arousal follows an inverted U; sleep alternates up and down states.
+
+**Inference (Week 48).** Signal detection theory separates sensitivity $d'$ from criterion; perception combines likelihood and prior, so low-contrast motion looks slower (Weiss, Simoncelli and Adelson); population codes can represent probability; predictive coding passes errors forward.
+
+**Networks and language (Week 49).** Brain networks are small-world and modular; language areas respond to predictable structure, and language models' predictions explain their activity; the successor representation links hippocampus to prediction.
+
+<Step n={3} title="Mixed problems" minutes={60} />
+
+<PyCell id="td" title="Problem 1: the prediction error moves to the cue" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "deltas holds one row of TD errors per trial"
+      assert deltas.shape == (n_trials, T)
+  def test_early():
+      "on the first trial the error is at the reward, not the cue"
+      assert deltas[0, t_rew] > 0.9 and abs(deltas[0, t_cs - 1]) < 1e-9
+  def test_late():
+      "after training the error is at the cue and has nearly vanished at the reward"
+      assert deltas[-1, t_cs - 1] > 0.7 and abs(deltas[-1, t_rew]) < 0.05
+  def test_omit():
+      "omitting reward after training gives a negative error at the reward time"
+      assert omit[t_rew] < -0.7
+`} prompt="Simulate tabular TD(0) over 300 trials of 25 time steps. The cue arrives at t_cs and the reward (1) at t_rew. States before the cue cannot predict it, so their values stay at zero; states from the cue onwards learn. Record delta_t = r_t + gamma V[t + 1] - V[t] at every step. Then run one more trial with the reward omitted, without learning."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  T, t_cs, t_rew, alpha, gamma, n_trials = 25, 5, 15, 0.1, 0.98, 300
+  V = np.zeros(T + 1)
+  deltas = np.zeros((n_trials, T))
+
+  def run_trial(V, reward=1.0, learn=True):
+      d = np.zeros(T)
+      for t in range(T):
+          r = reward if t == t_rew else 0.0
+          d[t] = ...
+          if learn and t >= t_cs:
+              V[t] += alpha * d[t]
+      return d
+
+  for k in range(n_trials):
+      deltas[k] = run_trial(V)
+  omit = run_trial(V, reward=0.0, learn=False)
+  for k in [0, 10, 50, 299]:
+      print(f"trial {k:3d}: error at cue {deltas[k, t_cs - 1]:.2f}, at reward {deltas[k, t_rew]:.2f}")
+  print(f"reward omitted after training: error at the reward time {omit[t_rew]:.2f}")
+  plt.imshow(deltas[:100], aspect="auto", cmap="RdBu_r", vmin=-1, vmax=1); plt.xlabel("time step"); plt.ylabel("trial"); plt.colorbar(); plt.show()
+`}
+hint="d[t] = r + gamma * V[t + 1] - V[t]. The error 'at the cue' is at t_cs - 1, the step whose next state is the cue."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  T, t_cs, t_rew, alpha, gamma, n_trials = 25, 5, 15, 0.1, 0.98, 300
+  V = np.zeros(T + 1)
+  deltas = np.zeros((n_trials, T))
+
+  def run_trial(V, reward=1.0, learn=True):
+      d = np.zeros(T)
+      for t in range(T):
+          r = reward if t == t_rew else 0.0
+          d[t] = r + gamma * V[t + 1] - V[t]
+          if learn and t >= t_cs:
+              V[t] += alpha * d[t]
+      return d
+
+  for k in range(n_trials):
+      deltas[k] = run_trial(V)
+  omit = run_trial(V, reward=0.0, learn=False)
+  for k in [0, 10, 50, 299]:
+      print(f"trial {k:3d}: error at cue {deltas[k, t_cs - 1]:.2f}, at reward {deltas[k, t_rew]:.2f}")
+  print(f"reward omitted after training: error at the reward time {omit[t_rew]:.2f}")
+  plt.imshow(deltas[:100], aspect="auto", cmap="RdBu_r", vmin=-1, vmax=1); plt.xlabel("time step"); plt.ylabel("trial"); plt.colorbar(); plt.show()
+`} />
+
+On the first trial the error is entirely at the reward. Within ten trials it has fallen to 0.35 there, and by trial 50 it is near zero at both the reward and the cue: in between, it is travelling backwards one time step at a time through the delay, as the plot shows. After 300 trials it sits at the cue, with a size of 0.80, which is $\gamma^{10}$, the discounted value of a reward ten steps away. Omitting the reward then produces an error of −1.00 at the expected time, the dip Schultz recorded in dopamine neurons. The backward-travelling error is a feature of this simple representation of time, not of real dopamine neurons, which do not show it clearly; richer representations of time, such as microstimuli or belief states, remove it (Week 44).
+
+<PyCell id="ddm" title="Problem 2: the bound that maximises reward rate" tests={String.raw`
+  import numpy as np
+  def test_formulas():
+      "accuracy and mean decision time follow the DDM formulas"
+      assert abs(accuracy(1.0) - 1 / (1 + np.exp(-2 * v * 1.0 / s2))) < 1e-12 and abs(mean_dt(1.0) - (1.0 / v) * np.tanh(v / s2)) < 1e-12
+  def test_sim():
+      "the simulation at a = 1 agrees with the formulas"
+      assert abs(sim_acc - accuracy(1.0)) < 0.03 and abs(sim_dt - mean_dt(1.0)) < 0.05
+  def test_opt():
+      "a_best maximises reward rate on the grid and is an intermediate bound"
+      assert a_best == grid[np.argmax(rate)] and grid[0] < a_best < grid[-1]
+  def test_iti():
+      "a longer wait between trials raises the best bound"
+      assert a_best_long > a_best
+`} prompt="Write accuracy(a) and mean_dt(a) from the formulas with drift v and noise variance s2. Check them by simulating 2,000 decisions at a = 1 (Euler steps of 1 ms). Then compute reward rate, accuracy over (decision time + t0 + iti), on a grid of bounds, and find the best bound for iti = 2 s and for iti = 8 s."
+code={String.raw`
+  v, s2, t0 = 1.0, 1.0, 0.3
+  grid = np.linspace(0.05, 3, 120)
+
+  def accuracy(a):
+      return ...
+
+  def mean_dt(a):
+      return ...
+
+  g = np.random.default_rng(45)
+  x = np.zeros(2000); t = np.zeros(2000); done = np.zeros(2000, bool); hit_up = np.zeros(2000, bool); dt = 0.001; k = 0
+  while not done.all() and k < 20000:
+      live = ~done
+      x[live] += v * dt + np.sqrt(s2 * dt) * g.normal(size=live.sum()); t[live] += dt
+      up, down = live & (x >= 1.0), live & (x <= -1.0)
+      hit_up |= up; done |= up | down; k += 1
+  sim_acc, sim_dt = hit_up.mean(), t.mean()
+
+  def reward_rate(a, iti):
+      return ...
+
+  rate = reward_rate(grid, 2.0)
+  a_best = grid[np.argmax(rate)]
+  a_best_long = grid[np.argmax(reward_rate(grid, 8.0))]
+  print(f"a = 1: formula accuracy {accuracy(1.0):.3f}, simulated {sim_acc:.3f}; formula DT {mean_dt(1.0):.3f} s, simulated {sim_dt:.3f} s")
+  print(f"best bound with a 2 s wait: {a_best:.2f} (accuracy {accuracy(a_best):.2f}, DT {mean_dt(a_best):.2f} s); with an 8 s wait: {a_best_long:.2f}")
+`}
+hint="accuracy: 1 / (1 + np.exp(-2 * v * a / s2)); mean_dt: (a / v) * np.tanh(v * a / s2); reward_rate: accuracy(a) / (mean_dt(a) + t0 + iti)."
+solution={String.raw`
+  v, s2, t0 = 1.0, 1.0, 0.3
+  grid = np.linspace(0.05, 3, 120)
+
+  def accuracy(a):
+      return 1 / (1 + np.exp(-2 * v * a / s2))
+
+  def mean_dt(a):
+      return (a / v) * np.tanh(v * a / s2)
+
+  g = np.random.default_rng(45)
+  x = np.zeros(2000); t = np.zeros(2000); done = np.zeros(2000, bool); hit_up = np.zeros(2000, bool); dt = 0.001; k = 0
+  while not done.all() and k < 20000:
+      live = ~done
+      x[live] += v * dt + np.sqrt(s2 * dt) * g.normal(size=live.sum()); t[live] += dt
+      up, down = live & (x >= 1.0), live & (x <= -1.0)
+      hit_up |= up; done |= up | down; k += 1
+  sim_acc, sim_dt = hit_up.mean(), t.mean()
+
+  def reward_rate(a, iti):
+      return accuracy(a) / (mean_dt(a) + t0 + iti)
+
+  rate = reward_rate(grid, 2.0)
+  a_best = grid[np.argmax(rate)]
+  a_best_long = grid[np.argmax(reward_rate(grid, 8.0))]
+  print(f"a = 1: formula accuracy {accuracy(1.0):.3f}, simulated {sim_acc:.3f}; formula DT {mean_dt(1.0):.3f} s, simulated {sim_dt:.3f} s")
+  print(f"best bound with a 2 s wait: {a_best:.2f} (accuracy {accuracy(a_best):.2f}, DT {mean_dt(a_best):.2f} s); with an 8 s wait: {a_best_long:.2f}")
+`} />
+
+The formulas match the simulation: accuracy 0.881 against 0.874 and decision time 0.76 against 0.78 s, the small differences coming from discrete time steps and sampling. With a 2-second wait after each trial, reward rate peaks at a bound of 0.72, giving 81% accuracy in 0.44 s: an intermediate bound, which answers the prediction. A lower bound wastes trials on errors; a higher one wastes time on certainty, since each extra second of deliberation buys little accuracy when the wait is short. When the wait grows to 8 s, each trial is more costly and the best bound almost doubles to 1.34: careful decisions pay when trials are scarce. Bogacz and colleagues (2006) derived this result, and people and animals do adjust their bounds with the timing of a task, though usually towards being too cautious.
+
+<PyCell id="prior" title="Problem 3: the width of a slow-speed prior" tests={String.raw`
+  import numpy as np
+  def test_model():
+      "perceived gives the posterior mean speed for a Gaussian prior centred on zero"
+      assert abs(perceived(4.0, 0.5, 2.0) - 4.0 * 4.0 / (4.0 + 0.25)) < 1e-12
+  def test_fit():
+      "sigma_p_hat recovers the true prior width within 15%"
+      assert abs(sigma_p_hat - 2.0) / 2.0 < 0.15
+  def test_order():
+      "low-contrast stimuli are perceived as slower than high-contrast ones"
+      assert perceived(4.0, like_sd[0], sigma_p_hat) < perceived(4.0, like_sd[-1], sigma_p_hat)
+`} prompt="An observer with a Gaussian prior on speed centred at zero, of width sigma_p, sees a speed v with Gaussian likelihood of width sigma_l and reports the posterior mean. Write perceived(v, sigma_l, sigma_p). The noisy reports at five contrasts are simulated for you; fit sigma_p by minimising the squared error between the reports and the model."
+code={String.raw`
+  from scipy.optimize import minimize_scalar
+  g = np.random.default_rng(48)
+  like_sd = np.array([3.0, 2.0, 1.2, 0.7, 0.4])        # likelihood width falls as contrast rises
+  v_true, sigma_p_true = 4.0, 2.0
+
+  def perceived(v, sigma_l, sigma_p):
+      return ...
+
+  reports = np.array([perceived(v_true, s, sigma_p_true) for s in like_sd])[:, None] + g.normal(0, 0.15, (5, 20))
+  loss = lambda sp: np.sum((reports - np.array([perceived(v_true, s, sp) for s in like_sd])[:, None]) ** 2)
+  sigma_p_hat = ...
+  for s, rep in zip(like_sd, reports.mean(1)):
+      print(f"likelihood SD {s:.1f}: mean report {rep:.2f} (true speed {v_true})")
+  print(f"fitted prior width {sigma_p_hat:.2f} (true {sigma_p_true})")
+`}
+hint="return v * sigma_p ** 2 / (sigma_p ** 2 + sigma_l ** 2); sigma_p_hat = minimize_scalar(loss, bounds=(0.1, 10), method='bounded').x."
+solution={String.raw`
+  from scipy.optimize import minimize_scalar
+  g = np.random.default_rng(48)
+  like_sd = np.array([3.0, 2.0, 1.2, 0.7, 0.4])        # likelihood width falls as contrast rises
+  v_true, sigma_p_true = 4.0, 2.0
+
+  def perceived(v, sigma_l, sigma_p):
+      return v * sigma_p ** 2 / (sigma_p ** 2 + sigma_l ** 2)
+
+  reports = np.array([perceived(v_true, s, sigma_p_true) for s in like_sd])[:, None] + g.normal(0, 0.15, (5, 20))
+  loss = lambda sp: np.sum((reports - np.array([perceived(v_true, s, sp) for s in like_sd])[:, None]) ** 2)
+  sigma_p_hat = minimize_scalar(loss, bounds=(0.1, 10), method="bounded").x
+  for s, rep in zip(like_sd, reports.mean(1)):
+      print(f"likelihood SD {s:.1f}: mean report {rep:.2f} (true speed {v_true})")
+  print(f"fitted prior width {sigma_p_hat:.2f} (true {sigma_p_true})")
+`} />
+
+The reports fall from 3.90 at the narrowest likelihood to 1.28 at the widest, although the true speed is 4 in every case: the noisier the measurement, the more the percept shrinks towards the prior's mean of zero. Fitting the model recovers a prior width of 2.04, against a true 2.0. This is the logic of Stocker and Simoncelli (Week 48) in miniature: the observer's prior is not measured directly but inferred from the pattern of biases across conditions of different reliability, just as Week 51 inferred the mice's prior from how their choices depended on history.
+
+<Step n={4} title="Proof practice" minutes={10} />
+
+<Prove title="The posterior of two Gaussians" task="A prior $s \sim \mathcal N(\mu_p, \sigma_p^2)$ is combined with a likelihood from a measurement $m \sim \mathcal N(s, \sigma_l^2)$. Show that the posterior is Gaussian with mean $\frac{\sigma_l^2\mu_p + \sigma_p^2 m}{\sigma_p^2 + \sigma_l^2}$ and precision $\frac{1}{\sigma_p^2} + \frac{1}{\sigma_l^2}$.">
+
+The log posterior is, up to a constant, $-\frac{(s - \mu_p)^2}{2\sigma_p^2} - \frac{(m - s)^2}{2\sigma_l^2}$, a quadratic in $s$, so the posterior is Gaussian.
+
+The coefficient of $-s^2/2$ is $\frac{1}{\sigma_p^2} + \frac{1}{\sigma_l^2}$, which is the posterior precision.
+
+The coefficient of $s$ is $\frac{\mu_p}{\sigma_p^2} + \frac{m}{\sigma_l^2}$, and the mean is this divided by the precision: $\frac{\mu_p/\sigma_p^2 + m/\sigma_l^2}{1/\sigma_p^2 + 1/\sigma_l^2} = \frac{\sigma_l^2\mu_p + \sigma_p^2 m}{\sigma_p^2 + \sigma_l^2}$.
+
+Each source is weighted by its precision. With $\mu_p = 0$ the mean is $m\frac{\sigma_p^2}{\sigma_p^2 + \sigma_l^2}$, the shrinkage of Problem 3: the noisier the measurement, the more the percept is pulled towards the prior. The same formula is cue combination (Week 16) and one step of the Kalman filter (Week 36).
+
+</Prove>
+
+<Step n={5} title="Mock quiz and plan" minutes={15} />
+
+<Quiz id="quiz" questions={[
+  { q: "After learning, dopamine neurons fire mainly to...", options: ["The predictive cue", "The reward", "Nothing", "Random times"], answer: 0, explain: "The TD error moves to the cue." },
+  { q: "Omitting an expected reward produces...", options: ["A dip below baseline at the expected time", "A burst", "No change", "A burst at the cue only"], answer: 0, explain: "Negative prediction error." },
+  { q: "In the DDM, raising the bound...", options: ["Increases accuracy and decision time", "Decreases both", "Increases accuracy only", "Changes nothing"], answer: 0, explain: "The speed-accuracy trade-off." },
+  { q: "Bump attractors are a model of...", options: ["Spatial working memory", "Reward learning", "Gamma rhythms", "Language"], answer: 0, explain: "Week 46." },
+  { q: "PING gamma oscillations come from...", options: ["Excitatory cells driving inhibitory cells that silence them", "Pacemaker neurons only", "Glia", "The thalamus alone"], answer: 0, explain: "Week 47." },
+  { q: "Low-contrast motion looks slower because...", options: ["A broader likelihood is pulled more towards a slow prior", "Neurons fire less", "The eye moves", "Of adaptation"], answer: 0, explain: "Week 48." },
+  { q: "d′ in signal detection theory measures...", options: ["Sensitivity independent of criterion", "Bias", "Reaction time", "Confidence"], answer: 0, explain: "Week 48." },
+  { q: "A small-world network has...", options: ["High clustering and short path lengths", "No clustering", "Long path lengths", "Only random connections"], answer: 0, explain: "Week 49." },
+]} />
+
+<Flashcards cards={[
+  { front: "TD error?", back: "$\\delta_t = r_t + \\gamma V_{t+1} - V_t$." },
+  { front: "DDM accuracy and decision time?", back: "$1/(1 + e^{-2va/\\sigma^2})$ and $\\frac{a}{v}\\tanh\\frac{va}{\\sigma^2}$ for bounds at ±a." },
+  { front: "Reward rate?", back: "Accuracy divided by (decision time + non-decision time + inter-trial interval)." },
+  { front: "Posterior mean of two Gaussians?", back: "Precision-weighted average of the prior mean and the measurement." },
+  { front: "Signal detection d′?", back: "Difference of the signal and noise means in units of their SD: z(hits) − z(false alarms)." },
+]} />
+
+<Predict revisit question="With a 2-second wait after each trial, was the reward-maximising bound low, high or in between?" />
+
+<Key title="Before you go">
+<ul>
+<li>The TD error transfers from reward to cue with learning, and dips when an expected reward is omitted.</li>
+<li>The reward-maximising bound is intermediate, and rises when trials are spaced further apart.</li>
+<li>A Gaussian prior shrinks noisy percepts towards its mean, by an amount set by relative precision.</li>
+<li>Note what you got wrong today and revisit those weeks before Day 6.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Botvinick, Wang, Dabney, Miller and Kurth-Nelson (2020), <em>Deep reinforcement learning and its neuroscientific implications</em>.</li>
+<li>Bogacz, Brown, Moehlis, Holmes and Cohen (2006), <em>The physics of optimal decision making</em>, Psychological Review 113(4), 700 to 765, on Problem 2.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Write a one-page summary of Weeks 44 to 49 from memory, without notes, then check it against the recap sheet. Mark every gap or error in a different colour: that list is your revision plan." />
