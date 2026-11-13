@@ -204,3 +204,8 @@ export { TDError } from "./td-error";
 export { BanditStrategies } from "./bandit-strategies";
 export { GridworldQ } from "./gridworld-q";
 export { DistributionalTD } from "./distributional-td";
+export { RTDistributions } from "./rt-distributions";
+export { LIPRamps } from "./lip-ramps";
+export { WangAttractor } from "./wang-attractor";
+export { BiasSignatures } from "./bias-signatures";
+export { ConfidenceMap } from "./confidence-map";

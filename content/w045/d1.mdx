@@ -1,0 +1,225 @@
+export const meta = {
+  title: "The diffusion model as a measurement tool",
+  intro: "In Week 24 you met the drift diffusion model as the continuous limit of the optimal sequential test, and found the bound that maximises reward rate. This week turns to the brain and asks how decisions are actually made: by which neurons, with what dynamics, and with how much confidence. We start where most experimental work starts: using the diffusion model to turn choices and response times into a few interpretable numbers. Ratcliff and McKoon's 2008 review set out the model and its use. Today you simulate full response time distributions, recover the model's parameters with a closed-form method, and see why a change in instructions and a change in the stimulus leave different fingerprints.",
+  goals: [
+    "Simulate the diffusion model with a non-decision time and describe its response time distributions",
+    "Recover drift rate, boundary separation and non-decision time with the EZ method",
+    "Distinguish effects of stimulus strength from effects of caution",
+    "Explain what the full Ratcliff model adds and why",
+  ],
+  plan: [
+    { label: "Predict and the model's parameters", minutes: 15 },
+    { label: "Response time distributions", minutes: 30 },
+    { label: "Recovering parameters", minutes: 35 },
+    { label: "Speed instructions against stimulus strength", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "ratcliff-mckoon-2008",
+};
+
+<Predict question="Participants are told to respond as fast as possible instead of as accurately as possible. In a diffusion model fit, which parameter should change: the drift rate, the boundary separation, or the non-decision time?" />
+
+<Step n={1} title="Three parameters with meanings" minutes={15} />
+
+In the form used by Ratcliff, evidence starts at $z$ between two bounds at $0$ and $a$ and drifts at rate $v$ with noise of standard deviation $s$ (conventionally $s = 1$ or 0.1, which only sets the scale). A response is made when either bound is reached, and the observed response time adds a **non-decision time** $T_{er}$ for encoding the stimulus and executing the movement. Each parameter has a psychological reading:
+
+- **drift rate** $v$: the quality of evidence, set by the stimulus and the observer's sensitivity;
+- **boundary separation** $a$: caution, set by the observer's strategy;
+- **non-decision time** $T_{er}$: sensory and motor delays;
+- **starting point** $z$: bias, set by prior expectations or payoffs (Day 4).
+
+The power of the model is that these components, confounded in raw accuracy and mean response time, can be separated by fitting. A slower group might have lower drift (worse information), higher bounds (more caution) or longer non-decision time (slower movement), and each would have different implications.
+
+<Video id="sT-XepFxq7o" title="Introduction: Aims and Challenges of Decision Models" by="Wulfram Gerstner (EPFL, Neuronal Dynamics)" note="Gerstner introduces the decision-making chapter of Neuronal Dynamics: the experimental paradigms and what a model of decisions must explain." />
+
+<Step n={2} title="Response time distributions" minutes={30} />
+
+<Figure caption="Response time distributions from the diffusion model. Correct responses are plotted upwards and errors downwards. Change the drift, bound and non-decision time and watch the shapes, not just the means." credit="Interactive figure by Engram, after Ratcliff and McKoon (2008).">
+  <RTDistributions />
+</Figure>
+
+<PyCell id="rtdist" title="Simulating choices and response times" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "response times are right-skewed (skewness above 1) and accuracy is between 0.7 and 0.9"
+      assert skew > 1 and 0.7 < ch.mean() < 0.9
+  def test_floor():
+      "no response is faster than the non-decision time"
+      assert rt.min() >= 0.3
+`} prompt="Complete ddm(): on each 1 ms step, add v dt plus noise of standard deviation sqrt(dt) to every undecided trial; mark trials that reach a (choice 1) or 0 (choice 0) and record their response time, including the non-decision time."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2008)
+
+  def ddm(v, a, ter, n=2000, dt=0.001, z=None):
+      x = np.full(n, a / 2 if z is None else z)
+      done = np.zeros(n, bool); ch = np.zeros(n, int); rt = np.zeros(n); k = 0
+      while not done.all() and k < 10000:
+          idx = ~done
+          ...
+          k += 1
+          up, lo = idx & (x >= a), idx & (x <= 0)
+          ch[up] = 1; rt[up | lo] = k * dt + ter; done |= up | lo
+      return ch, rt
+
+  ch, rt = ddm(v=1.0, a=1.2, ter=0.3)
+  skew = ((rt - rt.mean()) ** 3).mean() / rt.std() ** 3
+  print(f"accuracy {ch.mean():.3f}; mean RT correct {rt[ch == 1].mean():.3f} s, errors {rt[ch == 0].mean():.3f} s; skewness {skew:.2f}")
+  plt.hist(rt[ch == 1], 60, alpha=0.6, label="correct"); plt.hist(rt[ch == 0], 60, alpha=0.6, label="error")
+  plt.xlabel("response time (s)"); plt.legend(); plt.show()
+`}
+hint="x[idx] += v * dt + np.sqrt(dt) * r.normal(size=idx.sum())."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2008)
+
+  def ddm(v, a, ter, n=2000, dt=0.001, z=None):
+      x = np.full(n, a / 2 if z is None else z)
+      done = np.zeros(n, bool); ch = np.zeros(n, int); rt = np.zeros(n); k = 0
+      while not done.all() and k < 10000:
+          idx = ~done
+          x[idx] += v * dt + np.sqrt(dt) * r.normal(size=idx.sum())
+          k += 1
+          up, lo = idx & (x >= a), idx & (x <= 0)
+          ch[up] = 1; rt[up | lo] = k * dt + ter; done |= up | lo
+      return ch, rt
+
+  ch, rt = ddm(v=1.0, a=1.2, ter=0.3)
+  skew = ((rt - rt.mean()) ** 3).mean() / rt.std() ** 3
+  print(f"accuracy {ch.mean():.3f}; mean RT correct {rt[ch == 1].mean():.3f} s, errors {rt[ch == 0].mean():.3f} s; skewness {skew:.2f}")
+  plt.hist(rt[ch == 1], 60, alpha=0.6, label="correct"); plt.hist(rt[ch == 0], 60, alpha=0.6, label="error")
+  plt.xlabel("response time (s)"); plt.legend(); plt.show()
+`} />
+
+Accuracy is about 0.79, and the response times have a sharp rise just after the 0.3 s floor and a long right tail, with a skewness of about 2. This shape, rather than a symmetric bell, is what real response times look like, and it falls out of the geometry of a random walk between bounds: there are many ways to wander for a long time and few ways to arrive quickly. Mean correct and error times are almost the same, 0.64 and 0.65 s; that equality is a prediction of the simple model with an unbiased start, and the callout below explains why real data usually break it.
+
+<Step n={3} title="Recovering parameters" minutes={35} />
+
+Fitting the full model needs numerical methods, but Wagenmakers, van der Maas and Grasman (2007) showed that, for an unbiased starting point, three summary statistics determine the three main parameters in closed form. From the proportion correct $P_c$, the variance of correct response times $V_{RT}$ and their mean $M_{RT}$, with $L = \ln\frac{P_c}{1 - P_c}$ and $s = 1$:
+
+$$
+v = \operatorname{sign}(P_c - \tfrac12)\left[\frac{L\,(L P_c^2 - L P_c + P_c - \tfrac12)}{V_{RT}}\right]^{1/4}, \qquad a = \frac{L}{v},
+$$
+
+and $T_{er} = M_{RT} - \text{MDT}$, where the mean decision time is $\text{MDT} = \frac{a}{2v}\cdot\frac{1 - e^{-va}}{1 + e^{-va}}$. This is the EZ-diffusion model.
+
+<PyCell id="ez" title="EZ-diffusion" tests={String.raw`
+  import numpy as np
+  def test_recover():
+      "EZ recovers v within 0.15, a within 0.15 and Ter within 0.03 of the truth"
+      v_hat, a_hat, t_hat = ez(ch.mean(), rt[ch == 1].var(), rt[ch == 1].mean())
+      assert abs(v_hat - 1.0) < 0.15 and abs(a_hat - 1.2) < 0.15 and abs(t_hat - 0.3) < 0.03
+`} prompt="Write ez(pc, vrt, mrt) from the formulas above and apply it to the simulated data."
+code={String.raw`
+  def ez(pc, vrt, mrt):
+      L = np.log(pc / (1 - pc))
+      v = ...
+      a = ...
+      mdt = ...
+      return v, a, mrt - mdt
+
+  v_hat, a_hat, t_hat = ez(ch.mean(), rt[ch == 1].var(), rt[ch == 1].mean())
+  print(f"EZ estimates: v = {v_hat:.3f} (true 1.0), a = {a_hat:.3f} (true 1.2), Ter = {t_hat:.3f} s (true 0.3)")
+`}
+hint="v = np.sign(pc - 0.5) * (L * (L * pc ** 2 - L * pc + pc - 0.5) / vrt) ** 0.25; a = L / v; mdt = (a / (2 * v)) * (1 - np.exp(-v * a)) / (1 + np.exp(-v * a))."
+solution={String.raw`
+  def ez(pc, vrt, mrt):
+      L = np.log(pc / (1 - pc))
+      v = np.sign(pc - 0.5) * (L * (L * pc ** 2 - L * pc + pc - 0.5) / vrt) ** 0.25
+      a = L / v
+      mdt = (a / (2 * v)) * (1 - np.exp(-v * a)) / (1 + np.exp(-v * a))
+      return v, a, mrt - mdt
+
+  v_hat, a_hat, t_hat = ez(ch.mean(), rt[ch == 1].var(), rt[ch == 1].mean())
+  print(f"EZ estimates: v = {v_hat:.3f} (true 1.0), a = {a_hat:.3f} (true 1.2), Ter = {t_hat:.3f} s (true 0.3)")
+`} />
+
+From three numbers the EZ method recovers drift 1.04, boundary separation 1.25 and non-decision time 0.296 s, all close to the truth. Its simplicity is its appeal and its limit: it assumes an unbiased start and no trial-to-trial variability, it ignores error response times, and it can fail when accuracy is near ceiling (then $L$ is undefined). For such data, or to test assumptions, fit the full model.
+
+<Step n={4} title="Speed instructions against stimulus strength" minutes={25} />
+
+Now compare two manipulations that both lower accuracy: a speed instruction, modelled as a lower bound, and a weaker stimulus, modelled as a lower drift. Fit each condition with EZ and see whether the fit puts the change in the right place.
+
+<PyCell id="manip" title="Which parameter moved?" tests={String.raw`
+  import numpy as np
+  def test_speed():
+      "under a speed instruction, the fitted bound falls by more than 0.25 while drift stays within 0.15"
+      assert fits["accurate"][1] - fits["speed"][1] > 0.25 and abs(fits["accurate"][0] - fits["speed"][0]) < 0.15
+  def test_hard():
+      "for a weaker stimulus, the fitted drift falls by more than 0.3 while the bound stays within 0.15"
+      assert fits["accurate"][0] - fits["hard"][0] > 0.3 and abs(fits["accurate"][1] - fits["hard"][1]) < 0.15
+`} prompt="Simulate three conditions: accurate (v 1.0, a 1.2), speed (v 1.0, a 0.8) and hard (v 0.6, a 1.2), all with Ter 0.3 and 4,000 trials. Fit each with ez and print accuracy, mean RT and the three estimates."
+code={String.raw`
+  conds = {"accurate": (1.0, 1.2), "speed": (1.0, 0.8), "hard": (0.6, 1.2)}
+  fits = {}
+  for name, (v, a) in conds.items():
+      c, t = ...
+      fits[name] = ez(c.mean(), t[c == 1].var(), t[c == 1].mean())
+      print(f"{name:8s} accuracy {c.mean():.3f}, mean RT {t.mean():.3f} s -> v {fits[name][0]:.2f}, a {fits[name][1]:.2f}, Ter {fits[name][2]:.3f}")
+`}
+hint="c, t = ddm(v, a, 0.3, n=4000)."
+solution={String.raw`
+  conds = {"accurate": (1.0, 1.2), "speed": (1.0, 0.8), "hard": (0.6, 1.2)}
+  fits = {}
+  for name, (v, a) in conds.items():
+      c, t = ddm(v, a, 0.3, n=4000)
+      fits[name] = ez(c.mean(), t[c == 1].var(), t[c == 1].mean())
+      print(f"{name:8s} accuracy {c.mean():.3f}, mean RT {t.mean():.3f} s -> v {fits[name][0]:.2f}, a {fits[name][1]:.2f}, Ter {fits[name][2]:.3f}")
+`} />
+
+Both manipulations cost about 9 percentage points of accuracy, so accuracy alone cannot tell them apart. Response times can: the speed instruction makes responses 170 ms faster, while the weaker stimulus makes them slightly slower. The fits place the change correctly, the bound in one case and the drift in the other, with the other parameters unchanged. In real experiments speed instructions often lower non-decision time a little as well, and the separation is less clean, but the logic is the same.
+
+<Callout kind="note">
+
+The full Ratcliff diffusion model adds trial-to-trial variability in drift (standard deviation $\eta$), starting point and non-decision time. Drift variability makes errors slower than correct responses, as is typical in difficult, accuracy-emphasised tasks; starting-point variability makes errors faster, as is typical under speed pressure. The simple model you simulated predicts equal mean times for correct and error responses, which real data rarely show. Fitting the full model needs numerical likelihoods or quantile-based methods, implemented in packages such as HDDM and PyDDM.
+
+</Callout>
+
+<Bridge title="Turning behaviour into mechanism"
+  neuro="Diffusion model parameters have been used to show that ageing slows non-decision time and raises caution more than it lowers drift, and to locate the effects of drugs and brain lesions on specific components of a decision."
+  ai="Sequential sampling is the logic of early exit in neural networks, of speculative decoding and of adaptive computation time: keep computing until confidence passes a threshold. Choosing the threshold is the same speed-accuracy trade-off.">
+
+Fitting a diffusion model separates how good the evidence was from how much of it was demanded.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Boundary separation in the diffusion model reflects...", options: ["Caution", "Stimulus strength", "Motor delay", "Bias"], answer: 0, explain: "Set by strategy." },
+  { q: "Drift rate reflects...", options: ["The quality of evidence", "Caution", "Motor delay", "Prior expectations"], answer: 0, explain: "Set by stimulus and sensitivity." },
+  { q: "Non-decision time includes...", options: ["Sensory encoding and motor execution", "Deliberation", "Feedback", "The inter-trial interval"], answer: 0, explain: "T_er." },
+  { q: "Diffusion model response time distributions are...", options: ["Right-skewed", "Symmetric", "Left-skewed", "Uniform"], answer: 0, explain: "A long right tail." },
+  { q: "EZ-diffusion uses...", options: ["Accuracy, and the mean and variance of correct RTs", "Only accuracy", "Only mean RT", "The full distribution"], answer: 0, explain: "Wagenmakers et al. (2007)." },
+  { q: "A speed instruction mainly lowers...", options: ["Boundary separation", "Drift rate", "Non-decision time", "The starting point"], answer: 0, explain: "Caution, not evidence." },
+  { q: "Slow errors in the full model come from...", options: ["Trial-to-trial variability in drift", "Starting-point variability", "Non-decision time", "Low bounds"], answer: 0, explain: "η." },
+  { q: "In the simple model, mean error and correct RTs are...", options: ["Equal", "Errors always slower", "Errors always faster", "Unrelated"], answer: 0, explain: "With an unbiased start." },
+]} />
+
+<Flashcards cards={[
+  { front: "Diffusion model parameters?", back: "Drift $v$ (evidence quality), boundary separation $a$ (caution), non-decision time $T_{er}$, starting point $z$ (bias)." },
+  { front: "EZ drift formula?", back: "$v = \\mathrm{sign}(P_c - \\tfrac12)[L(LP_c^2 - LP_c + P_c - \\tfrac12)/V_{RT}]^{1/4}$, $L = \\ln(P_c/(1-P_c))$." },
+  { front: "Speed instruction signature?", back: "Lower $a$ with $v$ unchanged: faster, less accurate." },
+  { front: "Slow and fast errors?", back: "Drift variability gives slow errors; starting-point variability gives fast errors." },
+  { front: "Why fit a model rather than compare means?", back: "Accuracy and mean RT confound evidence, caution and delays; the model separates them." },
+]} />
+
+<Predict revisit question="Under a speed instruction, which parameter changes in a diffusion fit?" />
+
+<Key title="Before you go">
+<ul>
+<li>The diffusion model splits behaviour into evidence, caution, delay and bias.</li>
+<li>Its response time distributions are right-skewed with a floor at the non-decision time.</li>
+<li>EZ-diffusion recovers the main parameters from three statistics.</li>
+<li>Instructions move the bound; stimuli move the drift.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Ratcliff and McKoon (2008), <em>The diffusion decision model: theory and data for two-choice decision tasks</em>.</li>
+<li>Wagenmakers, van der Maas and Grasman (2007), <em>An EZ-diffusion model for response time and accuracy</em>, Psychonomic Bulletin and Review 14(1), 3 to 22.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A study reports that a drug makes people respond more slowly with no change in accuracy. Which diffusion parameters could explain that pattern, and what would you look at in the response time distributions to tell them apart?" />

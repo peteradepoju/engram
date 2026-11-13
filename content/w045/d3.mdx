@@ -1,0 +1,233 @@
+export const meta = {
+  title: "Decisions as attractor dynamics",
+  intro: "The diffusion model describes a decision as a perfect integrator with a separate stopping rule. Real cortex has neither: neurons leak, synapses saturate, and nothing reads a bound. Xiao-Jing Wang showed in 2002 that a recurrent network of spiking neurons, with two excitatory populations that excite themselves and inhibit each other through shared interneurons, accumulates evidence slowly through NMDA receptors and then commits to one choice as its activity falls into one of two attractor states. The same network holds the decision after the stimulus has gone, linking decisions to working memory. Wong and Wang (2006) reduced the model to two equations. Today you simulate that reduced model, reproduce psychometric and chronometric curves, watch it remember its choice, and find out why the slow synapses matter.",
+  goals: [
+    "Write the reduced Wong-Wang model and explain each term",
+    "Reproduce accuracy and response time as functions of coherence",
+    "Show that the decision persists after the stimulus is removed",
+    "Explain why slow NMDA synapses are needed for integration and commitment",
+  ],
+  plan: [
+    { label: "Predict and the circuit", minutes: 20 },
+    { label: "The reduced model", minutes: 35 },
+    { label: "Remembering the choice", minutes: 25 },
+    { label: "Why NMDA?", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "wang-2002",
+};
+
+<Predict question="In Wang's network, the stimulus is switched off after 1 second, before some trials have reached a decision. What happens to the two populations' activity afterwards: do both decay to baseline, or does one stay high?" />
+
+<Step n={1} title="Competition between two populations" minutes={20} />
+
+Wang's 2002 network contains 2,000 integrate-and-fire neurons: 1,600 excitatory and 400 inhibitory. Two small excitatory populations are selective for the two choices; each receives input that grows with motion coherence in its direction, as MT would provide. Within each population, recurrent excitation is strong and mediated largely by NMDA receptors, whose time constant of about 100 ms is long compared with a neuron's membrane time constant. The populations compete through the shared inhibitory neurons.
+
+Without input the network rests at low spontaneous rates. With input, both populations' activity rises slowly as the slow synapses integrate the evidence; small differences are amplified by mutual inhibition until one population wins and its rate climbs to a high state while the other is suppressed. A response is triggered when the winner crosses a threshold, as LIP activity does before a saccade. Because the high state is an attractor of the dynamics, it can persist without input.
+
+<Video id="MtthfGUKEqU" title="Theory of Decision Dynamics (Cortex)" by="Wulfram Gerstner (EPFL, Neuronal Dynamics)" note="Gerstner reduces a network of competing populations to a two-dimensional system and analyses its decision dynamics in the phase plane, the approach of today's model." />
+
+<Step n={2} title="The reduced model" minutes={35} />
+
+Wong and Wang (2006) reduced the spiking network to two variables, the NMDA gating variables $S_1$ and $S_2$ of the two populations:
+
+$$
+\frac{dS_i}{dt} = -\frac{S_i}{\tau_S} + (1 - S_i)\,\gamma\,H(x_i), \qquad x_1 = J_{11}S_1 - J_{12}S_2 + I_0 + I_1 + I_{\text{noise},1},
+$$
+
+and symmetrically for population 2, where $H(x) = \frac{ax - b}{1 - e^{-d(ax - b)}}$ is a population's firing rate as a function of its input current, $I_i = J_A\,\mu_0\,(1 \pm c/100)$ is the stimulus input for coherence $c$ per cent, and the noise is an Ornstein-Uhlenbeck process (Week 24) with a 2 ms time constant. With the published parameters ($\tau_S = 100$ ms, $J_{11} = 0.2609$ nA, $J_{12} = 0.0497$ nA, $I_0 = 0.3255$ nA, $J_A = 5.2\times10^{-4}$ nA/Hz, $\mu_0 = 30$ Hz, noise amplitude 0.02 nA) the model reproduces the spiking network's behaviour. A decision is made when either rate exceeds 15 Hz.
+
+<Figure caption="The reduced Wong-Wang model. Each line is one trial's pair of population rates; change the coherence and the stimulus duration, and watch trials split towards one attractor or the other." credit="Interactive figure by Engram, after Wong and Wang (2006).">
+  <WangAttractor />
+</Figure>
+
+<PyCell id="ww" title="Psychometric and chronometric functions" tests={String.raw`
+  import numpy as np
+  def test_psych():
+      "accuracy rises with coherence from about chance to near perfect"
+      acc = [res[c][0] for c in cohs]
+      assert abs(acc[0] - 0.5) < 0.08 and acc[-1] > 0.97 and all(np.diff(acc) > -0.02)
+  def test_chrono():
+      "decision time falls with coherence"
+      t = [res[c][1] for c in cohs]
+      assert t[0] > t[-1] + 0.1
+`} prompt="Complete one Euler step of the model inside sim(): compute x1 and x2, the rates H(x1) and H(x2), and update S1, S2 and the two noise currents."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  a_, b_, d_ = 270.0, 108.0, 0.154
+  gamma, J11, J12, I0, JA, mu0, tauA, sigma = 0.641, 0.2609, 0.0497, 0.3255, 5.2e-4, 30.0, 0.002, 0.02
+
+  def H(x):
+      return (a_ * x - b_) / (1 - np.exp(-d_ * (a_ * x - b_)))
+
+  def sim(c, n=300, T=1.5, dt=0.0005, thr=15.0, tauS=0.1, stim=(0.0, None), seed=0):
+      g = np.random.default_rng(seed)
+      S1 = np.full(n, 0.1); S2 = np.full(n, 0.1); N1 = np.zeros(n); N2 = np.zeros(n)
+      ch = np.full(n, -1); rt = np.full(n, np.nan)
+      for k in range(int(T / dt)):
+          t = k * dt
+          on = float(t >= stim[0] and (stim[1] is None or t < stim[1]))
+          I1, I2 = JA * mu0 * (1 + c / 100) * on, JA * mu0 * (1 - c / 100) * on
+          ...
+          new = (ch < 0) & ((r1 > thr) | (r2 > thr))
+          ch[new] = np.where(r1[new] > r2[new], 1, 0); rt[new] = t
+      return ch, rt, r1, r2
+
+  cohs = [0.0, 3.2, 6.4, 12.8, 25.6, 51.2]
+  res = {}
+  for c in cohs:
+      ch, rt, _, _ = sim(c)
+      dec = ch >= 0
+      res[c] = ((ch[dec] == 1).mean(), np.nanmean(rt))
+      print(f"coherence {c:4.1f}%: decided {dec.mean():.2f}, accuracy {res[c][0]:.3f}, mean decision time {res[c][1]:.3f} s")
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3.5))
+  ax[0].semilogx([max(c, 1) for c in cohs], [res[c][0] for c in cohs], "o-"); ax[0].set_ylabel("accuracy")
+  ax[1].semilogx([max(c, 1) for c in cohs], [res[c][1] for c in cohs], "o-"); ax[1].set_ylabel("decision time (s)")
+  for a in ax: a.set_xlabel("coherence (%)")
+  plt.tight_layout(); plt.show()
+`}
+hint="x1 = J11 * S1 - J12 * S2 + I0 + I1 + N1; x2 = J11 * S2 - J12 * S1 + I0 + I2 + N2; r1, r2 = H(x1), H(x2); S1 += dt * (-S1 / tauS + (1 - S1) * gamma * r1) (likewise S2); N1 += -N1 * dt / tauA + np.sqrt(dt / tauA) * sigma * g.normal(size=n) (likewise N2)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  a_, b_, d_ = 270.0, 108.0, 0.154
+  gamma, J11, J12, I0, JA, mu0, tauA, sigma = 0.641, 0.2609, 0.0497, 0.3255, 5.2e-4, 30.0, 0.002, 0.02
+
+  def H(x):
+      return (a_ * x - b_) / (1 - np.exp(-d_ * (a_ * x - b_)))
+
+  def sim(c, n=300, T=1.5, dt=0.0005, thr=15.0, tauS=0.1, stim=(0.0, None), seed=0):
+      g = np.random.default_rng(seed)
+      S1 = np.full(n, 0.1); S2 = np.full(n, 0.1); N1 = np.zeros(n); N2 = np.zeros(n)
+      ch = np.full(n, -1); rt = np.full(n, np.nan)
+      for k in range(int(T / dt)):
+          t = k * dt
+          on = float(t >= stim[0] and (stim[1] is None or t < stim[1]))
+          I1, I2 = JA * mu0 * (1 + c / 100) * on, JA * mu0 * (1 - c / 100) * on
+          x1 = J11 * S1 - J12 * S2 + I0 + I1 + N1
+          x2 = J11 * S2 - J12 * S1 + I0 + I2 + N2
+          r1, r2 = H(x1), H(x2)
+          S1 += dt * (-S1 / tauS + (1 - S1) * gamma * r1)
+          S2 += dt * (-S2 / tauS + (1 - S2) * gamma * r2)
+          N1 += -N1 * dt / tauA + np.sqrt(dt / tauA) * sigma * g.normal(size=n)
+          N2 += -N2 * dt / tauA + np.sqrt(dt / tauA) * sigma * g.normal(size=n)
+          new = (ch < 0) & ((r1 > thr) | (r2 > thr))
+          ch[new] = np.where(r1[new] > r2[new], 1, 0); rt[new] = t
+      return ch, rt, r1, r2
+
+  cohs = [0.0, 3.2, 6.4, 12.8, 25.6, 51.2]
+  res = {}
+  for c in cohs:
+      ch, rt, _, _ = sim(c)
+      dec = ch >= 0
+      res[c] = ((ch[dec] == 1).mean(), np.nanmean(rt))
+      print(f"coherence {c:4.1f}%: decided {dec.mean():.2f}, accuracy {res[c][0]:.3f}, mean decision time {res[c][1]:.3f} s")
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3.5))
+  ax[0].semilogx([max(c, 1) for c in cohs], [res[c][0] for c in cohs], "o-"); ax[0].set_ylabel("accuracy")
+  ax[1].semilogx([max(c, 1) for c in cohs], [res[c][1] for c in cohs], "o-"); ax[1].set_ylabel("decision time (s)")
+  for a in ax: a.set_xlabel("coherence (%)")
+  plt.tight_layout(); plt.show()
+`} />
+
+Accuracy climbs from chance at 0% to about 70% at 3.2%, 85% at 6.4% and essentially perfect above 12.8%, and decision times fall from about 0.42 to 0.17 s. These are the shapes of the monkeys' psychometric and chronometric functions, produced by a circuit with no explicit integrator and no explicit bound. The model is more accurate than monkeys at middle coherences with these parameters; more noise or a weaker stimulus gain would bring it into line. Like the data, and unlike the simple diffusion model, it also makes slower errors at low coherence, because errors tend to happen on trials where neither population pulls ahead for a long time.
+
+<Step n={3} title="Remembering the choice" minutes={25} />
+
+<PyCell id="memory" title="Activity after the stimulus ends" tests={String.raw`
+  import numpy as np
+  def test_persist():
+      "two seconds after the stimulus ends, the winning population fires above 15 Hz and the loser below 2 Hz"
+      assert np.mean(np.maximum(r1m, r2m)) > 15 and np.mean(np.minimum(r1m, r2m)) < 2
+  def test_spont():
+      "without any stimulus, neither population leaves its spontaneous state"
+      assert np.mean(r1s) < 5 and np.mean(r2s) < 5
+`} prompt="Run 200 trials with 12.8% coherence shown only for the first second of a 3-second trial, and 200 trials with no stimulus at all. Report the final rates."
+code={String.raw`
+  _, _, r1m, r2m = ...
+  _, _, r1s, r2s = ...
+  print(f"stimulus off for 2 s: winner {np.mean(np.maximum(r1m, r2m)):.1f} Hz, loser {np.mean(np.minimum(r1m, r2m)):.1f} Hz")
+  print(f"no stimulus: populations at {np.mean(r1s):.1f} and {np.mean(r2s):.1f} Hz")
+`}
+hint="sim(12.8, n=200, T=3.0, stim=(0.0, 1.0)) and sim(0.0, n=200, T=2.0, stim=(5.0, None)), which never switches the stimulus on."
+solution={String.raw`
+  _, _, r1m, r2m = sim(12.8, n=200, T=3.0, stim=(0.0, 1.0))
+  _, _, r1s, r2s = sim(0.0, n=200, T=2.0, stim=(5.0, None))
+  print(f"stimulus off for 2 s: winner {np.mean(np.maximum(r1m, r2m)):.1f} Hz, loser {np.mean(np.minimum(r1m, r2m)):.1f} Hz")
+  print(f"no stimulus: populations at {np.mean(r1s):.1f} and {np.mean(r2s):.1f} Hz")
+`} />
+
+Two seconds after the stimulus has gone, the winning population still fires at about 20 Hz and the loser at under 1 Hz: the network remembers its choice. Without any stimulus, both stay at their spontaneous 2 Hz and no decision is made, so the high state is reached only when input pushes the network out of the low one. The network is bistable, and in this the decision circuit is the same kind of object as the working-memory circuits of Week 46.
+
+<Step n={4} title="Why NMDA?" minutes={25} />
+
+Wang argued that the long NMDA time constant is essential. Replace it with a fast, AMPA-like 20 ms and see what is left.
+
+<PyCell id="nmda" title="Fast synapses" tests={String.raw`
+  import numpy as np
+  def test_fast():
+      "with a 20 ms synaptic time constant, the network almost never reaches a decision at 6.4% coherence"
+      assert dec_fast < 0.05 and dec_slow > 0.95
+`} prompt="Run 400 trials at 6.4% coherence with tauS = 0.1 and with tauS = 0.02, and report the fraction of trials that reach the 15 Hz threshold."
+code={String.raw`
+  ch_s, _, _, _ = ...
+  ch_f, _, _, _ = ...
+  dec_slow, dec_fast = (ch_s >= 0).mean(), (ch_f >= 0).mean()
+  print(f"decided: slow synapses {dec_slow:.2f}, fast synapses {dec_fast:.2f}")
+`}
+hint="sim(6.4, n=400, tauS=0.1) and sim(6.4, n=400, tauS=0.02)."
+solution={String.raw`
+  ch_s, _, _, _ = sim(6.4, n=400, tauS=0.1)
+  ch_f, _, _, _ = sim(6.4, n=400, tauS=0.02)
+  dec_slow, dec_fast = (ch_s >= 0).mean(), (ch_f >= 0).mean()
+  print(f"decided: slow synapses {dec_slow:.2f}, fast synapses {dec_fast:.2f}")
+`} />
+
+With 100 ms synapses every trial reaches a decision; with 20 ms synapses none do. A fast synapse lets the gating variable track the rate almost instantly, so the recurrent drive is too small to lift a population into the high state: the decision attractors disappear along with the long integration window. Wang's prediction that NMDA receptors matter for both slow integration and persistent activity has been supported by studies in which blocking NMDA receptors in monkey prefrontal cortex reduced persistent activity (Wang and colleagues, 2013).
+
+<Bridge title="Integration, commitment and memory in one circuit"
+  neuro="Attractor models explain build-up activity, the threshold-like convergence before the response, persistent activity after the stimulus, and why errors and slow decisions occur together. They predict that NMDA receptor blockade should impair both integration and working memory, which pharmacological studies in prefrontal cortex support."
+  ai="A recurrent network with self-excitation and mutual inhibition is a soft winner-take-all, the mechanism behind attention-like selection and many models of action selection. Trained recurrent networks often find similar solutions: slow points along which evidence is integrated, flanked by attractors for the choices.">
+
+Slow recurrent excitation and competition let a network add up evidence, commit, and remember the result.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In Wang's model, the two choice populations compete through...", options: ["Shared inhibitory neurons", "Direct excitation", "Dopamine", "Gap junctions"], answer: 0, explain: "Mutual inhibition via interneurons." },
+  { q: "The slow integration in the model comes from...", options: ["NMDA receptor time constants", "Membrane time constants", "AMPA receptors", "Axonal delays"], answer: 0, explain: "About 100 ms." },
+  { q: "The reduced Wong-Wang model has variables...", options: ["Two NMDA gating variables", "2,000 voltages", "One rate", "Four currents"], answer: 0, explain: "S₁ and S₂." },
+  { q: "After the stimulus is removed, the winner...", options: ["Stays in a high-activity attractor", "Decays to baseline", "Switches", "Oscillates"], answer: 0, explain: "Categorical working memory." },
+  { q: "Without any stimulus, the network...", options: ["Stays in its spontaneous state", "Always decides", "Explodes", "Oscillates"], answer: 0, explain: "The low state is stable." },
+  { q: "With fast 20 ms synapses, the network...", options: ["Fails to reach a decision state", "Decides faster and better", "Is unchanged", "Becomes a perfect integrator"], answer: 0, explain: "Recurrent drive is too weak to sustain the high state." },
+  { q: "A key difference from the diffusion model is...", options: ["Integration is leaky and commitment arises from attractor dynamics", "There is no noise", "There is no input", "It cannot make errors"], answer: 0, explain: "No separate bound is needed." },
+  { q: "The decision threshold in the reduced model is...", options: ["A population rate of 15 Hz", "A membrane voltage", "S = 1", "Fixed time"], answer: 0, explain: "Mirroring LIP convergence." },
+]} />
+
+<Flashcards cards={[
+  { front: "Reduced Wong-Wang dynamics?", back: "$\\dot S_i = -S_i/\\tau_S + (1 - S_i)\\gamma H(x_i)$, with $x_1 = J_{11}S_1 - J_{12}S_2 + I_0 + I_1 + I_{\\text{noise}}$." },
+  { front: "Why attractors?", back: "Self-excitation plus mutual inhibition create two high-activity states; noise and input decide which one the network falls into." },
+  { front: "Categorical working memory?", back: "The winning state persists after the stimulus, holding the choice." },
+  { front: "Role of NMDA?", back: "Slow synaptic gating gives a long integration time and enough sustained recurrent drive for the decision states." },
+  { front: "Attractor against diffusion model?", back: "Attractor: leaky, nonlinear, commitment emerges. Diffusion: perfect integration with an explicit bound." },
+]} />
+
+<Predict revisit question="The stimulus ends after one second. Do both populations return to baseline, or does one stay high?" />
+
+<Key title="Before you go">
+<ul>
+<li>Competing populations with slow recurrent excitation integrate and then commit.</li>
+<li>The reduced model reproduces accuracy and response time curves.</li>
+<li>The decision state persists after the stimulus, a form of working memory.</li>
+<li>Slow NMDA synapses are needed for both integration and the decision states.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Wang (2002), <em>Probabilistic decision making by slow reverberation in cortical circuits</em>.</li>
+<li>Wong and Wang (2006), <em>A recurrent network mechanism of time integration in perceptual decisions</em>, Journal of Neuroscience 26(4), 1314 to 1328.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="The attractor model commits to a choice and holds it, so evidence that arrives after commitment is ignored. Design a task that would test whether people stop using evidence once they have committed, and say what the attractor model and the diffusion model each predict." />

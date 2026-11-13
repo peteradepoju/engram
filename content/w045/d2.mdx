@@ -1,0 +1,244 @@
+export const meta = {
+  title: "Neurons that accumulate: LIP and the random-dot task",
+  intro: "In the random-dot motion task a monkey watches a patch of moving dots, a fraction of which move coherently left or right, and reports the direction with an eye movement to one of two targets. Shadlen and Newsome recorded from the lateral intraparietal area (LIP), where neurons respond in anticipation of eye movements into their response field, and found in 2001 that during the decision their firing rates rose or fell gradually, faster for stronger motion, as if they were integrating the evidence provided by motion-sensitive neurons in area MT. Roitman and Shadlen (2002) then showed that, in a reaction-time version, the rise ended at a fixed level just before the saccade, whatever the motion strength, which looks like an accumulator reaching a bound. Today you build model LIP neurons, reproduce both findings, and meet the challenge from a model in which single neurons step rather than ramp.",
+  goals: [
+    "Describe the random-dot task and the roles of MT and LIP",
+    "Simulate accumulator neurons and show that their build-up rate scales with coherence",
+    "Show the convergence of response-aligned activity to a common level",
+    "Explain why trial averages cannot distinguish ramping from stepping, and what can",
+  ],
+  plan: [
+    { label: "Predict and the experiments", minutes: 20 },
+    { label: "Ramping with coherence", minutes: 30 },
+    { label: "Aligned to the response", minutes: 25 },
+    { label: "Ramps or steps?", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "shadlen-newsome-2001",
+};
+
+<Predict question="On every trial a neuron jumps abruptly from 20 to 50 spikes per second at a random moment, earlier for stronger motion. Averaged over many trials, what does its firing rate look like: a step, a smooth ramp, or flat?" />
+
+<Step n={1} title="From motion to decision" minutes={20} />
+
+The random-dot task separates the evidence from the decision. Direction-selective neurons in area MT respond to the motion itself, with firing rates that grow roughly linearly with coherence in their preferred direction; Britten, Shadlen, Newsome and Movshon (1992) showed that single MT neurons can be about as sensitive as the monkey, and microstimulation of MT biases choices (Salzman, Britten and Newsome, 1990). But MT responses are steady during the stimulus; they do not accumulate. Something downstream must turn a stream of momentary evidence into a decision.
+
+Shadlen and Newsome (2001) recorded from LIP while monkeys viewed motion for a fixed duration. When the motion favoured the target in a neuron's response field, the firing rate rose; when it favoured the other target, it fell; and the slope of these changes grew with coherence. In the reaction-time version (Roitman and Shadlen, 2002), activity rose until about 70 ms before the saccade, reaching a similar level on every trial in which the monkey chose the response-field target. Both properties are what an accumulator with a bound would show, and the comparison with the diffusion model is the subject of Gold and Shadlen's 2007 review that you read in Week 24.
+
+<Video id="kLBnY-COlMo" title="Perceptual Decision Making" by="Wulfram Gerstner (EPFL, Neuronal Dynamics)" note="Gerstner describes the random-dot motion task and the recordings from MT and LIP that made it the standard paradigm for studying decisions." />
+
+<Step n={2} title="Ramping with coherence" minutes={30} />
+
+Model each LIP neuron's rate as a baseline plus a gain times accumulated evidence, $\lambda(t) = 20 + 30\,x(t)$ spikes per second, where $x$ starts integrating 200 ms after motion onset (the latency of the build-up in LIP), drifts at a rate proportional to coherence, and stops at a bound of $\pm 1$.
+
+<Figure caption="Model LIP activity. Left: averages aligned to motion onset, for four coherences. Right: the same trials aligned to the response. Change the bound and the latency." credit="Interactive figure by Engram, after Roitman and Shadlen (2002).">
+  <LIPRamps />
+</Figure>
+
+<PyCell id="ramp" title="Build-up rate and coherence" tests={String.raw`
+  import numpy as np
+  def test_slopes():
+      "the build-up slope increases with coherence and is near zero at 0%"
+      s = [slope[c] for c in cohs]
+      assert all(np.diff(s) > 0) and abs(s[0]) < 10
+`} prompt="Complete trials(c): on each 5 ms step after the latency, add k c dt plus noise to every undecided trial's x, stop trials whose |x| reaches 1, and record the rate 20 + 30 x (clipped at zero). Then measure the slope of the trial-averaged rate between 300 and 450 ms."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2001)
+  dt, lat, k = 0.005, 0.2, 8.0
+  T = int(1.0 / dt); time_ = np.arange(T) * dt
+
+  def trials(c, n=400):
+      x = np.zeros(n); rate = np.zeros((n, T)); done = np.zeros(n, bool); rt = np.full(n, np.nan)
+      for i in range(T):
+          if time_[i] >= lat:
+              idx = ~done
+              ...
+          rate[:, i] = np.clip(20 + 30 * x, 0, None)
+      return rate, rt
+
+  cohs = [0.0, 0.128, 0.256, 0.512]
+  data, slope = {}, {}
+  i1, i2 = int(0.3 / dt), int(0.45 / dt)
+  for c in cohs:
+      rate, rt = trials(c); data[c] = (rate, rt)
+      m = rate.mean(0); slope[c] = (m[i2] - m[i1]) / 0.15
+      plt.plot(time_, m, label=f"{100 * c:.1f}%")
+  print({f"{100 * c:.1f}%": round(s, 1) for c, s in slope.items()}, "spikes/s per second")
+  plt.xlabel("time from motion onset (s)"); plt.ylabel("rate (spikes/s)"); plt.legend(); plt.show()
+`}
+hint="Inside: x[idx] += k * c * dt + 0.6 * np.sqrt(dt) * r.normal(size=idx.sum()); hit = idx & (np.abs(x) >= 1); done |= hit; rt[hit] = time_[i]."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2001)
+  dt, lat, k = 0.005, 0.2, 8.0
+  T = int(1.0 / dt); time_ = np.arange(T) * dt
+
+  def trials(c, n=400):
+      x = np.zeros(n); rate = np.zeros((n, T)); done = np.zeros(n, bool); rt = np.full(n, np.nan)
+      for i in range(T):
+          if time_[i] >= lat:
+              idx = ~done
+              x[idx] += k * c * dt + 0.6 * np.sqrt(dt) * r.normal(size=idx.sum())
+              hit = idx & (np.abs(x) >= 1); done |= hit; rt[hit] = time_[i]
+          rate[:, i] = np.clip(20 + 30 * x, 0, None)
+      return rate, rt
+
+  cohs = [0.0, 0.128, 0.256, 0.512]
+  data, slope = {}, {}
+  i1, i2 = int(0.3 / dt), int(0.45 / dt)
+  for c in cohs:
+      rate, rt = trials(c); data[c] = (rate, rt)
+      m = rate.mean(0); slope[c] = (m[i2] - m[i1]) / 0.15
+      plt.plot(time_, m, label=f"{100 * c:.1f}%")
+  print({f"{100 * c:.1f}%": round(s, 1) for c, s in slope.items()}, "spikes/s per second")
+  plt.xlabel("time from motion onset (s)"); plt.ylabel("rate (spikes/s)"); plt.legend(); plt.show()
+`} />
+
+The average rate is flat for the first 200 ms and then rises with a slope of about 29, 58 and 100 spikes per second per second at 12.8, 25.6 and 51.2% coherence, close to proportional to coherence; at 0% it stays flat on average, because upward and downward drifts cancel across trials. This proportionality between coherence and build-up rate is the central observation of Shadlen and Newsome. Note that the average at high coherence bends over as more trials reach the bound and stop rising: averages aligned to stimulus onset mix trials at different stages of the decision.
+
+<Step n={3} title="Aligned to the response" minutes={25} />
+
+<PyCell id="aligned" title="A common level at the decision" tests={String.raw`
+  import numpy as np
+  def test_common():
+      "on trials ending at the upper bound, the rate at the decision is within 1 spike/s of 50 at every coherence"
+      assert all(abs(final[c] - 50) < 1 for c in cohs)
+  def test_rt():
+      "decisions are faster at higher coherence"
+      assert mean_rt[0.512] < mean_rt[0.128]
+`} prompt="For each coherence, take the trials that reached the upper bound, find each one's rate at its decision time and average them; also record the mean decision time."
+code={String.raw`
+  final, mean_rt = {}, {}
+  for c in cohs:
+      rate, rt = data[c]
+      ...
+      print(f"{100 * c:5.1f}%: rate at decision {final[c]:.1f} spikes/s, mean decision time {mean_rt[c]:.3f} s")
+`}
+hint="up = np.where(~np.isnan(rt))[0]; up = up[rate[up, (rt[up] / dt).astype(int)] > 35]; final[c] = rate[up, (rt[up] / dt).astype(int)].mean(); mean_rt[c] = np.nanmean(rt)."
+solution={String.raw`
+  final, mean_rt = {}, {}
+  for c in cohs:
+      rate, rt = data[c]
+      up = np.where(~np.isnan(rt))[0]
+      idx = (rt[up] / dt).astype(int)
+      keep = rate[up, idx] > 35
+      final[c] = rate[up[keep], idx[keep]].mean()
+      mean_rt[c] = np.nanmean(rt)
+      print(f"{100 * c:5.1f}%: rate at decision {final[c]:.1f} spikes/s, mean decision time {mean_rt[c]:.3f} s")
+`} />
+
+Aligned to each trial's own decision, the rate is about 51 spikes per second at every coherence, while mean decision times range from 0.45 to 0.77 s. Stronger evidence gets there sooner but not higher. In the data the common level was reached about 70 ms before the saccade, which is why it was read as a threshold that triggers the movement. Response alignment is the analysis that revealed it; averaging aligned to stimulus onset would have hidden it.
+
+<Step n={4} title="Ramps or steps?" minutes={30} />
+
+Latimer, Yates, Meister, Huk and Pillow (2015) proposed a different account of the same averages. Suppose each neuron, on each trial, sits at a baseline and then jumps once to a high or low state at a random time, earlier and more often upwards for stronger motion. Averaged over trials, the jumps at different times blend into a smooth ramp. Their model fitted many LIP neurons better than a diffusion-to-bound model, and Shadlen and colleagues (2016) and Zoltowski and colleagues (2019) have since argued about how to tell the two apart. The key is that the two models differ in how the activity varies across trials, not in its average.
+
+<PyCell id="steps" title="Same mean, different variance" tests={String.raw`
+  import numpy as np
+  def test_mean():
+      "both models' averages rise smoothly over the trial"
+      for m in [step_rate.mean(0), ramp_rate.mean(0)]:
+          assert m[-1] - m[int(0.3 / dt)] > 3
+  def test_var():
+      "mid-trial, the step model's across-trial variance is at least three times the ramp model's"
+      i = int(0.5 / dt)
+      assert step_rate[:, i].var() > 3 * ramp_rate[:, i].var()
+`} prompt="Write step_trials(c): each trial's rate is 20 until a step time (the latency plus an exponential delay with rate 2 + 20 c per second), then 50 with probability 0.5 + 0.75 c and 5 otherwise. Compare means and across-trial variances with the ramping model at 25.6% coherence."
+code={String.raw`
+  def step_trials(c, n=400):
+      rate = np.full((n, T), 20.0)
+      ts = lat + r.exponential(1 / (2 + 20 * c), n)
+      up = r.random(n) < 0.5 + 0.75 * c
+      for j in range(n):
+          ...
+      return rate
+
+  step_rate = step_trials(0.256); ramp_rate = data[0.256][0]
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3.5))
+  ax[0].plot(time_, ramp_rate.mean(0), label="ramp"); ax[0].plot(time_, step_rate.mean(0), label="step"); ax[0].set_title("trial average"); ax[0].legend()
+  ax[1].plot(time_, ramp_rate.var(0), label="ramp"); ax[1].plot(time_, step_rate.var(0), label="step"); ax[1].set_title("variance across trials")
+  for a_ in ax: a_.set_xlabel("time (s)")
+  plt.show()
+  i = int(0.5 / dt)
+  print(f"at 0.5 s: mean ramp {ramp_rate[:, i].mean():.1f}, step {step_rate[:, i].mean():.1f}; variance ramp {ramp_rate[:, i].var():.0f}, step {step_rate[:, i].var():.0f}")
+`}
+hint="i = int(ts[j] / dt); if i < T: rate[j, i:] = 50 if up[j] else 5."
+solution={String.raw`
+  def step_trials(c, n=400):
+      rate = np.full((n, T), 20.0)
+      ts = lat + r.exponential(1 / (2 + 20 * c), n)
+      up = r.random(n) < 0.5 + 0.75 * c
+      for j in range(n):
+          i = int(ts[j] / dt)
+          if i < T:
+              rate[j, i:] = 50 if up[j] else 5
+      return rate
+
+  step_rate = step_trials(0.256); ramp_rate = data[0.256][0]
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3.5))
+  ax[0].plot(time_, ramp_rate.mean(0), label="ramp"); ax[0].plot(time_, step_rate.mean(0), label="step"); ax[0].set_title("trial average"); ax[0].legend()
+  ax[1].plot(time_, ramp_rate.var(0), label="ramp"); ax[1].plot(time_, step_rate.var(0), label="step"); ax[1].set_title("variance across trials")
+  for a_ in ax: a_.set_xlabel("time (s)")
+  plt.show()
+  i = int(0.5 / dt)
+  print(f"at 0.5 s: mean ramp {ramp_rate[:, i].mean():.1f}, step {step_rate[:, i].mean():.1f}; variance ramp {ramp_rate[:, i].var():.0f}, step {step_rate[:, i].var():.0f}")
+`} />
+
+At half a second the two models' average rates differ by only a few spikes per second, and both rise smoothly when averaged. Their variances do not: across trials the stepping model's rate varies five times as much, because each trial is either at 5, 20 or 50 spikes per second, while the ramping trials are spread continuously around the mean. Churchland and colleagues (2011) used a related measure, the variance of the latent rate after removing Poisson noise, and found that it grew over time in a way consistent with diffusion. Latimer and colleagues fitted both models to spike trains directly and favoured steps for many neurons. Both analyses depend on assumptions about spiking noise, which is why the question is still open.
+
+<Callout kind="research">
+
+Two later lines of work have reshaped the debate. Inactivating LIP, unexpectedly, had little effect on monkeys' choices in the motion task (Katz and colleagues, 2016), suggesting that LIP reflects a decision computed in a wider network rather than being its sole site. And recording many neurons at once with Neuropixels now lets the decision variable be read out on single trials from the population, and such studies have reported drift-like single-trial dynamics. Population recordings answer questions that trial averages of single neurons could not.
+
+</Callout>
+
+<Bridge title="A decision variable in the brain"
+  neuro="LIP, frontal eye fields, superior colliculus and striatum all carry signals that build up with evidence and predict the choice. Whether any one area is necessary, and whether single neurons ramp or step, are still debated."
+  ai="Recurrent networks trained on the random-dot task develop units that integrate evidence and line attractors along which the decision variable moves (Mante and colleagues, 2013, Week 46). Analysing them gives a reference for what to look for in the brain.">
+
+Neurons downstream of the evidence carry its running total, at least on average.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "MT neurons during the random-dot task...", options: ["Respond to the momentary motion without accumulating", "Accumulate evidence", "Encode the saccade", "Do not respond"], answer: 0, explain: "Steady responses scaling with coherence." },
+  { q: "LIP neurons' build-up rate...", options: ["Increases with coherence", "Is independent of coherence", "Decreases with coherence", "Is zero"], answer: 0, explain: "Shadlen and Newsome (2001)." },
+  { q: "Aligned to the saccade, LIP activity...", options: ["Reaches a similar level regardless of coherence", "Depends strongly on coherence", "Falls to zero", "Is random"], answer: 0, explain: "Roitman and Shadlen (2002)." },
+  { q: "Microstimulation of MT...", options: ["Biases choices towards the stimulated neurons' preferred direction", "Has no effect", "Abolishes choices", "Reverses all choices"], answer: 0, explain: "Salzman et al. (1990)." },
+  { q: "A stepping model can produce...", options: ["Trial averages that look like ramps", "Only step-like averages", "No averages", "Decreasing averages"], answer: 0, explain: "Steps at different times blend." },
+  { q: "Ramping and stepping models differ most in...", options: ["Across-trial variance and single-trial dynamics", "Mean rates", "Baseline", "Latency"], answer: 0, explain: "Latimer et al. (2015)." },
+  { q: "Inactivating LIP in the motion task...", options: ["Had little effect on choices", "Abolished choices", "Reversed choices", "Caused blindness"], answer: 0, explain: "Katz et al. (2016)." },
+  { q: "The build-up in LIP starts about...", options: ["200 ms after motion onset", "Immediately", "1 s after onset", "At the saccade"], answer: 0, explain: "The latency used in the model." },
+]} />
+
+<Flashcards cards={[
+  { front: "Random-dot motion task?", back: "A fraction of dots move coherently; the subject reports direction. Coherence controls difficulty." },
+  { front: "MT against LIP?", back: "MT: momentary motion evidence. LIP: activity that builds up with accumulated evidence towards a saccade target." },
+  { front: "Roitman and Shadlen (2002)?", back: "In the reaction-time task, LIP build-up ends at a common level before the saccade, like a bound." },
+  { front: "Ramping against stepping?", back: "Same trial averages; stepping predicts larger and differently timed across-trial variance and abrupt single-trial jumps." },
+  { front: "Why population recordings help?", back: "They let the decision variable be read out on single trials, which trial averages of single neurons cannot provide." },
+]} />
+
+<Predict revisit question="A neuron jumps abruptly at a random time each trial. What does its trial average look like?" />
+
+<Key title="Before you go">
+<ul>
+<li>MT supplies momentary evidence; LIP activity resembles its running sum.</li>
+<li>Build-up rate scales with coherence and ends at a common level before the response.</li>
+<li>Trial averages cannot distinguish ramps from steps; variances and single trials can.</li>
+<li>LIP reflects the decision but may not be necessary for it.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Shadlen and Newsome (2001), <em>Neural basis of a perceptual decision in the parietal cortex (area LIP) of the rhesus monkey</em>.</li>
+<li>Roitman and Shadlen (2002), <em>Response of neurons in the lateral intraparietal area during a combined visual discrimination reaction time task</em>, Journal of Neuroscience 22(21), 9475 to 9489.</li>
+<li>Latimer, Yates, Meister, Huk and Pillow (2015), <em>Single-trial spike trains in parietal cortex reveal discrete steps during decision-making</em>, Science 349(6244), 184 to 187.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="LIP activity looks like accumulated evidence, yet inactivating LIP barely changes choices. List three explanations that would reconcile these findings, and for each, describe what you would expect to see if you recorded from LIP and another area at the same time." />

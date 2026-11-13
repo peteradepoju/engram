@@ -1,0 +1,241 @@
+export const meta = {
+  title: "Forge: Week 45 challenge, quiz and deep read",
+  intro: "This week followed a decision from behaviour to circuit and back: the diffusion model as a measuring instrument, LIP neurons whose activity resembles accumulated evidence, an attractor network that integrates and commits, the signatures of priors and urgency, and confidence as the probability of being right. Today's challenge does what Palmer, Huk and Shadlen did in 2005: fit one diffusion model, with a single sensitivity parameter, to accuracy and response time across all motion strengths at once. Then it confronts the simple model with a fact it cannot explain, slow errors, and fixes it with one more parameter. Then the quiz, and a critique of Shadlen and Newsome's LIP paper.",
+  goals: [
+    "Fit a diffusion model jointly to psychometric and chronometric functions",
+    "Explain why a single sensitivity parameter links accuracy and response time",
+    "Show that trial-to-trial drift variability produces slow errors",
+    "Critique the evidence that LIP integrates sensory evidence",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "shadlen-newsome-2001",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run. Use bounds at $\pm a$ and noise of unit variance per second.
+
+1. With drift $v = 1$ and $a = 1$, what is the probability of a correct choice, $1/(1 + e^{-2va})$?
+2. With the same values, what is the mean decision time, $(a/v)\tanh(va)$?
+3. With zero drift and $a = 1$, what is the mean decision time, $a^2$?
+
+<PyCell code={String.raw`
+  import numpy as np
+  print("1.", round(1 / (1 + np.exp(-2)), 3))
+  print("2.", round(np.tanh(1.0), 3), "s")
+  print("3.", 1.0, "s")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: one model for accuracy and time.** Palmer, Huk and Shadlen (2005) proposed that the drift is proportional to coherence, $v = kc$, so that a single sensitivity $k$, a bound $a$ and a non-decision time $T_{nd}$ must explain both the psychometric function (accuracy against coherence) and the chronometric function (mean response time against coherence). With bounds at $\pm a$:
+
+$$
+P_c(c) = \frac{1}{1 + e^{-2kca}}, \qquad \overline{RT}(c) = \frac{a}{kc}\tanh(kca) + T_{nd}, \qquad \overline{RT}(0) = a^2 + T_{nd}.
+$$
+
+Simulate 600 trials at each of six coherences from a model with $k = 10$, $a = 0.8$ and $T_{nd} = 0.35$ s, then recover the parameters by minimising the squared errors of both curves together.
+
+<PyCell id="partA" title="Part A: fitting both curves" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "the fit recovers k within 1.5, a within 0.08 and T_nd within 0.03 s"
+      k_, a_, t_ = res.x
+      assert abs(k_ - 10) < 1.5 and abs(a_ - 0.8) < 0.08 and abs(t_ - 0.35) < 0.03
+  def test_curves():
+      "the fitted curves pass within 0.05 of every accuracy and 60 ms of every mean RT"
+      P, M = pred(res.x)
+      assert np.abs(P - acc).max() < 0.05 and np.abs(M - mrt).max() < 0.06
+`} prompt="Write pred(p), returning predicted accuracy and mean RT at each coherence for p = (k, a, T_nd), using a^2 for the zero-drift mean decision time. Fit with Nelder-Mead on the summed squared errors, each scaled by 0.0004."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  r = np.random.default_rng(2005)
+  cohs = np.array([0, 0.032, 0.064, 0.128, 0.256, 0.512])
+
+  def sim(k, a, ter, n=600, dt=0.001, eta=0.0):
+      acc, mrt, out = [], [], []
+      for c in cohs:
+          v = k * c + eta * r.normal(size=n); x = np.zeros(n); done = np.zeros(n, bool); ch = np.zeros(n); rt = np.zeros(n); i = 0
+          while not done.all() and i < 10000:
+              idx = ~done; x[idx] += v[idx] * dt + np.sqrt(dt) * r.normal(size=idx.sum()); i += 1
+              hit = idx & (np.abs(x) >= a); ch[hit] = np.sign(x[hit]); rt[hit] = i * dt + ter; done |= hit
+          cor = np.where(c == 0, r.random(n) < 0.5, ch > 0)
+          acc.append(cor.mean()); mrt.append(rt.mean()); out.append((cor, rt))
+      return np.array(acc), np.array(mrt), out
+
+  acc, mrt, _ = sim(10.0, 0.8, 0.35)
+
+  def pred(p):
+      k, a, ter = p
+      v = k * cohs
+      ...
+      return P, M
+
+  def loss(p):
+      P, M = pred(p)
+      return np.sum((P - acc) ** 2 / 0.0004) + np.sum((M - mrt) ** 2 / 0.0004)
+
+  res = minimize(loss, [5, 1, 0.2], method="Nelder-Mead", options={"maxiter": 2000, "xatol": 1e-4, "fatol": 1e-6})
+  print("fitted k, a, T_nd:", np.round(res.x, 3))
+  P, M = pred(res.x)
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3.5))
+  ax[0].plot(cohs, acc, "o"); ax[0].plot(cohs, P); ax[0].set_ylabel("accuracy")
+  ax[1].plot(cohs, mrt, "o"); ax[1].plot(cohs, M); ax[1].set_ylabel("mean RT (s)")
+  for a_ in ax: a_.set_xlabel("coherence")
+  plt.tight_layout(); plt.show()
+`}
+hint="P = 1 / (1 + np.exp(-2 * v * a)); md = np.where(v > 1e-9, (a / np.maximum(v, 1e-9)) * np.tanh(v * a), a ** 2); M = md + ter."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  r = np.random.default_rng(2005)
+  cohs = np.array([0, 0.032, 0.064, 0.128, 0.256, 0.512])
+
+  def sim(k, a, ter, n=600, dt=0.001, eta=0.0):
+      acc, mrt, out = [], [], []
+      for c in cohs:
+          v = k * c + eta * r.normal(size=n); x = np.zeros(n); done = np.zeros(n, bool); ch = np.zeros(n); rt = np.zeros(n); i = 0
+          while not done.all() and i < 10000:
+              idx = ~done; x[idx] += v[idx] * dt + np.sqrt(dt) * r.normal(size=idx.sum()); i += 1
+              hit = idx & (np.abs(x) >= a); ch[hit] = np.sign(x[hit]); rt[hit] = i * dt + ter; done |= hit
+          cor = np.where(c == 0, r.random(n) < 0.5, ch > 0)
+          acc.append(cor.mean()); mrt.append(rt.mean()); out.append((cor, rt))
+      return np.array(acc), np.array(mrt), out
+
+  acc, mrt, _ = sim(10.0, 0.8, 0.35)
+
+  def pred(p):
+      k, a, ter = p
+      v = k * cohs
+      P = 1 / (1 + np.exp(-2 * v * a))
+      md = np.where(v > 1e-9, (a / np.maximum(v, 1e-9)) * np.tanh(v * a), a ** 2)
+      M = md + ter
+      return P, M
+
+  def loss(p):
+      P, M = pred(p)
+      return np.sum((P - acc) ** 2 / 0.0004) + np.sum((M - mrt) ** 2 / 0.0004)
+
+  res = minimize(loss, [5, 1, 0.2], method="Nelder-Mead", options={"maxiter": 2000, "xatol": 1e-4, "fatol": 1e-6})
+  print("fitted k, a, T_nd:", np.round(res.x, 3))
+  P, M = pred(res.x)
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3.5))
+  ax[0].plot(cohs, acc, "o"); ax[0].plot(cohs, P); ax[0].set_ylabel("accuracy")
+  ax[1].plot(cohs, mrt, "o"); ax[1].plot(cohs, M); ax[1].set_ylabel("mean RT (s)")
+  for a_ in ax: a_.set_xlabel("coherence")
+  plt.tight_layout(); plt.show()
+`} />
+
+The joint fit recovers $k \approx 10.5$, $a \approx 0.82$ and $T_{nd} \approx 0.36$ s, and both fitted curves pass through the data. Three parameters explain twelve numbers. The constraint is what makes the model testable: the same $k$ and $a$ that set how accuracy rises with coherence also fix how response time falls, so a model that fitted accuracy but missed the response times would be refuted. Palmer, Huk and Shadlen found that a single $k$ described both curves well for human observers across a range of motion durations and speed instructions.
+
+**Part B: slow errors.** In real data, errors at low and middle coherences are usually slower than correct responses, which the simple model cannot produce. Add trial-to-trial variability in drift: on each trial $v \sim \mathcal N(kc, \eta^2)$ with $\eta = 1.5$, and compare correct and error response times at 6.4% and 12.8% coherence with and without it.
+
+<PyCell id="partB" title="Part B: drift variability" tests={String.raw`
+  import numpy as np
+  def test_none():
+      "without drift variability, error and correct mean RTs differ by less than 40 ms"
+      assert all(abs(gap0[i]) < 0.04 for i in (2, 3))
+  def test_eta():
+      "with drift variability, errors are at least 50 ms slower than correct responses"
+      assert all(gap_eta[i] > 0.05 for i in (2, 3))
+`} prompt="Simulate with eta = 0 and eta = 1.5. For coherences 6.4% and 12.8% (indices 2 and 3), compute mean error RT minus mean correct RT."
+code={String.raw`
+  _, _, out0 = sim(10.0, 0.8, 0.35, n=1500)
+  _, _, out_eta = sim(10.0, 0.8, 0.35, n=1500, eta=1.5)
+
+  def gaps(out):
+      return [...]
+
+  gap0, gap_eta = gaps(out0), gaps(out_eta)
+  for i in (2, 3):
+      print(f"{100 * cohs[i]:.1f}%: error minus correct RT, no variability {1000 * gap0[i]:+.0f} ms, with variability {1000 * gap_eta[i]:+.0f} ms")
+`}
+hint="return [rt[~cor].mean() - rt[cor].mean() for cor, rt in out]."
+solution={String.raw`
+  _, _, out0 = sim(10.0, 0.8, 0.35, n=1500)
+  _, _, out_eta = sim(10.0, 0.8, 0.35, n=1500, eta=1.5)
+
+  def gaps(out):
+      return [rt[~cor].mean() - rt[cor].mean() for cor, rt in out]
+
+  gap0, gap_eta = gaps(out0), gaps(out_eta)
+  for i in (2, 3):
+      print(f"{100 * cohs[i]:.1f}%: error minus correct RT, no variability {1000 * gap0[i]:+.0f} ms, with variability {1000 * gap_eta[i]:+.0f} ms")
+`} />
+
+Without drift variability, errors and correct responses take the same time, within simulation noise of a few milliseconds, as the second derivation below proves. With $\eta = 1.5$, errors are 90 to 100 ms slower. Errors come disproportionately from trials whose drift happened to be weak, and weak-drift trials are slow; correct responses come disproportionately from strong-drift trials, which are fast. This is why Ratcliff's full model includes $\eta$, and why mean accuracy and RT alone cannot tell you whether the drift varies.
+
+**Part C (written).** Answer in your journal. First, Part A assumed drift proportional to coherence. Palmer and colleagues tested this by fitting each coherence separately; describe what you would expect to see if MT's responses saturated at high coherence, and how the joint fit would fail. Second, Day 3's attractor model and Day 1's diffusion model both fit psychometric and chronometric functions. Name one measurement, behavioural or neural, that would favour one over the other.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. Accuracy with symmetric bounds" task="For drift $v$, unit noise and bounds at $\pm a$ starting from 0, use the result of Week 24 for bounds at $0$ and $2a$ starting at $a$ to show that $P(\text{upper}) = 1/(1 + e^{-2va})$.">
+
+Shift the axis by $a$: bounds at $\pm a$ from 0 are bounds at $0$ and $2a$ from $a$. Week 24 gave, for bounds $0$ and $A$ starting at $z$, $P(\text{upper}) = \frac{1 - e^{-2vz}}{1 - e^{-2vA}}$ with unit noise.
+
+With $z = a$ and $A = 2a$: $P = \frac{1 - e^{-2va}}{1 - e^{-4va}} = \frac{1 - e^{-2va}}{(1 - e^{-2va})(1 + e^{-2va})} = \frac{1}{1 + e^{-2va}}$.
+
+The product $va$ alone sets accuracy, so doubling the bound has the same effect on accuracy as doubling the drift, but a very different effect on time.
+
+</Prove>
+
+<Prove title="2. Equal mean times for correct and error responses" task="In the simple diffusion model with an unbiased start, explain why correct and error responses have the same distribution of decision times.">
+
+Take any path that ends at $-a$ at time $t$. Reflect it through zero: it becomes a path ending at $+a$ at the same time $t$, and it has the same noise increments with the sign reversed.
+
+The likelihood of a path under drift $v$ is proportional to $\exp(v x_t - v^2 t/2)$ times a term that does not depend on $v$. For the original path $x_t = -a$, for the reflected one $x_t = +a$; the ratio of their likelihoods is $e^{2va}$, the same at every $t$.
+
+So the time distributions of upper and lower crossings differ only by a constant factor, which is absorbed when each is normalised: they are identical. Breaking the symmetry, by drift variability across trials or a biased start, is what makes errors slower or faster.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 45 quiz (15 questions)" questions={[
+  { q: "Boundary separation reflects...", options: ["Caution", "Stimulus strength", "Motor delay", "Confidence"], answer: 0, explain: "Day 1." },
+  { q: "EZ-diffusion needs...", options: ["Accuracy and the mean and variance of correct RTs", "Only accuracy", "Neural data", "The full distribution"], answer: 0, explain: "Day 1." },
+  { q: "A speed instruction mainly changes...", options: ["The bound", "The drift", "The non-decision time", "The prior"], answer: 0, explain: "Day 1." },
+  { q: "LIP build-up rate...", options: ["Increases with coherence", "Is constant", "Decreases with coherence", "Is absent"], answer: 0, explain: "Day 2." },
+  { q: "Response-aligned LIP activity...", options: ["Reaches a common level", "Depends on coherence", "Falls to zero", "Is noisy only"], answer: 0, explain: "Day 2." },
+  { q: "Ramping and stepping are distinguished by...", options: ["Across-trial variance and single trials", "Trial averages", "Mean RT", "Accuracy"], answer: 0, explain: "Day 2." },
+  { q: "Wang's model integrates slowly because of...", options: ["NMDA receptors", "AMPA receptors", "Gap junctions", "Dopamine"], answer: 0, explain: "Day 3." },
+  { q: "After the stimulus, the attractor network...", options: ["Holds its choice", "Resets", "Oscillates", "Switches choice"], answer: 0, explain: "Day 3." },
+  { q: "A starting-point bias is strongest in...", options: ["Fast responses", "Slow responses", "All equally", "No responses"], answer: 0, explain: "Day 4." },
+  { q: "A collapsing bound predicts accuracy...", options: ["Falls with RT within a condition", "Rises with RT", "Is constant", "Is perfect"], answer: 0, explain: "Day 4." },
+  { q: "Confidence is the probability that...", options: ["The choice is correct given the evidence", "The stimulus is strong", "The reward is large", "The bound is reached"], answer: 0, explain: "Day 5." },
+  { q: "With variable difficulty, longer elapsed time at fixed evidence means...", options: ["Lower confidence", "Higher confidence", "No change", "Certainty"], answer: 0, explain: "Day 5." },
+  { q: "Declined sure-target trials were...", options: ["More accurate than trials without the offer", "Less accurate", "Equally accurate", "Never correct"], answer: 0, explain: "Day 5." },
+  { q: "Palmer, Huk and Shadlen's model links accuracy and RT through...", options: ["A single sensitivity k with drift kc", "Separate fits per coherence", "Confidence", "Urgency"], answer: 0, explain: "Part A." },
+  { q: "Slow errors arise from...", options: ["Trial-to-trial drift variability", "Starting-point variability", "A higher bound", "Shorter non-decision time"], answer: 0, explain: "Part B." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Shadlen and Newsome (2001) its third pass and write your critique under the five headings. Focus on one question: **does the paper show that LIP integrates sensory evidence, or that its activity is consistent with integration?** Consider the fixed-duration design and what it can and cannot reveal about a bound; the selection of neurons with persistent, saccade-related activity and what that does to generality; the alternative that LIP reflects the planned eye movement or attention rather than the decision itself; how averaging across trials and neurons might hide single-trial dynamics (Day 2); and what later inactivation results imply about necessity. End with an experiment that would establish a causal role for LIP in accumulation rather than in reporting the outcome.
+
+<Callout kind="research">
+
+Combine Day 3 and Day 5: in the Wong-Wang model, is the difference between the two populations' activity at the end of a fixed-duration stimulus a calibrated confidence signal? Simulate fixed-duration trials, read out the difference, convert it to a probability of being correct by binning, and test whether a sure-target rule based on it reproduces Kiani and Shadlen's results.
+
+</Callout>
+
+<Key title="Week 45 review checklist">
+<ul>
+<li>I can simulate and fit the diffusion model and interpret its parameters.</li>
+<li>I can reproduce LIP build-up and response-aligned convergence, and explain ramp against step.</li>
+<li>I can simulate the reduced Wong-Wang model and explain the role of NMDA.</li>
+<li>I can tell starting-point from drift bias and identify collapsing-bound signatures.</li>
+<li>I can compute confidence, check calibration and reproduce the opt-out findings.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then write a short paragraph on which of this week's models you find most convincing as a description of how a monkey decides about moving dots, and what single experiment would most change your mind." />

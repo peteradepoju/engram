@@ -1,0 +1,206 @@
+export const meta = {
+  title: "Priors, urgency and collapsing bounds",
+  intro: "The basic diffusion model treats every decision as starting from neutral and ending at a fixed amount of evidence. Two extensions make it more realistic and more interesting. When one answer is more likely or more rewarding, a decision maker should be biased towards it, and the model offers two ways to do that, which leave different fingerprints in the data. And when some trials are hopeless, waiting for a fixed amount of evidence can waste time, so the amount demanded might fall as time passes. Drugowitsch, Moreno-Bote, Churchland, Shadlen and Pouget asked in 2012 whether people and monkeys behave as if evidence has a cost and bounds collapse. Today you simulate both extensions and learn to read their signatures in response times.",
+  goals: [
+    "Distinguish starting-point bias from drift bias by their effects on fast and slow responses",
+    "Simulate a collapsing bound and describe its effect on accuracy over time and on response time distributions",
+    "Explain the normative argument for collapsing bounds and urgency signals",
+    "Assess how strong the evidence for collapsing bounds is",
+  ],
+  plan: [
+    { label: "Predict and two kinds of bias", minutes: 20 },
+    { label: "Bias in fast and slow responses", minutes: 30 },
+    { label: "Collapsing bounds", minutes: 30 },
+    { label: "Do bounds collapse?", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "drugowitsch-2012",
+};
+
+<Predict question="A participant learns that 'right' is the correct answer on 70% of trials. If they handle this by starting their accumulation closer to the 'right' bound, will the bias towards 'right' be strongest in their fastest responses, their slowest, or equal throughout?" />
+
+<Step n={1} title="Two ways to be biased" minutes={20} />
+
+A prior expectation or an asymmetric payoff can enter the diffusion model in two places. A **starting-point bias** moves $z$ towards the favoured bound: the decision maker begins partway there. A **drift bias** adds a constant to the drift: every sample of evidence is read as slightly favouring one side. Both shift the proportion of choices. But they differ in when the bias acts. A starting-point shift matters most for decisions made after little accumulation, which are the fast ones; a drift bias accumulates with time and so acts on fast and slow decisions alike.
+
+The normative answer depends on the situation. For a known prior and a fixed stimulus strength, the optimal policy shifts the starting point by the log prior odds (Bogacz and colleagues, 2006). When stimulus strength varies from trial to trial, the optimal adjustment becomes partly time-dependent, and it can look like a drift bias (Hanks, Mazurek, Kiani, Hopp and Shadlen, 2011, who found such a dynamic bias signal in LIP).
+
+<Video id="7la4FoA--lM" title="Solutions of Decision Dynamics: Symmetric and Biased Case" by="Wulfram Gerstner (EPFL, Neuronal Dynamics)" note="Gerstner analyses a decision network when the two inputs are equal and when one is favoured, showing how bias changes the dynamics in the phase plane." />
+
+<Step n={2} title="Bias in fast and slow responses" minutes={30} />
+
+<Figure caption="Bias in the diffusion model. Choose a starting-point bias or a drift bias and see how the proportion of 'right' choices varies across response time bins, from fastest to slowest." credit="Interactive figure by Engram.">
+  <BiasSignatures />
+</Figure>
+
+<PyCell id="bias" title="Where the bias lives" tests={String.raw`
+  import numpy as np
+  def test_start():
+      "with a starting-point bias, the fastest third of responses is far more biased than the slowest"
+      assert p_start[0] - p_start[2] > 0.25
+  def test_drift():
+      "with a drift bias, the bias changes less than half as much across terciles"
+      assert (p_drift[0] - p_drift[2]) < 0.5 * (p_start[0] - p_start[2])
+  def test_matched():
+      "the two biases give similar overall accuracy"
+      assert abs(acc_start - acc_drift) < 0.03
+`} prompt="Complete ddm(): each 2 ms step adds drift plus noise to undecided trials and stops those that cross plus or minus bound(t). Then compute the proportion of 'right' (+1) choices in each response time tercile for a starting-point bias (z = 0.3) and a drift bias (+0.4)."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def ddm(v, bound, z=0.0, n=6000, dt=0.002, T=4.0, seed=0):
+      g = np.random.default_rng(seed)
+      x = np.full(n, z, float); done = np.zeros(n, bool); ch = np.zeros(n, int); rt = np.full(n, T)
+      for k in range(int(T / dt)):
+          t = (k + 1) * dt; idx = ~done
+          ...
+          B = bound(t); up = idx & (x >= B); lo = idx & (x <= -B)
+          ch[up] = 1; ch[lo] = -1; rt[up | lo] = t; done |= up | lo
+          if done.all():
+              break
+      ch[~done] = np.where(x[~done] >= 0, 1, -1)
+      return ch, rt
+
+  def by_tercile(values, rt):
+      q = np.quantile(rt, [1 / 3, 2 / 3])
+      return np.array([values[m].mean() for m in [rt <= q[0], (rt > q[0]) & (rt <= q[1]), rt > q[1]]])
+
+  stim = np.where(np.random.default_rng(1).random(6000) < 0.5, 1, -1)
+  v = 0.8 * stim
+  ch_s, rt_s = ddm(v, lambda t: 1.0, z=0.3)
+  ch_d, rt_d = ddm(v + 0.4, lambda t: 1.0)
+  p_start, p_drift = by_tercile(ch_s == 1, rt_s), by_tercile(ch_d == 1, rt_d)
+  acc_start, acc_drift = (ch_s == stim).mean(), (ch_d == stim).mean()
+  print("P(right) by tercile, starting-point bias:", np.round(p_start, 3), " accuracy", round(acc_start, 3))
+  print("P(right) by tercile, drift bias:         ", np.round(p_drift, 3), " accuracy", round(acc_drift, 3))
+`}
+hint="x[idx] += v[idx] * dt + np.sqrt(dt) * g.normal(size=idx.sum())."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def ddm(v, bound, z=0.0, n=6000, dt=0.002, T=4.0, seed=0):
+      g = np.random.default_rng(seed)
+      x = np.full(n, z, float); done = np.zeros(n, bool); ch = np.zeros(n, int); rt = np.full(n, T)
+      for k in range(int(T / dt)):
+          t = (k + 1) * dt; idx = ~done
+          x[idx] += v[idx] * dt + np.sqrt(dt) * g.normal(size=idx.sum())
+          B = bound(t); up = idx & (x >= B); lo = idx & (x <= -B)
+          ch[up] = 1; ch[lo] = -1; rt[up | lo] = t; done |= up | lo
+          if done.all():
+              break
+      ch[~done] = np.where(x[~done] >= 0, 1, -1)
+      return ch, rt
+
+  def by_tercile(values, rt):
+      q = np.quantile(rt, [1 / 3, 2 / 3])
+      return np.array([values[m].mean() for m in [rt <= q[0], (rt > q[0]) & (rt <= q[1]), rt > q[1]]])
+
+  stim = np.where(np.random.default_rng(1).random(6000) < 0.5, 1, -1)
+  v = 0.8 * stim
+  ch_s, rt_s = ddm(v, lambda t: 1.0, z=0.3)
+  ch_d, rt_d = ddm(v + 0.4, lambda t: 1.0)
+  p_start, p_drift = by_tercile(ch_s == 1, rt_s), by_tercile(ch_d == 1, rt_d)
+  acc_start, acc_drift = (ch_s == stim).mean(), (ch_d == stim).mean()
+  print("P(right) by tercile, starting-point bias:", np.round(p_start, 3), " accuracy", round(acc_start, 3))
+  print("P(right) by tercile, drift bias:         ", np.round(p_drift, 3), " accuracy", round(acc_drift, 3))
+`} />
+
+The two biases give almost the same overall accuracy, about 0.81 to 0.82, but they distribute the bias very differently. With a starting-point shift, 84% of the fastest responses are 'right', while the slowest are slightly biased the other way (44%): fast responses come mostly from walks that started near the favoured bound, and slow ones from walks that had to overcome the head start. With a drift bias, the proportion falls only from 67% to 54%. Plotting choice proportions against response time is therefore a cheap first test of how a prior is used, and in Hanks and colleagues' monkeys the bias grew with time, pointing to a dynamic, drift-like component.
+
+<Step n={3} title="Collapsing bounds" minutes={30} />
+
+If the bound falls over the course of a trial, $B(t)$ decreasing towards zero, decisions that have dragged on are made on less evidence. An equivalent formulation multiplies the accumulated evidence by a growing **urgency signal** $u(t)$ and compares it with a fixed bound (Cisek, Puskas and El-Murr, 2009; Churchland, Kiani and Shadlen, 2008, who found an evidence-independent rise in LIP activity). Either way, the model makes two predictions the fixed-bound model does not: accuracy falls for slower responses within a condition, and the long right tail of the response time distribution is cut short.
+
+<PyCell id="collapse" title="Signatures of a collapsing bound" tests={String.raw`
+  import numpy as np
+  def test_flat():
+      "with a fixed bound, accuracy is about the same in fast and slow responses"
+      assert abs(acc_fixed[0] - acc_fixed[2]) < 0.04
+  def test_fall():
+      "with a collapsing bound, slow responses are at least 8 points less accurate than fast ones"
+      assert acc_coll[0] - acc_coll[2] > 0.08
+  def test_tail():
+      "the collapsing bound cuts the right tail: lower skewness"
+      assert skew(rt_c) < 0.6 * skew(rt_f)
+`} prompt="Run the unbiased model with a fixed bound of 1 and with a bound 1.4 exp(-t / 0.8) (floored at 0.05). Compute accuracy by response time tercile and the skewness of each response time distribution."
+code={String.raw`
+  def skew(x):
+      return ((x - x.mean()) ** 3).mean() / x.std() ** 3
+
+  ch_f, rt_f = ...
+  ch_c, rt_c = ...
+  acc_fixed, acc_coll = by_tercile(ch_f == stim, rt_f), by_tercile(ch_c == stim, rt_c)
+  print("accuracy by tercile, fixed bound:     ", np.round(acc_fixed, 3), f" mean RT {rt_f.mean():.2f} s, skew {skew(rt_f):.2f}")
+  print("accuracy by tercile, collapsing bound:", np.round(acc_coll, 3), f" mean RT {rt_c.mean():.2f} s, skew {skew(rt_c):.2f}")
+  plt.hist(rt_f, 80, alpha=0.5, density=True, label="fixed"); plt.hist(rt_c, 80, alpha=0.5, density=True, label="collapsing"); plt.legend(); plt.xlabel("decision time (s)"); plt.show()
+`}
+hint="ch_f, rt_f = ddm(v, lambda t: 1.0); ch_c, rt_c = ddm(v, lambda t: max(0.05, 1.4 * np.exp(-t / 0.8)))."
+solution={String.raw`
+  def skew(x):
+      return ((x - x.mean()) ** 3).mean() / x.std() ** 3
+
+  ch_f, rt_f = ddm(v, lambda t: 1.0)
+  ch_c, rt_c = ddm(v, lambda t: max(0.05, 1.4 * np.exp(-t / 0.8)))
+  acc_fixed, acc_coll = by_tercile(ch_f == stim, rt_f), by_tercile(ch_c == stim, rt_c)
+  print("accuracy by tercile, fixed bound:     ", np.round(acc_fixed, 3), f" mean RT {rt_f.mean():.2f} s, skew {skew(rt_f):.2f}")
+  print("accuracy by tercile, collapsing bound:", np.round(acc_coll, 3), f" mean RT {rt_c.mean():.2f} s, skew {skew(rt_c):.2f}")
+  plt.hist(rt_f, 80, alpha=0.5, density=True, label="fixed"); plt.hist(rt_c, 80, alpha=0.5, density=True, label="collapsing"); plt.legend(); plt.xlabel("decision time (s)"); plt.show()
+`} />
+
+With a fixed bound, accuracy is the same, about 0.84, in fast, middle and slow responses: in this simple model the time taken carries no information about whether the answer is right. With a collapsing bound, accuracy falls from 0.83 in the fastest third to 0.71 in the slowest, because late decisions are made on less evidence. Mean decision time falls from 0.86 to 0.54 s and the skewness from 1.7 to 0.6, as the long tail is cut away. Be warned, though: falling accuracy with time is also produced by trial-to-trial variability in drift, because the weakest-drift trials are both the slowest and the least accurate, which is why this signature alone is not decisive.
+
+<Step n={4} title="Do bounds collapse?" minutes={25} />
+
+The normative argument is straightforward. When stimulus strength varies unpredictably and some trials carry almost no evidence, a decision maker who waits for a fixed amount of evidence spends a long time on exactly the trials where waiting helps least. If time has a cost, because reward rate matters or because each moment of sampling is effortful, the optimal policy lowers the bound as time passes. Drugowitsch and colleagues derived the optimal bounds for a cost of evidence that could vary over time, fitted the model to humans and monkeys in the random-dot task, and found that the inferred cost rose during the trial in some participants, implying collapsing bounds, but that bounds in many participants were close to fixed.
+
+Hawkins, Forstmann, Wagenmakers, Ratcliff and Brown (2015) compared fixed-bound and collapsing-bound models across many data sets and found that fixed bounds usually fitted human data as well or better, while monkeys, trained for months with strong pressure to be fast, more often showed collapse. The answer seems to depend on species, training and the reward structure. The lesson for an analyst is the one from Day 1: the signatures are real, but several mechanisms (collapsing bounds, drift variability, urgency, leak) can produce similar patterns, and only careful model comparison on full distributions can separate them.
+
+<Bridge title="Spending time wisely"
+  neuro="Priors bias decisions in ways that can be read from response times, and urgency signals that grow with time appear in LIP, premotor cortex and basal ganglia. Whether bounds collapse depends on the species, the training and the payoffs."
+  ai="Anytime algorithms and adaptive computation decide when to stop computing; a collapsing threshold is a deadline-aware stopping rule. Priors enter classifiers as shifted decision thresholds, the analogue of a starting-point bias.">
+
+Where the bias enters, and whether patience runs out, are written in the shape of the response times.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A starting-point bias affects mostly...", options: ["Fast responses", "Slow responses", "All responses equally", "No responses"], answer: 0, explain: "It matters most when little evidence has accumulated." },
+  { q: "A drift bias...", options: ["Acts on fast and slow responses more evenly", "Affects only fast responses", "Has no effect on choices", "Changes the bound"], answer: 0, explain: "It accumulates with time." },
+  { q: "For a known prior and fixed stimulus strength, the optimal adjustment is...", options: ["A starting-point shift by the log prior odds", "A drift bias", "A collapsing bound", "No adjustment"], answer: 0, explain: "Bogacz et al. (2006)." },
+  { q: "A collapsing bound predicts that within a condition...", options: ["Slow responses are less accurate", "Slow responses are more accurate", "Accuracy is constant", "There are no errors"], answer: 0, explain: "Less evidence is required later." },
+  { q: "A collapsing bound changes the RT distribution by...", options: ["Cutting its right tail", "Lengthening its tail", "Making it bimodal", "Shifting it later"], answer: 0, explain: "Long decisions are cut short." },
+  { q: "An urgency signal is...", options: ["A growing gain on evidence, equivalent to a collapsing bound", "A fixed bias", "A non-decision time", "A reward"], answer: 0, explain: "Cisek et al. (2009); Churchland et al. (2008)." },
+  { q: "Hawkins et al. (2015) found that collapsing bounds...", options: ["Were rarely needed for human data", "Always fitted best", "Never fitted monkey data", "Were impossible to test"], answer: 0, explain: "Monkeys showed collapse more often." },
+  { q: "Collapsing bounds are normatively justified when...", options: ["Difficulty varies and time is costly", "All trials are equally easy", "There is no time pressure", "Accuracy is all that matters"], answer: 0, explain: "Drugowitsch et al. (2012)." },
+]} />
+
+<Flashcards cards={[
+  { front: "Starting-point against drift bias?", back: "Starting point: bias strongest in fast responses. Drift: bias spread across response times." },
+  { front: "Optimal prior adjustment (fixed strength)?", back: "Shift the starting point by the log prior odds." },
+  { front: "Collapsing bound signatures?", back: "Accuracy falls with response time within a condition; the right tail of the RT distribution shrinks." },
+  { front: "Urgency signal?", back: "A time-dependent gain on accumulated evidence; equivalent to a bound that falls over time." },
+  { front: "Evidence on collapse?", back: "Mixed: monkeys often show it; humans often fit fixed bounds as well (Hawkins et al., 2015)." },
+]} />
+
+<Predict revisit question="With a starting-point bias towards 'right', where is the bias strongest: fast, slow or equal?" />
+
+<Key title="Before you go">
+<ul>
+<li>Bias can enter through the starting point or the drift, with different time courses.</li>
+<li>Collapsing bounds trade accuracy for time on hard trials.</li>
+<li>They predict falling accuracy with response time and a short right tail.</li>
+<li>Whether bounds collapse is an empirical question with mixed answers.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Drugowitsch, Moreno-Bote, Churchland, Shadlen and Pouget (2012), <em>The cost of accumulating evidence in perceptual decision making</em>.</li>
+<li>Hawkins, Forstmann, Wagenmakers, Ratcliff and Brown (2015), <em>Revisiting the evidence for collapsing boundaries and urgency signals in perceptual decision-making</em>, Journal of Neuroscience 35(6), 2476 to 2484.</li>
+<li>Hanks, Mazurek, Kiani, Hopp and Shadlen (2011), <em>Elapsed decision time affects the weighting of prior probability in a perceptual decision task</em>, Journal of Neuroscience 31(17), 6339 to 6352.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Think of a decision you make under time pressure, such as when to stop searching for something. Does your criterion fall as time passes? Describe how you could measure it from your own behaviour, using today's signatures." />

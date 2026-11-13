@@ -1,0 +1,229 @@
+export const meta = {
+  title: "Confidence: knowing how likely you are to be right",
+  intro: "After a decision, people can say how sure they are, and their confidence predicts their accuracy. Animals cannot say so, but they can show it. In 2009 Roozbeh Kiani and Michael Shadlen gave monkeys a third option on some trials of the random-dot task: a sure target that paid a small but certain reward. The monkeys chose it more often when the motion was weak or brief, and on trials where it was offered but declined they were more accurate than on trials where it was not offered at all, so they declined it when they knew they were likely right. LIP neurons carried the same information. Today you compute confidence as the probability of being correct given the evidence and the time taken, check that it is calibrated, and reproduce the opt-out experiment and a signature of confidence seen in rats and humans.",
+  goals: [
+    "Define confidence as the posterior probability of a correct choice",
+    "Compute it from accumulated evidence and elapsed time, and check its calibration",
+    "Reproduce the opt-out findings of Kiani and Shadlen",
+    "Explain the folded-X pattern of confidence for correct and error trials",
+  ],
+  plan: [
+    { label: "Predict and the opt-out task", minutes: 15 },
+    { label: "Confidence as a probability", minutes: 35 },
+    { label: "The sure target", minutes: 30 },
+    { label: "Confidence on correct and error trials", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "kiani-shadlen-2009",
+};
+
+<Predict question="Two trials end with the same amount of accumulated evidence, but one took 0.2 seconds and the other 0.8 seconds. In a task where difficulty varies from trial to trial, should you be equally confident in both?" />
+
+<Step n={1} title="Asking a monkey how sure it is" minutes={15} />
+
+In Kiani and Shadlen's task the motion was shown for a duration chosen by the experimenter, from 100 to 900 ms. On half the trials, during the delay after the motion, a third target appeared. Choosing it gave a reward smaller than a correct direction choice but certain. The design separates two questions: whether the monkey knows the answer, measured on trials without the sure target, and whether it knows that it knows, measured by when it takes the sure target and how well it does when it does not.
+
+<Video id="E8lvgFeIGQM" title="Fixed threshold on confidence" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch shows how accumulating evidence until a fixed level of confidence is reached links confidence to the stopping rule of a sequential decision." />
+
+<Step n={2} title="Confidence as a probability" minutes={35} />
+
+The natural definition (Kepecs and Mainen, 2012; Pouget, Drugowitsch and Kepecs, 2016) is that confidence is the probability that the choice just made is correct, given everything the decision maker knows: here, the accumulated evidence $x$ and the elapsed time $T$. If the motion strength $c$ is drawn from a known set and the evidence is $x \sim \mathcal N(k c s T, T)$ for direction $s = \pm 1$, then the choice is $\operatorname{sign}(x)$ and
+
+$$
+P(\text{correct} \mid x, T) = \frac{\sum_c p(c)\,\phi\big(x;\ \operatorname{sign}(x)\,kcT,\ T\big)}{\sum_c p(c)\big[\phi(x;\ kcT,\ T) + \phi(x;\ -kcT,\ T)\big]},
+$$
+
+where $\phi(x; \mu, \sigma^2)$ is the normal density. The time matters: after a long stimulus, a given $x$ is weaker evidence, because noise has had longer to accumulate.
+
+<Figure caption="Confidence as a function of accumulated evidence and elapsed time. Brightness shows the probability of being correct; the same evidence earns less confidence when it took longer to accumulate." credit="Interactive figure by Engram, after Kiani and Shadlen (2009).">
+  <ConfidenceMap />
+</Figure>
+
+<PyCell id="calib" title="A calibrated confidence" tests={String.raw`
+  import numpy as np
+  def test_calibrated():
+      "in every confidence bin, accuracy matches mean confidence within 0.02"
+      assert all(abs(acc_b[i] - conf_b[i]) < 0.02 for i in range(5))
+  def test_time():
+      "the same evidence gives lower confidence after a longer time"
+      assert conf(np.array([1.0]), np.array([0.8]))[0] < conf(np.array([1.0]), np.array([0.2]))[0]
+`} prompt="Write conf(x, T) from the formula, summing over the six coherences with equal prior probability. Apply it to 60,000 simulated trials and compare accuracy with mean confidence in five confidence bins from 0.5 to 1."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2009)
+  cohs = np.array([0, 0.032, 0.064, 0.128, 0.256, 0.512]); k = 6.0; n = 60000
+  c = r.choice(cohs, n); s = np.where(r.random(n) < 0.5, 1, -1); T = r.choice([0.1, 0.2, 0.4, 0.8], n)
+  x = k * c * s * T + np.sqrt(T) * r.normal(size=n)
+  choice = np.where(x >= 0, 1, -1)
+  correct = np.where(c == 0, r.random(n) < 0.5, choice == s)
+
+  def conf(x, T):
+      num, den = 0.0, 0.0
+      for cc in cohs:
+          mu = k * cc * T
+          lp = np.exp(-(x - mu) ** 2 / (2 * T)); lm = np.exp(-(x + mu) ** 2 / (2 * T))
+          ...
+      return num / den
+
+  cf = conf(x, T)
+  edges = np.linspace(0.5, 1, 6); b = np.clip(np.digitize(cf, edges) - 1, 0, 4)
+  acc_b = [correct[b == i].mean() for i in range(5)]; conf_b = [cf[b == i].mean() for i in range(5)]
+  for i in range(5):
+      print(f"confidence {edges[i]:.1f} to {edges[i + 1]:.1f}: mean confidence {conf_b[i]:.3f}, accuracy {acc_b[i]:.3f}")
+  plt.plot(conf_b, acc_b, "o-"); plt.plot([0.5, 1], [0.5, 1], "k:"); plt.xlabel("confidence"); plt.ylabel("accuracy"); plt.show()
+`}
+hint="num += np.where(x >= 0, lp, lm); den += lp + lm."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2009)
+  cohs = np.array([0, 0.032, 0.064, 0.128, 0.256, 0.512]); k = 6.0; n = 60000
+  c = r.choice(cohs, n); s = np.where(r.random(n) < 0.5, 1, -1); T = r.choice([0.1, 0.2, 0.4, 0.8], n)
+  x = k * c * s * T + np.sqrt(T) * r.normal(size=n)
+  choice = np.where(x >= 0, 1, -1)
+  correct = np.where(c == 0, r.random(n) < 0.5, choice == s)
+
+  def conf(x, T):
+      num, den = 0.0, 0.0
+      for cc in cohs:
+          mu = k * cc * T
+          lp = np.exp(-(x - mu) ** 2 / (2 * T)); lm = np.exp(-(x + mu) ** 2 / (2 * T))
+          num += np.where(x >= 0, lp, lm); den += lp + lm
+      return num / den
+
+  cf = conf(x, T)
+  edges = np.linspace(0.5, 1, 6); b = np.clip(np.digitize(cf, edges) - 1, 0, 4)
+  acc_b = [correct[b == i].mean() for i in range(5)]; conf_b = [cf[b == i].mean() for i in range(5)]
+  for i in range(5):
+      print(f"confidence {edges[i]:.1f} to {edges[i + 1]:.1f}: mean confidence {conf_b[i]:.3f}, accuracy {acc_b[i]:.3f}")
+  plt.plot(conf_b, acc_b, "o-"); plt.plot([0.5, 1], [0.5, 1], "k:"); plt.xlabel("confidence"); plt.ylabel("accuracy"); plt.show()
+`} />
+
+In every bin, accuracy matches mean confidence to within a percentage point: trials given a confidence of 0.75 are right three times in four. That is what it means for a confidence signal to be calibrated, and it holds here because the decision maker knows the true generative model. A real observer who misjudges the mix of difficulties, or the noise, will be over- or underconfident. And at a fixed evidence of 1, confidence is lower after 0.8 s than after 0.2 s: elapsed time is itself evidence about difficulty, which is one reason confidence in reaction-time tasks falls for slow responses.
+
+<Step n={3} title="The sure target" minutes={30} />
+
+Now give the model the monkeys' option. On half the trials a sure target is offered, and the model takes it whenever its confidence is below 0.7.
+
+<PyCell id="optout" title="Opting out" tests={String.raw`
+  import numpy as np
+  def test_coherence():
+      "the sure target is chosen far more often at 0% than at 51.2% coherence"
+      assert opt[0.0] > opt[0.512] + 0.3
+  def test_waive():
+      "at 6.4% coherence, accuracy when the sure target was offered and declined beats accuracy when it was not offered"
+      assert acc_waived > acc_unoffered + 0.05
+`} prompt="Offer the sure target on a random half of trials; opt out when offered and confidence is below 0.7. Report the opt-out rate at each coherence, and at 6.4% coherence compare accuracy on offered-but-declined trials with accuracy on trials without the offer."
+code={String.raw`
+  offered = r.random(n) < 0.5
+  out = ...
+  opt = {cc: out[(c == cc) & offered].mean() for cc in cohs}
+  waived = offered & ~out
+  acc_waived = ...
+  acc_unoffered = ...
+  print({f"{100 * cc:.1f}%": round(v, 2) for cc, v in opt.items()}, "opt-out rate")
+  print(f"6.4% coherence: accuracy when the sure target was declined {acc_waived:.3f}, when not offered {acc_unoffered:.3f}")
+`}
+hint="out = offered & (cf < 0.7); acc_waived = correct[waived & (c == 0.064)].mean(); acc_unoffered = correct[~offered & (c == 0.064)].mean()."
+solution={String.raw`
+  offered = r.random(n) < 0.5
+  out = offered & (cf < 0.7)
+  opt = {cc: out[(c == cc) & offered].mean() for cc in cohs}
+  waived = offered & ~out
+  acc_waived = correct[waived & (c == 0.064)].mean()
+  acc_unoffered = correct[~offered & (c == 0.064)].mean()
+  print({f"{100 * cc:.1f}%": round(v, 2) for cc, v in opt.items()}, "opt-out rate")
+  print(f"6.4% coherence: accuracy when the sure target was declined {acc_waived:.3f}, when not offered {acc_unoffered:.3f}")
+`} />
+
+The model opts out on about three quarters of offered trials at 0 to 6.4% coherence and on a third at 51.2%, the same ordering as the monkeys. The key result also appears: at 6.4% coherence, accuracy is 0.69 on trials where the sure target was offered and declined, against 0.59 when it was not offered. Declining is informative because it happens only when confidence is high, so the declined trials are a selected, easier subset. Kiani and Shadlen found the same, and found that LIP activity at the end of the motion predicted both the choice and whether the sure target would be taken, as a single decision variable carrying confidence should.
+
+<Step n={4} title="Confidence on correct and error trials" minutes={25} />
+
+How should confidence vary with stimulus strength? For correct choices, stronger evidence should bring higher confidence. For errors, the opposite: an error on an easy trial must have come from evidence that was weak or misleading, so as the stimulus gets stronger, the errors that remain are made with less confidence. Plotted against stimulus strength, the two curves diverge in a "folded X". Kepecs, Uchida, Zariwala and Mainen (2008) found this pattern in the time rats were willing to wait for an uncertain reward, and in neurons of orbitofrontal cortex; Sanders, Hangya and Kepecs (2016) found it in human confidence reports.
+
+<PyCell id="foldx" title="The folded X" tests={String.raw`
+  import numpy as np
+  def test_correct():
+      "confidence on correct trials rises with coherence"
+      assert all(np.diff(conf_cor) > 0)
+  def test_error():
+      "confidence on error trials falls with coherence"
+      assert all(np.diff(conf_err) < 0)
+`} prompt="For each non-zero coherence, average confidence separately over correct and error trials."
+code={String.raw`
+  nz = cohs[1:]
+  conf_cor = np.array([...])
+  conf_err = np.array([...])
+  for cc, a_, b_ in zip(nz, conf_cor, conf_err):
+      print(f"{100 * cc:5.1f}%: confidence when correct {a_:.3f}, when wrong {b_:.3f}")
+  plt.semilogx(100 * nz, conf_cor, "o-", label="correct"); plt.semilogx(100 * nz, conf_err, "o-", label="error")
+  plt.xlabel("coherence (%)"); plt.ylabel("mean confidence"); plt.legend(); plt.show()
+`}
+hint="conf_cor = np.array([cf[(c == cc) & correct].mean() for cc in nz]); conf_err likewise with ~correct."
+solution={String.raw`
+  nz = cohs[1:]
+  conf_cor = np.array([cf[(c == cc) & correct].mean() for cc in nz])
+  conf_err = np.array([cf[(c == cc) & ~correct].mean() for cc in nz])
+  for cc, a_, b_ in zip(nz, conf_cor, conf_err):
+      print(f"{100 * cc:5.1f}%: confidence when correct {a_:.3f}, when wrong {b_:.3f}")
+  plt.semilogx(100 * nz, conf_cor, "o-", label="correct"); plt.semilogx(100 * nz, conf_err, "o-", label="error")
+  plt.xlabel("coherence (%)"); plt.ylabel("mean confidence"); plt.legend(); plt.show()
+`} />
+
+Confidence on correct trials rises from 0.64 at 3.2% to 0.80 at 51.2%; on error trials it falls from 0.63 to 0.58. The divergence is slight for weak stimuli, where correct and error trials come from similar evidence, and grows for strong ones, where errors require evidence pushed far from the truth by noise and so tend to be the least convincing. The pattern makes a useful check that a measured signal behaves like confidence, but read today's warning before treating it as proof.
+
+<Callout kind="warning">
+
+The folded X is often treated as proof that a confidence signal is a Bayesian posterior. It is not: many simple measures of evidence strength, computed from the same noisy samples, produce it too (Adler and Ma, 2018). The more distinctive predictions are calibration, the effect of elapsed time at fixed evidence, and how confidence changes with new information after the choice. Testing those needs designs like Kiani and Shadlen's, in which the stimulus duration is controlled independently of the evidence.
+
+</Callout>
+
+<Bridge title="Knowing what you know"
+  neuro="Confidence can be read from LIP activity before the choice, from orbitofrontal neurons after it, and from rodents' and monkeys' willingness to wait or wager. It guides learning, information seeking and when to change one's mind."
+  ai="Calibration of predicted probabilities is a central concern for deployed classifiers and language models, which are often overconfident. Selective prediction, in which a model abstains when unsure, is the machine version of the sure target.">
+
+Confidence is the decision maker's estimate of its own accuracy, and it can be measured even in animals that cannot report it.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In Kiani and Shadlen's task, the sure target offered...", options: ["A small certain reward", "A large risky reward", "No reward", "A punishment"], answer: 0, explain: "An opt-out." },
+  { q: "Monkeys chose the sure target more when...", options: ["Motion was weak or brief", "Motion was strong", "Never", "Always equally"], answer: 0, explain: "Low confidence." },
+  { q: "On trials where the sure target was offered but declined, accuracy was...", options: ["Higher than when it was not offered", "Lower", "The same", "Zero"], answer: 0, explain: "They declined it when likely right." },
+  { q: "Confidence is best defined as...", options: ["The probability that the choice is correct given the evidence", "The amount of evidence", "Response time", "Reward size"], answer: 0, explain: "A posterior probability." },
+  { q: "At a fixed amount of accumulated evidence, more elapsed time means...", options: ["Lower confidence", "Higher confidence", "No change", "Certainty"], answer: 0, explain: "Noise has accumulated longer." },
+  { q: "Calibration means...", options: ["Accuracy equals stated confidence on average", "Confidence is always high", "Errors are rare", "Confidence is constant"], answer: 0, explain: "Checked by binning." },
+  { q: "The folded X shows confidence on errors...", options: ["Falling as the stimulus gets stronger", "Rising with stimulus strength", "Constant", "Equal to confidence on correct trials"], answer: 0, explain: "Kepecs et al. (2008)." },
+  { q: "Adler and Ma (2018) showed that the folded X...", options: ["Is produced by many non-Bayesian measures too", "Proves Bayesian confidence", "Never occurs in humans", "Requires LIP"], answer: 0, explain: "It is not diagnostic." },
+]} />
+
+<Flashcards cards={[
+  { front: "Confidence (normative)?", back: "$P(\\text{correct} \\mid x, T)$: the posterior probability that the choice made is right." },
+  { front: "Why does time matter for confidence?", back: "With variable difficulty, the same accumulated evidence after a longer time implies a weaker stimulus." },
+  { front: "Sure-target findings?", back: "Opt-outs increase with weak or brief motion; declined offers are followed by higher accuracy than no offer." },
+  { front: "Folded X?", back: "Confidence rises with stimulus strength on correct trials and falls on error trials." },
+  { front: "Calibration test?", back: "Bin trials by confidence and compare mean confidence with accuracy in each bin." },
+]} />
+
+<Predict revisit question="Same evidence, 0.2 s against 0.8 s, variable difficulty: equally confident?" />
+
+<Key title="Before you go">
+<ul>
+<li>Confidence is the probability of being right, given evidence and time.</li>
+<li>A Bayesian confidence is calibrated and falls with elapsed time at fixed evidence.</li>
+<li>Opt-out choices reveal confidence in animals.</li>
+<li>The folded X is common to many confidence measures and is not by itself diagnostic.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Kiani and Shadlen (2009), <em>Representation of confidence associated with a decision by neurons in the parietal cortex</em>.</li>
+<li>Kepecs, Uchida, Zariwala and Mainen (2008), <em>Neural correlates, computation and behavioural impact of decision confidence</em>, Nature 455(7210), 227 to 231.</li>
+<li>Pouget, Drugowitsch and Kepecs (2016), <em>Confidence and certainty: distinct probabilistic quantities for different goals</em>, Nature Neuroscience 19(3), 366 to 374.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Large language models can be asked how confident they are. Design a test, in the spirit of the sure-target task, that would show whether a model's stated confidence carries information about its accuracy beyond what is in its answer." />
