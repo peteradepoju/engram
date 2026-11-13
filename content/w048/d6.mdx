@@ -1,0 +1,221 @@
+export const meta = {
+  title: "Forge: Week 48 challenge, quiz and deep read",
+  intro: "This week treated perception as inference. Signal detection theory separates sensitivity from bias; a slow-speed prior turns motion illusions into optimal percepts; psychophysics can measure that prior; probabilistic population codes show how neurons might carry a posterior; and predictive coding offers a process that computes one. Today's challenge connects these. First, ask whether an observer uses a prior at all, by comparing a Bayesian model with an unbiased one on the same discrimination data. Second, build Weiss's slow-speed prior into a probabilistic population code and watch the slowing at low contrast fall out of neural activity. Then the quiz, and a critique of Weiss, Simoncelli and Adelson.",
+  goals: [
+    "Test for a prior by likelihood-ratio comparison of nested observer models",
+    "Implement a prior inside a probabilistic population code",
+    "Reproduce contrast-dependent slowing from population activity",
+    "Critique the claim that motion illusions are optimal percepts",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "weiss-2002",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. Hit rate 0.9 and false-alarm rate 0.1: what is d'?
+2. Prior sd 1, likelihood sd 1: what fraction of the true speed does the posterior mean report?
+3. A population's gain is multiplied by 9. By what factor does its posterior sd shrink?
+
+<PyCell code={String.raw`
+  from scipy.stats import norm
+  print("1.", round(norm.ppf(0.9) - norm.ppf(0.1), 2))
+  print("2.", 1 / (1 + 1))
+  print("3.", 9 ** 0.5)
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: is there a prior?** Using Day 3's observer, simulate a discrimination experiment with a low-contrast test against a high-contrast reference, with 80 trials at each of nine speed differences. Fit two models to all the choices: a **Bayesian** model with free noise levels and prior slope $a$, and an **unbiased** model with $a = 0$. The unbiased model is the Bayesian model with one parameter fixed, so twice the difference in their negative log-likelihoods follows a chi-squared distribution with one degree of freedom when the prior is absent.
+
+<PyCell id="partA" title="Part A: a likelihood-ratio test for a prior" tests={String.raw`
+  import numpy as np
+  def test_detect():
+      "with a true prior slope of -1.2, the likelihood ratio exceeds 10 (p well below 0.01)"
+      assert lr["prior"] > 10
+  def test_null():
+      "with no prior, the likelihood ratio is below 6.6 (not significant at 1%)"
+      assert lr["no prior"] < 6.6
+`} prompt="Write nll(params, k_high, k_low, fixed_a=None): the summed binomial negative log-likelihood of both conditions, with P(test faster) = Phi((d + a (sig_t^2 - sig_h^2)) / sqrt(sig_t^2 + sig_h^2)), where sig_h = exp(params[0]), sig_l = exp(params[1]) and a = params[2] unless fixed. Fit both models to data simulated with a = -1.2 and with a = 0, and compute the likelihood ratio."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.stats import norm, chi2
+  from scipy.optimize import minimize
+  r = np.random.default_rng(2002)
+  du = np.linspace(-0.6, 0.6, 9); n_tr = 80
+
+  def simulate(a, sh=0.15, sl=0.35):
+      def p(d, st): return norm.cdf((d + a * (st ** 2 - sh ** 2)) / np.sqrt(st ** 2 + sh ** 2))
+      return r.binomial(n_tr, p(du, sh)), r.binomial(n_tr, p(du, sl))
+
+  def nll(params, k_high, k_low, fixed_a=None):
+      sh, sl = np.exp(params[0]), np.exp(params[1])
+      a = params[2] if fixed_a is None else fixed_a
+      total = 0.0
+      for k, st in [(k_high, sh), (k_low, sl)]:
+          p = ...
+          total -= np.sum(k * np.log(p) + (n_tr - k) * np.log(1 - p))
+      return total
+
+  lr = {}
+  for name, a_true in [("prior", -1.2), ("no prior", 0.0)]:
+      kh, kl = simulate(a_true)
+      full = minimize(nll, [np.log(0.2), np.log(0.3), 0.0], args=(kh, kl), method="Nelder-Mead", options={"maxiter": 4000})
+      null = minimize(nll, [np.log(0.2), np.log(0.3)], args=(kh, kl, 0.0), method="Nelder-Mead")
+      lr[name] = 2 * (null.fun - full.fun)
+      print(f"{name:8s}: fitted a = {full.x[2]:+.2f}; likelihood ratio {lr[name]:.1f}, p = {chi2.sf(lr[name], 1):.2g}")
+`}
+hint="p = np.clip(norm.cdf((du + a * (st ** 2 - sh ** 2)) / np.sqrt(st ** 2 + sh ** 2)), 1e-6, 1 - 1e-6)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.stats import norm, chi2
+  from scipy.optimize import minimize
+  r = np.random.default_rng(2002)
+  du = np.linspace(-0.6, 0.6, 9); n_tr = 80
+
+  def simulate(a, sh=0.15, sl=0.35):
+      def p(d, st): return norm.cdf((d + a * (st ** 2 - sh ** 2)) / np.sqrt(st ** 2 + sh ** 2))
+      return r.binomial(n_tr, p(du, sh)), r.binomial(n_tr, p(du, sl))
+
+  def nll(params, k_high, k_low, fixed_a=None):
+      sh, sl = np.exp(params[0]), np.exp(params[1])
+      a = params[2] if fixed_a is None else fixed_a
+      total = 0.0
+      for k, st in [(k_high, sh), (k_low, sl)]:
+          p = np.clip(norm.cdf((du + a * (st ** 2 - sh ** 2)) / np.sqrt(st ** 2 + sh ** 2)), 1e-6, 1 - 1e-6)
+          total -= np.sum(k * np.log(p) + (n_tr - k) * np.log(1 - p))
+      return total
+
+  lr = {}
+  for name, a_true in [("prior", -1.2), ("no prior", 0.0)]:
+      kh, kl = simulate(a_true)
+      full = minimize(nll, [np.log(0.2), np.log(0.3), 0.0], args=(kh, kl), method="Nelder-Mead", options={"maxiter": 4000})
+      null = minimize(nll, [np.log(0.2), np.log(0.3)], args=(kh, kl, 0.0), method="Nelder-Mead")
+      lr[name] = 2 * (null.fun - full.fun)
+      print(f"{name:8s}: fitted a = {full.x[2]:+.2f}; likelihood ratio {lr[name]:.1f}, p = {chi2.sf(lr[name], 1):.2g}")
+`} />
+
+For the observer with a prior, adding the slope parameter improves the fit by a likelihood ratio of about 41 (p around $10^{-10}$), and the fitted slope, $-1.4$, is close to the true $-1.2$. For the observer without one, the ratio is essentially zero and the fitted slope is near 0. Because the models are nested, this test is cleaner than comparing AIC or BIC: under the null hypothesis the statistic has a known distribution. Its weakness is that it only asks whether the prior improves this particular model; if the model is wrong in another way, the extra parameter may absorb the misfit.
+
+**Part B: a prior in a population code.** In Day 4's code the log-posterior is $\sum_i r_i\log f_i(s)$ plus a constant. A Gaussian prior adds $-s^2/(2\sigma_p^2)$. Build a population of 61 Poisson neurons tuned to speed (in arbitrary units), whose gain grows with contrast, add the log prior to the decoded log-likelihood, and measure the posterior mean speed at low and high contrast for a stimulus moving at speed 10.
+
+<PyCell id="partB" title="Part B: contrast-dependent slowing from spikes" tests={String.raw`
+  import numpy as np
+  def test_slowing():
+      "average perceived speed at contrast 0.05 is at least 20% below that at contrast 1"
+      assert perceived[0.05] < 0.8 * perceived[1.0]
+  def test_high():
+      "at full contrast the perceived speed is within 10% of the true speed"
+      assert abs(perceived[1.0] - 10) < 1.0
+`} prompt="Write perceived_speed(c): draw spikes with gain 20 c, compute the log-likelihood as logF @ r, add the log prior -s^2 / (2 sigma_p^2) with sigma_p = 8, normalise and return the posterior mean. Average over 200 trials for contrasts 0.05, 0.1, 0.3 and 1."
+code={String.raw`
+  pref = np.linspace(-40, 40, 61); s_grid = np.linspace(-20, 40, 1201); w = 6.0
+  logF = -(s_grid[:, None] - pref[None]) ** 2 / (2 * w ** 2)
+  sigma_p = 8.0
+
+  def perceived_speed(c, s_true=10.0):
+      rs = r.poisson(20 * c * np.exp(-(s_true - pref) ** 2 / (2 * w ** 2)) + 0.05)
+      lp = ...
+      lp -= lp.max(); p = np.exp(lp); p /= p.sum()
+      return (p * s_grid).sum()
+
+  perceived = {c: np.mean([perceived_speed(c) for _ in range(200)]) for c in [0.05, 0.1, 0.3, 1.0]}
+  for c, v in perceived.items():
+      print(f"contrast {c:4.2f}: mean perceived speed {v:.2f} (true 10)")
+  plt.semilogx(list(perceived), list(perceived.values()), "o-"); plt.axhline(10, color="k", ls=":"); plt.xlabel("contrast"); plt.ylabel("perceived speed"); plt.show()
+`}
+hint="lp = logF @ rs - s_grid ** 2 / (2 * sigma_p ** 2)."
+solution={String.raw`
+  pref = np.linspace(-40, 40, 61); s_grid = np.linspace(-20, 40, 1201); w = 6.0
+  logF = -(s_grid[:, None] - pref[None]) ** 2 / (2 * w ** 2)
+  sigma_p = 8.0
+
+  def perceived_speed(c, s_true=10.0):
+      rs = r.poisson(20 * c * np.exp(-(s_true - pref) ** 2 / (2 * w ** 2)) + 0.05)
+      lp = logF @ rs - s_grid ** 2 / (2 * sigma_p ** 2)
+      lp -= lp.max(); p = np.exp(lp); p /= p.sum()
+      return (p * s_grid).sum()
+
+  perceived = {c: np.mean([perceived_speed(c) for _ in range(200)]) for c in [0.05, 0.1, 0.3, 1.0]}
+  for c, v in perceived.items():
+      print(f"contrast {c:4.2f}: mean perceived speed {v:.2f} (true 10)")
+  plt.semilogx(list(perceived), list(perceived.values()), "o-"); plt.axhline(10, color="k", ls=":"); plt.xlabel("contrast"); plt.ylabel("perceived speed"); plt.show()
+`} />
+
+At full contrast the population reports 9.8, close to the true 10; at 30% contrast, 9.5; at 10%, 8.5; and at 5%, 7.5, a quarter slower. Nothing in the readout changed between contrasts: lower contrast meant fewer spikes, a broader likelihood, and a prior that therefore won more of the argument. Weiss's observer and Ma's population code are the same computation viewed at two levels, the behavioural and the neural, which is the kind of link the course has been building towards.
+
+**Part C (written).** Answer in your journal. First, in Part A the likelihood-ratio test assumed the models were correct apart from the prior. Name one way the observer could show a contrast-dependent bias without any prior, and how you would distinguish it. Second, in Part B the prior was a fixed term added to the readout. Where in the brain might such a prior live, and how could it be learned from experience?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The posterior mean with Gaussian prior and likelihood" task="With likelihood $\mathcal N(m, \sigma_l^2)$ for a measurement $m$ and prior $\mathcal N(0, \sigma_p^2)$, show that the posterior is Gaussian with mean $\frac{\sigma_p^2}{\sigma_p^2 + \sigma_l^2}m$ and variance $\frac{\sigma_p^2\sigma_l^2}{\sigma_p^2 + \sigma_l^2}$.">
+
+The log-posterior is, up to a constant, $-\frac{(s - m)^2}{2\sigma_l^2} - \frac{s^2}{2\sigma_p^2}$, a quadratic in $s$, so the posterior is Gaussian.
+
+Its precision is the coefficient of $-s^2/2$: $\frac{1}{\sigma_l^2} + \frac{1}{\sigma_p^2}$, so its variance is $\frac{\sigma_p^2\sigma_l^2}{\sigma_p^2 + \sigma_l^2}$.
+
+Setting the derivative to zero, $\frac{m - s}{\sigma_l^2} = \frac{s}{\sigma_p^2}$, so $s = \frac{\sigma_p^2}{\sigma_p^2 + \sigma_l^2}m$. The estimate shrinks towards zero by a factor that approaches 0 as $\sigma_l$ grows, which is the slowing at low contrast.
+
+</Prove>
+
+<Prove title="2. 2AFC and d'" task="Show that if signal and noise responses are independent with $\mathcal N(d', 1)$ and $\mathcal N(0, 1)$, the probability that the signal response exceeds the noise response is $\Phi(d'/\sqrt2)$.">
+
+The difference $D = x_s - x_n$ is normal with mean $d'$ and variance $1 + 1 = 2$, since the responses are independent.
+
+$P(D \gt 0) = P\left(\frac{D - d'}{\sqrt2} \gt -\frac{d'}{\sqrt2}\right) = 1 - \Phi\left(-\frac{d'}{\sqrt2}\right) = \Phi\left(\frac{d'}{\sqrt2}\right)$.
+
+So a 2AFC observer with $d' = 1$ is 76% correct, and the area under the yes-no ROC, which is the same probability, is also 0.76.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 48 quiz (15 questions)" questions={[
+  { q: "d' is computed as...", options: ["z(H) − z(F)", "H − F", "H/F", "z(H) + z(F)"], answer: 0, explain: "Day 1." },
+  { q: "A payoff for hits changes...", options: ["The criterion", "d'", "Both equally", "Neither"], answer: 0, explain: "Day 1." },
+  { q: "A z-ROC slope below 1 indicates...", options: ["Signal variance larger than noise variance", "Equal variances", "A liberal criterion", "No sensitivity"], answer: 0, explain: "Day 1." },
+  { q: "Weiss et al. explained low-contrast slowing with...", options: ["A slow-speed prior and noisier measurements", "Neural fatigue", "Eye movements", "A fast prior"], answer: 0, explain: "Day 2." },
+  { q: "The aperture problem means local edge motion constrains...", options: ["Only the perpendicular component", "Both components", "Only speed", "Nothing"], answer: 0, explain: "Day 2." },
+  { q: "As contrast falls, a plaid's perceived direction moves towards...", options: ["The vector average", "The intersection of constraints", "Straight up", "Randomness"], answer: 0, explain: "Day 2." },
+  { q: "The width of a psychometric function estimates...", options: ["Measurement noise", "The prior slope", "The lapse rate only", "The PSE"], answer: 0, explain: "Day 3." },
+  { q: "The PSE shift between contrasts estimates...", options: ["The prior slope times the difference in variances", "Noise only", "Nothing", "Attention"], answer: 0, explain: "Day 3." },
+  { q: "Inferred speed priors fall off...", options: ["More slowly than a Gaussian", "Exactly as a Gaussian", "Not at all", "Exponentially fast"], answer: 0, explain: "Day 3." },
+  { q: "In a probabilistic population code, gain encodes...", options: ["Certainty", "The stimulus value", "Time", "Reward"], answer: 0, explain: "Day 4." },
+  { q: "Adding two populations' spike counts...", options: ["Performs optimal cue combination", "Averages estimates", "Loses information", "Doubles noise"], answer: 0, explain: "Day 4." },
+  { q: "In predictive coding, feedforward connections carry...", options: ["Prediction errors", "Predictions", "Rewards", "Nothing"], answer: 0, explain: "Day 5." },
+  { q: "The predictive coding learning rule is...", options: ["ΔU ∝ e rᵀ", "ΔU ∝ x xᵀ", "ΔU ∝ r rᵀ", "No learning"], answer: 0, explain: "Day 5." },
+  { q: "The likelihood-ratio statistic for nested models is compared with...", options: ["A chi-squared distribution", "A normal distribution of the data", "The PSE", "d'"], answer: 0, explain: "Part A." },
+  { q: "Adding a log prior to a population's log-likelihood readout...", options: ["Produces a posterior, giving slowing at low gain", "Removes noise", "Has no effect", "Increases gain"], answer: 0, explain: "Part B." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Weiss, Simoncelli and Adelson (2002) its third pass and write your critique under the five headings. Focus on one question: **in what sense are these illusions 'optimal', and how strong is the evidence?** Consider that the prior was chosen to fit, not measured independently, and how much freedom that gives; which phenomena the model explains with the same parameters and which needed adjustments; what 'optimal' means when the prior may not match the true statistics of motion in the world; the later findings of faster perceived speed at low contrast for fast stimuli; and how the model could be connected to neural mechanisms in MT. End with an experiment that would test a prediction of the model that was not used in fitting it.
+
+<Callout kind="research">
+
+Combine Days 4 and 5: implement predictive coding inference in which the representation units form a population code over speed, and the top-down prediction includes a prior. Does inference by error reduction converge to the same posterior mean as Part B's direct readout, and how many inference steps does it take at low and high contrast?
+
+</Callout>
+
+<Key title="Week 48 review checklist">
+<ul>
+<li>I can compute d' and c, build ROCs from ratings and relate yes-no to 2AFC.</li>
+<li>I can build Weiss's Bayesian motion observer and explain its illusions.</li>
+<li>I can infer noise and prior slope from psychometric functions.</li>
+<li>I can decode posteriors from Poisson populations and combine cues by addition.</li>
+<li>I can implement predictive-coding inference and learning, and model surprise responses.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then write a paragraph on whether 'the brain is Bayesian' is a testable claim, and what kind of evidence would count against it." />

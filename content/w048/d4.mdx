@@ -1,0 +1,229 @@
+export const meta = {
+  title: "Probabilistic population codes",
+  intro: "If perception is inference, the brain must represent not just a best guess but how uncertain it is: a whole posterior distribution. How could a population of noisy neurons do that? In 2006 Wei Ji Ma, Jeffrey Beck, Peter Latham and Alexandre Pouget pointed out that it already does, if neurons' variability has the right form. With Poisson-like variability, the log-likelihood of a stimulus is a linear function of the spike counts, so the population's activity encodes a full distribution, its overall gain encodes certainty, and combining two cues optimally requires nothing more than adding the activities of the two populations. Today you decode posteriors from simulated spikes, see uncertainty fall as gain rises, and check that adding spike counts performs Bayesian cue combination exactly.",
+  goals: [
+    "Derive the posterior over a stimulus from Poisson population activity",
+    "Show that posterior width falls as one over the square root of the population gain",
+    "Demonstrate that summing two populations' spikes multiplies their likelihoods",
+    "Discuss the evidence for and limits of probabilistic population codes",
+  ],
+  plan: [
+    { label: "Predict and the idea", minutes: 20 },
+    { label: "Posteriors from spikes", minutes: 30 },
+    { label: "Gain encodes certainty", minutes: 20 },
+    { label: "Cue combination by addition", minutes: 35 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "ma-2006",
+};
+
+<Predict question="Two populations encode the same stimulus, one driven by a visual cue and one by a touch cue, with identical tuning curves. A downstream population simply adds their spike counts. Does its activity encode the optimal combination of the two cues, a simple average, or something worse?" />
+
+<Step n={1} title="Variability as a feature" minutes={20} />
+
+Suppose neuron $i$ fires $r_i$ spikes, Poisson with mean $g f_i(s)$, where $f_i$ is its tuning curve and $g$ a gain set by contrast or reliability. Then
+
+$$
+\log p(\mathbf r \mid s) = \sum_i r_i \log f_i(s) - g\sum_i f_i(s) + \text{terms without } s.
+$$
+
+If tuning curves tile the stimulus space densely, $\sum_i f_i(s)$ is nearly constant in $s$, and with a flat prior the posterior is
+
+$$
+p(s \mid \mathbf r) \propto \exp\Big(\sum_i r_i \log f_i(s)\Big) = \exp\big(\mathbf h(s)\cdot\mathbf r\big),
+$$
+
+linear in the spike counts through the fixed kernels $h_i(s) = \log f_i(s)$. Ma and colleagues called this a **probabilistic population code**. Two consequences follow. Higher gain means more spikes and a narrower posterior: the gain encodes certainty. And because the log-posterior is linear in $\mathbf r$, adding two populations' spike counts adds their log-likelihoods, which multiplies the likelihoods: exactly Bayesian cue combination (Week 16).
+
+<Video id="84Fqve5i28U" title="Posterior Beliefs" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch on combining a prior and a likelihood into a posterior belief, the object today's neural populations are proposed to represent." />
+
+<Step n={2} title="Posteriors from spikes" minutes={30} />
+
+<Figure caption="A probabilistic population code. Spike counts of 41 neurons with Gaussian tuning (bars) and the posterior they imply (curve). Raise the gain and the posterior sharpens; add a second population and watch the combined posterior." credit="Interactive figure by Engram, after Ma et al. (2006).">
+  <PopulationPosterior />
+</Figure>
+
+<PyCell id="posterior" title="Decoding a distribution" tests={String.raw`
+  import numpy as np
+  def test_normalised():
+      "the posterior sums to 1 and peaks near the true stimulus"
+      p = posterior(r.poisson(tuning(5.0, 16)))
+      assert abs(p.sum() - 1) < 1e-9 and abs(s_grid[np.argmax(p)] - 5.0) < 4
+`} prompt="Write posterior(rs): compute log f_i(s) for every candidate s and neuron, form the log-posterior sum_i r_i log f_i(s), subtract its maximum, exponentiate and normalise."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2006)
+  pref = np.linspace(-90, 90, 61); s_grid = np.linspace(-45, 45, 901); width = 15.0
+
+  def tuning(s, g):
+      return g * np.exp(-(s - pref) ** 2 / (2 * width ** 2)) + 0.1
+
+  logF = -(s_grid[:, None] - pref[None]) ** 2 / (2 * width ** 2)     # log f_i(s) up to a constant
+
+  def posterior(rs):
+      ...
+
+  def mean_sd(p):
+      m = (p * s_grid).sum()
+      return m, np.sqrt((p * (s_grid - m) ** 2).sum())
+
+  rs = r.poisson(tuning(5.0, 4))
+  p = posterior(rs)
+  print(f"posterior mean {mean_sd(p)[0]:.2f}, sd {mean_sd(p)[1]:.2f} (true stimulus 5)")
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3.4)); ax[0].bar(pref, rs, width=2.5); ax[0].set_xlabel("preferred stimulus")
+  ax[1].plot(s_grid, p); ax[1].axvline(5, color="k", ls=":"); ax[1].set_xlabel("stimulus"); plt.show()
+`}
+hint="lp = logF @ rs; lp -= lp.max(); p = np.exp(lp); return p / p.sum()."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2006)
+  pref = np.linspace(-90, 90, 61); s_grid = np.linspace(-45, 45, 901); width = 15.0
+
+  def tuning(s, g):
+      return g * np.exp(-(s - pref) ** 2 / (2 * width ** 2)) + 0.1
+
+  logF = -(s_grid[:, None] - pref[None]) ** 2 / (2 * width ** 2)     # log f_i(s) up to a constant
+
+  def posterior(rs):
+      lp = logF @ rs
+      lp -= lp.max()
+      p = np.exp(lp)
+      return p / p.sum()
+
+  def mean_sd(p):
+      m = (p * s_grid).sum()
+      return m, np.sqrt((p * (s_grid - m) ** 2).sum())
+
+  rs = r.poisson(tuning(5.0, 4))
+  p = posterior(rs)
+  print(f"posterior mean {mean_sd(p)[0]:.2f}, sd {mean_sd(p)[1]:.2f} (true stimulus 5)")
+  fig, ax = plt.subplots(1, 2, figsize=(9, 3.4)); ax[0].bar(pref, rs, width=2.5); ax[0].set_xlabel("preferred stimulus")
+  ax[1].plot(s_grid, p); ax[1].axvline(5, color="k", ls=":"); ax[1].set_xlabel("stimulus"); plt.show()
+`} />
+
+On this trial the posterior peaks at 3.0 with a standard deviation of about 1.9: the true stimulus, 5, lies just over one standard deviation away, as it should a fair fraction of the time. The posterior is computed from a fixed linear readout of spike counts followed by exponentiation and normalisation, operations that are easy for neurons: the weights $h_i(s)$ never change, only the activity does.
+
+<Step n={3} title="Gain encodes certainty" minutes={20} />
+
+<PyCell id="gain" title="Width against gain" tests={String.raw`
+  import numpy as np
+  def test_scaling():
+      "multiplying the gain by 16 shrinks the average posterior sd by a factor between 3 and 5"
+      assert 3 < sd_by_gain[1] / sd_by_gain[16] < 5
+`} prompt="For gains 1, 4 and 16, decode 200 independent trials at s = 5 and average the posterior standard deviations."
+code={String.raw`
+  sd_by_gain = {}
+  for g in [1, 4, 16]:
+      sd_by_gain[g] = ...
+      print(f"gain {g:2d}: mean posterior sd {sd_by_gain[g]:.2f}")
+`}
+hint="sd_by_gain[g] = np.mean([mean_sd(posterior(r.poisson(tuning(5.0, g))))[1] for _ in range(200)])."
+solution={String.raw`
+  sd_by_gain = {}
+  for g in [1, 4, 16]:
+      sd_by_gain[g] = np.mean([mean_sd(posterior(r.poisson(tuning(5.0, g))))[1] for _ in range(200)])
+      print(f"gain {g:2d}: mean posterior sd {sd_by_gain[g]:.2f}")
+`} />
+
+Multiplying the gain by 4 halves the posterior width (3.58 to 2.02) and multiplying by 16 shrinks it by 3.4, close to the factor of 4 predicted by $1/\sqrt g$. A downstream area does not need to be told how reliable the input is: the number of spikes says so. Contrast in vision has this effect on many cortical neurons, which is one reason the theory is attractive.
+
+<Step n={4} title="Cue combination by addition" minutes={35} />
+
+<PyCell id="combine" title="Adding spikes multiplies likelihoods" tests={String.raw`
+  import numpy as np
+  def test_exact():
+      "the posterior from summed spikes equals the product of the two posteriors, on every trial"
+      assert max_mean_diff < 1e-6 and max_sd_diff < 1e-6
+  def test_better():
+      "the combined posterior is narrower than either single-cue posterior on average"
+      assert sd_comb < min(sd_one)
+`} prompt="On 300 trials, draw spikes from a low-gain (3) and a high-gain (9) population at s = 5. Compare the posterior from r1 + r2 with the normalised product of the two separate posteriors, and record average widths."
+code={String.raw`
+  diffs, sds = [], []
+  for _ in range(300):
+      r1, r2 = r.poisson(tuning(5.0, 3)), r.poisson(tuning(5.0, 9))
+      p1, p2 = posterior(r1), posterior(r2)
+      p_sum = ...
+      p_prod = ...
+      (m_a, s_a), (m_b, s_b) = mean_sd(p_sum), mean_sd(p_prod)
+      diffs.append((abs(m_a - m_b), abs(s_a - s_b))); sds.append((mean_sd(p1)[1], mean_sd(p2)[1], s_a))
+  diffs, sds = np.array(diffs), np.array(sds)
+  max_mean_diff, max_sd_diff = diffs.max(0)
+  sd_one, sd_comb = sds[:, :2].mean(0), sds[:, 2].mean()
+  print(f"largest difference between summed-spike and product posteriors: mean {max_mean_diff:.1e}, sd {max_sd_diff:.1e}")
+  print(f"average sd: cue 1 {sd_one[0]:.2f}, cue 2 {sd_one[1]:.2f}, combined {sd_comb:.2f}, optimal {1 / np.sqrt(1 / sd_one[0] ** 2 + 1 / sd_one[1] ** 2):.2f}")
+`}
+hint="p_sum = posterior(r1 + r2); p_prod = p1 * p2 / (p1 * p2).sum()."
+solution={String.raw`
+  diffs, sds = [], []
+  for _ in range(300):
+      r1, r2 = r.poisson(tuning(5.0, 3)), r.poisson(tuning(5.0, 9))
+      p1, p2 = posterior(r1), posterior(r2)
+      p_sum = posterior(r1 + r2)
+      p_prod = p1 * p2 / (p1 * p2).sum()
+      (m_a, s_a), (m_b, s_b) = mean_sd(p_sum), mean_sd(p_prod)
+      diffs.append((abs(m_a - m_b), abs(s_a - s_b))); sds.append((mean_sd(p1)[1], mean_sd(p2)[1], s_a))
+  diffs, sds = np.array(diffs), np.array(sds)
+  max_mean_diff, max_sd_diff = diffs.max(0)
+  sd_one, sd_comb = sds[:, :2].mean(0), sds[:, 2].mean()
+  print(f"largest difference between summed-spike and product posteriors: mean {max_mean_diff:.1e}, sd {max_sd_diff:.1e}")
+  print(f"average sd: cue 1 {sd_one[0]:.2f}, cue 2 {sd_one[1]:.2f}, combined {sd_comb:.2f}, optimal {1 / np.sqrt(1 / sd_one[0] ** 2 + 1 / sd_one[1] ** 2):.2f}")
+`} />
+
+On every one of 300 trials, the posterior from the summed spike counts is identical, to numerical precision, to the normalised product of the two separate posteriors. The combined posterior's width, 1.18, equals the optimal $1/\sqrt{1/\sigma_1^2 + 1/\sigma_2^2}$, and it is narrower than either cue alone. The more reliable population automatically gets more weight because it contributes more spikes. No reliability-dependent weights had to be computed or learned, which is the main appeal of the scheme.
+
+<Callout kind="warning">
+
+The exactness depends on assumptions: Poisson-like variability (strictly, an exponential family with linear sufficient statistics), tuning curves whose shape does not change with gain, and tuning that tiles the space so that the summed rate is constant. Real responses often violate them, for example when contrast changes tuning width or when noise is correlated (Week 35). Fetsch, Pouget, DeAngelis and Angelaki (2012) found that MSTd neurons combine visual and vestibular cues with weights that change with reliability, as the theory requires, but not by simple addition. Alternative proposals, in which neural activity represents samples from the posterior (Orbán, Berkes, Fiser and Lengyel, 2016), make different predictions about variability.
+
+</Callout>
+
+<Bridge title="Uncertainty in the code"
+  neuro="With Poisson-like variability, population activity encodes a posterior, gain encodes certainty, and summation implements cue combination. Whether cortex uses this code or a sampling code is still debated."
+  ai="Neural networks usually output point estimates; Bayesian deep learning, ensembles and evidential methods add uncertainty explicitly. The population-code view suggests that uncertainty can live implicitly in the magnitude of activity, much as logit scale encodes confidence in a softmax.">
+
+Noisy spikes, read correctly, are not a nuisance but a representation of what the brain does not know.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "With Poisson variability, the log-likelihood of a stimulus is...", options: ["Linear in the spike counts", "Quadratic in the counts", "Independent of the counts", "The firing rate"], answer: 0, explain: "Σ rᵢ log fᵢ(s) − Σ fᵢ(s)." },
+  { q: "Higher population gain makes the posterior...", options: ["Narrower", "Wider", "Shifted", "Bimodal"], answer: 0, explain: "More spikes, more information." },
+  { q: "Posterior sd scales with gain g as...", options: ["1/√g", "1/g", "√g", "g"], answer: 0, explain: "Fisher information grows with g." },
+  { q: "Adding two populations' spike counts...", options: ["Multiplies their likelihoods", "Averages their estimates", "Loses information", "Doubles the noise"], answer: 0, explain: "Log-likelihoods add." },
+  { q: "The summed-population posterior equals...", options: ["The optimal Bayesian combination", "A simple average", "The more reliable cue alone", "The prior"], answer: 0, explain: "Exactly, under the assumptions." },
+  { q: "The assumption that Σfᵢ(s) is constant requires...", options: ["Tuning curves that tile the space", "No tuning", "A single neuron", "Correlated noise"], answer: 0, explain: "Otherwise a stimulus-dependent term remains." },
+  { q: "An alternative to probabilistic population codes is...", options: ["Sampling-based representations", "Grid codes", "Place codes", "Rate coding without noise"], answer: 0, explain: "Orbán et al. (2016)." },
+  { q: "Fetsch et al. (2012) studied cue combination in...", options: ["MSTd with visual and vestibular cues", "V1 with orientation", "Hippocampus", "Auditory cortex"], answer: 0, explain: "Reliability-weighted combination." },
+]} />
+
+<Flashcards cards={[
+  { front: "Probabilistic population code?", back: "$p(s \\mid \\mathbf r) \\propto \\exp(\\mathbf h(s)\\cdot\\mathbf r)$ with $h_i(s) = \\log f_i(s)$ for Poisson-like variability." },
+  { front: "What encodes uncertainty?", back: "The overall gain of the population: more spikes, narrower posterior." },
+  { front: "Cue combination in PPCs?", back: "Summing two populations' activities adds log-likelihoods, giving the optimal combined posterior." },
+  { front: "Key assumptions?", back: "Poisson-like (exponential family) variability, gain-invariant tuning shape, dense tiling." },
+  { front: "Sampling hypothesis?", back: "Neural activity over time represents samples from the posterior rather than its parameters." },
+]} />
+
+<Predict revisit question="Adding the spike counts of two cue populations: optimal combination, simple average, or worse?" />
+
+<Key title="Before you go">
+<ul>
+<li>Poisson-like noise makes population activity encode a full posterior.</li>
+<li>Gain encodes certainty: posterior width falls as one over root gain.</li>
+<li>Adding populations performs exact Bayesian cue combination.</li>
+<li>The result depends on assumptions that real neurons only partly satisfy.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Ma, Beck, Latham and Pouget (2006), <em>Bayesian inference with probabilistic population codes</em>.</li>
+<li>Fetsch, Pouget, DeAngelis and Angelaki (2012), <em>Neural correlates of reliability-based cue weighting during multisensory integration</em>, Nature Neuroscience 15(1), 146 to 154.</li>
+<li>Orbán, Berkes, Fiser and Lengyel (2016), <em>Neural variability and sampling-based probabilistic representations in the visual cortex</em>, Neuron 92(2), 530 to 543.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If uncertainty is encoded in gain, then anything that changes gain without changing information, such as attention or arousal (Week 47), would change the brain's confidence. Is that a bug or a feature? Describe an experiment that could tell." />

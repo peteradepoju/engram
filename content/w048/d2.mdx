@@ -1,0 +1,204 @@
+export const meta = {
+  title: "Motion illusions as optimal percepts",
+  intro: "Drive in fog and the cars around you seem to move more slowly than they are. Watch a low-contrast pattern drift and it appears slower than the same pattern at high contrast. Show a plaid made of two gratings whose motions both point upward of the true direction, and at low contrast it appears to move in a direction it is not moving at all. In 2002 Yair Weiss, Eero Simoncelli and Edward Adelson showed that these and many other illusions follow from one assumption: the visual system combines noisy measurements of local motion with a prior belief that objects tend to be still or slow. Illusions are what optimal inference looks like when the prior and the truth disagree. Today you build their observer, reproduce the slowing at low contrast, and watch a perceived direction swing as contrast falls.",
+  goals: [
+    "Combine a Gaussian likelihood with a slow-speed prior to estimate speed",
+    "Explain why lower contrast produces slower perceived speed",
+    "Solve the aperture problem as Bayesian inference with constraints from component motions",
+    "Show that perceived direction moves from the intersection of constraints towards the vector average as contrast falls",
+  ],
+  plan: [
+    { label: "Predict and the aperture problem", minutes: 20 },
+    { label: "Speed with a slow prior", minutes: 25 },
+    { label: "Direction from two constraints", minutes: 40 },
+    { label: "What the model explains and misses", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "weiss-2002",
+};
+
+<Predict question="A plaid moves to the right, but both of its component gratings move upward and to the right, at 50 and 75 degrees. At very low contrast, will it appear to move right, up and to the right, or not at all?" />
+
+<Step n={1} title="The aperture problem" minutes={20} />
+
+A neuron with a small receptive field sees only part of a moving edge. It can measure the motion perpendicular to the edge but not along it, because sliding the edge along itself changes nothing in the aperture. Each local measurement constrains the velocity to a line in velocity space: all velocities $\mathbf v$ with $\mathbf n\cdot\mathbf v = s$, where $\mathbf n$ is the edge's normal and $s$ the measured normal speed. With two edges of different orientations, the two lines intersect at a single velocity, the **intersection of constraints** (IOC; Adelson and Movshon, 1982). An alternative, cheaper rule, the **vector average** (VA) of the two normal velocities, gives the wrong answer for some stimuli. People perceive the IOC at high contrast and something closer to the vector average at low contrast, which looked like evidence for two different mechanisms.
+
+Weiss and colleagues showed that a single Bayesian observer does both. The measurements are noisy, with noise that grows as contrast falls, and the prior favours slow speeds:
+
+$$
+p(\mathbf v \mid \text{image}) \propto \exp\!\Big(-\sum_i \frac{(\mathbf n_i\cdot\mathbf v - s_i)^2}{2\sigma^2}\Big)\,\exp\!\Big(-\frac{|\mathbf v|^2}{2\sigma_p^2}\Big).
+$$
+
+<Video id="tmi3JwbvmpY" title="Multiplying Gaussians" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch shows how a Gaussian prior and a Gaussian likelihood combine into a Gaussian posterior whose mean is pulled towards the more reliable source, the computation behind today's motion illusions." />
+
+<Step n={2} title="Speed with a slow prior" minutes={25} />
+
+In one dimension, with likelihood $\mathcal N(v_\text{true}, \sigma_l^2)$ and prior $\mathcal N(0, \sigma_p^2)$, the posterior mean is
+
+$$
+\hat v = \frac{\sigma_p^2}{\sigma_p^2 + \sigma_l^2}\,v_\text{true}.
+$$
+
+If the measurement noise scales inversely with contrast, $\sigma_l = \sigma_0 / c$, lower contrast means stronger shrinkage towards zero.
+
+<Figure caption="A Bayesian observer for a plaid. The two constraint lines, the prior centred on zero, and the posterior; as contrast falls the posterior moves away from the intersection of constraints, slowing and turning towards the vector average." credit="Interactive figure by Engram, after Weiss, Simoncelli and Adelson (2002).">
+  <MotionPrior />
+</Figure>
+
+<PyCell id="speed" title="Slower at low contrast" tests={String.raw`
+  import numpy as np
+  def test_monotonic():
+      "perceived speed increases with contrast"
+      assert all(np.diff(v_hat) > 0)
+  def test_ratio():
+      "at the lowest contrast perceived speed is below half the true speed, at the highest above 90%"
+      assert v_hat[0] < 0.5 and v_hat[-1] > 0.9
+`} prompt="With true speed 1, prior sd 1 and likelihood sd 0.1 / contrast, compute the posterior mean speed for contrasts 0.05, 0.1, 0.2, 0.5 and 1."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  contrasts = np.array([0.05, 0.1, 0.2, 0.5, 1.0])
+  sigma_p, sigma_0, v_true = 1.0, 0.1, 1.0
+  sigma_l = sigma_0 / contrasts
+  v_hat = ...
+  for c, v in zip(contrasts, v_hat):
+      print(f"contrast {c:4.2f}: perceived speed {v:.2f}")
+  plt.semilogx(contrasts, v_hat, "o-"); plt.xlabel("contrast"); plt.ylabel("perceived speed / true speed"); plt.show()
+`}
+hint="v_hat = sigma_p ** 2 / (sigma_p ** 2 + sigma_l ** 2) * v_true."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  contrasts = np.array([0.05, 0.1, 0.2, 0.5, 1.0])
+  sigma_p, sigma_0, v_true = 1.0, 0.1, 1.0
+  sigma_l = sigma_0 / contrasts
+  v_hat = sigma_p ** 2 / (sigma_p ** 2 + sigma_l ** 2) * v_true
+  for c, v in zip(contrasts, v_hat):
+      print(f"contrast {c:4.2f}: perceived speed {v:.2f}")
+  plt.semilogx(contrasts, v_hat, "o-"); plt.xlabel("contrast"); plt.ylabel("perceived speed / true speed"); plt.show()
+`} />
+
+At full contrast the observer sees 99% of the true speed; at 10% contrast, half; at 5%, a fifth. Nothing is wrong with the observer: given noisy measurements and a world in which slow motion is common, shrinking towards zero minimises error on average. Stone and Thompson (1992) found that a low-contrast grating needs to move substantially faster than a high-contrast one to appear equally fast, and Thompson's observation that drivers in fog underestimate speed is the same effect outside the laboratory.
+
+<Step n={3} title="Direction from two constraints" minutes={40} />
+
+Now the plaid. It moves right at speed 1; its gratings have normals at 50 and 75 degrees, so each measures a normal speed $s_i = \mathbf n_i\cdot\mathbf v$. With Gaussian likelihood and prior, the posterior is Gaussian and its peak solves a linear system:
+
+$$
+\Big(\frac{N^\top N}{\sigma^2} + \frac{I}{\sigma_p^2}\Big)\hat{\mathbf v} = \frac{N^\top\mathbf s}{\sigma^2},
+$$
+
+where the rows of $N$ are the normals.
+
+<PyCell id="plaid" title="Perceived direction against contrast" tests={String.raw`
+  import numpy as np
+  def test_ioc():
+      "at the smallest noise the percept is within 2 degrees of the true direction (IOC)"
+      assert abs(dirs[0]) < 2
+  def test_va():
+      "at the largest noise it is within 5 degrees of the vector average direction"
+      assert abs(dirs[-1] - va_dir) < 5
+  def test_monotone():
+      "perceived direction rotates steadily as noise grows"
+      assert all(np.diff(dirs) > 0)
+`} prompt="Write map_v(sigma): build N from the two normals, s = N v_true, and solve the linear system with prior sd 1. Compute the perceived direction (in degrees) for sigma 0.02, 0.1, 0.3, 1 and 3, and the vector average direction of the two normal velocities."
+code={String.raw`
+  v_true = np.array([1.0, 0.0])
+  angles = np.deg2rad([50, 75])
+  N = np.stack([np.cos(angles), np.sin(angles)], 1)
+  s = N @ v_true
+
+  def map_v(sigma, sigma_p=1.0):
+      A = ...
+      b = ...
+      return np.linalg.solve(A, b)
+
+  sigmas = [0.02, 0.1, 0.3, 1.0, 3.0]
+  vs = [map_v(sg) for sg in sigmas]
+  dirs = np.array([np.degrees(np.arctan2(v[1], v[0])) for v in vs])
+  va = (s[:, None] * N).mean(0); va_dir = np.degrees(np.arctan2(va[1], va[0]))
+  for sg, v, d in zip(sigmas, vs, dirs):
+      print(f"noise {sg:4.2f}: perceived velocity {np.round(v, 3)}, direction {d:5.1f} deg, speed {np.linalg.norm(v):.2f}")
+  print(f"vector average direction {va_dir:.1f} deg; intersection of constraints 0 deg")
+`}
+hint="A = N.T @ N / sigma ** 2 + np.eye(2) / sigma_p ** 2; b = N.T @ s / sigma ** 2."
+solution={String.raw`
+  v_true = np.array([1.0, 0.0])
+  angles = np.deg2rad([50, 75])
+  N = np.stack([np.cos(angles), np.sin(angles)], 1)
+  s = N @ v_true
+
+  def map_v(sigma, sigma_p=1.0):
+      A = N.T @ N / sigma ** 2 + np.eye(2) / sigma_p ** 2
+      b = N.T @ s / sigma ** 2
+      return np.linalg.solve(A, b)
+
+  sigmas = [0.02, 0.1, 0.3, 1.0, 3.0]
+  vs = [map_v(sg) for sg in sigmas]
+  dirs = np.array([np.degrees(np.arctan2(v[1], v[0])) for v in vs])
+  va = (s[:, None] * N).mean(0); va_dir = np.degrees(np.arctan2(va[1], va[0]))
+  for sg, v, d in zip(sigmas, vs, dirs):
+      print(f"noise {sg:4.2f}: perceived velocity {np.round(v, 3)}, direction {d:5.1f} deg, speed {np.linalg.norm(v):.2f}")
+  print(f"vector average direction {va_dir:.1f} deg; intersection of constraints 0 deg")
+`} />
+
+With precise measurements the percept is the intersection of constraints, moving right at full speed. As noise grows the percept slows and its direction swings upward: 17 degrees at moderate noise, 48 at high noise, and 56 at very high noise, close to the vector average direction of 57 degrees. The prior does not treat all directions equally because the two constraint lines are nearly parallel: the data pin down the velocity well along one axis and poorly along the other, so the prior shrinks it mainly along the poorly constrained axis, which rotates it. One observer, with no switch between rules, produces both IOC-like and VA-like percepts, as Yo and Wilson (1992) and others had found psychophysically.
+
+<Step n={4} title="What the model explains and misses" minutes={20} />
+
+Weiss and colleagues showed that the same observer, with one prior and contrast-dependent noise, accounts for the perceived slowing at low contrast (Thompson, 1982), direction biases in plaids and rhombuses, the barber pole illusion, and the effect of edge orientation on perceived motion of lines. Its success made "perception as Bayesian inference" a mainstream view.
+
+The model also has limits. The prior was assumed Gaussian and centred on zero, and its width was chosen, not measured; tomorrow's paper shows how to measure it. At high speeds, some studies find that low contrast makes things appear faster, not slower (Thompson, Brooks and Hammett, 2006), which a single slow prior cannot produce. And the model does not say how neurons compute the posterior, a question for Day 4.
+
+<Callout kind="think">
+
+If the brain's prior favours slow speeds because slow speeds are common in the world, the prior should be learnable and should differ between people with different visual experience. How would you test whether the prior adapts, for example after a week of watching fast-moving scenes?
+
+</Callout>
+
+<Bridge title="Illusions as inference"
+  neuro="A slow-speed prior combined with noisy local motion measurements explains contrast-dependent speed perception and direction illusions; MT neurons combine component motions in ways that have been modelled as computing such posteriors."
+  ai="Regularisation in machine learning is a prior: ridge regression is exactly today's computation, with the identity matrix term shrinking estimates towards zero more strongly when the data are less informative. Optical flow algorithms use smoothness and slowness priors for the same reason.">
+
+When the evidence is weak, the prior wins, and what we see is what is most probable, not what is there.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The aperture problem is that a local edge measurement constrains...", options: ["Only the velocity component perpendicular to the edge", "Both components fully", "Only speed", "Nothing"], answer: 0, explain: "Motion along the edge is invisible." },
+  { q: "The intersection of constraints is...", options: ["The velocity consistent with both edges' constraint lines", "The average of normal velocities", "The prior mean", "Zero"], answer: 0, explain: "Adelson and Movshon (1982)." },
+  { q: "Weiss et al.'s prior favours...", options: ["Slow speeds", "Fast speeds", "Rightward motion", "No particular speed"], answer: 0, explain: "Centred on zero." },
+  { q: "Lower contrast makes the likelihood...", options: ["Broader, so the prior pulls harder", "Narrower", "Unchanged", "Biased fast"], answer: 0, explain: "Noise grows as contrast falls." },
+  { q: "The 1D posterior mean is the true speed times...", options: ["σp²/(σp² + σl²)", "σl²/σp²", "1", "σp/σl"], answer: 0, explain: "Shrinkage factor." },
+  { q: "For the plaid, as contrast falls the perceived direction...", options: ["Rotates from the IOC towards the vector average", "Stays at the IOC", "Reverses", "Becomes random"], answer: 0, explain: "The prior shortens the vector along the poorly constrained direction." },
+  { q: "The MAP velocity solves...", options: ["(NᵀN/σ² + I/σp²)v = Nᵀs/σ²", "Nv = s exactly", "v = s", "v = 0"], answer: 0, explain: "Gaussian likelihood and prior." },
+  { q: "A finding a single slow prior cannot explain is...", options: ["Low contrast making fast motion look faster", "Slowing at low contrast", "Direction biases", "The barber pole"], answer: 0, explain: "Thompson et al. (2006)." },
+]} />
+
+<Flashcards cards={[
+  { front: "Constraint line?", back: "All velocities $\\mathbf v$ with $\\mathbf n\\cdot\\mathbf v = s$ consistent with one edge's normal motion." },
+  { front: "IOC against VA?", back: "IOC: intersection of constraint lines (true velocity). VA: average of normal velocities, often wrong in direction." },
+  { front: "Weiss et al. observer?", back: "Gaussian likelihoods from local measurements times a slow-speed Gaussian prior; MAP velocity is the percept." },
+  { front: "Why low contrast looks slow?", back: "Noisier measurements give a broader likelihood, so the slow prior pulls the estimate towards zero." },
+  { front: "Ridge regression link?", back: "The MAP solution with a zero-mean Gaussian prior is ridge regression." },
+]} />
+
+<Predict revisit question="A rightward plaid whose components move at 50 and 75 degrees, at very low contrast: right, up-right, or still?" />
+
+<Key title="Before you go">
+<ul>
+<li>Local motion measurements give constraint lines; noise grows at low contrast.</li>
+<li>A slow-speed prior shrinks estimates more when evidence is weak.</li>
+<li>One Bayesian observer gives both IOC and vector-average-like percepts.</li>
+<li>The prior's shape and adaptability are empirical questions.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Weiss, Simoncelli and Adelson (2002), <em>Motion illusions as optimal percepts</em>.</li>
+<li>Adelson and Movshon (1982), <em>Phenomenal coherence of moving visual patterns</em>, Nature 300(5892), 523 to 525.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Pick a visual or auditory illusion you know. Write down what prior would make it an optimal percept, and what experiment could show whether people actually hold that prior." />

@@ -219,3 +219,8 @@ export { PhaseLocking } from "./phase-locking";
 export { CoherenceRouting } from "./coherence-routing";
 export { ArousalInvertedU } from "./arousal-inverted-u";
 export { UpDownStates } from "./up-down-states";
+export { SignalDetection } from "./signal-detection";
+export { MotionPrior } from "./motion-prior";
+export { PriorFromPsychophysics } from "./prior-from-psychophysics";
+export { PopulationPosterior } from "./population-posterior";
+export { PredictiveCoding } from "./predictive-coding";

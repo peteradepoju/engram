@@ -1,0 +1,261 @@
+export const meta = {
+  title: "Predictive coding: perception as explaining away the input",
+  intro: "The Bayesian observers of this week compute posteriors, but a brain must find them by some process. In 1999 Rajesh Rao and Dana Ballard proposed one: the cortex holds a generative model of its inputs, higher areas send down predictions of the activity in lower areas, and lower areas send up only the prediction errors, the part of the input not yet explained. Inference is the dynamics that reduce those errors; learning adjusts the generative model so that errors shrink over time. Trained on natural images, their network developed oriented receptive fields and showed end-stopping as a consequence of top-down prediction. Today you implement predictive-coding inference and learning on a small problem, recover the hidden causes of images, and model the surprise responses that predictive coding predicts.",
+  goals: [
+    "Write predictive coding as gradient descent on prediction error",
+    "Implement inference of latent causes and learning of the generative weights",
+    "Recover a dictionary of image components from data alone",
+    "Relate prediction-error responses to repetition suppression and mismatch signals",
+  ],
+  plan: [
+    { label: "Predict and the theory", minutes: 20 },
+    { label: "Inference by reducing error", minutes: 25 },
+    { label: "Learning the generative model", minutes: 35 },
+    { label: "Surprise", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "rao-ballard-1999",
+};
+
+<Predict question="In a predictive coding network, an input that the higher level predicts perfectly arrives. What do the error neurons in the lower level report: a large response, a response proportional to the input, or almost nothing?" />
+
+<Step n={1} title="The theory" minutes={20} />
+
+Assume an image $\mathbf x$ is generated from causes $\mathbf r$ through weights $U$, $\mathbf x = U\mathbf r + \text{noise}$, and that causes are sparse. The best causes minimise
+
+$$
+E(\mathbf r, U) = \tfrac12\,|\mathbf x - U\mathbf r|^2 + \lambda\,|\mathbf r|_1.
+$$
+
+Gradient descent on $\mathbf r$ gives the inference dynamics
+
+$$
+\mathbf e = \mathbf x - U\mathbf r, \qquad \dot{\mathbf r} \propto U^\top\mathbf e - \lambda\,\operatorname{sign}(\mathbf r),
+$$
+
+which have a natural neural reading: **error units** compute $\mathbf e$, the input minus the top-down prediction $U\mathbf r$, and send it up through weights $U^\top$; **representation units** $\mathbf r$ change to reduce the error. Learning slowly adjusts the generative weights by $\Delta U \propto \mathbf e\,\mathbf r^\top$, a Hebbian product of error and cause. Rao and Ballard stacked such modules, so that each level predicts the representation of the level below. Similar sparse-coding ideas from Olshausen and Field (Week 13) learned the same oriented filters.
+
+<Video id="Vh93h77B8rk" title="Perception" by="Wulfram Gerstner (EPFL, Neuronal Dynamics)" note="Gerstner applies cortical field models to perceptual phenomena, an example of explaining what we perceive with the dynamics of interacting populations, which predictive coding does in its own way." />
+
+<Step n={2} title="Inference by reducing error" minutes={25} />
+
+Images here are 8 by 8 patches made by adding two of 16 possible bars (8 horizontal, 8 vertical) with random strengths, plus a little noise. First, give the network the true generative weights and let inference find the causes.
+
+<Figure caption="Predictive coding. An input patch, the top-down prediction and the remaining error, as inference runs. Step through the iterations and watch the error shrink as the causes are found." credit="Interactive figure by Engram, after Rao and Ballard (1999).">
+  <PredictiveCoding />
+</Figure>
+
+<PyCell id="infer" title="Finding the causes" tests={String.raw`
+  import numpy as np
+  def test_error():
+      "the prediction error falls below 35% of the input's norm, from above 80%"
+      assert err_hist[-1] < 0.35 * np.linalg.norm(x) and err_hist[0] > 0.8 * np.linalg.norm(x)
+  def test_causes():
+      "the two largest inferred causes are the two true bars"
+      assert set(np.argsort(np.abs(r_hat))[-2:]) == set(true_idx)
+`} prompt="Write infer(X, U): start from zero causes; for each step compute the error E = X - U R, move R by eta U^T E, then soft-threshold by eta lambda. Return the causes and the error. Run it on one patch with the true dictionary B and record the error norm at each step."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1999)
+  P = 8; bars = []
+  for i in range(P):
+      h = np.zeros((P, P)); h[i] = 1; bars.append(h.ravel())
+      v = np.zeros((P, P)); v[:, i] = 1; bars.append(v.ravel())
+  B = np.array(bars).T; B /= np.linalg.norm(B, axis=0)          # 64 pixels x 16 causes
+
+  def sample(n):
+      C = np.zeros((16, n))
+      for j in range(n):
+          C[r.choice(16, 2, replace=False), j] = r.uniform(0.5, 1.5, 2)
+      return B @ C + 0.05 * r.normal(size=(64, n)), C
+
+  def infer(X, U, steps=40, eta=0.1, lam=0.1, record=False):
+      R = np.zeros((U.shape[1], X.shape[1])); hist = []
+      for _ in range(steps):
+          ...
+          if record:
+              hist.append(np.linalg.norm(X - U @ R))
+      return R, X - U @ R, hist
+
+  x, c = sample(1); true_idx = np.where(c[:, 0] > 0)[0]
+  R, E, err_hist = infer(x, B, record=True); r_hat = R[:, 0]
+  print(f"true causes {sorted(true_idx.tolist())}, largest inferred {sorted(np.argsort(np.abs(r_hat))[-2:].tolist())}; error {err_hist[0]:.2f} -> {err_hist[-1]:.2f} (input norm {np.linalg.norm(x):.2f})")
+  plt.plot(err_hist); plt.xlabel("inference step"); plt.ylabel("|prediction error|"); plt.show()
+`}
+hint="E = X - U @ R; R = R + eta * (U.T @ E); R = np.sign(R) * np.maximum(np.abs(R) - eta * lam, 0)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(1999)
+  P = 8; bars = []
+  for i in range(P):
+      h = np.zeros((P, P)); h[i] = 1; bars.append(h.ravel())
+      v = np.zeros((P, P)); v[:, i] = 1; bars.append(v.ravel())
+  B = np.array(bars).T; B /= np.linalg.norm(B, axis=0)          # 64 pixels x 16 causes
+
+  def sample(n):
+      C = np.zeros((16, n))
+      for j in range(n):
+          C[r.choice(16, 2, replace=False), j] = r.uniform(0.5, 1.5, 2)
+      return B @ C + 0.05 * r.normal(size=(64, n)), C
+
+  def infer(X, U, steps=40, eta=0.1, lam=0.1, record=False):
+      R = np.zeros((U.shape[1], X.shape[1])); hist = []
+      for _ in range(steps):
+          E = X - U @ R
+          R = R + eta * (U.T @ E)
+          R = np.sign(R) * np.maximum(np.abs(R) - eta * lam, 0)
+          if record:
+              hist.append(np.linalg.norm(X - U @ R))
+      return R, X - U @ R, hist
+
+  x, c = sample(1); true_idx = np.where(c[:, 0] > 0)[0]
+  R, E, err_hist = infer(x, B, record=True); r_hat = R[:, 0]
+  print(f"true causes {sorted(true_idx.tolist())}, largest inferred {sorted(np.argsort(np.abs(r_hat))[-2:].tolist())}; error {err_hist[0]:.2f} -> {err_hist[-1]:.2f} (input norm {np.linalg.norm(x):.2f})")
+  plt.plot(err_hist); plt.xlabel("inference step"); plt.ylabel("|prediction error|"); plt.show()
+`} />
+
+Inference finds the two bars that made the patch: the two largest causes are exactly the true ones, and the prediction error falls from about 90% of the input to about 30%. The error does not reach the noise level because the sparsity penalty shrinks every cause slightly, a bias that trades accuracy for sparse, interpretable causes. Notice what the network never had to do: compare the input with each bar separately. The error signal, fed back through the same weights, did the search.
+
+<Step n={3} title="Learning the generative model" minutes={35} />
+
+Now start from random generative weights and learn them: for each batch of 50 patches, infer the causes with the current weights, then update $U \leftarrow U + \eta_U\,E R^\top/50$ and renormalise each column.
+
+<PyCell id="learn" title="Discovering the bars" tests={String.raw`
+  import numpy as np
+  def test_dictionary():
+      "every true bar is matched by a learned column with |cosine| above 0.9"
+      assert (match > 0.9).all()
+  def test_error():
+      "after learning, the relative prediction error on new patches is below 0.35"
+      assert rel_err < 0.35
+`} prompt="Start from random unit-norm columns; for 400 batches of 50 patches, infer causes, update U by 1.0 E R^T / 50 and renormalise columns. Then compute, for each true bar, the best |cosine| with any learned column, and the relative error on 200 new patches."
+code={String.raw`
+  U = r.normal(size=(64, 16)); U /= np.linalg.norm(U, axis=0)
+  for it in range(400):
+      X, _ = sample(50)
+      R, E, _ = infer(X, U)
+      ...
+  match = np.abs(B.T @ U).max(1)
+  Xt, _ = sample(200); _, Et, _ = infer(Xt, U)
+  rel_err = np.linalg.norm(Et) / np.linalg.norm(Xt)
+  print(f"best match per true bar: min {match.min():.2f}, mean {match.mean():.2f}; relative error {rel_err:.3f}")
+  fig, ax = plt.subplots(2, 8, figsize=(8, 2.2))
+  for k, a_ in enumerate(ax.ravel()):
+      a_.imshow(U[:, k].reshape(8, 8), cmap="gray"); a_.axis("off")
+  plt.show()
+`}
+hint="U = U + 1.0 * E @ R.T / 50; U /= np.linalg.norm(U, axis=0)."
+solution={String.raw`
+  U = r.normal(size=(64, 16)); U /= np.linalg.norm(U, axis=0)
+  for it in range(400):
+      X, _ = sample(50)
+      R, E, _ = infer(X, U)
+      U = U + 1.0 * E @ R.T / 50
+      U /= np.linalg.norm(U, axis=0)
+  match = np.abs(B.T @ U).max(1)
+  Xt, _ = sample(200); _, Et, _ = infer(Xt, U)
+  rel_err = np.linalg.norm(Et) / np.linalg.norm(Xt)
+  print(f"best match per true bar: min {match.min():.2f}, mean {match.mean():.2f}; relative error {rel_err:.3f}")
+  fig, ax = plt.subplots(2, 8, figsize=(8, 2.2))
+  for k, a_ in enumerate(ax.ravel()):
+      a_.imshow(U[:, k].reshape(8, 8), cmap="gray"); a_.axis("off")
+  plt.show()
+`} />
+
+From random weights, 400 batches of learning recover all 16 bars: every true bar has a learned column matching it essentially perfectly, and the relative error on new patches is about 0.27, the same as with the true dictionary. The learning rule is local: each weight changes by the product of an error unit's activity and a cause unit's activity. Rao and Ballard ran the same procedure on natural image patches and obtained oriented, localised receptive fields like V1 simple cells.
+
+<Step n={4} title="Surprise" minutes={25} />
+
+Predictive coding predicts that responses to an expected stimulus should be small and responses to an unexpected one large, because error units report only what was not predicted. Apply the idea over time: a higher level predicts the next input from recent inputs, $\mathbf p_t = \mathbf p_{t-1} + \alpha(\mathbf x_{t-1} - \mathbf p_{t-1})$, and the error is $|\mathbf x_t - \mathbf p_t|$. Present a standard stimulus repeatedly with occasional deviants, as in the oddball paradigm used to measure the mismatch negativity.
+
+<PyCell id="oddball" title="Repetition suppression and mismatch" tests={String.raw`
+  import numpy as np
+  def test_suppression():
+      "the error to the standard falls over its first repetitions"
+      assert err[std_idx[0]] > 3 * err[std_idx[10]]
+  def test_mismatch():
+      "deviants evoke at least three times the error of late standards"
+      assert err[dev_idx].mean() > 3 * err[std_idx[20:]].mean()
+`} prompt="Make a sequence of 200 patches: the standard (bars 0 and 5) on 90% of trials and a deviant (bars 2 and 11) on 10% (never in the first 20). Run the prediction update with alpha 0.3 and record the error norm at each trial."
+code={String.raw`
+  std = B[:, [0, 5]].sum(1); dev = B[:, [2, 11]].sum(1)
+  is_dev = (r.random(200) < 0.1); is_dev[:20] = False
+  seq = np.where(is_dev[:, None], dev, std) + 0.05 * r.normal(size=(200, 64))
+  p = np.zeros(64); err = np.zeros(200); alpha = 0.3
+  for t in range(200):
+      ...
+  std_idx, dev_idx = np.where(~is_dev)[0], np.where(is_dev)[0]
+  print(f"error to first standard {err[std_idx[0]]:.2f}, to the 11th {err[std_idx[10]]:.2f}; late standards {err[std_idx[20:]].mean():.2f}, deviants {err[dev_idx].mean():.2f}")
+  plt.plot(err, "k-", lw=0.6); plt.plot(dev_idx, err[dev_idx], "ro", label="deviant"); plt.xlabel("trial"); plt.ylabel("|prediction error|"); plt.legend(); plt.show()
+`}
+hint="err[t] = np.linalg.norm(seq[t] - p); p = p + alpha * (seq[t] - p)."
+solution={String.raw`
+  std = B[:, [0, 5]].sum(1); dev = B[:, [2, 11]].sum(1)
+  is_dev = (r.random(200) < 0.1); is_dev[:20] = False
+  seq = np.where(is_dev[:, None], dev, std) + 0.05 * r.normal(size=(200, 64))
+  p = np.zeros(64); err = np.zeros(200); alpha = 0.3
+  for t in range(200):
+      err[t] = np.linalg.norm(seq[t] - p)
+      p = p + alpha * (seq[t] - p)
+  std_idx, dev_idx = np.where(~is_dev)[0], np.where(is_dev)[0]
+  print(f"error to first standard {err[std_idx[0]]:.2f}, to the 11th {err[std_idx[10]]:.2f}; late standards {err[std_idx[20:]].mean():.2f}, deviants {err[dev_idx].mean():.2f}")
+  plt.plot(err, "k-", lw=0.6); plt.plot(dev_idx, err[dev_idx], "ro", label="deviant"); plt.xlabel("trial"); plt.ylabel("|prediction error|"); plt.legend(); plt.show()
+`} />
+
+The first standard produces a large error, 1.5; by its eleventh repetition the error has fallen to 0.45, close to the noise floor: repetition suppression. Deviants, arriving after many standards, produce errors of about 1.75, more than three times those of late standards: a mismatch response. Notice, though, that the same pattern would come from simple adaptation of the units that respond to the standard. Telling prediction from adaptation needs designs in which a stimulus is rare but not novel, or expected but not repeated, which is the subject of today's warning.
+
+<Callout kind="warning">
+
+Predictive coding is a family of theories, not one, and its core prediction, dedicated error neurons that report the difference between input and prediction, has been hard to pin down. Many apparent prediction-error responses can also be explained by adaptation of feedforward responses, and some studies that control for adaptation find genuine expectation effects while others do not (Walsh, McGovern, Clark and O'Connell, 2020, review the evidence). Stimulus-specific adaptation, the deceptively simple explanation of today's oddball result, must be ruled out before claiming prediction.
+
+</Callout>
+
+<Bridge title="Prediction as the engine of perception"
+  neuro="Predictive coding casts feedback connections as carrying predictions and feedforward ones as carrying errors. It explains end-stopping, repetition suppression and mismatch responses, and it links perception to learning a generative model of the world."
+  ai="Predictive coding networks can approximate backpropagation with local learning rules (Whittington and Bogacz, 2017), and self-supervised learning by prediction, of the next word or of masked image patches, is the dominant way large models learn representations today.">
+
+Higher areas predict, lower areas report the surprise, and learning makes the surprise small.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In Rao and Ballard's model, feedback connections carry...", options: ["Predictions of lower-level activity", "Prediction errors", "Rewards", "Attention signals only"], answer: 0, explain: "Feedforward carries errors." },
+  { q: "Inference in predictive coding is...", options: ["Gradient descent on prediction error with a sparsity penalty", "A lookup table", "Random search", "Backpropagation through time"], answer: 0, explain: "ṙ ∝ Uᵀe − λ sign(r)." },
+  { q: "The learning rule for generative weights is...", options: ["ΔU ∝ e rᵀ", "ΔU ∝ x xᵀ", "ΔU ∝ r rᵀ", "No learning"], answer: 0, explain: "Error times cause." },
+  { q: "A perfectly predicted input produces error responses that are...", options: ["Near zero", "Maximal", "Proportional to the input", "Negative"], answer: 0, explain: "Nothing left to explain." },
+  { q: "Trained on natural images, Rao and Ballard's network learned...", options: ["Oriented receptive fields", "Place fields", "Grid fields", "Colour opponency only"], answer: 0, explain: "Like sparse coding." },
+  { q: "End-stopping in the model arises because...", options: ["Higher levels predict long lines, reducing errors for them", "Neurons tire", "Inhibition is random", "Inputs are short"], answer: 0, explain: "A long bar is well predicted." },
+  { q: "The oddball paradigm measures...", options: ["Responses to rare deviants among frequent standards", "Reaction times", "Colour perception", "Motor learning"], answer: 0, explain: "Mismatch negativity." },
+  { q: "An alternative explanation of mismatch responses is...", options: ["Stimulus-specific adaptation", "Dopamine bursts", "Eye movements only", "Attention lapses"], answer: 0, explain: "Must be controlled." },
+]} />
+
+<Flashcards cards={[
+  { front: "Predictive coding energy?", back: "$E = \\tfrac12|\\mathbf x - U\\mathbf r|^2 + \\lambda|\\mathbf r|_1$; inference descends it in $\\mathbf r$, learning in $U$." },
+  { front: "Error and representation units?", back: "Error units compute $\\mathbf e = \\mathbf x - U\\mathbf r$; representation units update by $U^\\top\\mathbf e$." },
+  { front: "Learning rule?", back: "$\\Delta U \\propto \\mathbf e\\,\\mathbf r^\\top$, a local Hebbian product." },
+  { front: "Predictions for responses?", back: "Expected inputs give small error responses; surprising ones give large responses (repetition suppression, mismatch)." },
+  { front: "Main empirical challenge?", back: "Distinguishing prediction-error responses from feedforward adaptation." },
+]} />
+
+<Predict revisit question="A perfectly predicted input: large, proportional, or almost no error response?" />
+
+<Key title="Before you go">
+<ul>
+<li>Predictive coding infers causes by reducing prediction error.</li>
+<li>Learning the generative weights with error times cause recovers the input's components.</li>
+<li>Expected inputs evoke small errors; deviants evoke large ones.</li>
+<li>Adaptation must be ruled out before attributing responses to prediction.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Rao and Ballard (1999), <em>Predictive coding in the visual cortex: a functional interpretation of some extra-classical receptive-field effects</em>.</li>
+<li>Walsh, McGovern, Clark and O'Connell (2020), <em>Evaluating the neurophysiological evidence for predictive processing as a model of perception</em>, Annals of the New York Academy of Sciences 1464(1), 242 to 268.</li>
+<li>Whittington and Bogacz (2017), <em>An approximation of the error backpropagation algorithm in a predictive coding network with local Hebbian synaptic plasticity</em>, Neural Computation 29(5), 1229 to 1262.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Large language models learn by predicting the next token. In what ways is that the same as predictive coding, and in what ways is it different? Consider what is predicted, where errors go, and how learning happens." />

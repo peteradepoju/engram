@@ -1,0 +1,223 @@
+export const meta = {
+  title: "Measuring the prior: inference from psychophysics",
+  intro: "Yesterday's observer used a prior that was assumed, not measured. If perception is Bayesian, the prior is a property of the observer, and it ought to be possible to infer it from behaviour. In 2006 Alan Stocker and Eero Simoncelli showed how: in a speed discrimination task in which reference and test stimuli differ in contrast, the width of the psychometric function reveals the observer's measurement noise, and the shift of its midpoint reveals how strongly the prior pulls noisy estimates. Putting the two together gives the shape of the prior. Today you run their logic on a simulated observer: collect two-alternative forced choices, fit psychometric functions, and recover the noise at each contrast and the slope of the prior.",
+  goals: [
+    "Write the probability of a 'faster' judgement for a Bayesian observer with a locally linear log prior",
+    "Fit cumulative Gaussian psychometric functions by maximum likelihood",
+    "Recover measurement noise from psychometric slopes and the prior slope from biases",
+    "Discuss what such inferred priors have revealed",
+  ],
+  plan: [
+    { label: "Predict and the approach", minutes: 20 },
+    { label: "Simulating the observer", minutes: 25 },
+    { label: "Fitting psychometric functions", minutes: 35 },
+    { label: "Recovering the prior", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "stocker-simoncelli-2006",
+};
+
+<Predict question="A low-contrast test and a high-contrast reference are compared for speed. If the observer's prior favours slow speeds, will the test need to be physically faster or slower than the reference to appear equally fast?" />
+
+<Step n={1} title="What the data constrain" minutes={20} />
+
+Work in log speed, $u = \log v$, where Weber's law makes measurement noise roughly constant. The observer's measurement of a stimulus with contrast $c$ is $m \sim \mathcal N(u, \sigma_c^2)$. Near any speed the log prior can be approximated by a straight line with slope $a$; for a prior favouring slow speeds, $a \lt 0$. Then the posterior mean is shifted from the measurement by $a\sigma_c^2$:
+
+$$
+\hat u = m + a\,\sigma_c^2.
+$$
+
+Noisier measurements are shifted more. When the observer compares a test (contrast $c_t$) with a reference ($c_r$), the probability of calling the test faster is
+
+$$
+P(\text{test faster}) = \Phi\!\left(\frac{u_t - u_r + a(\sigma_t^2 - \sigma_r^2)}{\sqrt{\sigma_t^2 + \sigma_r^2}}\right).
+$$
+
+Two things can be read from a psychometric function measured against $u_t$: its **slope** gives $\sqrt{\sigma_t^2 + \sigma_r^2}$, and its **point of subjective equality** (PSE), where $P = \frac12$, is shifted by $-a(\sigma_t^2 - \sigma_r^2)$. Comparing same-contrast and different-contrast conditions separates the noises from the prior.
+
+<Video id="M_pIY0xv_xw" title="Utility Loss Estimators" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch explains how the choice of loss function turns a posterior into a single estimate, such as its mean or its peak, the step from posterior to percept that today's observer takes." />
+
+<Step n={2} title="Simulating the observer" minutes={25} />
+
+The simulated observer has $\sigma = 0.15$ at high contrast and $0.35$ at low contrast, and a prior slope $a = -1.2$. The reference moves at 4 degrees per second at high contrast. Tests at high and at low contrast are shown at nine log speeds around the reference, 80 trials each.
+
+<Figure caption="Psychometric functions for speed discrimination. The high-contrast test (blue) is unbiased and steep; the low-contrast test (pink) is shallower and shifted, because it must move faster to look as fast. Change the prior slope and the noise." credit="Interactive figure by Engram, after Stocker and Simoncelli (2006).">
+  <PriorFromPsychophysics />
+</Figure>
+
+<PyCell id="simulate" title="Two-alternative choices from a Bayesian observer" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "the high-contrast test is near 50% at the reference speed and the low-contrast test is chosen less often across the range"
+      mid = len(du) // 2
+      assert abs(p_high[mid] - 0.5) < 0.12 and p_low[mid] < 0.5 and p_low[mid + 1] < p_high[mid + 1]
+`} prompt="Complete choose(): draw measurements for test and reference, shift each by a sigma^2, and return whether the test's estimate is larger. Simulate 80 trials at each of nine log-speed differences du from -0.6 to 0.6 for the high- and low-contrast test."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.stats import norm
+  from scipy.optimize import minimize
+  r = np.random.default_rng(2006)
+  sig = {"high": 0.15, "low": 0.35}; a_true = -1.2
+  u_ref = np.log(4.0)
+  du = np.linspace(-0.6, 0.6, 9); n_tr = 80
+
+  def choose(u_test, c_test, n):
+      m_t = u_test + sig[c_test] * r.normal(size=n)
+      m_r = u_ref + sig["high"] * r.normal(size=n)
+      ...
+
+  k_high = np.array([choose(u_ref + d, "high", n_tr).sum() for d in du])
+  k_low = np.array([choose(u_ref + d, "low", n_tr).sum() for d in du])
+  p_high, p_low = k_high / n_tr, k_low / n_tr
+  plt.plot(du, p_high, "o", label="high-contrast test"); plt.plot(du, p_low, "o", label="low-contrast test")
+  plt.axhline(0.5, color="k", ls=":"); plt.xlabel("log speed of test minus reference"); plt.ylabel("P(test faster)"); plt.legend(); plt.show()
+  print("P(test faster) at equal speeds: high", p_high[4], " low", p_low[4])
+`}
+hint="return (m_t + a_true * sig[c_test] ** 2) > (m_r + a_true * sig['high'] ** 2)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.stats import norm
+  from scipy.optimize import minimize
+  r = np.random.default_rng(2006)
+  sig = {"high": 0.15, "low": 0.35}; a_true = -1.2
+  u_ref = np.log(4.0)
+  du = np.linspace(-0.6, 0.6, 9); n_tr = 80
+
+  def choose(u_test, c_test, n):
+      m_t = u_test + sig[c_test] * r.normal(size=n)
+      m_r = u_ref + sig["high"] * r.normal(size=n)
+      return (m_t + a_true * sig[c_test] ** 2) > (m_r + a_true * sig["high"] ** 2)
+
+  k_high = np.array([choose(u_ref + d, "high", n_tr).sum() for d in du])
+  k_low = np.array([choose(u_ref + d, "low", n_tr).sum() for d in du])
+  p_high, p_low = k_high / n_tr, k_low / n_tr
+  plt.plot(du, p_high, "o", label="high-contrast test"); plt.plot(du, p_low, "o", label="low-contrast test")
+  plt.axhline(0.5, color="k", ls=":"); plt.xlabel("log speed of test minus reference"); plt.ylabel("P(test faster)"); plt.legend(); plt.show()
+  print("P(test faster) at equal speeds: high", p_high[4], " low", p_low[4])
+`} />
+
+At equal speeds the high-contrast test is judged faster on about half the trials, as it should be, and the low-contrast test on fewer: the prior has slowed it. The low-contrast curve is also shallower, because its measurements are noisier. With 80 trials per point the proportions scatter by several percentage points, which is why the next step fits a smooth function rather than reading values off individual points.
+
+<Step n={3} title="Fitting psychometric functions" minutes={35} />
+
+Fit each condition with $P = \Phi\big((d - \mu)/s\big)$ by maximum likelihood over the binomial counts. Here $\mu$ is the PSE and $s$ the width.
+
+<PyCell id="fit" title="PSE and width by maximum likelihood" tests={String.raw`
+  import numpy as np
+  def test_widths():
+      "fitted widths are within 0.06 of their true values sqrt(sig_t^2 + sig_r^2)"
+      assert abs(fits["high"][1] - np.sqrt(2) * 0.15) < 0.06 and abs(fits["low"][1] - np.sqrt(0.35 ** 2 + 0.15 ** 2)) < 0.08
+  def test_pse():
+      "the low-contrast PSE is shifted positive by about -a(sig_l^2 - sig_h^2) = 0.12"
+      assert 0.05 < fits["low"][0] < 0.22 and abs(fits["high"][0]) < 0.06
+`} prompt="Write nll(params, k): the negative binomial log-likelihood of the counts k at the differences du, for P = Phi((du - mu) / s) with s = exp(log_s) to keep it positive. Fit both conditions with Nelder-Mead from (0, log 0.3)."
+code={String.raw`
+  def nll(params, k):
+      mu, log_s = params
+      p = np.clip(norm.cdf((du - mu) / np.exp(log_s)), 1e-6, 1 - 1e-6)
+      return ...
+
+  fits = {}
+  for name, k in [("high", k_high), ("low", k_low)]:
+      res = minimize(nll, [0.0, np.log(0.3)], args=(k,), method="Nelder-Mead")
+      fits[name] = (res.x[0], np.exp(res.x[1]))
+      print(f"{name}-contrast test: PSE {fits[name][0]:+.3f}, width {fits[name][1]:.3f}")
+`}
+hint="return -np.sum(k * np.log(p) + (n_tr - k) * np.log(1 - p))."
+solution={String.raw`
+  def nll(params, k):
+      mu, log_s = params
+      p = np.clip(norm.cdf((du - mu) / np.exp(log_s)), 1e-6, 1 - 1e-6)
+      return -np.sum(k * np.log(p) + (n_tr - k) * np.log(1 - p))
+
+  fits = {}
+  for name, k in [("high", k_high), ("low", k_low)]:
+      res = minimize(nll, [0.0, np.log(0.3)], args=(k,), method="Nelder-Mead")
+      fits[name] = (res.x[0], np.exp(res.x[1]))
+      print(f"{name}-contrast test: PSE {fits[name][0]:+.3f}, width {fits[name][1]:.3f}")
+`} />
+
+The high-contrast fit has a PSE of essentially zero and a width of 0.22, close to $\sqrt2 \times 0.15 = 0.21$. The low-contrast fit is shifted by about 0.13 log units, meaning the test must move about 14% faster to look equal, and is wider, 0.39 against the expected 0.38. The binomial likelihood weights each point by how much information it carries, which matters near 0 and 1 where proportions are most precise.
+
+<Step n={4} title="Recovering the prior" minutes={25} />
+
+<PyCell id="recover" title="Noise and prior slope from two fits" tests={String.raw`
+  import numpy as np
+  def test_sigmas():
+      "recovered noise levels are within 0.05 of 0.15 and 0.35"
+      assert abs(sig_h - 0.15) < 0.05 and abs(sig_l - 0.35) < 0.07
+  def test_slope():
+      "the recovered prior slope is negative and within 0.6 of -1.2"
+      assert a_hat < 0 and abs(a_hat + 1.2) < 0.6
+`} prompt="From the high-contrast width, sig_h = s_high / sqrt 2. From the low-contrast width, sig_l = sqrt(s_low^2 - sig_h^2). Then the prior slope is a = -PSE_low / (sig_l^2 - sig_h^2)."
+code={String.raw`
+  sig_h = ...
+  sig_l = ...
+  a_hat = ...
+  print(f"recovered noise: high contrast {sig_h:.3f} (true 0.15), low contrast {sig_l:.3f} (true 0.35); prior slope {a_hat:.2f} (true -1.2)")
+`}
+hint="sig_h = fits['high'][1] / np.sqrt(2); sig_l = np.sqrt(fits['low'][1] ** 2 - sig_h ** 2); a_hat = -fits['low'][0] / (sig_l ** 2 - sig_h ** 2)."
+solution={String.raw`
+  sig_h = fits["high"][1] / np.sqrt(2)
+  sig_l = np.sqrt(fits["low"][1] ** 2 - sig_h ** 2)
+  a_hat = -fits["low"][0] / (sig_l ** 2 - sig_h ** 2)
+  print(f"recovered noise: high contrast {sig_h:.3f} (true 0.15), low contrast {sig_l:.3f} (true 0.35); prior slope {a_hat:.2f} (true -1.2)")
+`} />
+
+The recovered noise levels, 0.156 and 0.354, are within a few per cent of the truth, and the prior slope, $-1.28$, is close to the true $-1.2$. Each estimate rests on 720 trials per condition; the prior slope is the most fragile because it divides a small shift by a difference of variances. Stocker and Simoncelli fitted all conditions at once with a full model, which uses the data more efficiently and gives a prior slope at each reference speed, tracing out the whole prior.
+
+<Callout kind="research">
+
+Stocker and Simoncelli repeated this at several reference speeds and contrasts and reconstructed each observer's speed prior; it fell off with speed more slowly than a Gaussian, closer to a power law. Later work inferred priors for orientation, which match the over-representation of cardinal orientations in natural scenes (Girshick, Landy and Simoncelli, 2011), and showed that the same efficient-coding principle that shapes neural tuning (Week 39) predicts both perceptual biases and discrimination thresholds (Wei and Stocker, 2015), including biases away from the prior that a simple Bayesian observer cannot produce.
+
+</Callout>
+
+<Bridge title="Priors you can measure"
+  neuro="Psychophysics can reveal the noise and prior an observer uses, and these inferred priors often match the statistics of natural environments. Linking them to neural tuning and adaptation is an active area."
+  ai="Inferring a model's implicit prior from its behaviour is a form of model probing. Calibration studies and analyses of the inductive biases of trained networks ask the same question: what does the system assume before it sees the data?">
+
+The width of a psychometric curve gives the noise, its shift gives the prior, and together they reveal what the observer believes.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "With a locally linear log prior of slope a, the posterior mean is the measurement shifted by...", options: ["a σ²", "a σ", "σ/a", "a"], answer: 0, explain: "Noisier measurements shift more." },
+  { q: "The width of the psychometric function estimates...", options: ["√(σ_t² + σ_r²)", "The prior slope", "The PSE", "The lapse rate"], answer: 0, explain: "Combined measurement noise." },
+  { q: "The PSE shift for a low-contrast test estimates...", options: ["−a(σ_t² − σ_r²)", "σ_t", "a alone", "Nothing"], answer: 0, explain: "The prior pulls the noisier estimate more." },
+  { q: "With a slow prior, a low-contrast test must be...", options: ["Faster than the reference to appear equal", "Slower", "Equal", "At zero speed"], answer: 0, explain: "Its estimate is shrunk more." },
+  { q: "Why work in log speed?", options: ["Measurement noise is roughly constant there (Weber's law)", "It is required by Bayes", "Speeds are negative", "It removes the prior"], answer: 0, explain: "Weber-like scaling." },
+  { q: "Stocker and Simoncelli found the speed prior falls off...", options: ["More slowly than a Gaussian", "Exactly like a Gaussian", "Not at all", "Faster than exponential"], answer: 0, explain: "Heavy-tailed, closer to a power law." },
+  { q: "Girshick et al. (2011) found orientation priors that match...", options: ["The prevalence of cardinal orientations in natural scenes", "Uniform orientation statistics", "Speed priors", "Colour statistics"], answer: 0, explain: "Environmental statistics." },
+  { q: "Fitting a psychometric function by maximum likelihood uses...", options: ["The binomial likelihood of counts", "Least squares on proportions only", "The median", "No model"], answer: 0, explain: "Each condition's k out of n." },
+]} />
+
+<Flashcards cards={[
+  { front: "Locally linear prior shift?", back: "$\\hat u = m + a\\sigma^2$, where $a$ is the slope of the log prior." },
+  { front: "P(test faster)?", back: "$\\Phi\\big((u_t - u_r + a(\\sigma_t^2 - \\sigma_r^2))/\\sqrt{\\sigma_t^2 + \\sigma_r^2}\\big)$." },
+  { front: "Recovering noise?", back: "Same-contrast width gives $\\sqrt2\\sigma$; different-contrast width gives $\\sqrt{\\sigma_t^2 + \\sigma_r^2}$." },
+  { front: "Recovering the prior slope?", back: "$a = -\\text{PSE}/(\\sigma_t^2 - \\sigma_r^2)$." },
+  { front: "What inferred priors show?", back: "Speed priors heavier-tailed than Gaussian; orientation priors matching natural scene statistics." },
+]} />
+
+<Predict revisit question="Low-contrast test, slow prior: must the test move faster or slower than the reference to look equally fast?" />
+
+<Key title="Before you go">
+<ul>
+<li>A Bayesian observer's bias depends on its noise and the slope of its prior.</li>
+<li>Psychometric widths give noise; shifts in the PSE give the prior.</li>
+<li>Comparing same- and different-contrast conditions separates them.</li>
+<li>Inferred priors often reflect natural statistics.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Stocker and Simoncelli (2006), <em>Noise characteristics and prior expectations in human visual speed perception</em>.</li>
+<li>Girshick, Landy and Simoncelli (2011), <em>Cardinal rules: visual orientation perception reflects knowledge of environmental statistics</em>, Nature Neuroscience 14(7), 926 to 932.</li>
+<li>Wei and Stocker (2015), <em>A Bayesian observer model constrained by efficient coding can explain 'anti-Bayesian' percepts</em>, Nature Neuroscience 18(10), 1509 to 1517.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Design a version of today's experiment for a sense other than vision, such as judging the weight of objects or the pitch of tones. What would play the role of contrast, and what prior would you expect to find?" />

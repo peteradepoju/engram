@@ -1,0 +1,224 @@
+export const meta = {
+  title: "Signal detection theory: sensitivity and bias",
+  intro: "This week treats perception as inference: the brain receives noisy, ambiguous signals and must work out what caused them. The oldest formal version of that idea is signal detection theory, imported into psychology from radar engineering by Wilson Tanner and John Swets in 1954. Its central insight is that a 'yes' or 'no' about a faint stimulus mixes two things: how well the observer can tell signal from noise, their sensitivity, and how willing they are to say yes, their criterion. Separate the two and many puzzles disappear. Today you compute sensitivity and criterion from hits and false alarms, build ROC curves from confidence ratings, test the equal-variance assumption, and link yes-no performance to two-alternative forced choice.",
+  goals: [
+    "Compute d' and the criterion from hit and false-alarm rates",
+    "Show that payoffs move the criterion but not d'",
+    "Build an ROC curve from confidence ratings and test equal variance with its z-transformed slope",
+    "Relate yes-no d' to two-alternative forced-choice accuracy",
+  ],
+  plan: [
+    { label: "Predict and the theory", minutes: 20 },
+    { label: "Sensitivity and criterion", minutes: 30 },
+    { label: "ROC curves from ratings", minutes: 35 },
+    { label: "Two-alternative forced choice", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "tanner-swets-1954",
+};
+
+<Predict question="An observer detects faint tones. When paid more for hits, their hit rate rises from 0.69 to 0.84 and their false-alarm rate from 0.16 to 0.31. Did their hearing get better, worse, or stay the same?" />
+
+<Step n={1} title="Two distributions and a criterion" minutes={20} />
+
+On each trial the observer receives an internal response $x$. On noise trials, $x \sim \mathcal N(0, 1)$; on signal trials, $x \sim \mathcal N(d', 1)$. The observer says "yes" if $x$ exceeds a criterion $k$. Then the hit rate and false-alarm rate are
+
+$$
+H = 1 - \Phi(k - d'), \qquad F = 1 - \Phi(k),
+$$
+
+where $\Phi$ is the standard normal cumulative distribution. Inverting them gives the two quantities separately:
+
+$$
+d' = z(H) - z(F), \qquad c = -\tfrac12\big(z(H) + z(F)\big),
+$$
+
+where $z = \Phi^{-1}$ and $c$ measures the criterion relative to the midpoint between the distributions (0 is unbiased; positive is conservative). Tanner and Swets showed that human observers detecting tones behave this way: as payoffs or instructions change, hit and false-alarm rates move together along a curve of constant $d'$.
+
+<Video id="8-5RM0k3IKE" title="Utility" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch shows how the costs and rewards of different outcomes change the best decision for the same evidence, the logic behind the criterion of signal detection theory." />
+
+<Step n={2} title="Sensitivity and criterion" minutes={30} />
+
+<Figure caption="Signal detection theory. The noise and signal distributions, the criterion, and the resulting hit and false-alarm rates; the ROC curve on the right traces every criterion at a fixed d'." credit="Interactive figure by Engram, after Tanner and Swets (1954).">
+  <SignalDetection />
+</Figure>
+
+<PyCell id="dprime" title="Payoffs move the criterion" tests={String.raw`
+  import numpy as np
+  def test_same_dprime():
+      "d' is the same (within 0.05) under both payoffs"
+      assert abs(results["neutral"][0] - results["liberal"][0]) < 0.05
+  def test_criterion():
+      "the liberal payoff lowers the criterion by more than 0.4"
+      assert results["neutral"][1] - results["liberal"][1] > 0.4
+`} prompt="Write sdt(H, F) returning d' and c. Apply it to the predict question's two conditions."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.stats import norm
+
+  def sdt(H, F):
+      ...
+
+  results = {"neutral": sdt(0.69, 0.16), "liberal": sdt(0.84, 0.31)}
+  for k, (d, c) in results.items():
+      print(f"{k:8s}: d' = {d:.2f}, c = {c:+.2f}")
+`}
+hint="z = norm.ppf; return z(H) - z(F), -0.5 * (z(H) + z(F))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.stats import norm
+
+  def sdt(H, F):
+      z = norm.ppf
+      return z(H) - z(F), -0.5 * (z(H) + z(F))
+
+  results = {"neutral": sdt(0.69, 0.16), "liberal": sdt(0.84, 0.31)}
+  for k, (d, c) in results.items():
+      print(f"{k:8s}: d' = {d:.2f}, c = {c:+.2f}")
+`} />
+
+Both conditions give $d' = 1.49$; only the criterion moved, from $+0.25$ (slightly conservative) to $-0.25$ (slightly liberal). The observer's hearing did not change at all; the payoff made them say yes more readily, which raised hits and false alarms together. Comparing hit rates alone would have suggested better detection. This is why attention, emotion and drug effects on perception must be analysed with $d'$ and $c$, not with hit rates.
+
+<Step n={3} title="ROC curves from ratings" minutes={35} />
+
+Running a separate block for each payoff is slow. Instead, ask the observer to rate confidence on, say, a six-point scale, from "sure no" to "sure yes". Each boundary between ratings acts as a criterion, and cumulating the ratings from the top gives a whole receiver operating characteristic (ROC) in one experiment. Plotted as $z(H)$ against $z(F)$, an equal-variance observer gives a straight line of slope 1; if the signal distribution is wider than the noise distribution, as is common in memory and some perception experiments, the slope is $\sigma_n/\sigma_s$, less than 1.
+
+<PyCell id="roc" title="Ratings, ROC and the z-ROC slope" tests={String.raw`
+  import numpy as np
+  def test_equal():
+      "for the equal-variance observer the z-ROC slope is within 0.1 of 1"
+      assert abs(slope["equal"] - 1) < 0.1
+  def test_unequal():
+      "for the unequal-variance observer (signal sd 1.5) the slope is near 1/1.5"
+      assert abs(slope["unequal"] - 1 / 1.5) < 0.1
+  def test_auc():
+      "the equal-variance area under the ROC is within 0.04 of Phi(d'/sqrt 2)"
+      assert abs(auc["equal"] - norm.cdf(1.5 / np.sqrt(2))) < 0.04
+`} prompt="Simulate 2,000 noise and 2,000 signal trials (d' = 1.5) with rating boundaries at -0.5, 0, 0.5, 1, 1.5. For each boundary compute H and F as the fraction of ratings above it, fit a line to (z(F), z(H)), and compute the area under the ROC with the trapezium rule (adding the corners 0,0 and 1,1)."
+code={String.raw`
+  r = np.random.default_rng(1954)
+  bounds = np.array([-0.5, 0.0, 0.5, 1.0, 1.5])
+
+  def roc(sd_signal, n=2000, d=1.5):
+      noise = r.normal(0, 1, n); signal = r.normal(d, sd_signal, n)
+      H = ...
+      F = ...
+      return H, F
+
+  slope, auc = {}, {}
+  for name, sd in [("equal", 1.0), ("unequal", 1.5)]:
+      H, F = roc(sd)
+      slope[name] = np.polyfit(norm.ppf(F), norm.ppf(H), 1)[0]
+      Fs, Hs = np.r_[0, F[::-1], 1], np.r_[0, H[::-1], 1]
+      auc[name] = np.trapz(Hs, Fs) if hasattr(np, "trapz") else np.trapezoid(Hs, Fs)
+      plt.plot(Fs, Hs, "o-", label=name)
+      print(f"{name:8s}: z-ROC slope {slope[name]:.2f}, area under ROC {auc[name]:.3f}")
+  plt.plot([0, 1], [0, 1], "k:"); plt.xlabel("false-alarm rate"); plt.ylabel("hit rate"); plt.legend(); plt.show()
+`}
+hint="H = np.array([(signal > b).mean() for b in bounds]); F = np.array([(noise > b).mean() for b in bounds])."
+solution={String.raw`
+  r = np.random.default_rng(1954)
+  bounds = np.array([-0.5, 0.0, 0.5, 1.0, 1.5])
+
+  def roc(sd_signal, n=2000, d=1.5):
+      noise = r.normal(0, 1, n); signal = r.normal(d, sd_signal, n)
+      H = np.array([(signal > b).mean() for b in bounds])
+      F = np.array([(noise > b).mean() for b in bounds])
+      return H, F
+
+  slope, auc = {}, {}
+  for name, sd in [("equal", 1.0), ("unequal", 1.5)]:
+      H, F = roc(sd)
+      slope[name] = np.polyfit(norm.ppf(F), norm.ppf(H), 1)[0]
+      Fs, Hs = np.r_[0, F[::-1], 1], np.r_[0, H[::-1], 1]
+      auc[name] = np.trapz(Hs, Fs) if hasattr(np, "trapz") else np.trapezoid(Hs, Fs)
+      plt.plot(Fs, Hs, "o-", label=name)
+      print(f"{name:8s}: z-ROC slope {slope[name]:.2f}, area under ROC {auc[name]:.3f}")
+  plt.plot([0, 1], [0, 1], "k:"); plt.xlabel("false-alarm rate"); plt.ylabel("hit rate"); plt.legend(); plt.show()
+`} />
+
+The equal-variance observer's z-ROC has a slope of 0.97, close to 1, and the unequal-variance observer's 0.63, close to the predicted $1/1.5 = 0.67$. The area under the equal-variance ROC is 0.84, a little below $\Phi(1.5/\sqrt2) = 0.86$ because joining five points with straight lines cuts the corners of a smooth curve. Recognition memory experiments typically give z-ROC slopes near 0.8, which is one piece of evidence that remembered items produce more variable memory strength than new ones (Wixted, 2007).
+
+<Step n={4} title="Two-alternative forced choice" minutes={20} />
+
+In two-alternative forced choice (2AFC), each trial contains one signal interval and one noise interval, and the observer picks the interval with the larger response. The difference between the two responses has mean $d'$ and standard deviation $\sqrt2$, so
+
+$$
+P_c = \Phi\!\left(\frac{d'}{\sqrt 2}\right),
+$$
+
+which is also the area under the yes-no ROC (Green and Swets, 1966). 2AFC has the advantage of being free of criterion bias, which is why most psychophysics uses it.
+
+<PyCell id="tafc" title="2AFC from first principles" tests={String.raw`
+  import numpy as np
+  def test_match():
+      "simulated 2AFC accuracy matches Phi(d'/sqrt 2) within 0.015 for every d'"
+      assert all(abs(pc_sim[d] - norm.cdf(d / np.sqrt(2))) < 0.015 for d in pc_sim)
+`} prompt="For d' of 0.5, 1, 1.5 and 2, simulate 20,000 2AFC trials and compare the proportion correct with Phi(d'/sqrt 2)."
+code={String.raw`
+  pc_sim = {}
+  for d in [0.5, 1.0, 1.5, 2.0]:
+      s, n_ = r.normal(d, 1, 20000), r.normal(0, 1, 20000)
+      pc_sim[d] = ...
+      print(f"d' = {d}: simulated {pc_sim[d]:.3f}, formula {norm.cdf(d / np.sqrt(2)):.3f}")
+`}
+hint="pc_sim[d] = np.mean(s > n_)."
+solution={String.raw`
+  pc_sim = {}
+  for d in [0.5, 1.0, 1.5, 2.0]:
+      s, n_ = r.normal(d, 1, 20000), r.normal(0, 1, 20000)
+      pc_sim[d] = np.mean(s > n_)
+      print(f"d' = {d}: simulated {pc_sim[d]:.3f}, formula {norm.cdf(d / np.sqrt(2)):.3f}")
+`} />
+
+The simulated accuracies match the formula to within sampling error. A d' of 1 gives 76% correct in 2AFC, which is why thresholds are often defined at 75% correct: that is close to d' = 1.
+
+<Bridge title="Evidence and decision, separated"
+  neuro="Signal detection theory separates what neurons and observers can discriminate from how they choose. Neurometric functions computed from single neurons' responses (Britten et al., 1992) use exactly this logic, and changes in d' against c distinguish perceptual from decisional effects of attention or drugs."
+  ai="The ROC curve and its area are the standard way to evaluate classifiers whose outputs are scores, because they separate the quality of the score from the choice of threshold. Calibration, threshold choice under costs and AUC all come from this theory.">
+
+A yes or a no mixes what you can tell apart with how willing you are to say yes; signal detection theory unmixes them.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "d' measures...", options: ["Separation of signal and noise distributions in noise units", "Willingness to say yes", "Hit rate", "Reaction time"], answer: 0, explain: "Sensitivity." },
+  { q: "d' is computed as...", options: ["z(H) − z(F)", "H − F", "H / F", "z(H) + z(F)"], answer: 0, explain: "Inverse normal of each rate." },
+  { q: "A liberal criterion...", options: ["Raises both hits and false alarms", "Raises hits only", "Raises d'", "Lowers both"], answer: 0, explain: "Moves along the ROC." },
+  { q: "An ROC curve from ratings uses...", options: ["Each rating boundary as a criterion", "One criterion", "Reaction times", "Only 2AFC data"], answer: 0, explain: "One experiment, many criteria." },
+  { q: "A z-ROC slope below 1 indicates...", options: ["A signal distribution wider than noise", "Equal variances", "No sensitivity", "A liberal criterion"], answer: 0, explain: "Slope = σn/σs." },
+  { q: "2AFC accuracy equals...", options: ["Φ(d'/√2)", "Φ(d')", "d'/2", "H − F"], answer: 0, explain: "Difference of two responses has sd √2." },
+  { q: "The area under the yes-no ROC equals...", options: ["2AFC proportion correct", "d'", "The hit rate", "The criterion"], answer: 0, explain: "Green and Swets (1966)." },
+  { q: "2AFC is preferred in psychophysics because...", options: ["It is free of criterion bias", "It is faster", "It needs no stimuli", "It measures reaction time"], answer: 0, explain: "The observer always chooses." },
+]} />
+
+<Flashcards cards={[
+  { front: "d' and c?", back: "$d' = z(H) - z(F)$; $c = -\\tfrac12(z(H) + z(F))$." },
+  { front: "ROC curve?", back: "Hit rate against false-alarm rate across criteria at fixed sensitivity." },
+  { front: "z-ROC slope?", back: "$\\sigma_n/\\sigma_s$: 1 for equal variance, below 1 when signal is more variable." },
+  { front: "2AFC and d'?", back: "$P_c = \\Phi(d'/\\sqrt2)$, also the area under the yes-no ROC." },
+  { front: "Why separate d' from c?", back: "Payoffs, instructions and expectations change c; true perceptual change shows in d'." },
+]} />
+
+<Predict revisit question="Hits 0.69 to 0.84, false alarms 0.16 to 0.31 when paid for hits: better, worse, or the same hearing?" />
+
+<Key title="Before you go">
+<ul>
+<li>Sensitivity and criterion are computed from z-transformed hit and false-alarm rates.</li>
+<li>Payoffs move the criterion; only perceptual change moves d'.</li>
+<li>Confidence ratings give a whole ROC; its z-slope tests equal variance.</li>
+<li>2AFC accuracy is Φ(d'/√2), the area under the ROC.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Tanner and Swets (1954), <em>A decision-making theory of visual detection</em>.</li>
+<li>Green and Swets (1966), <em>Signal Detection Theory and Psychophysics</em>, Wiley.</li>
+<li>Stanislaw and Todorov (1999), <em>Calculation of signal detection theory measures</em>, Behavior Research Methods 31(1), 137 to 149.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A medical screening test is reported to be 95% sensitive. Using today's ideas, explain why that number alone does not tell you how good the test is, and what else you would ask for." />
