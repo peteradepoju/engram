@@ -9,7 +9,6 @@ export default function manifest(): MetadataRoute.Manifest {
     start_url: "/today?source=app",
     scope: "/",
     display: "standalone",
-    orientation: "portrait",
     background_color: "#111018",
     theme_color: "#111018",
     categories: ["education", "science"],

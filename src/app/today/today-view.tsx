@@ -95,7 +95,7 @@ export function TodayView() {
         </section>
 
         <aside className="space-y-4">
-          <div className="md:hidden"><InstallApp compact /></div>
+          <div><InstallApp compact /></div>
           <section className="card p-5">
             <div className="flex items-end justify-between">
               <div><div className="eyebrow">Streak</div><div className="text-4xl font-semibold">{info.current}<span className="ml-1 text-base font-normal text-ink-3">days</span></div></div>
