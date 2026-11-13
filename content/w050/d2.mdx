@@ -1,0 +1,222 @@
+export const meta = {
+  title: "Falsification: checking a model by simulating it",
+  intro: "A model that fits best is not necessarily a model that is right. Likelihoods and information criteria compare models only with each other; they do not say whether any of them reproduces what participants actually did. In 2017 Stefano Palminteri, Valentin Wyart and Étienne Koechlin argued that the decisive test of a computational model is falsification: simulate the fitted model and check whether it reproduces the qualitative patterns in the data that matter for the theory. A model that cannot generate the key effect should be rejected, however good its likelihood. Today you fit two learning models to choices that contain a tendency to repeat, and see a model that fits tolerably fail a simple simulation check.",
+  goals: [
+    "Explain the difference between model comparison and model falsification",
+    "Compute behavioural signatures such as stay probabilities after wins and losses",
+    "Simulate fitted models (posterior predictive checks) and compare their signatures with the data",
+    "Explain why parameters of a mis-specified model can mislead",
+  ],
+  plan: [
+    { label: "Predict and the argument", minutes: 20 },
+    { label: "A behavioural signature", minutes: 25 },
+    { label: "Fitting two models", minutes: 25 },
+    { label: "Simulating the fits", minutes: 35 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "palminteri-2017",
+};
+
+<Predict question="A participant tends to repeat choices regardless of outcome. You fit a learning model without any repetition term. When you simulate the fitted model, will it repeat after losses as often as the participant did, more often, or less often?" />
+
+<Step n={1} title="Comparison is not validation" minutes={20} />
+
+Palminteri, Wyart and Koechlin made three points. **Relative model comparison**, by likelihood, AIC or BIC, picks the best of the models you thought of; if all are wrong, the winner is merely the least wrong, and its parameters can be distorted to compensate. **Absolute model falsification** asks whether the model can generate the data's key features: simulate it with its fitted parameters, analyse the simulated data exactly as you analysed the real data, and compare. And the features to check should be chosen in advance, as the qualitative signatures that distinguish the hypotheses, not just overall accuracy.
+
+This is the same logic as the posterior predictive check of Bayesian statistics (Gelman and colleagues): if replicated data from the fitted model do not look like the observed data, the model is missing something.
+
+<Video id="nHXMSXLcd9A" title="Formulating a hypothesis" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch on turning a question into a testable hypothesis whose predictions a model must reproduce, the starting point for falsifying a model rather than just fitting it." />
+
+<Step n={2} title="A behavioural signature" minutes={25} />
+
+The task is a two-armed bandit with reward probabilities 0.3 and 0.7 that swap every 100 trials, for 400 trials. The simulated participant learns with $\alpha = 0.3$, chooses with $\beta = 3$, and has a perseveration bonus $\kappa = 1.5$ for the option chosen last. Two signatures summarise choice behaviour: the probability of repeating a choice after a win and after a loss.
+
+<Figure caption="Posterior predictive checks. Bars show stay probabilities after wins and losses in the data and in simulations of each fitted model. Change the participant's perseveration and see when the plain learning model fails." credit="Interactive figure by Engram, after Palminteri, Wyart and Koechlin (2017).">
+  <PosteriorPredictive />
+</Figure>
+
+<PyCell id="signature" title="Stay after wins and losses" tests={String.raw`
+  import numpy as np
+  def test_stays():
+      "the participant stays after a loss more than 75% of the time and after a win more than 85%"
+      assert stay_win > 0.85 and stay_loss > 0.75
+`} prompt="Complete run(): on each trial compute utilities beta Q plus kappa for the previous choice, the probability of option 1, then either sample a choice and outcome (simulation) or score the observed choice (fitting), and update Q. Write signatures(a, rw), returning stay probability after wins and after losses."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  r = np.random.default_rng(2017)
+  T = 400
+
+  def run(par, sticky, a_obs=None, rw_obs=None):
+      alpha, beta = par[0], par[1]; kappa = par[2] if sticky else 0.0
+      Q = np.zeros(2); prev = -1; a = np.zeros(T, int); rw = np.zeros(T); L = 0.0
+      for t in range(T):
+          mu = np.array([0.3, 0.7]) if (t // 100) % 2 == 0 else np.array([0.7, 0.3])
+          u = beta * Q + kappa * (np.arange(2) == prev)
+          p1 = 1 / (1 + np.exp(-(u[1] - u[0])))
+          if a_obs is None:
+              a[t] = r.random() < p1; rw[t] = r.random() < mu[a[t]]
+          else:
+              a[t], rw[t] = a_obs[t], rw_obs[t]
+              L -= np.log(max(p1 if a[t] == 1 else 1 - p1, 1e-9))
+          Q[a[t]] += alpha * (rw[t] - Q[a[t]]); prev = a[t]
+      return a, rw, L
+
+  def signatures(a, rw):
+      ...
+
+  a, rw, _ = run([0.3, 3.0, 1.5], sticky=True)
+  stay_win, stay_loss = signatures(a, rw)
+  print(f"participant: stay after win {stay_win:.3f}, stay after loss {stay_loss:.3f}")
+`}
+hint="stay = a[1:] == a[:-1]; win = rw[:-1] == 1; return stay[win].mean(), stay[~win].mean()."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  r = np.random.default_rng(2017)
+  T = 400
+
+  def run(par, sticky, a_obs=None, rw_obs=None):
+      alpha, beta = par[0], par[1]; kappa = par[2] if sticky else 0.0
+      Q = np.zeros(2); prev = -1; a = np.zeros(T, int); rw = np.zeros(T); L = 0.0
+      for t in range(T):
+          mu = np.array([0.3, 0.7]) if (t // 100) % 2 == 0 else np.array([0.7, 0.3])
+          u = beta * Q + kappa * (np.arange(2) == prev)
+          p1 = 1 / (1 + np.exp(-(u[1] - u[0])))
+          if a_obs is None:
+              a[t] = r.random() < p1; rw[t] = r.random() < mu[a[t]]
+          else:
+              a[t], rw[t] = a_obs[t], rw_obs[t]
+              L -= np.log(max(p1 if a[t] == 1 else 1 - p1, 1e-9))
+          Q[a[t]] += alpha * (rw[t] - Q[a[t]]); prev = a[t]
+      return a, rw, L
+
+  def signatures(a, rw):
+      stay = a[1:] == a[:-1]; win = rw[:-1] == 1
+      return stay[win].mean(), stay[~win].mean()
+
+  a, rw, _ = run([0.3, 3.0, 1.5], sticky=True)
+  stay_win, stay_loss = signatures(a, rw)
+  print(f"participant: stay after win {stay_win:.3f}, stay after loss {stay_loss:.3f}")
+`} />
+
+The participant repeats 92% of choices after a win and, strikingly, 82% after a loss. A pure learner with these settings would switch more after losses, because each loss lowers the chosen option's value. The high stay-after-loss rate is the fingerprint of perseveration, and it is visible in the raw data before any model is fitted.
+
+<Step n={3} title="Fitting two models" minutes={25} />
+
+<PyCell id="fits" title="Plain learning and learning with perseveration" tests={String.raw`
+  import numpy as np
+  def test_better():
+      "the perseveration model has a lower negative log-likelihood by more than 10"
+      assert fits["plain"].fun - fits["sticky"].fun > 10
+  def test_beta():
+      "the plain model's beta is inflated above the true 3"
+      assert fits["plain"].x[1] > 3.5
+`} prompt="Fit the plain model (alpha, beta) and the sticky model (alpha, beta, kappa) to the participant's choices with L-BFGS-B."
+code={String.raw`
+  fits = {}
+  for name, sticky, x0, bounds in [("plain", False, [0.5, 3.0], [(0.01, 1), (0, 20)]), ("sticky", True, [0.5, 3.0, 0.0], [(0.01, 1), (0, 20), (-5, 5)])]:
+      fits[name] = ...
+      print(f"{name:6s}: parameters {np.round(fits[name].x, 2)}, NLL {fits[name].fun:.1f}")
+`}
+hint="fits[name] = minimize(lambda p: run(p, sticky, a, rw)[2], x0, method='L-BFGS-B', bounds=bounds)."
+solution={String.raw`
+  fits = {}
+  for name, sticky, x0, bounds in [("plain", False, [0.5, 3.0], [(0.01, 1), (0, 20)]), ("sticky", True, [0.5, 3.0, 0.0], [(0.01, 1), (0, 20), (-5, 5)])]:
+      fits[name] = minimize(lambda p: run(p, sticky, a, rw)[2], x0, method="L-BFGS-B", bounds=bounds)
+      print(f"{name:6s}: parameters {np.round(fits[name].x, 2)}, NLL {fits[name].fun:.1f}")
+`} />
+
+The perseveration model fits much better, by 38 units of negative log-likelihood, and recovers parameters close to the truth. The plain model compensates as best it can: its inverse temperature rises from 3 to 5, so it explains runs of repeated choices as unusually consistent value-based choice. If you had only the plain model, you would report this participant as an unusually decisive learner, and a group difference in such inflated values could be entirely spurious.
+
+<Step n={4} title="Simulating the fits" minutes={35} />
+
+<PyCell id="ppc" title="Posterior predictive check" tests={String.raw`
+  import numpy as np
+  def test_plain_fails():
+      "the plain model underpredicts staying after losses by more than 0.1"
+      assert stay_loss - pred["plain"][1] > 0.1
+  def test_sticky_ok():
+      "the sticky model reproduces both signatures within 0.05"
+      assert abs(pred["sticky"][0] - stay_win) < 0.05 and abs(pred["sticky"][1] - stay_loss) < 0.05
+`} prompt="Simulate each fitted model 30 times with its fitted parameters, compute the two stay probabilities for each simulation, and average them."
+code={String.raw`
+  pred = {}
+  for name, sticky in [("plain", False), ("sticky", True)]:
+      sims = [...]
+      pred[name] = np.mean(sims, 0)
+      print(f"{name:6s} model simulations: stay after win {pred[name][0]:.3f}, after loss {pred[name][1]:.3f}")
+  print(f"data:                        stay after win {stay_win:.3f}, after loss {stay_loss:.3f}")
+  x = np.arange(2)
+  plt.bar(x - 0.25, [stay_win, stay_loss], 0.25, label="data"); plt.bar(x, pred["plain"], 0.25, label="plain"); plt.bar(x + 0.25, pred["sticky"], 0.25, label="sticky")
+  plt.xticks(x, ["after win", "after loss"]); plt.ylabel("stay probability"); plt.ylim(0.5, 1); plt.legend(); plt.show()
+`}
+hint="sims = [signatures(*run(fits[name].x, sticky)[:2]) for _ in range(30)]."
+solution={String.raw`
+  pred = {}
+  for name, sticky in [("plain", False), ("sticky", True)]:
+      sims = [signatures(*run(fits[name].x, sticky)[:2]) for _ in range(30)]
+      pred[name] = np.mean(sims, 0)
+      print(f"{name:6s} model simulations: stay after win {pred[name][0]:.3f}, after loss {pred[name][1]:.3f}")
+  print(f"data:                        stay after win {stay_win:.3f}, after loss {stay_loss:.3f}")
+  x = np.arange(2)
+  plt.bar(x - 0.25, [stay_win, stay_loss], 0.25, label="data"); plt.bar(x, pred["plain"], 0.25, label="plain"); plt.bar(x + 0.25, pred["sticky"], 0.25, label="sticky")
+  plt.xticks(x, ["after win", "after loss"]); plt.ylabel("stay probability"); plt.ylim(0.5, 1); plt.legend(); plt.show()
+`} />
+
+Simulated with its fitted parameters, the plain model stays after losses only 64% of the time, far below the participant's 82%: it cannot produce the key effect, and so it is falsified, whatever its likelihood. The perseveration model reproduces both signatures within a couple of percentage points. Note that the plain model gets the stay-after-win rate roughly right; a check based only on overall accuracy or win-stay would have missed its failure.
+
+<Callout kind="think">
+
+Which signatures you check determines which failures you can find. Stay probabilities caught missing perseveration; they would not catch a model with the wrong learning rate after reversals. Before fitting, write down the two or three behavioural effects that your theory exists to explain, and treat reproducing them as a requirement, not a bonus.
+
+</Callout>
+
+<Bridge title="A model must be able to behave"
+  neuro="Computational psychiatry and cognitive neuroscience increasingly require that fitted models reproduce key behavioural effects, because parameters of mis-specified models, such as an inflated inverse temperature, can produce spurious group differences."
+  ai="Evaluating generative models by sampling from them and comparing statistics of samples with data is standard practice, from images to language. A model with good likelihood can still produce samples that are wrong in ways that matter.">
+
+Fit to compare; simulate to falsify.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Relative model comparison tells you...", options: ["Which of your candidate models is best", "Whether any model is correct", "The true parameters", "The noise ceiling"], answer: 0, explain: "Least wrong among those tried." },
+  { q: "Model falsification asks whether...", options: ["The fitted model can generate the data's key features", "Its likelihood is highest", "It has few parameters", "It converges"], answer: 0, explain: "Palminteri et al. (2017)." },
+  { q: "A posterior predictive check...", options: ["Simulates the fitted model and compares statistics with the data", "Computes BIC", "Fits a prior", "Removes outliers"], answer: 0, explain: "Replicated data." },
+  { q: "Without a perseveration term, a fitted learning model tends to...", options: ["Inflate β", "Deflate β", "Set α to 0", "Fit perfectly"], answer: 0, explain: "Repetition is absorbed as consistency." },
+  { q: "The plain model underpredicts...", options: ["Staying after losses", "Staying after wins", "Learning", "Reversals"], answer: 0, explain: "It has no reason to repeat a losing choice." },
+  { q: "Signatures to check should be chosen...", options: ["In advance, from the theory", "After seeing which model fails", "At random", "By the reviewer"], answer: 0, explain: "To avoid circularity." },
+  { q: "A model with the best BIC...", options: ["Can still fail to reproduce key effects", "Is always correct", "Has the true parameters", "Needs no checking"], answer: 0, explain: "Comparison is relative." },
+  { q: "Analysing simulated data should be done...", options: ["Exactly as the real data were analysed", "Differently", "Only for the winning model", "Without the task"], answer: 0, explain: "Like for like." },
+]} />
+
+<Flashcards cards={[
+  { front: "Comparison against falsification?", back: "Comparison ranks candidate models; falsification tests whether a model can generate the observed behaviour." },
+  { front: "Posterior predictive check?", back: "Simulate data from the fitted model, analyse them like the real data, compare key statistics." },
+  { front: "Stay probabilities?", back: "P(repeat choice | previous outcome win) and P(repeat | loss); separate learning from perseveration." },
+  { front: "Mis-specified model's parameters?", back: "Can be distorted to absorb missing processes, e.g. β inflated by unmodelled perseveration." },
+  { front: "Palminteri et al. (2017) main advice?", back: "Simulate fitted models and check they reproduce the theory-relevant effects before interpreting them." },
+]} />
+
+<Predict revisit question="Fitting a learning model without repetition to a repetitive participant: will its simulations stay after losses as often as the participant?" />
+
+<Key title="Before you go">
+<ul>
+<li>Model comparison is relative; falsification is absolute.</li>
+<li>Simulate fitted models and analyse the simulations like the data.</li>
+<li>Check signatures chosen from the theory, such as stay after wins and losses.</li>
+<li>Missing processes distort the parameters of the models that lack them.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Palminteri, Wyart and Koechlin (2017), <em>The importance of falsification in computational cognitive modeling</em>.</li>
+<li>Gelman, Meng and Stern (1996), <em>Posterior predictive assessment of model fitness via realized discrepancies</em>, Statistica Sinica 6(4), 733 to 760.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Think of a published result that depends on a fitted model parameter, from this course or elsewhere. What behavioural signature would you want to see the fitted model reproduce before you believed the parameter?" />

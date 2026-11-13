@@ -1,0 +1,268 @@
+export const meta = {
+  title: "Hidden states in behaviour: the GLM-HMM",
+  intro: "A psychometric curve averaged over a session assumes that the animal used one strategy throughout. In 2022 Zoe Ashwood, Nicholas Roy, Iris Stone, the International Brain Laboratory, Anne Urai, Anne Churchland, Alexandre Pouget and Jonathan Pillow showed that mice in perceptual decision tasks do not. Fitting a hidden Markov model whose states each have their own logistic-regression choice policy (a GLM-HMM), they found that mice switch between an engaged state, in which choices follow the stimulus closely, and disengaged states, in which choices are biased towards one side, staying in each for tens to hundreds of trials. The lapses of a single psychometric curve were mostly time spent in these other states. Today you simulate such a mouse, infer its hidden states with the forward-backward algorithm, and fit the whole model by expectation maximisation. Next week you will apply these tools to data in the format of the International Brain Laboratory.",
+  goals: [
+    "Describe the GLM-HMM and what its states represent",
+    "Show that a mixture of strategies produces apparent lapses in a single psychometric curve",
+    "Compute posterior state probabilities with the forward-backward algorithm",
+    "Fit state weights and transition probabilities by expectation maximisation",
+  ],
+  plan: [
+    { label: "Predict and the model", minutes: 15 },
+    { label: "A mouse with two strategies", minutes: 25 },
+    { label: "Forward-backward", minutes: 35 },
+    { label: "Learning by EM", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "ashwood-2022",
+};
+
+<Predict question="A mouse spends 60% of trials in an engaged state with near-perfect choices and 40% in a state where it mostly chooses right regardless of the stimulus. If you fit one psychometric curve to all trials, what will you see at strong left stimuli?" />
+
+<Step n={1} title="The model" minutes={15} />
+
+In each trial $t$ the mouse is in one of $K$ hidden states $z_t$. In state $k$ it chooses right with probability
+
+$$
+P(y_t = 1 \mid z_t = k) = \sigma(\mathbf w_k^\top\mathbf x_t),
+$$
+
+a logistic regression on inputs $\mathbf x_t$ (here the signed stimulus contrast and a constant for bias). States follow a Markov chain with transition matrix $A$, $A_{jk} = P(z_{t+1} = k \mid z_t = j)$. Ashwood and colleagues fitted this model to mice from the International Brain Laboratory (Weeks 2 and 3) and to mice in other tasks, and found that three states described most animals: one engaged, and two biased towards left or right. The states were persistent, with expected dwell times of many trials, and differed in response times as well as in choice, supporting the interpretation that they reflect internal states rather than fitting artefacts.
+
+<Video id="fErhvxE9SHs" title="Inference in an HMM" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch explains how to infer the hidden state of a hidden Markov model from a sequence of observations, the forward computation at the heart of today's model." />
+
+<Step n={2} title="A mouse with two strategies" minutes={25} />
+
+<Figure caption="Psychometric curves from a two-state mouse. Pink: engaged state. Blue: disengaged, right-biased state. Black: the single curve fitted to all trials, whose apparent lapses come from mixing the states." credit="Interactive figure by Engram, after Ashwood et al. (2022).">
+  <GLMHMMStates />
+</Figure>
+
+<PyCell id="simulate" title="Simulating a GLM-HMM" tests={String.raw`
+  import numpy as np
+  def test_dwell():
+      "states persist: mean run length above 20 trials"
+      runs = np.diff(np.flatnonzero(np.diff(np.r_[-1, s, -1]) != 0))
+      assert runs.mean() > 20
+  def test_lapse():
+      "pooled across states, right choices at the strongest left contrast exceed 10%"
+      assert y[stim == -1].mean() > 0.1
+`} prompt="Simulate 3,000 trials: the state switches with probability 1 minus the diagonal of A_true; the stimulus is drawn from nine signed contrasts; the choice is right with probability sigma(w_k . x) for the current state."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2022)
+  T = 3000
+  W_true = np.array([[4.0, 0.0],        # engaged: strong stimulus weight, no bias
+                     [0.5, 1.5]])       # disengaged: weak stimulus weight, right bias
+  A_true = np.array([[0.98, 0.02], [0.03, 0.97]])
+  contrasts = np.array([-1, -0.5, -0.25, -0.125, 0, 0.125, 0.25, 0.5, 1])
+
+  s = np.zeros(T, int)
+  for t in range(1, T):
+      ...
+  stim = r.choice(contrasts, T)
+  X = np.c_[stim, np.ones(T)]
+  p_right = ...
+  y = (r.random(T) < p_right).astype(float)
+  print(f"fraction of trials engaged {np.mean(s == 0):.2f}; right choices at contrast -1: engaged {y[(stim == -1) & (s == 0)].mean():.2f}, disengaged {y[(stim == -1) & (s == 1)].mean():.2f}, pooled {y[stim == -1].mean():.2f}")
+  for k, lab in [(0, "engaged"), (1, "disengaged")]:
+      plt.plot(contrasts, [y[(stim == c) & (s == k)].mean() for c in contrasts], "o-", label=lab)
+  plt.plot(contrasts, [y[stim == c].mean() for c in contrasts], "k--", label="pooled")
+  plt.xlabel("signed contrast"); plt.ylabel("P(right)"); plt.legend(); plt.show()
+`}
+hint="s[t] = (1 - s[t - 1]) if r.random() > A_true[s[t - 1], s[t - 1]] else s[t - 1]; p_right = 1 / (1 + np.exp(-(X * W_true[s]).sum(1)))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2022)
+  T = 3000
+  W_true = np.array([[4.0, 0.0],        # engaged: strong stimulus weight, no bias
+                     [0.5, 1.5]])       # disengaged: weak stimulus weight, right bias
+  A_true = np.array([[0.98, 0.02], [0.03, 0.97]])
+  contrasts = np.array([-1, -0.5, -0.25, -0.125, 0, 0.125, 0.25, 0.5, 1])
+
+  s = np.zeros(T, int)
+  for t in range(1, T):
+      s[t] = (1 - s[t - 1]) if r.random() > A_true[s[t - 1], s[t - 1]] else s[t - 1]
+  stim = r.choice(contrasts, T)
+  X = np.c_[stim, np.ones(T)]
+  p_right = 1 / (1 + np.exp(-(X * W_true[s]).sum(1)))
+  y = (r.random(T) < p_right).astype(float)
+  print(f"fraction of trials engaged {np.mean(s == 0):.2f}; right choices at contrast -1: engaged {y[(stim == -1) & (s == 0)].mean():.2f}, disengaged {y[(stim == -1) & (s == 1)].mean():.2f}, pooled {y[stim == -1].mean():.2f}")
+  for k, lab in [(0, "engaged"), (1, "disengaged")]:
+      plt.plot(contrasts, [y[(stim == c) & (s == k)].mean() for c in contrasts], "o-", label=lab)
+  plt.plot(contrasts, [y[stim == c].mean() for c in contrasts], "k--", label="pooled")
+  plt.xlabel("signed contrast"); plt.ylabel("P(right)"); plt.legend(); plt.show()
+`} />
+
+The mouse is engaged on about half the trials. At the strongest left contrast, it chooses right on 1% of engaged trials and 78% of disengaged trials, and the pooled curve shows 41%: a huge apparent lapse rate. Fitted with one psychometric curve plus lapse parameters (Week 37), this mouse would look like a careless observer on every trial, when in fact it is a near-perfect observer part of the time and a strongly biased one the rest. The states last about 40 trials on average, long enough to matter for any analysis that averages over trials.
+
+<Step n={3} title="Forward-backward" minutes={35} />
+
+Given the parameters, the posterior probability of each state at each trial combines what came before and what came after. The **forward** pass computes $\alpha_t(k) \propto P(z_t = k, y_{1:t})$ recursively, normalising at each step; the **backward** pass computes $\beta_t(k) \propto P(y_{t+1:T} \mid z_t = k)$; their product, normalised, is $\gamma_t(k) = P(z_t = k \mid y_{1:T})$.
+
+<PyCell id="fb" title="Posterior over hidden states" tests={String.raw`
+  import numpy as np
+  def test_accuracy():
+      "with the true parameters, the most probable state matches the true state on more than 85% of trials"
+      assert np.mean(gamma.argmax(1) == s) > 0.85
+`} prompt="Write forward_backward(X, y, W, A, pi): compute the per-trial likelihood of the observed choice under each state, run the scaled forward recursion and the backward recursion, and return gamma, the scaling constants and the forward and backward variables."
+code={String.raw`
+  def forward_backward(X, y, W, A, pi):
+      P = 1 / (1 + np.exp(-X @ W.T))
+      like = np.where(y[:, None] == 1, P, 1 - P)
+      T_, K = like.shape
+      al = np.zeros((T_, K)); c = np.zeros(T_)
+      al[0] = pi * like[0]; c[0] = al[0].sum(); al[0] /= c[0]
+      for t in range(1, T_):
+          ...
+      be = np.ones((T_, K))
+      for t in range(T_ - 2, -1, -1):
+          ...
+      g = al * be; g /= g.sum(1, keepdims=True)
+      return g, c, al, be, like
+
+  gamma, c, *_ = forward_backward(X, y, W_true, A_true, np.array([0.5, 0.5]))
+  print(f"state decoding accuracy with true parameters: {np.mean(gamma.argmax(1) == s):.3f}; log-likelihood {np.log(c).sum():.1f}")
+  plt.plot(gamma[:400, 1], label="P(disengaged)"); plt.plot(s[:400], "k:", label="true state"); plt.xlabel("trial"); plt.legend(); plt.show()
+`}
+hint="Forward: al[t] = (al[t - 1] @ A) * like[t]; c[t] = al[t].sum(); al[t] /= c[t]. Backward: be[t] = (A @ (like[t + 1] * be[t + 1])) / c[t + 1]."
+solution={String.raw`
+  def forward_backward(X, y, W, A, pi):
+      P = 1 / (1 + np.exp(-X @ W.T))
+      like = np.where(y[:, None] == 1, P, 1 - P)
+      T_, K = like.shape
+      al = np.zeros((T_, K)); c = np.zeros(T_)
+      al[0] = pi * like[0]; c[0] = al[0].sum(); al[0] /= c[0]
+      for t in range(1, T_):
+          al[t] = (al[t - 1] @ A) * like[t]; c[t] = al[t].sum(); al[t] /= c[t]
+      be = np.ones((T_, K))
+      for t in range(T_ - 2, -1, -1):
+          be[t] = (A @ (like[t + 1] * be[t + 1])) / c[t + 1]
+      g = al * be; g /= g.sum(1, keepdims=True)
+      return g, c, al, be, like
+
+  gamma, c, *_ = forward_backward(X, y, W_true, A_true, np.array([0.5, 0.5]))
+  print(f"state decoding accuracy with true parameters: {np.mean(gamma.argmax(1) == s):.3f}; log-likelihood {np.log(c).sum():.1f}")
+  plt.plot(gamma[:400, 1], label="P(disengaged)"); plt.plot(s[:400], "k:", label="true state"); plt.xlabel("trial"); plt.legend(); plt.show()
+`} />
+
+With the true parameters, the most probable state matches the true state on 94% of trials. The posterior is confident during long runs and uncertain near switches, where a few ambiguous choices could belong to either state; trials with strong stimuli are the most informative, because only there do the two states predict different choices. On zero-contrast trials, choices say little about the state, and the posterior relies on the states' persistence.
+
+<Step n={4} title="Learning by EM" minutes={30} />
+
+Expectation maximisation alternates the forward-backward pass (E-step) with updates of the parameters (M-step): the transition matrix from expected transition counts, $\xi$, and each state's weights by a weighted logistic regression in which trial $t$ counts with weight $\gamma_t(k)$.
+
+<PyCell id="em" title="Fitting the GLM-HMM" tests={String.raw`
+  import numpy as np
+  def test_weights():
+      "the engaged state's stimulus weight is recovered within 0.8 and the disengaged bias within 0.5"
+      assert abs(W_fit[0, 0] - 4) < 0.8 and abs(W_fit[1, 1] - 1.5) < 0.5
+  def test_states():
+      "the fitted model decodes states with accuracy above 0.85"
+      assert np.mean(g_fit.argmax(1) == s) > 0.85
+`} prompt="Complete the M-step: accumulate expected transitions xi over trials, normalise rows to get A, and update each state's weights with five Newton steps of gamma-weighted logistic regression. Run 40 iterations from random weights, then order states by stimulus weight."
+code={String.raw`
+  def fit_glmhmm(X, y, K=2, iters=40, seed=0):
+      g0 = np.random.default_rng(seed)
+      W = g0.normal(0, 1, (K, X.shape[1])); A = np.full((K, K), 0.05 / (K - 1)); np.fill_diagonal(A, 0.95); pi = np.ones(K) / K
+      for it in range(iters):
+          g, c, al, be, like = forward_backward(X, y, W, A, pi)
+          xi = np.zeros((K, K))
+          for t in range(len(y) - 1):
+              xi += al[t][:, None] * A * (like[t + 1] * be[t + 1])[None] / c[t + 1]
+          A = ...
+          pi = g[0]
+          for k in range(K):
+              for _ in range(5):
+                  pk = 1 / (1 + np.exp(-X @ W[k]))
+                  grad = ...
+                  H = -(X * (g[:, k] * pk * (1 - pk))[:, None]).T @ X - 1e-3 * np.eye(X.shape[1])
+                  W[k] -= np.linalg.solve(H, grad)
+      return W, A, g, np.log(c).sum()
+
+  W_fit, A_fit, g_fit, ll = fit_glmhmm(X, y)
+  order = np.argsort(-W_fit[:, 0]); W_fit, A_fit, g_fit = W_fit[order], A_fit[np.ix_(order, order)], g_fit[:, order]
+  print("fitted weights (stimulus, bias):\n", np.round(W_fit, 2)); print("fitted transitions:\n", np.round(A_fit, 3))
+  print(f"state decoding accuracy {np.mean(g_fit.argmax(1) == s):.3f}; log-likelihood {ll:.1f}")
+`}
+hint="A = xi / xi.sum(1, keepdims=True); grad = X.T @ (g[:, k] * (y - pk))."
+solution={String.raw`
+  def fit_glmhmm(X, y, K=2, iters=40, seed=0):
+      g0 = np.random.default_rng(seed)
+      W = g0.normal(0, 1, (K, X.shape[1])); A = np.full((K, K), 0.05 / (K - 1)); np.fill_diagonal(A, 0.95); pi = np.ones(K) / K
+      for it in range(iters):
+          g, c, al, be, like = forward_backward(X, y, W, A, pi)
+          xi = np.zeros((K, K))
+          for t in range(len(y) - 1):
+              xi += al[t][:, None] * A * (like[t + 1] * be[t + 1])[None] / c[t + 1]
+          A = xi / xi.sum(1, keepdims=True)
+          pi = g[0]
+          for k in range(K):
+              for _ in range(5):
+                  pk = 1 / (1 + np.exp(-X @ W[k]))
+                  grad = X.T @ (g[:, k] * (y - pk))
+                  H = -(X * (g[:, k] * pk * (1 - pk))[:, None]).T @ X - 1e-3 * np.eye(X.shape[1])
+                  W[k] -= np.linalg.solve(H, grad)
+      return W, A, g, np.log(c).sum()
+
+  W_fit, A_fit, g_fit, ll = fit_glmhmm(X, y)
+  order = np.argsort(-W_fit[:, 0]); W_fit, A_fit, g_fit = W_fit[order], A_fit[np.ix_(order, order)], g_fit[:, order]
+  print("fitted weights (stimulus, bias):\n", np.round(W_fit, 2)); print("fitted transitions:\n", np.round(A_fit, 3))
+  print(f"state decoding accuracy {np.mean(g_fit.argmax(1) == s):.3f}; log-likelihood {ll:.1f}")
+`} />
+
+From random starting weights, 40 iterations recover the engaged state's stimulus weight (4.07 against 4) and the disengaged state's weak stimulus weight and right bias (0.41 and 1.57 against 0.5 and 1.5), and the transition matrix is close to the truth. The fitted model decodes states as well as the true one, and its log-likelihood is slightly higher, as a fitted model's should be. Ordering states by stimulus weight after fitting resolves the labelling ambiguity: EM does not know which state is 'engaged'.
+
+<Callout kind="warning">
+
+EM finds a local maximum of the likelihood, so fit from several random starts and keep the best. The number of states must be chosen, by cross-validated likelihood on held-out sessions, as Ashwood and colleagues did; more states always fit training data better. And states are defined by choice policies alone: a "disengaged" state may be lapses of attention, exploration, a strategy based on previous trials, or a mixture, and other measures (response times, pupil, neural activity) are needed to interpret it.
+
+</Callout>
+
+<Bridge title="Behaviour has states"
+  neuro="Mice switch between engaged and biased strategies that persist over many trials, and these states account for most apparent lapses. Neural activity in many brain areas differs between such states, which matters for every analysis that pools trials."
+  ai="Hidden Markov models and their switching variants are classic tools for sequence data, and the same idea, a latent mode that changes the policy, appears in hierarchical reinforcement learning and in mixture-of-experts models that route inputs to different experts.">
+
+A noisy average can hide a mixture of clean strategies.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In a GLM-HMM, each hidden state has its own...", options: ["Logistic regression policy", "Reward", "Stimulus set", "Response time only"], answer: 0, explain: "Weights on stimulus and bias." },
+  { q: "Ashwood et al. found that mice...", options: ["Switch between engaged and biased states lasting many trials", "Use one strategy throughout", "Change state every trial", "Never lapse"], answer: 0, explain: "Persistent states." },
+  { q: "Pooling trials across states produces...", options: ["Apparent lapses in a single psychometric curve", "A steeper curve", "No change", "A shift in threshold only"], answer: 0, explain: "Mixing policies." },
+  { q: "The forward pass computes...", options: ["P(state, observations so far), recursively", "The weights", "The transition matrix", "Choices"], answer: 0, explain: "Scaled for stability." },
+  { q: "γₜ(k) is...", options: ["The posterior probability of state k at trial t given all data", "A transition probability", "A weight", "The likelihood"], answer: 0, explain: "Forward times backward." },
+  { q: "In the M-step, each state's weights are updated by...", options: ["Logistic regression weighted by γ", "Averaging choices", "Gradient ascent on transitions", "Copying the true weights"], answer: 0, explain: "Soft assignment." },
+  { q: "The number of states should be chosen by...", options: ["Cross-validated likelihood on held-out data", "Training likelihood", "Always 3", "The number of contrasts"], answer: 0, explain: "More states always fit training data better." },
+  { q: "EM guarantees...", options: ["A non-decreasing likelihood but only a local maximum", "The global maximum", "Correct state labels", "Interpretable states"], answer: 0, explain: "Use multiple starts." },
+]} />
+
+<Flashcards cards={[
+  { front: "GLM-HMM?", back: "Hidden Markov model whose states each have a logistic-regression choice policy, $P(y_t = 1 \\mid z_t = k) = \\sigma(\\mathbf w_k^\\top\\mathbf x_t)$." },
+  { front: "Forward recursion?", back: "$\\alpha_t \\propto (\\alpha_{t-1}A)\\odot\\text{like}_t$, normalised each step." },
+  { front: "Backward recursion?", back: "$\\beta_t = A(\\text{like}_{t+1}\\odot\\beta_{t+1})/c_{t+1}$." },
+  { front: "EM for the GLM-HMM?", back: "E-step: forward-backward for γ and ξ. M-step: A from ξ; weights by γ-weighted logistic regression." },
+  { front: "Ashwood et al. (2022) main finding?", back: "Mice alternate between an engaged state and biased disengaged states lasting tens to hundreds of trials; these explain lapses." },
+]} />
+
+<Predict revisit question="60% engaged and 40% right-biased: what does a single pooled psychometric curve show at strong left stimuli?" />
+
+<Key title="Before you go">
+<ul>
+<li>A GLM-HMM gives each hidden state its own choice policy.</li>
+<li>Mixing states produces apparent lapses in pooled psychometric curves.</li>
+<li>Forward-backward infers state probabilities trial by trial.</li>
+<li>EM learns weights and transitions; choose the number of states by cross-validation.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Ashwood, Roy, Stone, International Brain Laboratory, Urai, Churchland, Pouget and Pillow (2022), <em>Mice alternate between discrete strategies during perceptual decision-making</em>.</li>
+<li>Rabiner (1989), <em>A tutorial on hidden Markov models and selected applications in speech recognition</em>, Proceedings of the IEEE 77(2), 257 to 286.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If animals switch between engaged and disengaged states, how should a neuroscientist analyse neural recordings from such a task? Propose one analysis that uses the inferred states and one result that would surprise you." />

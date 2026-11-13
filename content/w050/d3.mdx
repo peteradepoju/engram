@@ -1,0 +1,208 @@
+export const meta = {
+  title: "Comparing models across a group",
+  intro: "Yesterday's comparisons were within one participant. A study has many, and they may not all use the same strategy. The common practice of adding up each model's log evidence across participants, fixed-effects model comparison, assumes they do, and a few participants with very strong evidence can then decide the result for everyone. In 2009 Klaas Enno Stephan, Will Penny, Jean Daunizeau, Rosalyn Moran and Karl Friston introduced random-effects Bayesian model selection, which treats the model each participant uses as a random variable and estimates how common each model is in the population. Today you see fixed effects mislead, implement the variational algorithm of Stephan and colleagues, and compute exceedance probabilities.",
+  goals: [
+    "Explain fixed-effects and random-effects model comparison",
+    "Show how a minority with strong evidence can dominate a fixed-effects comparison",
+    "Implement random-effects Bayesian model selection by variational updates",
+    "Compute and interpret expected model frequencies and exceedance probabilities",
+  ],
+  plan: [
+    { label: "Predict and the problem", minutes: 20 },
+    { label: "Fixed effects", minutes: 20 },
+    { label: "Random effects", minutes: 40 },
+    { label: "Exceedance probabilities", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "stephan-2009",
+};
+
+<Predict question="Fourteen of twenty participants favour model A modestly; six favour model B overwhelmingly. Summing log evidence across participants, which model wins? Which model do most participants use?" />
+
+<Step n={1} title="Model evidence" minutes={20} />
+
+For each participant $n$ and model $k$, the **log model evidence** $\ell_{nk} = \log p(\text{data}_n \mid \text{model}_k)$ measures how well the model, averaged over its parameters, predicts that participant's data. In practice it is approximated, for example by $-\text{BIC}/2$ or by a variational free energy. Differences in log evidence are log Bayes factors: a difference of 3 means the data are about 20 times more probable under one model.
+
+<Video id="9JfXKmVB6qc" title="Model Fitting: Introduction" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch introduces its model fitting day: estimating parameters, quantifying uncertainty and choosing between models, the groundwork for today's group-level comparison." />
+
+<Step n={2} title="Fixed effects" minutes={20} />
+
+If every participant used the same model, the group evidence would be the product of individual evidences, so log evidences would add:
+
+$$
+\ell_k^\text{group} = \sum_n \ell_{nk}.
+$$
+
+<Figure caption="Fixed against random effects. Each bar is a participant's log Bayes factor for model A over model B. Change the size of the minority and how strongly it favours model B, and compare the fixed-effects verdict with the random-effects estimate of how common each model is." credit="Interactive figure by Engram, after Stephan et al. (2009).">
+  <GroupBMS />
+</Figure>
+
+<PyCell id="ffx" title="Summed log evidence" tests={String.raw`
+  import numpy as np
+  def test_ffx():
+      "fixed effects favours model B, although most participants favour A"
+      assert ffx[1] > ffx[0] and (lme[:, 0] > lme[:, 1]).sum() > 10
+`} prompt="Build the 20 by 2 matrix of log evidences: 14 participants favour A by about 3 (sd 0.5), 6 favour B by about 15 (sd 2). Sum each column."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.special import digamma
+  r = np.random.default_rng(2009)
+  lme = np.zeros((20, 2))
+  lme[:14, 0] = 3 + r.normal(0, 0.5, 14)
+  lme[14:, 1] = 15 + r.normal(0, 2, 6)
+  ffx = ...
+  print(f"fixed effects: log evidence A {ffx[0]:.1f}, B {ffx[1]:.1f}; participants favouring A: {(lme[:, 0] > lme[:, 1]).sum()} of 20")
+`}
+hint="ffx = lme.sum(0)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.special import digamma
+  r = np.random.default_rng(2009)
+  lme = np.zeros((20, 2))
+  lme[:14, 0] = 3 + r.normal(0, 0.5, 14)
+  lme[14:, 1] = 15 + r.normal(0, 2, 6)
+  ffx = lme.sum(0)
+  print(f"fixed effects: log evidence A {ffx[0]:.1f}, B {ffx[1]:.1f}; participants favouring A: {(lme[:, 0] > lme[:, 1]).sum()} of 20")
+`} />
+
+Summed across the group, model B wins by about 50 units of log evidence, a Bayes factor so large it would usually be called decisive. Yet 14 of the 20 participants favour model A. The fixed-effects comparison has answered the question "which single model best explains everyone's data together?", which is the wrong question when people differ: six participants with very strong evidence outvote fourteen with moderate evidence.
+
+<Step n={3} title="Random effects" minutes={40} />
+
+Stephan and colleagues assume each participant's model is drawn from a multinomial with frequencies $\mathbf r$, which have a Dirichlet prior with parameters $\boldsymbol\alpha_0$ (here all 1). Variational Bayes then alternates two steps until convergence:
+
+$$
+u_{nk} = \exp\big(\ell_{nk} + \psi(\alpha_k) - \psi(\textstyle\sum_j \alpha_j)\big), \qquad g_{nk} = \frac{u_{nk}}{\sum_j u_{nj}}, \qquad \alpha_k = \alpha_{0k} + \sum_n g_{nk},
+$$
+
+where $\psi$ is the digamma function and $g_{nk}$ is the posterior probability that participant $n$ used model $k$. The posterior over frequencies is Dirichlet($\boldsymbol\alpha$), so the expected frequency of model $k$ is $\alpha_k/\sum_j\alpha_j$.
+
+<PyCell id="rfx" title="Variational random-effects BMS" tests={String.raw`
+  import numpy as np
+  def test_freq():
+      "the expected frequency of model A is between 0.6 and 0.75"
+      assert 0.6 < freq[0] < 0.75
+  def test_assign():
+      "each participant is assigned to the model it favours with probability above 0.9"
+      assert (g[:14, 0] > 0.9).all() and (g[14:, 1] > 0.9).all()
+`} prompt="Write rfx_bms(lme, iters=100): start from alpha = alpha0 = ones, and repeat the two updates (subtract each row's maximum of the log u before exponentiating, for numerical stability). Return alpha and g."
+code={String.raw`
+  def rfx_bms(lme, iters=100):
+      a0 = np.ones(lme.shape[1]); a = a0.copy()
+      for _ in range(iters):
+          ...
+      return a, g
+
+  alpha, g = rfx_bms(lme)
+  freq = alpha / alpha.sum()
+  print(f"Dirichlet parameters {np.round(alpha, 2)}; expected frequencies A {freq[0]:.3f}, B {freq[1]:.3f}")
+`}
+hint="lu = lme + digamma(a) - digamma(a.sum()); lu -= lu.max(1, keepdims=True); u = np.exp(lu); g = u / u.sum(1, keepdims=True); a = a0 + g.sum(0)."
+solution={String.raw`
+  def rfx_bms(lme, iters=100):
+      a0 = np.ones(lme.shape[1]); a = a0.copy()
+      for _ in range(iters):
+          lu = lme + digamma(a) - digamma(a.sum())
+          lu -= lu.max(1, keepdims=True)
+          u = np.exp(lu); g = u / u.sum(1, keepdims=True)
+          a = a0 + g.sum(0)
+      return a, g
+
+  alpha, g = rfx_bms(lme)
+  freq = alpha / alpha.sum()
+  print(f"Dirichlet parameters {np.round(alpha, 2)}; expected frequencies A {freq[0]:.3f}, B {freq[1]:.3f}")
+`} />
+
+Random-effects selection estimates that about two thirds of the population use model A (expected frequency 0.66) and a third model B, with each participant confidently assigned to the model it favours. The strength of each participant's evidence now matters only for how sure we are about that participant's assignment, not for how much that participant counts. The Dirichlet prior with $\alpha_0 = 1$ pulls the frequencies slightly towards equality, which is why the estimate is 0.66 rather than 14/20 = 0.70.
+
+<Step n={4} title="Exceedance probabilities" minutes={25} />
+
+The **exceedance probability** of model $k$ is the posterior probability that it is more frequent in the population than every other model, $P(r_k \gt r_j\ \forall j \neq k)$. With a Dirichlet posterior it is easily estimated by sampling.
+
+<PyCell id="xp" title="How sure are we that A is more common?" tests={String.raw`
+  import numpy as np
+  def test_xp():
+      "the exceedance probability of model A is above 0.9"
+      assert xp > 0.9
+  def test_small():
+      "with only 5 participants (4 favour A, 1 favours B) it is lower"
+      assert xp_small < xp
+`} prompt="Draw 100,000 samples from Dirichlet(alpha) and compute the fraction in which model A's frequency exceeds B's. Repeat for a group of 5 made of the first 4 participants and the last."
+code={String.raw`
+  def exceedance(alpha, n=100000):
+      s = r.dirichlet(alpha, n)
+      return ...
+
+  xp = exceedance(alpha)
+  alpha_small, _ = rfx_bms(np.r_[lme[:4], lme[-1:]])
+  xp_small = exceedance(alpha_small)
+  print(f"exceedance probability of A: full group {xp:.3f}, group of five {xp_small:.3f}")
+`}
+hint="return np.mean(s[:, 0] > s[:, 1])."
+solution={String.raw`
+  def exceedance(alpha, n=100000):
+      s = r.dirichlet(alpha, n)
+      return np.mean(s[:, 0] > s[:, 1])
+
+  xp = exceedance(alpha)
+  alpha_small, _ = rfx_bms(np.r_[lme[:4], lme[-1:]])
+  xp_small = exceedance(alpha_small)
+  print(f"exceedance probability of A: full group {xp:.3f}, group of five {xp_small:.3f}")
+`} />
+
+With all 20 participants, the posterior probability that model A is more common than B is 0.94; with five participants, four favouring A, it is 0.88, lower because the frequencies are less certain. Exceedance probabilities answer a comparative question about the population, not "how many use A", which is why they should be reported with the expected frequencies, and preferably in their protected form (the warning below).
+
+<Callout kind="warning">
+
+Exceedance probabilities can be overconfident: they never reach 0.5 for all models even when there is no evidence of any difference, because some model is always more frequent in each sample. Rigoux, Stephan, Friston and Daunizeau (2014) introduced the **protected exceedance probability**, which accounts for the possibility that all models are equally frequent; report it, along with expected frequencies, rather than exceedance probabilities alone.
+
+</Callout>
+
+<Bridge title="Populations of strategies"
+  neuro="Participants often differ in which model describes them best. Random-effects model selection estimates the mixture, protects against outliers, and is now the standard for group-level comparisons in model-based neuroimaging and behaviour."
+  ai="Mixture-of-experts gating, ensemble weighting and Bayesian model averaging all face the same question: which of several models explains which data, and with what weight. Random-effects BMS is a Bayesian mixture over models with one assignment per participant.">
+
+Ask not which model wins in total, but how common each model is among the people you studied.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Fixed-effects model comparison assumes...", options: ["Every participant uses the same model", "Each participant uses a different model", "No model is correct", "Equal log evidence"], answer: 0, explain: "Log evidences add." },
+  { q: "A log evidence difference of 3 corresponds to a Bayes factor of about...", options: ["20", "3", "1000", "1"], answer: 0, explain: "e³ ≈ 20." },
+  { q: "Random-effects BMS treats each participant's model as...", options: ["A draw from population frequencies", "Fixed", "Unknown and irrelevant", "Always the best"], answer: 0, explain: "Stephan et al. (2009)." },
+  { q: "The prior over model frequencies is...", options: ["Dirichlet", "Gaussian", "Uniform over models only", "Poisson"], answer: 0, explain: "Conjugate to the multinomial." },
+  { q: "gₙₖ in the variational updates is...", options: ["The posterior probability that participant n used model k", "The log evidence", "The frequency", "A learning rate"], answer: 0, explain: "Assignment probability." },
+  { q: "The expected frequency of model k is...", options: ["αₖ / Σⱼ αⱼ", "αₖ", "Σₙ ℓₙₖ", "1/K"], answer: 0, explain: "Dirichlet mean." },
+  { q: "An exceedance probability is...", options: ["The probability a model is more frequent than all others", "A p value", "The model frequency", "The Bayes factor"], answer: 0, explain: "Estimated by sampling." },
+  { q: "Protected exceedance probabilities account for...", options: ["The possibility that all models are equally frequent", "Outliers", "Missing data", "Parameter recovery"], answer: 0, explain: "Rigoux et al. (2014)." },
+]} />
+
+<Flashcards cards={[
+  { front: "Fixed-effects group evidence?", back: "$\\sum_n \\ell_{nk}$; can be dominated by a few participants with strong evidence." },
+  { front: "Random-effects BMS updates?", back: "$u_{nk} = \\exp(\\ell_{nk} + \\psi(\\alpha_k) - \\psi(\\sum\\alpha))$, $g_{nk} = u_{nk}/\\sum_j u_{nj}$, $\\alpha_k = \\alpha_{0k} + \\sum_n g_{nk}$." },
+  { front: "Expected frequency?", back: "$\\alpha_k/\\sum_j\\alpha_j$ from the Dirichlet posterior." },
+  { front: "Exceedance probability?", back: "$P(r_k \\gt r_j\\ \\forall j \\neq k)$ under the posterior, estimated by sampling." },
+  { front: "Protected exceedance probability?", back: "Exceedance probability corrected for the chance that model frequencies are all equal (Rigoux et al., 2014)." },
+]} />
+
+<Predict revisit question="Fourteen modestly for A, six overwhelmingly for B: which wins by summed evidence, and which do most use?" />
+
+<Key title="Before you go">
+<ul>
+<li>Summing log evidence assumes everyone uses the same model.</li>
+<li>A strong minority can dominate a fixed-effects comparison.</li>
+<li>Random-effects BMS estimates how common each model is.</li>
+<li>Report expected frequencies and protected exceedance probabilities.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Stephan, Penny, Daunizeau, Moran and Friston (2009), <em>Bayesian model selection for group studies</em>.</li>
+<li>Rigoux, Stephan, Friston and Daunizeau (2014), <em>Bayesian model selection for group studies, revisited</em>, NeuroImage 84, 971 to 985.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If participants use different strategies, what should you do next after finding that 65% use model A and 35% model B? Describe two follow-up analyses, one about the people and one about the task." />

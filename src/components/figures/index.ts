@@ -229,3 +229,8 @@ export { ModularNetwork } from "./modular-network";
 export { SurprisalBars } from "./surprisal-bars";
 export { BrainScore } from "./brain-score";
 export { SuccessorFields } from "./successor-fields";
+export { ConfusionMatrix } from "./confusion-matrix";
+export { PosteriorPredictive } from "./posterior-predictive";
+export { GroupBMS } from "./group-bms";
+export { DDMDensity } from "./ddm-density";
+export { GLMHMMStates } from "./glmhmm-states";

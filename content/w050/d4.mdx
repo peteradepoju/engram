@@ -1,0 +1,235 @@
+export const meta = {
+  title: "Fitting the diffusion model by maximum likelihood",
+  intro: "In Week 45 you recovered diffusion model parameters from three summary statistics. Real analyses use every response time, which requires the probability density of reaching a bound at each time. That density is an infinite series, and evaluating it quickly and accurately for every trial in a likelihood was a practical obstacle until Daniel Navarro and Ian Fuss showed in 2009 how many terms are needed. Today you implement the first-passage time density of the Wiener diffusion process, check it against simulation and theory, fit drift, boundary separation and non-decision time to a dataset by maximum likelihood, and check the fit against the data's quantiles.",
+  goals: [
+    "Write the first-passage time density of the Wiener process as a series",
+    "Check that it integrates to the correct choice probability and matches simulated response times",
+    "Fit drift, boundary and non-decision time by maximum likelihood",
+    "Validate the fit with predicted against observed response time quantiles",
+  ],
+  plan: [
+    { label: "Predict and the density", minutes: 20 },
+    { label: "Implementing the series", minutes: 30 },
+    { label: "Maximum likelihood fitting", minutes: 30 },
+    { label: "Checking the fit", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "navarro-fuss-2009",
+};
+
+<Predict question="The density of hitting the lower bound is integrated over all times. What number should it give, and how is that number related to the drift and the bound?" />
+
+<Step n={1} title="The first-passage time density" minutes={20} />
+
+For a Wiener process with drift $v$, unit noise, bounds at 0 and $a$, and starting point $z = wa$, the density of first reaching the lower bound at time $t$ is
+
+$$
+f(t \mid v, a, w) = \frac{1}{a^2}\exp\!\Big(-vaw - \frac{v^2t}{2}\Big)\,\pi\sum_{k=1}^\infty k\,\exp\!\Big(-\frac{k^2\pi^2 t}{2a^2}\Big)\sin(k\pi w).
+$$
+
+The density at the upper bound is obtained by replacing $v$ with $-v$ and $w$ with $1 - w$. The series converges quickly for large $t$ and slowly for small $t$; Navarro and Fuss derived how many terms guarantee a given accuracy and combined it with a second series that converges fast for small times. Using about 60 terms of this large-time series is accurate enough for the response times in this lesson. Observed response times add a non-decision time $t_0$: the density of an observed time $T$ is $f(T - t_0)$.
+
+<Video id="HH7HkQ1kv5M" title="Overview of Tutorials on Hidden Dynamics" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch's overview of its hidden dynamics day, which starts from the sequential probability ratio test and the drift diffusion model whose likelihood you implement today." />
+
+<Step n={2} title="Implementing the series" minutes={30} />
+
+<Figure caption="The first-passage time densities at the two bounds, against a histogram of simulated decisions. Change drift, boundary and starting point and watch both the shapes and the areas, which are the choice probabilities." credit="Interactive figure by Engram, after Navarro and Fuss (2009).">
+  <DDMDensity />
+</Figure>
+
+<PyCell id="density" title="The density and its checks" tests={String.raw`
+  import numpy as np
+  def test_area():
+      "the lower-bound density integrates to the analytic probability within 0.002"
+      assert abs(area_lower - p_lower_theory) < 0.002
+  def test_sim():
+      "it matches the simulated error rate within 0.03"
+      assert abs(area_lower - (1 - ch.mean())) < 0.03
+`} prompt="Write fpt_lower(t, v, a, w, K=60) from the series. Integrate it numerically on a fine grid for v = 1.2, a = 1.5, w = 0.5 and compare with the analytic error probability 1 / (1 + exp(v a)) for an unbiased start and with simulated data."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  r = np.random.default_rng(2009)
+
+  def fpt_lower(t, v, a, w, K=60):
+      ...
+
+  def simulate(v, a, t0, n=1500, dt=0.001):
+      x = np.full(n, a / 2); done = np.zeros(n, bool); ch = np.zeros(n, int); rt = np.zeros(n); k = 0
+      while not done.all() and k < 20000:
+          idx = ~done; x[idx] += v * dt + np.sqrt(dt) * r.normal(size=idx.sum()); k += 1
+          up, lo = idx & (x >= a), idx & (x <= 0)
+          ch[up] = 1; rt[up | lo] = k * dt + t0; done |= up | lo
+      return ch, rt
+
+  ch, rt = simulate(1.2, 1.5, 0.3)
+  tt = np.arange(0.0005, 6, 0.001)
+  area_lower = fpt_lower(tt, 1.2, 1.5, 0.5).sum() * 0.001
+  p_lower_theory = 1 / (1 + np.exp(1.2 * 1.5))
+  print(f"integrated lower density {area_lower:.4f}; analytic {p_lower_theory:.4f}; simulated error rate {1 - ch.mean():.4f}")
+  plt.hist(rt[ch == 1] - 0.3, 60, density=True, alpha=0.4, label="simulated correct")
+  plt.plot(tt, fpt_lower(tt, -1.2, 1.5, 0.5) / (1 - area_lower), label="density (upper, normalised)"); plt.xlim(0, 3); plt.legend(); plt.show()
+`}
+hint="u = t / a ** 2; k = np.arange(1, K + 1)[:, None]; s = np.pi * (k * np.exp(-k ** 2 * np.pi ** 2 * u / 2) * np.sin(k * np.pi * w)).sum(0); return np.exp(-v * a * w - v ** 2 * t / 2) / a ** 2 * s."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  r = np.random.default_rng(2009)
+
+  def fpt_lower(t, v, a, w, K=60):
+      u = t / a ** 2
+      k = np.arange(1, K + 1)[:, None]
+      s = np.pi * (k * np.exp(-k ** 2 * np.pi ** 2 * u / 2) * np.sin(k * np.pi * w)).sum(0)
+      return np.exp(-v * a * w - v ** 2 * t / 2) / a ** 2 * s
+
+  def simulate(v, a, t0, n=1500, dt=0.001):
+      x = np.full(n, a / 2); done = np.zeros(n, bool); ch = np.zeros(n, int); rt = np.zeros(n); k = 0
+      while not done.all() and k < 20000:
+          idx = ~done; x[idx] += v * dt + np.sqrt(dt) * r.normal(size=idx.sum()); k += 1
+          up, lo = idx & (x >= a), idx & (x <= 0)
+          ch[up] = 1; rt[up | lo] = k * dt + t0; done |= up | lo
+      return ch, rt
+
+  ch, rt = simulate(1.2, 1.5, 0.3)
+  tt = np.arange(0.0005, 6, 0.001)
+  area_lower = fpt_lower(tt, 1.2, 1.5, 0.5).sum() * 0.001
+  p_lower_theory = 1 / (1 + np.exp(1.2 * 1.5))
+  print(f"integrated lower density {area_lower:.4f}; analytic {p_lower_theory:.4f}; simulated error rate {1 - ch.mean():.4f}")
+  plt.hist(rt[ch == 1] - 0.3, 60, density=True, alpha=0.4, label="simulated correct")
+  plt.plot(tt, fpt_lower(tt, -1.2, 1.5, 0.5) / (1 - area_lower), label="density (upper, normalised)"); plt.xlim(0, 3); plt.legend(); plt.show()
+`} />
+
+The lower-bound density integrates to 0.1415, against the analytic 0.1419 and a simulated error rate of 0.142: the series is right, and the small shortfall comes from the grid starting just above zero and stopping at 6 s. Normalised, the upper-bound density traces the histogram of simulated correct response times, including its sharp rise and long tail. A density that integrates to less than 1 at each bound, with the two adding to 1, is called defective; the defect at each bound is the probability of that choice.
+
+<Step n={3} title="Maximum likelihood fitting" minutes={30} />
+
+<PyCell id="mle" title="Recovering v, a and t0" tests={String.raw`
+  import numpy as np
+  def test_recover():
+      "fitted drift within 0.15, boundary within 0.1 and non-decision time within 0.02 s"
+      v_, a_, t_ = fit.x
+      assert abs(v_ - 1.2) < 0.15 and abs(a_ - 1.5) < 0.1 and abs(t_ - 0.3) < 0.02
+`} prompt="Write density(t, choice, v, a, t0): the upper-bound density for choice 1 and the lower for choice 0, evaluated at t - t0, with a small floor for times at or below t0. Minimise the negative log-likelihood with Nelder-Mead, returning a large value when a or t0 are out of range."
+code={String.raw`
+  def density(t, choice, v, a, t0, w=0.5):
+      dt_ = t - t0; out = np.full(len(t), 1e-12); ok = dt_ > 1e-4
+      ...
+      return np.maximum(out, 1e-12)
+
+  def nll(p):
+      v, a, t0 = p
+      if a <= 0.2 or not (0 < t0 < rt.min()):
+          return 1e10
+      return -np.sum(np.log(density(rt, ch, v, a, t0)))
+
+  fit = minimize(nll, [0.5, 1.0, 0.1], method="Nelder-Mead", options={"maxiter": 2000, "xatol": 1e-4, "fatol": 1e-4})
+  print(f"fitted v = {fit.x[0]:.3f}, a = {fit.x[1]:.3f}, t0 = {fit.x[2]:.3f} (true 1.2, 1.5, 0.3); NLL {fit.fun:.1f}")
+`}
+hint="lo = fpt_lower(dt_[ok], v, a, w); up = fpt_lower(dt_[ok], -v, a, 1 - w); out[ok] = np.where(choice[ok] == 1, up, lo)."
+solution={String.raw`
+  def density(t, choice, v, a, t0, w=0.5):
+      dt_ = t - t0; out = np.full(len(t), 1e-12); ok = dt_ > 1e-4
+      lo = fpt_lower(dt_[ok], v, a, w); up = fpt_lower(dt_[ok], -v, a, 1 - w)
+      out[ok] = np.where(choice[ok] == 1, up, lo)
+      return np.maximum(out, 1e-12)
+
+  def nll(p):
+      v, a, t0 = p
+      if a <= 0.2 or not (0 < t0 < rt.min()):
+          return 1e10
+      return -np.sum(np.log(density(rt, ch, v, a, t0)))
+
+  fit = minimize(nll, [0.5, 1.0, 0.1], method="Nelder-Mead", options={"maxiter": 2000, "xatol": 1e-4, "fatol": 1e-4})
+  print(f"fitted v = {fit.x[0]:.3f}, a = {fit.x[1]:.3f}, t0 = {fit.x[2]:.3f} (true 1.2, 1.5, 0.3); NLL {fit.fun:.1f}")
+`} />
+
+Starting from a deliberately poor guess, Nelder-Mead recovers drift 1.205, boundary 1.499 and non-decision time 0.306, all within a few per cent of the truth from 1,500 trials. The non-decision time is constrained to lie below the fastest response, since no response can be faster than the non-decision time; this hard edge is one reason fast outliers are so damaging to diffusion model fits.
+
+<Step n={4} title="Checking the fit" minutes={25} />
+
+<PyCell id="quantiles" title="Predicted against observed quantiles" tests={String.raw`
+  import numpy as np
+  def test_quantiles():
+      "predicted 10th to 90th percentiles of correct RTs are within 40 ms of the data"
+      assert np.abs(q_pred - q_data).max() < 0.04
+`} prompt="From the fitted parameters, compute the cumulative distribution of correct response times on a fine grid (cumulative sum of the upper density, normalised by its total), invert it at 0.1, 0.3, 0.5, 0.7 and 0.9, add t0, and compare with the data's quantiles."
+code={String.raw`
+  v_, a_, t_ = fit.x
+  grid = np.arange(0.0005, 6, 0.001)
+  dens = fpt_lower(grid, -v_, a_, 0.5)
+  cdf = ...
+  probs = np.array([0.1, 0.3, 0.5, 0.7, 0.9])
+  q_pred = ...
+  q_data = np.quantile(rt[ch == 1], probs)
+  print("quantiles  data:", np.round(q_data, 3)); print("quantiles model:", np.round(q_pred, 3))
+  plt.plot(q_data, probs, "o", label="data"); plt.plot(q_pred, probs, "x-", label="model"); plt.xlabel("response time (s)"); plt.ylabel("cumulative probability"); plt.legend(); plt.show()
+`}
+hint="cdf = np.cumsum(dens) / dens.sum(); q_pred = np.interp(probs, cdf, grid) + t_."
+solution={String.raw`
+  v_, a_, t_ = fit.x
+  grid = np.arange(0.0005, 6, 0.001)
+  dens = fpt_lower(grid, -v_, a_, 0.5)
+  cdf = np.cumsum(dens) / dens.sum()
+  probs = np.array([0.1, 0.3, 0.5, 0.7, 0.9])
+  q_pred = np.interp(probs, cdf, grid) + t_
+  q_data = np.quantile(rt[ch == 1], probs)
+  print("quantiles  data:", np.round(q_data, 3)); print("quantiles model:", np.round(q_pred, 3))
+  plt.plot(q_data, probs, "o", label="data"); plt.plot(q_pred, probs, "x-", label="model"); plt.xlabel("response time (s)"); plt.ylabel("cumulative probability"); plt.legend(); plt.show()
+`} />
+
+The model's quantiles for correct responses lie within about 15 ms of the data's at every level from the 10th to the 90th percentile. A good likelihood does not guarantee this: if the data had slow errors, or a contaminant distribution, the simple model could fit the bulk well and miss a tail. Quantile plots for correct and error responses, side by side, are the standard visual check, and they correspond to the posterior predictive checks of Day 2.
+
+<Callout kind="note">
+
+In practice, use a tested implementation, such as the Navarro and Fuss approximation in PyDDM, HDDM or the ddm functions of R packages, and fit the full model with across-trial variabilities when the data demand it (Week 45). Response time outliers, such as very fast guesses or very slow lapses, can distort a likelihood fit badly; a mixture with a uniform contaminant distribution, or trimming fixed in advance, protects against them.
+
+</Callout>
+
+<Bridge title="Every trial counts"
+  neuro="Fitting the full response time distribution uses information that summary statistics discard, and it lets the diffusion model be tested against the shapes of correct and error distributions. Hierarchical versions share information across participants."
+  ai="Survival analysis and time-to-event models in machine learning face the same problem of writing a likelihood for when something happens, and first-passage times appear in models of when an agent or a system will cross a threshold.">
+
+Write down the probability of every observation, and the data will tell you the parameters.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The integral of the lower-bound density over time is...", options: ["The probability of hitting the lower bound", "1", "The mean RT", "The drift"], answer: 0, explain: "A defective density." },
+  { q: "For an unbiased start, P(lower) is...", options: ["1 / (1 + exp(v a))", "v a", "1/2 always", "exp(−v)"], answer: 0, explain: "With bounds 0 and a." },
+  { q: "The upper-bound density is obtained by...", options: ["Replacing v with −v and w with 1 − w", "Doubling v", "Swapping a and t", "Integrating"], answer: 0, explain: "Symmetry." },
+  { q: "The large-time series converges slowly for...", options: ["Small times", "Large times", "Large drifts", "All times equally"], answer: 0, explain: "Hence a second series for small t." },
+  { q: "Navarro and Fuss (2009) showed...", options: ["How many terms are needed for a given accuracy", "That the DDM is wrong", "How to simulate RTs", "A closed form"], answer: 0, explain: "Fast and accurate computation." },
+  { q: "Observed RT density with non-decision time t₀ is...", options: ["f(T − t₀)", "f(T + t₀)", "f(T) t₀", "f(T/t₀)"], answer: 0, explain: "Shifted." },
+  { q: "A quantile check compares...", options: ["Predicted and observed RT quantiles", "Parameters", "Likelihoods across models", "Choices only"], answer: 0, explain: "Validation." },
+  { q: "To protect against outlier RTs, one can...", options: ["Add a uniform contaminant to the likelihood", "Ignore errors", "Use mean RT only", "Increase the drift"], answer: 0, explain: "Mixture model." },
+]} />
+
+<Flashcards cards={[
+  { front: "Lower-bound first-passage density?", back: "$\\frac{1}{a^2}e^{-vaw - v^2t/2}\\pi\\sum_k k\\,e^{-k^2\\pi^2t/(2a^2)}\\sin(k\\pi w)$." },
+  { front: "Upper-bound density?", back: "Replace $v \\to -v$ and $w \\to 1 - w$." },
+  { front: "DDM likelihood?", back: "Product over trials of the density at the chosen bound, evaluated at $T - t_0$." },
+  { front: "Fit validation?", back: "Compare predicted and observed RT quantiles for correct and error responses." },
+  { front: "Outlier protection?", back: "Mixture with a uniform distribution of contaminant responses, or pre-specified trimming." },
+]} />
+
+<Predict revisit question="What does the lower-bound density integrate to, and how does that depend on drift and bound?" />
+
+<Key title="Before you go">
+<ul>
+<li>The first-passage density is a rapidly computable series.</li>
+<li>Its integral gives the choice probability; its shape gives the RT distribution.</li>
+<li>Maximum likelihood recovers v, a and t₀ from every trial.</li>
+<li>Check fits against RT quantiles, and guard against outliers.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Navarro and Fuss (2009), <em>Fast and accurate calculations for first-passage times in Wiener diffusion models</em>.</li>
+<li>Shinn, Lam and Murray (2020), <em>A flexible framework for simulating and fitting generalized drift-diffusion models</em>, eLife 9, e56938.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Fitting every trial is more efficient than fitting summary statistics, but also more sensitive to a few odd trials. In your own words, describe when you would prefer EZ-diffusion (Week 45) to a full likelihood fit, and why." />

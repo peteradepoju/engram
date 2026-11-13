@@ -1,0 +1,342 @@
+export const meta = {
+  title: "Forge: Week 50 challenge, quiz and deep read",
+  intro: "This week assembled a workflow for analysing behaviour with models: simulate candidate models and check that they can be recovered; falsify fitted models by simulating them; compare models across a group with random effects; fit diffusion models to every response time; and uncover hidden strategies with a GLM-HMM. Today's challenge applies two of these steps exactly as you will need them in next week's project. First, choose the number of hidden states in a GLM-HMM by cross-validation on held-out trials. Second, take a group of simulated participants who use different strategies, fit every model to every participant, and estimate how common each strategy is with random-effects model selection. Then the quiz, and a critique of Wilson and Collins's ten rules.",
+  goals: [
+    "Choose the number of GLM-HMM states by held-out log-likelihood",
+    "Run a full group model comparison from raw choices to model frequencies",
+    "Connect simulation, recovery, comparison and validation into one workflow",
+    "Critique the ten rules as a standard for computational modelling",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "wilson-collins-2019",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. A model with 3 parameters fitted to 200 trials has negative log-likelihood 110. What is its BIC?
+2. Two models differ in summed log evidence by 4.6. What Bayes factor is that?
+3. A state persists with probability 0.98 per trial. What is its expected dwell time?
+
+<PyCell code={String.raw`
+  import numpy as np
+  print("1.", round(2 * 110 + 3 * np.log(200), 1))
+  print("2.", round(np.exp(4.6), 0))
+  print("3.", round(1 / (1 - 0.98)), "trials")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: how many states?** Simulate Day 5's two-state mouse for 3,000 trials. Fit GLM-HMMs with one, two and three states to the first 2,000 trials, and compute the log-likelihood per trial of the last 1,000 trials under each fitted model (running the forward pass on the test trials). Choose the number of states with the highest held-out likelihood, or the smallest number within a negligible distance of it.
+
+<PyCell id="partA" title="Part A: cross-validating the number of states" tests={String.raw`
+  import numpy as np
+  def test_two_beats_one():
+      "two states improve held-out log-likelihood per trial by more than 0.05 over one"
+      assert held[2] - held[1] > 0.05
+  def test_three_no_gain():
+      "a third state adds less than 0.01 per trial"
+      assert held[3] - held[2] < 0.01
+`} prompt="Using the provided forward_backward and fit_glmhmm, fit K = 1, 2 and 3 to the training trials and store the mean log-likelihood per test trial, computed from the scaling constants of a forward pass on the test trials."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2022)
+  T = 3000
+  W_true = np.array([[4.0, 0.0], [0.5, 1.5]]); A_true = np.array([[0.98, 0.02], [0.03, 0.97]])
+  s = np.zeros(T, int)
+  for t in range(1, T):
+      s[t] = (1 - s[t - 1]) if r.random() > A_true[s[t - 1], s[t - 1]] else s[t - 1]
+  stim = r.choice([-1, -0.5, -0.25, -0.125, 0, 0.125, 0.25, 0.5, 1], T)
+  X = np.c_[stim, np.ones(T)]
+  y = (r.random(T) < 1 / (1 + np.exp(-(X * W_true[s]).sum(1)))).astype(float)
+
+  def forward_backward(X, y, W, A, pi):
+      P = 1 / (1 + np.exp(-X @ W.T)); like = np.where(y[:, None] == 1, P, 1 - P); T_, K = like.shape
+      al = np.zeros((T_, K)); c = np.zeros(T_); al[0] = pi * like[0]; c[0] = al[0].sum(); al[0] /= c[0]
+      for t in range(1, T_):
+          al[t] = (al[t - 1] @ A) * like[t]; c[t] = al[t].sum(); al[t] /= c[t]
+      be = np.ones((T_, K))
+      for t in range(T_ - 2, -1, -1):
+          be[t] = (A @ (like[t + 1] * be[t + 1])) / c[t + 1]
+      g = al * be; g /= g.sum(1, keepdims=True)
+      return g, c, al, be, like
+
+  def fit_glmhmm(X, y, K, iters=25, seed=0):
+      g0 = np.random.default_rng(seed)
+      W = g0.normal(0, 1, (K, 2)); A = np.full((K, K), 0.05 / max(K - 1, 1)); np.fill_diagonal(A, 0.95 if K > 1 else 1.0); pi = np.ones(K) / K
+      for it in range(iters):
+          g, c, al, be, like = forward_backward(X, y, W, A, pi)
+          if K > 1:
+              xi = np.zeros((K, K))
+              for t in range(len(y) - 1):
+                  xi += al[t][:, None] * A * (like[t + 1] * be[t + 1])[None] / c[t + 1]
+              A = xi / xi.sum(1, keepdims=True)
+          pi = g[0]
+          for k in range(K):
+              for _ in range(5):
+                  pk = 1 / (1 + np.exp(-X @ W[k])); grad = X.T @ (g[:, k] * (y - pk))
+                  H = -(X * (g[:, k] * pk * (1 - pk))[:, None]).T @ X - 1e-3 * np.eye(2)
+                  W[k] -= np.linalg.solve(H, grad)
+      return W, A, pi
+
+  train, test = slice(0, 2000), slice(2000, 3000)
+  held = {}
+  for K in [1, 2, 3]:
+      W, A, pi = fit_glmhmm(X[train], y[train], K)
+      ...
+      print(f"K = {K}: held-out log-likelihood per trial {held[K]:.4f}")
+`}
+hint="_, c, *_ = forward_backward(X[test], y[test], W, A, pi); held[K] = np.log(c).sum() / 1000."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2022)
+  T = 3000
+  W_true = np.array([[4.0, 0.0], [0.5, 1.5]]); A_true = np.array([[0.98, 0.02], [0.03, 0.97]])
+  s = np.zeros(T, int)
+  for t in range(1, T):
+      s[t] = (1 - s[t - 1]) if r.random() > A_true[s[t - 1], s[t - 1]] else s[t - 1]
+  stim = r.choice([-1, -0.5, -0.25, -0.125, 0, 0.125, 0.25, 0.5, 1], T)
+  X = np.c_[stim, np.ones(T)]
+  y = (r.random(T) < 1 / (1 + np.exp(-(X * W_true[s]).sum(1)))).astype(float)
+
+  def forward_backward(X, y, W, A, pi):
+      P = 1 / (1 + np.exp(-X @ W.T)); like = np.where(y[:, None] == 1, P, 1 - P); T_, K = like.shape
+      al = np.zeros((T_, K)); c = np.zeros(T_); al[0] = pi * like[0]; c[0] = al[0].sum(); al[0] /= c[0]
+      for t in range(1, T_):
+          al[t] = (al[t - 1] @ A) * like[t]; c[t] = al[t].sum(); al[t] /= c[t]
+      be = np.ones((T_, K))
+      for t in range(T_ - 2, -1, -1):
+          be[t] = (A @ (like[t + 1] * be[t + 1])) / c[t + 1]
+      g = al * be; g /= g.sum(1, keepdims=True)
+      return g, c, al, be, like
+
+  def fit_glmhmm(X, y, K, iters=25, seed=0):
+      g0 = np.random.default_rng(seed)
+      W = g0.normal(0, 1, (K, 2)); A = np.full((K, K), 0.05 / max(K - 1, 1)); np.fill_diagonal(A, 0.95 if K > 1 else 1.0); pi = np.ones(K) / K
+      for it in range(iters):
+          g, c, al, be, like = forward_backward(X, y, W, A, pi)
+          if K > 1:
+              xi = np.zeros((K, K))
+              for t in range(len(y) - 1):
+                  xi += al[t][:, None] * A * (like[t + 1] * be[t + 1])[None] / c[t + 1]
+              A = xi / xi.sum(1, keepdims=True)
+          pi = g[0]
+          for k in range(K):
+              for _ in range(5):
+                  pk = 1 / (1 + np.exp(-X @ W[k])); grad = X.T @ (g[:, k] * (y - pk))
+                  H = -(X * (g[:, k] * pk * (1 - pk))[:, None]).T @ X - 1e-3 * np.eye(2)
+                  W[k] -= np.linalg.solve(H, grad)
+      return W, A, pi
+
+  train, test = slice(0, 2000), slice(2000, 3000)
+  held = {}
+  for K in [1, 2, 3]:
+      W, A, pi = fit_glmhmm(X[train], y[train], K)
+      _, c, *_ = forward_backward(X[test], y[test], W, A, pi)
+      held[K] = np.log(c).sum() / 1000
+      print(f"K = {K}: held-out log-likelihood per trial {held[K]:.4f}")
+`} />
+
+On the 1,000 test trials, one state reaches a log-likelihood of about -0.567 per trial and two states about -0.497, a gain of 0.07 nats per trial, or roughly 70 nats over the test block: overwhelming evidence for a second state. The third state brings the test likelihood to the same value to four decimal places. Its extra weights and transitions fit the training trials slightly better, but they describe noise rather than structure, so nothing carries over to new trials. Two states it is, which is the true number. With real mice Ashwood and colleagues made the same choice by the same method, and found that three or four states were usually justified because real animals have more than one way of disengaging.
+
+**Part B: a group of strategists.** Twenty simulated participants play Day 1's bandit with a reversal: fourteen are Q-learners and six use win-stay lose-shift. Fit all three of Day 1's models to each, approximate each log evidence by $-\text{BIC}/2$, and run Day 3's random-effects model selection.
+
+<PyCell id="partB" title="Part B: from choices to population frequencies" tests={String.raw`
+  import numpy as np
+  def test_assign():
+      "at least 17 of 20 participants are assigned to their true model"
+      assert correct >= 17
+  def test_freq():
+      "the expected frequency of Q-learning is between 0.55 and 0.8"
+      assert 0.55 < freq[0] < 0.8
+`} prompt="Write choice_prob and nll as in Day 1, then for each participant fit the three models with L-BFGS-B, store -BIC/2 in lme, and run rfx_bms. Count participants whose highest-evidence model is their true one."
+code={String.raw`
+  from scipy.optimize import minimize
+  from scipy.special import digamma
+  T2 = 200; mu = np.array([0.2, 0.8])
+
+  def choice_prob(model, par, Q, t, a, rw):
+      if model == "ql":
+          return 1 / (1 + np.exp(-par[1] * (Q[1] - Q[0])))
+      if model == "wsls":
+          if t == 0:
+              return 0.5
+          stay = 1 - par[0] / 2
+          return stay if ((a[t - 1] == 1) == (rw[t - 1] == 1)) else 1 - stay
+      return par[0]
+
+  def simulate(model, par):
+      a, rw, Q = np.zeros(T2, int), np.zeros(T2), np.zeros(2)
+      for t in range(T2):
+          a[t] = r.random() < choice_prob(model, par, Q, t, a, rw)
+          rw[t] = r.random() < (mu if t < T2 // 2 else mu[::-1])[a[t]]
+          if model == "ql":
+              Q[a[t]] += par[0] * (rw[t] - Q[a[t]])
+      return a, rw
+
+  def nll(model, par, a, rw):
+      Q = np.zeros(2); L = 0.0
+      for t in range(T2):
+          p1 = min(max(choice_prob(model, par, Q, t, a, rw), 1e-6), 1 - 1e-6)
+          L -= np.log(p1 if a[t] == 1 else 1 - p1)
+          if model == "ql":
+              Q[a[t]] += par[0] * (rw[t] - Q[a[t]])
+      return L
+
+  def rfx_bms(lme, iters=100):
+      a0 = np.ones(lme.shape[1]); a = a0.copy()
+      for _ in range(iters):
+          lu = lme + digamma(a) - digamma(a.sum()); lu -= lu.max(1, keepdims=True)
+          u = np.exp(lu); g = u / u.sum(1, keepdims=True); a = a0 + g.sum(0)
+      return a, g
+
+  spec = {"ql": ([0.5, 3.0], [(0.01, 1), (0, 20)]), "wsls": ([0.3], [(0.01, 1)]), "bias": ([0.5], [(0.01, 0.99)])}
+  names = list(spec)
+  truth = ["ql"] * 14 + ["wsls"] * 6
+  lme = np.zeros((20, 3))
+  for i, m in enumerate(truth):
+      par = [r.uniform(0.1, 0.6), r.uniform(2, 8)] if m == "ql" else [r.uniform(0.05, 0.3)]
+      a_, rw_ = simulate(m, par)
+      for j, (mod, (x0, bounds)) in enumerate(spec.items()):
+          res = minimize(lambda p: nll(mod, p, a_, rw_), x0, method="L-BFGS-B", bounds=bounds)
+          lme[i, j] = ...
+  alpha, g = rfx_bms(lme)
+  freq = alpha / alpha.sum()
+  correct = sum(names[np.argmax(lme[i])] == truth[i] for i in range(20))
+  print(f"participants assigned to their true model: {correct} of 20")
+  print("expected frequencies:", {n: round(float(f), 3) for n, f in zip(names, freq)})
+`}
+hint="lme[i, j] = -(2 * res.fun + len(x0) * np.log(T2)) / 2."
+solution={String.raw`
+  from scipy.optimize import minimize
+  from scipy.special import digamma
+  T2 = 200; mu = np.array([0.2, 0.8])
+
+  def choice_prob(model, par, Q, t, a, rw):
+      if model == "ql":
+          return 1 / (1 + np.exp(-par[1] * (Q[1] - Q[0])))
+      if model == "wsls":
+          if t == 0:
+              return 0.5
+          stay = 1 - par[0] / 2
+          return stay if ((a[t - 1] == 1) == (rw[t - 1] == 1)) else 1 - stay
+      return par[0]
+
+  def simulate(model, par):
+      a, rw, Q = np.zeros(T2, int), np.zeros(T2), np.zeros(2)
+      for t in range(T2):
+          a[t] = r.random() < choice_prob(model, par, Q, t, a, rw)
+          rw[t] = r.random() < (mu if t < T2 // 2 else mu[::-1])[a[t]]
+          if model == "ql":
+              Q[a[t]] += par[0] * (rw[t] - Q[a[t]])
+      return a, rw
+
+  def nll(model, par, a, rw):
+      Q = np.zeros(2); L = 0.0
+      for t in range(T2):
+          p1 = min(max(choice_prob(model, par, Q, t, a, rw), 1e-6), 1 - 1e-6)
+          L -= np.log(p1 if a[t] == 1 else 1 - p1)
+          if model == "ql":
+              Q[a[t]] += par[0] * (rw[t] - Q[a[t]])
+      return L
+
+  def rfx_bms(lme, iters=100):
+      a0 = np.ones(lme.shape[1]); a = a0.copy()
+      for _ in range(iters):
+          lu = lme + digamma(a) - digamma(a.sum()); lu -= lu.max(1, keepdims=True)
+          u = np.exp(lu); g = u / u.sum(1, keepdims=True); a = a0 + g.sum(0)
+      return a, g
+
+  spec = {"ql": ([0.5, 3.0], [(0.01, 1), (0, 20)]), "wsls": ([0.3], [(0.01, 1)]), "bias": ([0.5], [(0.01, 0.99)])}
+  names = list(spec)
+  truth = ["ql"] * 14 + ["wsls"] * 6
+  lme = np.zeros((20, 3))
+  for i, m in enumerate(truth):
+      par = [r.uniform(0.1, 0.6), r.uniform(2, 8)] if m == "ql" else [r.uniform(0.05, 0.3)]
+      a_, rw_ = simulate(m, par)
+      for j, (mod, (x0, bounds)) in enumerate(spec.items()):
+          res = minimize(lambda p: nll(mod, p, a_, rw_), x0, method="L-BFGS-B", bounds=bounds)
+          lme[i, j] = -(2 * res.fun + len(x0) * np.log(T2)) / 2
+  alpha, g = rfx_bms(lme)
+  freq = alpha / alpha.sum()
+  correct = sum(names[np.argmax(lme[i])] == truth[i] for i in range(20))
+  print(f"participants assigned to their true model: {correct} of 20")
+  print("expected frequencies:", {n: round(float(f), 3) for n, f in zip(names, freq)})
+`} />
+
+All twenty participants are assigned to the model that generated their data, which is the payoff for Day 1's reversal design: without it, Q-learners with low learning rates look like biased choosers. Random-effects selection estimates the population frequencies at about 0.65 for Q-learning, 0.30 for win-stay lose-shift and 0.04 for the bias model, against true proportions of 0.70, 0.30 and 0. The estimates are shrunk towards equal frequencies by the Dirichlet prior, which is why they never reach zero for a model nobody uses. This is the shape of a result you should report: frequencies with their uncertainty, not a single winner.
+
+**Part C (written).** Answer in your journal. First, in Part A, explain why the training likelihood cannot be used to choose the number of states, and why a third state gained almost nothing on test data even though it could fit training data better. Second, in Part B, the evidence was approximated by $-\text{BIC}/2$. Name one situation in which this approximation could favour the wrong model, and what you would use instead.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The forward recursion" task="Show that $P(z_t = k, y_{1:t}) = \text{like}_t(k)\sum_j P(z_{t-1} = j, y_{1:t-1})A_{jk}$, and explain why normalising at each step gives the log-likelihood as $\sum_t \log c_t$.">
+
+By the Markov property, $P(z_t = k, y_{1:t}) = P(y_t \mid z_t = k)\sum_j P(z_t = k \mid z_{t-1} = j)\,P(z_{t-1} = j, y_{1:t-1})$, which is the stated recursion with $\text{like}_t(k) = P(y_t \mid z_t = k)$.
+
+If at each step the vector is divided by its sum $c_t$, then $c_t = P(y_t \mid y_{1:t-1})$, because the unnormalised sum is $P(y_t, \cdot \mid y_{1:t-1})$ summed over states.
+
+So $\log P(y_{1:T}) = \sum_t \log P(y_t \mid y_{1:t-1}) = \sum_t \log c_t$, which avoids the numerical underflow of multiplying thousands of probabilities.
+
+</Prove>
+
+<Prove title="2. Why fixed effects can be dominated" task="With two models and log evidence differences $d_n = \ell_{nA} - \ell_{nB}$, show that fixed effects favours A if and only if $\sum_n d_n \gt 0$, and construct a group in which most $d_n$ are positive but A loses.">
+
+Fixed effects compares $\sum_n \ell_{nA}$ with $\sum_n \ell_{nB}$, which is the sign of $\sum_n d_n$.
+
+Take 14 participants with $d_n = 3$ and 6 with $d_n = -15$. Then 14 of 20 favour A but $\sum_n d_n = 42 - 90 = -48 \lt 0$, so fixed effects favours B with a Bayes factor of $e^{48}$.
+
+The sum weights each participant by the strength of their evidence, so a minority with strong evidence outweighs a majority with moderate evidence. Random-effects selection instead weights each participant equally in estimating frequencies.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 50 quiz (15 questions)" questions={[
+  { q: "Wilson and Collins's rules start with...", options: ["Designing a good experiment", "Collecting data", "Choosing the winner", "Writing the paper"], answer: 0, explain: "Day 1." },
+  { q: "A model recovery confusion matrix should be...", options: ["Strongly diagonal", "Uniform", "Antidiagonal", "Empty"], answer: 0, explain: "Day 1." },
+  { q: "A reversal in a bandit task helps separate...", options: ["Learners from biased choosers", "Rewards from punishments", "Left from right", "Nothing"], answer: 0, explain: "Day 1." },
+  { q: "Model falsification asks whether a fitted model...", options: ["Reproduces the key behavioural effects", "Has the lowest BIC", "Converges", "Has few parameters"], answer: 0, explain: "Day 2." },
+  { q: "Unmodelled perseveration tends to inflate...", options: ["β", "α", "The bias", "The number of trials"], answer: 0, explain: "Day 2." },
+  { q: "Fixed-effects model comparison sums...", options: ["Log evidences across participants", "Parameters", "Choices", "Frequencies"], answer: 0, explain: "Day 3." },
+  { q: "Random-effects BMS estimates...", options: ["How common each model is in the population", "One model for all", "Parameters", "Reaction times"], answer: 0, explain: "Day 3." },
+  { q: "Exceedance probability is...", options: ["The probability a model is the most frequent", "A p value", "A Bayes factor", "A frequency"], answer: 0, explain: "Day 3." },
+  { q: "The DDM lower-bound density integrates to...", options: ["The probability of the lower response", "1", "The mean RT", "Zero"], answer: 0, explain: "Day 4." },
+  { q: "The non-decision time must be...", options: ["Shorter than the fastest RT", "Longer than the mean RT", "Zero", "Equal to the drift"], answer: 0, explain: "Day 4." },
+  { q: "Fit validation for the DDM compares...", options: ["Predicted and observed RT quantiles", "Only accuracy", "Parameters", "BIC values"], answer: 0, explain: "Day 4." },
+  { q: "In a GLM-HMM, apparent lapses can come from...", options: ["Time spent in biased states", "Motor noise only", "Stimulus noise", "Reward"], answer: 0, explain: "Day 5." },
+  { q: "The forward-backward algorithm computes...", options: ["Posterior state probabilities", "Weights", "Rewards", "Contrasts"], answer: 0, explain: "Day 5." },
+  { q: "The number of GLM-HMM states should be chosen by...", options: ["Held-out likelihood", "Training likelihood", "Guessing", "BIC on training data only"], answer: 0, explain: "Part A." },
+  { q: "In Part B, log evidence was approximated by...", options: ["−BIC/2", "AIC", "R²", "Accuracy"], answer: 0, explain: "Part B." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Wilson and Collins (2019) its third pass and write your critique under the five headings. Focus on one question: **are the ten rules sufficient for trustworthy computational modelling, and are they all necessary?** Consider which rules are most often skipped in published work and why; whether parameter and model recovery on simulated data guarantee anything about real data; how the rules handle model misspecification, the situation in which none of the candidate models is right; what they say, or do not say, about hierarchical fitting, priors and preregistration; and whether rules written for reinforcement learning tasks transfer to other domains, such as neural data or response times. End with an eleventh rule you would add, and a justification for it.
+
+<Callout kind="research">
+
+Combine Days 4 and 5: build a GLM-HMM in which each state also has its own diffusion model for response times, so that engaged and disengaged states differ in drift as well as in choice policy. Simulate it, and ask whether including response times improves state decoding over choices alone. Ashwood and colleagues found that their states differed in response times; this would test whether that information can help find them.
+
+</Callout>
+
+<Key title="Week 50 review checklist">
+<ul>
+<li>I can simulate candidate models and build model recovery confusion matrices.</li>
+<li>I can falsify fitted models with posterior predictive checks of key signatures.</li>
+<li>I can compare models across a group with random-effects BMS and report frequencies.</li>
+<li>I can fit the diffusion model by maximum likelihood and check its quantiles.</li>
+<li>I can fit a GLM-HMM by EM, decode states, and choose the number of states by cross-validation.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then write your own one-page modelling plan for next week's project, following the ten rules: which models, which simulations and checks, and which comparisons you will report." />
