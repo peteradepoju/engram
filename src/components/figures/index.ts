@@ -224,3 +224,8 @@ export { MotionPrior } from "./motion-prior";
 export { PriorFromPsychophysics } from "./prior-from-psychophysics";
 export { PopulationPosterior } from "./population-posterior";
 export { PredictiveCoding } from "./predictive-coding";
+export { SmallWorld } from "./small-world";
+export { ModularNetwork } from "./modular-network";
+export { SurprisalBars } from "./surprisal-bars";
+export { BrainScore } from "./brain-score";
+export { SuccessorFields } from "./successor-fields";

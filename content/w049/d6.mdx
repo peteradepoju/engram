@@ -1,0 +1,229 @@
+export const meta = {
+  title: "Forge: Week 49 challenge, quiz and deep read",
+  intro: "This week moved from circuits to whole-brain networks and to language. Brain networks are small worlds with modules and hubs; correlation between regions reflects indirect as well as direct paths; reading difficulty follows surprisal; language models predict brain responses in proportion to how well they predict words; and the hippocampus may store a predictive map of where we will be next. Today's challenge takes two of these further. First, distinguish hubs that link modules from hubs that stay inside one, with the participation coefficient. Second, show the payoff of a predictive map: when a reward moves, a successor-representation agent knows the new values at once, while a model-free agent must relearn. Then the quiz, and a critique of Schrimpf and colleagues.",
+  goals: [
+    "Classify hubs as connector or provincial with the participation coefficient",
+    "Demonstrate instant reward revaluation with the successor representation",
+    "Compare it with model-free relearning",
+    "Critique brain-score evidence for predictive processing in the language network",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "schrimpf-2021",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. A word has probability 1/32 in context. What is its surprisal?
+2. Two repetitions correlate at 0.6. What is the Spearman-Brown reliability of their average?
+3. With $\gamma = 0.9$ and a state that always leads back to itself, what is $M(s, s)$?
+
+<PyCell code={String.raw`
+  import numpy as np
+  print("1.", -np.log2(1 / 32), "bits")
+  print("2.", round(2 * 0.6 / 1.6, 3))
+  print("3.", round(1 / (1 - 0.9), 1))
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: connector and provincial hubs.** Guimerà and Amaral (2005) classified nodes by their degree and their **participation coefficient**,
+
+$$
+P_i = 1 - \sum_{m}\left(\frac{k_{im}}{k_i}\right)^2,
+$$
+
+where $k_{im}$ is the number of node $i$'s links into module $m$. $P_i$ is near 0 if all links stay in one module and approaches $1 - 1/M$ if they spread evenly over $M$ modules. Build four modules of 30 nodes; add four extra high-degree nodes, two that link mostly inside one module (provincial hubs) and two that link evenly to all modules (connector hubs). Classify them.
+
+<PyCell id="partA" title="Part A: participation coefficient" tests={String.raw`
+  import numpy as np
+  def test_degree():
+      "all four added nodes have degree above twice the median"
+      assert all(k[h] > 2 * np.median(k) for h in hubs)
+  def test_classify():
+      "connector hubs have P above 0.6 and provincial hubs below 0.3"
+      assert all(P[h] > 0.6 for h in hubs[2:]) and all(P[h] < 0.3 for h in hubs[:2])
+`} prompt="Write participation(A, labels): for each node, count links into each module, divide by its degree and compute 1 minus the sum of squares. Apply it to the network with the four added hubs."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2005)
+  M, n = 4, 30; N = M * n + 4
+  lab = np.r_[np.repeat(np.arange(M), n), [0, 1, 0, 0]]          # added hubs get a home module
+  A = np.zeros((N, N))
+  for i in range(M * n):
+      for j in range(i + 1, M * n):
+          if r.random() < (0.25 if lab[i] == lab[j] else 0.01):
+              A[i, j] = A[j, i] = 1
+  hubs = np.arange(M * n, N)
+  for h, kind in zip(hubs, ["provincial", "provincial", "connector", "connector"]):
+      if kind == "provincial":
+          targets = r.choice(np.where(lab[: M * n] == lab[h])[0], 24, replace=False)
+      else:
+          targets = np.concatenate([r.choice(np.where(lab[: M * n] == m)[0], 6, replace=False) for m in range(M)])
+      A[h, targets] = A[targets, h] = 1
+
+  def participation(A, labels):
+      ...
+
+  k = A.sum(1); P = participation(A, lab)
+  for h, kind in zip(hubs, ["provincial", "provincial", "connector", "connector"]):
+      print(f"node {h} ({kind}): degree {k[h]:.0f}, participation {P[h]:.2f}")
+  plt.scatter(P, k, s=10); plt.scatter(P[hubs], k[hubs], c="r"); plt.xlabel("participation coefficient"); plt.ylabel("degree"); plt.show()
+`}
+hint="k = A.sum(1); frac = np.stack([A[:, labels == m].sum(1) for m in np.unique(labels)], 1) / np.maximum(k[:, None], 1); return 1 - (frac ** 2).sum(1)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2005)
+  M, n = 4, 30; N = M * n + 4
+  lab = np.r_[np.repeat(np.arange(M), n), [0, 1, 0, 0]]          # added hubs get a home module
+  A = np.zeros((N, N))
+  for i in range(M * n):
+      for j in range(i + 1, M * n):
+          if r.random() < (0.25 if lab[i] == lab[j] else 0.01):
+              A[i, j] = A[j, i] = 1
+  hubs = np.arange(M * n, N)
+  for h, kind in zip(hubs, ["provincial", "provincial", "connector", "connector"]):
+      if kind == "provincial":
+          targets = r.choice(np.where(lab[: M * n] == lab[h])[0], 24, replace=False)
+      else:
+          targets = np.concatenate([r.choice(np.where(lab[: M * n] == m)[0], 6, replace=False) for m in range(M)])
+      A[h, targets] = A[targets, h] = 1
+
+  def participation(A, labels):
+      k = A.sum(1)
+      frac = np.stack([A[:, labels == m].sum(1) for m in np.unique(labels)], 1) / np.maximum(k[:, None], 1)
+      return 1 - (frac ** 2).sum(1)
+
+  k = A.sum(1); P = participation(A, lab)
+  for h, kind in zip(hubs, ["provincial", "provincial", "connector", "connector"]):
+      print(f"node {h} ({kind}): degree {k[h]:.0f}, participation {P[h]:.2f}")
+  plt.scatter(P, k, s=10); plt.scatter(P[hubs], k[hubs], c="r"); plt.xlabel("participation coefficient"); plt.ylabel("degree"); plt.show()
+`} />
+
+All four added nodes have the same degree, 24, three times the typical node's, so degree alone cannot tell them apart. The participation coefficient can: the provincial hubs score 0, all their links inside their home module, and the connector hubs score 0.75, the maximum for four equal modules. In human connectomes, connector hubs sit mainly in association cortex and their damage has been linked to widespread cognitive deficits (Warren and colleagues, 2014, found that lesions to connector hubs disrupted the modular structure of the whole network).
+
+**Part B: when the reward moves.** On Day 5's 50-state track with a rightward policy, the reward has been at state 45. It now moves to state 10. An SR agent already knows $M$ and only has to learn the new reward vector, which it does from a single visit; a model-free agent must relearn its values by TD updates as it runs. Compare their value estimates with the true new values after one run down the track.
+
+<PyCell id="partB" title="Part B: instant revaluation" tests={String.raw`
+  import numpy as np
+  def test_sr():
+      "after one run, the SR agent's values correlate above 0.99 with the true new values"
+      assert np.corrcoef(V_sr, V_true)[0, 1] > 0.99
+  def test_mf():
+      "the model-free agent's values still correlate below 0.5 with them"
+      assert np.corrcoef(V_mf, V_true)[0, 1] < 0.5
+`} prompt="Compute the true values M R_new. For the SR agent, set R to the new reward vector after its run (it visits every state) and compute M R. For the model-free agent, start from the old values M R_old and apply TD(0) updates with alpha 0.1 for one run from state 0 to the end."
+code={String.raw`
+  n, gamma = 50, 0.9
+  T = np.zeros((n, n))
+  for s in range(n):
+      T[s, min(s + 1, n - 1)] += 0.9; T[s, max(s - 1, 0)] += 0.1
+  Msr = np.linalg.inv(np.eye(n) - gamma * T)
+  R_old, R_new = np.zeros(n), np.zeros(n); R_old[45] = 1; R_new[10] = 1
+  V_true = Msr @ R_new
+  V_sr = ...
+  V_mf = Msr @ R_old                                # model-free values learned before the change
+  s = 0; g2 = np.random.default_rng(1)
+  while s < n - 1:
+      s2 = min(s + 1, n - 1) if g2.random() < 0.9 else max(s - 1, 0)
+      ...
+      s = s2
+  print(f"correlation with true new values: SR {np.corrcoef(V_sr, V_true)[0, 1]:.3f}, model-free {np.corrcoef(V_mf, V_true)[0, 1]:.3f}")
+  plt.plot(V_true, label="true"); plt.plot(V_sr, "--", label="SR"); plt.plot(V_mf, label="model-free"); plt.legend(); plt.xlabel("state"); plt.show()
+`}
+hint="V_sr = Msr @ R_new. In the loop: V_mf[s] += 0.1 * (R_new[s] + gamma * V_mf[s2] - V_mf[s])."
+solution={String.raw`
+  n, gamma = 50, 0.9
+  T = np.zeros((n, n))
+  for s in range(n):
+      T[s, min(s + 1, n - 1)] += 0.9; T[s, max(s - 1, 0)] += 0.1
+  Msr = np.linalg.inv(np.eye(n) - gamma * T)
+  R_old, R_new = np.zeros(n), np.zeros(n); R_old[45] = 1; R_new[10] = 1
+  V_true = Msr @ R_new
+  V_sr = Msr @ R_new
+  V_mf = Msr @ R_old                                # model-free values learned before the change
+  s = 0; g2 = np.random.default_rng(1)
+  while s < n - 1:
+      s2 = min(s + 1, n - 1) if g2.random() < 0.9 else max(s - 1, 0)
+      V_mf[s] += 0.1 * (R_new[s] + gamma * V_mf[s2] - V_mf[s])
+      s = s2
+  print(f"correlation with true new values: SR {np.corrcoef(V_sr, V_true)[0, 1]:.3f}, model-free {np.corrcoef(V_mf, V_true)[0, 1]:.3f}")
+  plt.plot(V_true, label="true"); plt.plot(V_sr, "--", label="SR"); plt.plot(V_mf, label="model-free"); plt.legend(); plt.xlabel("state"); plt.show()
+`} />
+
+After a single run, the SR agent's values match the new true values perfectly: it needed only the new reward vector, and its predictive map did the rest. The model-free agent's values still point to the old reward and are negatively correlated with the new ones: one pass of TD updates moved them only slightly, and its values near state 45 remain high. This rapid revaluation after a reward change, together with slow adjustment after a change in transitions, is the behavioural signature by which the SR was distinguished from both model-free and fully model-based learning.
+
+**Part C (written).** Answer in your journal. First, the SR revalues instantly when rewards change but not when transitions change, for example when a barrier blocks the track. Predict what an SR agent would do after a barrier appears, and how Momennejad and colleagues (2017) used this asymmetry to test whether people use an SR. Second, connector hubs have been linked to cognitive flexibility. Propose an analysis of resting-state data that would test whether people with more connector-like hubs switch tasks faster, and name one confound.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The successor representation as a geometric series" task="Show that $\sum_{t=0}^\infty \gamma^t T^t = (I - \gamma T)^{-1}$ for a stochastic matrix $T$ and $0 \le \gamma \lt 1$, and hence that $M(s, s') = \mathbb E[\sum_t \gamma^t \mathbb 1(s_t = s')]$.">
+
+$(T^t)_{ss'}$ is the probability of being in $s'$ after $t$ steps from $s$, so $\mathbb E[\sum_t \gamma^t\mathbb 1(s_t = s')] = \sum_t \gamma^t (T^t)_{ss'}$.
+
+The eigenvalues of a stochastic matrix have modulus at most 1, so those of $\gamma T$ have modulus less than 1 and the series $\sum_t (\gamma T)^t$ converges.
+
+Multiplying $S = \sum_t (\gamma T)^t$ by $I - \gamma T$ telescopes: $(I - \gamma T)S = I$, so $S = (I - \gamma T)^{-1}$.
+
+</Prove>
+
+<Prove title="2. Surprisal as belief change" task="A comprehender holds a distribution $P$ over complete sentences. When word $w$ arrives, sentences inconsistent with it are ruled out and the rest renormalised. Show that the relative entropy from the old to the new distribution equals $-\log P(w \mid \text{context})$.">
+
+Let $A$ be the set of sentences consistent with the context and $w$, and $Z = P(A) = P(w \mid \text{context})$ (taking $P$ already conditioned on the context). The new distribution is $Q(x) = P(x)/Z$ for $x \in A$ and 0 otherwise.
+
+$D(Q\,\|\,P) = \sum_{x \in A} Q(x)\log\frac{Q(x)}{P(x)} = \sum_{x\in A} Q(x)\log\frac1Z = -\log Z$.
+
+So the amount the comprehender's beliefs must change is exactly the surprisal of the word, which is Levy's (2008) justification for surprisal as processing cost.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 49 quiz (15 questions)" questions={[
+  { q: "A small-world network has...", options: ["High clustering and short paths", "Low clustering and long paths", "No clustering", "Only hubs"], answer: 0, explain: "Day 1." },
+  { q: "Rewiring 1% of a lattice mainly...", options: ["Shortens paths", "Destroys clustering", "Adds hubs", "Changes nothing"], answer: 0, explain: "Day 1." },
+  { q: "The small-world index compares C and L with...", options: ["A random graph", "A lattice only", "Brain data", "Nothing"], answer: 0, explain: "Day 1." },
+  { q: "Modularity Q measures...", options: ["Within-module links above chance", "Path length", "Degree", "Correlation"], answer: 0, explain: "Day 2." },
+  { q: "Removing hubs from a hub-rich network...", options: ["Fragments it", "Barely matters", "Improves efficiency", "Adds modules"], answer: 0, explain: "Day 2." },
+  { q: "Partial correlation removes...", options: ["Dependence explained by other measured variables", "All noise", "Direction", "Hidden causes"], answer: 0, explain: "Day 2." },
+  { q: "Surprisal is...", options: ["−log₂ P(word | context)", "Word length", "Frequency", "Syntax depth"], answer: 0, explain: "Day 3." },
+  { q: "Reading time grows with surprisal...", options: ["Linearly", "Exponentially", "Not at all", "Only for long words"], answer: 0, explain: "Day 3." },
+  { q: "A noise ceiling is estimated from...", options: ["Repeated measurements", "The model", "The stimulus", "A random baseline"], answer: 0, explain: "Day 4." },
+  { q: "Normalised predictivity divides the model's r by...", options: ["The noise ceiling", "Chance", "The number of voxels", "The training r"], answer: 0, explain: "Day 4." },
+  { q: "Brain scores across language models correlate with...", options: ["Next-word prediction performance", "Parameter count only", "Grammar tests", "Nothing"], answer: 0, explain: "Day 4." },
+  { q: "The successor representation is...", options: ["(I − γT)⁻¹", "T", "R", "γT"], answer: 0, explain: "Day 5." },
+  { q: "SR place fields skew...", options: ["Against the direction of travel", "With it", "Upwards", "Never"], answer: 0, explain: "Day 5." },
+  { q: "A connector hub has...", options: ["High degree and high participation coefficient", "High degree and low participation", "Low degree", "No links"], answer: 0, explain: "Part A." },
+  { q: "When rewards move, an SR agent...", options: ["Revalues at once", "Must relearn everything", "Cannot adapt", "Changes its transitions"], answer: 0, explain: "Part B." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Schrimpf and colleagues (2021) its third pass and write your critique under the five headings. Focus on one question: **does the evidence show that the human language network does predictive processing?** Consider what the encoding models measure and what a linear map can and cannot reveal; how the noise ceilings were estimated and how much they matter for the headline claim; whether the correlation between next-word prediction and brain score could arise from confounds such as model size or training data; the strong performance of untrained models and what it implies; and what later work on lexical against syntactic contributions found. End with an analysis or experiment that would separate prediction from other properties of language models as the source of brain predictivity.
+
+<Callout kind="research">
+
+Combine Days 4 and 5: build a toy language from a graph of states (each state emits a word), compute its successor representation, and test whether SR features predict simulated 'brain' responses better than one-hot word features, using Day 4's encoding pipeline. Then make the brain responses depend on the next word only, and see which feature set wins.
+
+</Callout>
+
+<Key title="Week 49 review checklist">
+<ul>
+<li>I can compute clustering, path length and small-world indices and reproduce the Watts-Strogatz transition.</li>
+<li>I can find modules, test robustness to hub removal and separate direct from indirect dependencies.</li>
+<li>I can build n-gram models, compute surprisal and regress reading times on it.</li>
+<li>I can fit encoding models with cross-validation and judge them against noise ceilings.</li>
+<li>I can compute and learn a successor representation and explain its predictions.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then write a paragraph on what this week's three topics (networks, language, cognitive maps) have in common, if anything, as views of how the brain organises information." />

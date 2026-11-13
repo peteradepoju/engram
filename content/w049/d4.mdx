@@ -1,0 +1,222 @@
+export const meta = {
+  title: "Language models and the brain: encoding models and brain scores",
+  intro: "If the brain processes language by prediction, models trained to predict words might process language somewhat as brains do. In 2021 Martin Schrimpf, Idan Blank, Greta Tuckute and colleagues tested 43 language models against fMRI, intracranial and reading-time data from people reading or listening to sentences. They fitted linear encoding models from each model's internal activations to brain responses, measured how well held-out responses were predicted relative to the data's noise ceiling, and found that the best models predicted nearly all the explainable variance, and that a model's brain score tracked how well it predicted the next word. Today you build the analysis pipeline on simulated data: ridge encoding models, cross-validation, noise ceilings, and the comparison across a family of models.",
+  goals: [
+    "Fit a ridge encoding model from model features to voxel responses with cross-validation",
+    "Estimate a noise ceiling from repeated measurements",
+    "Compute normalised predictivity and compare feature sets",
+    "Interpret the relation between next-word prediction and brain scores, and its limits",
+  ],
+  plan: [
+    { label: "Predict and the method", minutes: 20 },
+    { label: "Encoding models", minutes: 35 },
+    { label: "The noise ceiling", minutes: 25 },
+    { label: "A family of models", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "schrimpf-2021",
+};
+
+<Predict question="A model's features predict held-out brain responses with a correlation of 0.3. Is that a poor model?" />
+
+<Step n={1} title="The method" minutes={20} />
+
+An **encoding model** predicts each brain measurement (a voxel, an electrode) as a weighted sum of features of the stimulus, here the activations of a language model's layer for each sentence. Because features are many and stimuli few, the weights are fitted by ridge regression (Week 36) and evaluated on held-out sentences by the correlation between predicted and measured responses. Two refinements make scores interpretable. The **noise ceiling** estimates how well any model could do, given that the measurements themselves are noisy: if the same sentence measured twice gives correlated but different responses, no model can exceed that reliability. **Normalised predictivity** divides the model's held-out correlation by the ceiling.
+
+Schrimpf and colleagues found that transformer models such as GPT-2 reached normalised predictivity close to 1 in language-selective cortex, that untrained models did surprisingly well, and that across models the brain score correlated with next-word prediction performance but not with performance on other language benchmarks. They took this as evidence that the language network is shaped by predictive processing.
+
+<Video id="9-Jl0dxWQs8" title="How might LLMs store facts" by="Grant Sanderson (3Blue1Brown)" note="A look inside a transformer's layers: the internal activations and directions that encode information, which are the features encoding models map onto brain responses." />
+
+<Step n={2} title="Encoding models" minutes={35} />
+
+Simulate 200 sentences with 20 latent properties that drive 50 voxels, each measured twice with noise. One candidate model has 100 features that are a random mixture of the true properties plus noise; another has 100 random features unrelated to them.
+
+<Figure caption="Brain scores. Each dot is a simulated language model; its quality sets both how well it predicts the next word and how much its features share with the brain's. Change the measurement noise and see the ceiling and the scores move." credit="Interactive figure by Engram, after Schrimpf et al. (2021).">
+  <BrainScore />
+</Figure>
+
+<PyCell id="encoding" title="Cross-validated ridge encoding" tests={String.raw`
+  import numpy as np
+  def test_good():
+      "the informative model's median held-out correlation exceeds 0.4"
+      assert np.median(score["informative"]) > 0.4
+  def test_random():
+      "the random model's median held-out correlation is below 0.1"
+      assert abs(np.median(score["random"])) < 0.1
+`} prompt="Write cv_score(F, Y): 5-fold cross-validation; in each fold fit ridge weights W = (F^T F + lam I)^-1 F^T Y on the training sentences (lam = 10, features and responses centred on the training set), predict the test sentences, and finally return each voxel's correlation between all held-out predictions and responses."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2021)
+  n_sent, n_lat, n_vox = 200, 20, 50
+  Z = r.normal(size=(n_sent, n_lat))                       # latent sentence properties
+  B = r.normal(size=(n_lat, n_vox))
+  signal = Z @ B / np.sqrt(n_lat)
+  Y1 = signal + 1.0 * r.normal(size=signal.shape)          # repetition 1
+  Y2 = signal + 1.0 * r.normal(size=signal.shape)          # repetition 2
+  Y = (Y1 + Y2) / 2
+  F_info = Z @ r.normal(size=(n_lat, 100)) + 0.5 * r.normal(size=(n_sent, 100))
+  F_rand = r.normal(size=(n_sent, 100))
+
+  def cv_score(F, Y, lam=10.0, k=5):
+      folds = np.array_split(r.permutation(len(F)), k); pred = np.zeros_like(Y)
+      for te in folds:
+          tr = np.setdiff1d(np.arange(len(F)), te)
+          ...
+      return np.array([np.corrcoef(pred[:, v], Y[:, v])[0, 1] for v in range(Y.shape[1])])
+
+  score = {"informative": cv_score(F_info, Y), "random": cv_score(F_rand, Y)}
+  for k_, s in score.items():
+      print(f"{k_:11s}: median held-out r = {np.median(s):.3f}")
+`}
+hint="Fm, Ym = F[tr].mean(0), Y[tr].mean(0); Ft, Yt = F[tr] - Fm, Y[tr] - Ym; W = np.linalg.solve(Ft.T @ Ft + lam * np.eye(F.shape[1]), Ft.T @ Yt); pred[te] = (F[te] - Fm) @ W + Ym."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2021)
+  n_sent, n_lat, n_vox = 200, 20, 50
+  Z = r.normal(size=(n_sent, n_lat))                       # latent sentence properties
+  B = r.normal(size=(n_lat, n_vox))
+  signal = Z @ B / np.sqrt(n_lat)
+  Y1 = signal + 1.0 * r.normal(size=signal.shape)          # repetition 1
+  Y2 = signal + 1.0 * r.normal(size=signal.shape)          # repetition 2
+  Y = (Y1 + Y2) / 2
+  F_info = Z @ r.normal(size=(n_lat, 100)) + 0.5 * r.normal(size=(n_sent, 100))
+  F_rand = r.normal(size=(n_sent, 100))
+
+  def cv_score(F, Y, lam=10.0, k=5):
+      folds = np.array_split(r.permutation(len(F)), k); pred = np.zeros_like(Y)
+      for te in folds:
+          tr = np.setdiff1d(np.arange(len(F)), te)
+          Fm, Ym = F[tr].mean(0), Y[tr].mean(0)
+          Ft, Yt = F[tr] - Fm, Y[tr] - Ym
+          W = np.linalg.solve(Ft.T @ Ft + lam * np.eye(F.shape[1]), Ft.T @ Yt)
+          pred[te] = (F[te] - Fm) @ W + Ym
+      return np.array([np.corrcoef(pred[:, v], Y[:, v])[0, 1] for v in range(Y.shape[1])])
+
+  score = {"informative": cv_score(F_info, Y), "random": cv_score(F_rand, Y)}
+  for k_, s in score.items():
+      print(f"{k_:11s}: median held-out r = {np.median(s):.3f}")
+`} />
+
+The informative model predicts held-out voxel responses with a median correlation of 0.69; the random model scores about zero, as it should, since cross-validation gives no credit for fitting noise. Without held-out testing the random model would look impressive: 100 features fitted to 200 sentences can match much of any response by chance. The ridge penalty and the train-test split are not optional details; they are what make the score mean anything.
+
+<Step n={3} title="The noise ceiling" minutes={25} />
+
+With two repetitions, the split-half correlation $r_{12}$ between them measures reliability. The reliability of their average is given by the Spearman-Brown formula, $\frac{2r_{12}}{1 + r_{12}}$, and the best correlation any model could reach with the averaged response is its square root.
+
+<PyCell id="ceiling" title="How good could any model be?" tests={String.raw`
+  import numpy as np
+  def test_ceiling():
+      "the median ceiling is between 0.6 and 0.95"
+      assert 0.6 < np.median(ceiling) < 0.95
+  def test_normalised():
+      "the informative model's median normalised predictivity is above 0.6"
+      assert np.median(norm_pred) > 0.6
+`} prompt="For each voxel compute r12 = corr(Y1, Y2), the Spearman-Brown reliability of the mean, and the ceiling as its square root. Divide the informative model's scores by the ceiling."
+code={String.raw`
+  r12 = np.array([np.corrcoef(Y1[:, v], Y2[:, v])[0, 1] for v in range(n_vox)])
+  ceiling = ...
+  norm_pred = score["informative"] / ceiling
+  print(f"median split-half r {np.median(r12):.3f}; median ceiling {np.median(ceiling):.3f}; median normalised predictivity {np.median(norm_pred):.3f}")
+  plt.scatter(ceiling, score["informative"]); plt.plot([0, 1], [0, 1], "k:"); plt.xlabel("noise ceiling"); plt.ylabel("model r"); plt.show()
+`}
+hint="ceiling = np.sqrt(2 * r12 / (1 + r12))."
+solution={String.raw`
+  r12 = np.array([np.corrcoef(Y1[:, v], Y2[:, v])[0, 1] for v in range(n_vox)])
+  ceiling = np.sqrt(2 * r12 / (1 + r12))
+  norm_pred = score["informative"] / ceiling
+  print(f"median split-half r {np.median(r12):.3f}; median ceiling {np.median(ceiling):.3f}; median normalised predictivity {np.median(norm_pred):.3f}")
+  plt.scatter(ceiling, score["informative"]); plt.plot([0, 1], [0, 1], "k:"); plt.xlabel("noise ceiling"); plt.ylabel("model r"); plt.show()
+`} />
+
+The two repetitions of each voxel correlate at about 0.47, so the averaged response has a ceiling of about 0.80: no model can do better than that, because a fifth of the variance in the measured average is noise. The informative model's 0.69 is therefore 89% of what is achievable. A raw correlation of 0.3 could be excellent in noisy data with a ceiling of 0.35 and poor in clean data with a ceiling of 0.9, which is why a score without its ceiling is uninterpretable.
+
+<Step n={4} title="A family of models" minutes={25} />
+
+Schrimpf and colleagues compared many models. Simulate a family whose quality $q$ sets both how much their features share with the latent properties and, as a stand-in for next-word prediction, how well a linear readout of their features predicts a held-out latent property.
+
+<PyCell id="family" title="Brain score against task performance" tests={String.raw`
+  import numpy as np
+  def test_corr():
+      "across models, brain score and task score correlate above 0.8"
+      assert np.corrcoef(brain, task)[0, 1] > 0.8
+`} prompt="For q from 0 to 1 in 8 steps, build features q Z M + (1 - q) noise, compute the median cross-validated brain score and a task score (cross-validated correlation for predicting the first latent property), and correlate the two across models."
+code={String.raw`
+  qs = np.linspace(0, 1, 8); brain, task = [], []
+  for q in qs:
+      F = q * (Z @ r.normal(size=(n_lat, 100))) + (1 - q) * 3 * r.normal(size=(n_sent, 100))
+      brain.append(...)
+      task.append(...)
+  brain, task = np.array(brain), np.array(task)
+  print("brain scores:", np.round(brain, 2)); print("task scores: ", np.round(task, 2))
+  print(f"correlation across models {np.corrcoef(brain, task)[0, 1]:.2f}")
+  plt.plot(task, brain, "o"); plt.xlabel("task (prediction) score"); plt.ylabel("brain score"); plt.show()
+`}
+hint="brain.append(np.median(cv_score(F, Y))); task.append(cv_score(F, Z[:, :1])[0])."
+solution={String.raw`
+  qs = np.linspace(0, 1, 8); brain, task = [], []
+  for q in qs:
+      F = q * (Z @ r.normal(size=(n_lat, 100))) + (1 - q) * 3 * r.normal(size=(n_sent, 100))
+      brain.append(np.median(cv_score(F, Y)))
+      task.append(cv_score(F, Z[:, :1])[0])
+  brain, task = np.array(brain), np.array(task)
+  print("brain scores:", np.round(brain, 2)); print("task scores: ", np.round(task, 2))
+  print(f"correlation across models {np.corrcoef(brain, task)[0, 1]:.2f}")
+  plt.plot(task, brain, "o"); plt.xlabel("task (prediction) score"); plt.ylabel("brain score"); plt.show()
+`} />
+
+Across the eight simulated models, brain score rises with task score and the two correlate at 0.98. Here that relation is built in: both depend on the same quality parameter. That is exactly the interpretive problem of the real finding. A correlation across models between next-word prediction and brain predictivity is compatible with prediction shaping the brain's representations, but also with any property, such as size or training data, that improves both. Schrimpf and colleagues addressed some of these confounds; others remain open.
+
+<Callout kind="warning">
+
+A high brain score shows that a model's features contain the information that linearly predicts brain responses, not that the model computes as the brain does. Features that encode simple properties, such as word position or sentence length, can earn substantial scores (Kauf and colleagues, 2024, found that much of the predictivity of language models for fMRI depends on lexical semantic content rather than syntax), and the correlation with next-word prediction across models could arise from shared confounds such as model size. Controls, such as scrambling word order or matching models on size, are essential.
+
+</Callout>
+
+<Bridge title="Models as hypotheses about the language network"
+  neuro="Activations of language models linearly predict responses in the human language network, up to the data's reliability, and better next-word predictors predict the brain better. Encoding models with noise ceilings are now the standard way to compare models with brain data."
+  ai="Representational alignment with brains is one of several ways to evaluate what models have learned. It complements behavioural benchmarks but measures something different: whether the information in a model's internal states is laid out like the brain's.">
+
+Fit a linear map from model to brain, test it on new sentences, and judge it against how reliable the brain data are.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "An encoding model predicts...", options: ["Brain responses from stimulus features", "Stimuli from brain responses", "Behaviour from genes", "Features from labels"], answer: 0, explain: "Decoding is the reverse." },
+  { q: "Ridge regression is used because...", options: ["Features are many and stimuli few", "It is non-linear", "It needs no data", "It finds causal links"], answer: 0, explain: "Regularisation." },
+  { q: "The noise ceiling estimates...", options: ["The best correlation any model could achieve given measurement noise", "The model's training error", "The number of voxels", "Chance level"], answer: 0, explain: "From repeated measurements." },
+  { q: "Spearman-Brown gives the reliability of...", options: ["The average of repeated measurements", "A single trial", "The model", "The noise"], answer: 0, explain: "2r/(1 + r) for two halves." },
+  { q: "Normalised predictivity is...", options: ["Model r divided by the ceiling", "Model r minus chance", "Ceiling squared", "Training r"], answer: 0, explain: "Schrimpf et al. (2021)." },
+  { q: "Schrimpf et al. found brain scores correlate with...", options: ["Next-word prediction performance", "Grammar benchmark scores", "Model age", "Vocabulary size only"], answer: 0, explain: "Across 43 models." },
+  { q: "A random feature set should give held-out correlations near...", options: ["Zero", "The ceiling", "One", "0.5"], answer: 0, explain: "No shared information." },
+  { q: "A high brain score shows that...", options: ["The features linearly contain brain-predictive information", "The model computes like the brain", "The brain uses transformers", "Syntax is solved"], answer: 0, explain: "A weaker claim." },
+]} />
+
+<Flashcards cards={[
+  { front: "Encoding model?", back: "Linear (ridge) map from stimulus features to each voxel's response, evaluated on held-out stimuli." },
+  { front: "Noise ceiling with two repetitions?", back: "$\\sqrt{2r_{12}/(1 + r_{12})}$, the square root of the Spearman-Brown reliability of the mean." },
+  { front: "Normalised predictivity?", back: "Held-out correlation divided by the noise ceiling." },
+  { front: "Schrimpf et al. (2021) main finding?", back: "Transformer features predict language-network responses near the ceiling, and brain scores track next-word prediction across models." },
+  { front: "Main caution?", back: "Predictivity shows shared information, not shared computation; simple features and confounds can drive scores." },
+]} />
+
+<Predict revisit question="Held-out correlation 0.3: a poor model?" />
+
+<Key title="Before you go">
+<ul>
+<li>Encoding models map features to responses with ridge regression and cross-validation.</li>
+<li>Scores must be judged against a noise ceiling from repeated data.</li>
+<li>Better predictors of language predict the brain better, across models.</li>
+<li>Predictivity is evidence of shared information, not shared mechanism.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Schrimpf, Blank, Tuckute, Kauf, Hosseini, Kanwisher, Tenenbaum and Fedorenko (2021), <em>The neural architecture of language: integrative modeling converges on predictive processing</em>.</li>
+<li>Caucheteux and King (2022), <em>Brains and algorithms partially converge in natural language processing</em>, Communications Biology 5, 134.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Propose a control analysis that would show whether a language model's brain score depends on its knowledge of syntax rather than of word meanings. Describe the stimuli and what result would support each possibility." />

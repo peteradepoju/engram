@@ -1,0 +1,270 @@
+export const meta = {
+  title: "Language as prediction: surprisal and processing difficulty",
+  intro: "Why are some words harder to read than others? In 2008 Roger Levy argued that the difficulty of a word is its surprisal, the negative log probability of the word given what came before, so that comprehension is the continual updating of expectations about how a sentence will continue. The idea, building on John Hale's work, explained garden-path effects and other classic puzzles of sentence processing without special parsing rules, and it was confirmed when reading times turned out to grow linearly with surprisal (Smith and Levy, 2013). It is also exactly the quantity that large language models are trained to minimise. Today you build n-gram language models, compute surprisal word by word, see why context length matters, and regress simulated reading times on surprisal.",
+  goals: [
+    "Estimate bigram and interpolated trigram probabilities from a corpus",
+    "Compute word-by-word surprisal and explain what it measures",
+    "Show that longer context resolves expectations a short context cannot",
+    "Recover the effect of surprisal on reading time by regression",
+  ],
+  plan: [
+    { label: "Predict and the theory", minutes: 20 },
+    { label: "A bigram model", minutes: 25 },
+    { label: "More context", minutes: 30 },
+    { label: "Surprisal and reading time", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "levy-2008",
+};
+
+<Predict question="A model that predicts each word only from the single word before it reads 'the farmer milked the ...'. Will it find 'cow' much more expected than 'bread'?" />
+
+<Step n={1} title="Surprisal" minutes={20} />
+
+The **surprisal** of word $w_t$ in its context is
+
+$$
+s(w_t) = -\log_2 P(w_t \mid w_1, \dots, w_{t-1}) \quad \text{bits}.
+$$
+
+A word that was certain has surprisal 0; one with probability 1/8 has 3 bits. Levy (2008) showed that surprisal equals the amount by which a comprehender's probability distribution over complete interpretations of the sentence must change when the word arrives (the relative entropy between the distributions before and after), which gives it a principled interpretation as the work of updating beliefs. Hale (2001) had proposed surprisal as a difficulty measure; Levy derived it and showed that it accounts for effects of syntactic expectation, such as why some relative clauses are harder than others.
+
+The theory needs a probability model of language. Classic work used probabilistic grammars; today the best estimates come from neural language models, and their surprisal predicts reading times and the N400, an EEG response to unexpected words (Kutas and Hillyard, 1980), across many languages.
+
+<Video id="LPZh9BOjkQs" title="Large Language Models explained briefly" by="Grant Sanderson (3Blue1Brown)" note="A short explanation of how large language models assign probabilities to the next word, the quantity whose negative logarithm is today's surprisal." />
+
+<Step n={2} title="A bigram model" minutes={25} />
+
+The corpus below is a few dozen short sentences written for this lesson. A **bigram** model estimates $P(w_t \mid w_{t-1})$ from counts, smoothed so that unseen pairs are not impossible:
+
+$$
+P(w \mid v) = \frac{\text{count}(v, w) + \alpha}{\text{count}(v) + \alpha|V|}.
+$$
+
+<Figure caption="Word-by-word surprisal for a sentence and a surprising variant, under bigram and trigram models. Pick a sentence and a model and compare the profiles." credit="Interactive figure by Engram, after Levy (2008).">
+  <SurprisalBars />
+</Figure>
+
+<PyCell id="bigram" title="Bigram surprisal" tests={String.raw`
+  import numpy as np
+  def test_socks():
+      "under the bigram model, 'socks' after 'butter on the' is at least 5 bits more surprising than 'bread'"
+      s_bread = dict(bigram_surprisal("she spread butter on the bread ."))["bread"]
+      s_socks = dict(bigram_surprisal("she spread butter on the socks ."))["socks"]
+      assert s_socks > s_bread + 5
+  def test_blind():
+      "the bigram model cannot prefer 'cow' over 'bread' after 'milked the'"
+      s_cow = dict(bigram_surprisal("the farmer milked the cow ."))["cow"]
+      s_bread = dict(bigram_surprisal("the farmer milked the bread ."))["bread"]
+      assert s_cow >= s_bread - 0.5
+`} prompt="Write bigram_surprisal(sentence): for each word after the first, return (word, -log2 P(word | previous word)) using the smoothed bigram probability with alpha = 0.1."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from collections import Counter
+  corpus = """the cat sat on the mat . the dog sat on the rug . the cat chased the mouse . the dog chased the cat .
+  the child read the book . the child read the letter . the teacher read the book . the teacher wrote the letter .
+  the girl ate the apple . the boy ate the bread . the girl drank the milk . the boy drank the water .
+  the farmer milked the cow . the farmer fed the cow . the farmer fed the dog . the baker baked the bread .
+  the baker sold the bread . the man drove the car . the woman drove the bus . the man parked the car .
+  the cat slept on the mat . the dog slept on the rug . the child slept in the bed . the baby slept in the cot .
+  she spread butter on the bread . he spread jam on the bread . she put milk in the tea . he put sugar in the tea .""".split()
+  V = sorted(set(corpus))
+  uni = Counter(corpus[:-1]); big = Counter(zip(corpus[:-1], corpus[1:]))
+
+  def p_bigram(w, prev, alpha=0.1):
+      return (big[(prev, w)] + alpha) / (uni[prev] + alpha * len(V))
+
+  def bigram_surprisal(sentence):
+      ws = sentence.split()
+      return ...
+
+  for s in ["the farmer milked the cow .", "the farmer milked the bread .", "she spread butter on the bread .", "she spread butter on the socks ."]:
+      print(s, " ".join(f"{w}:{v:.1f}" for w, v in bigram_surprisal(s)))
+`}
+hint="return [(w, -np.log2(p_bigram(w, ws[i - 1]))) for i, w in enumerate(ws) if i > 0]."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from collections import Counter
+  corpus = """the cat sat on the mat . the dog sat on the rug . the cat chased the mouse . the dog chased the cat .
+  the child read the book . the child read the letter . the teacher read the book . the teacher wrote the letter .
+  the girl ate the apple . the boy ate the bread . the girl drank the milk . the boy drank the water .
+  the farmer milked the cow . the farmer fed the cow . the farmer fed the dog . the baker baked the bread .
+  the baker sold the bread . the man drove the car . the woman drove the bus . the man parked the car .
+  the cat slept on the mat . the dog slept on the rug . the child slept in the bed . the baby slept in the cot .
+  she spread butter on the bread . he spread jam on the bread . she put milk in the tea . he put sugar in the tea .""".split()
+  V = sorted(set(corpus))
+  uni = Counter(corpus[:-1]); big = Counter(zip(corpus[:-1], corpus[1:]))
+
+  def p_bigram(w, prev, alpha=0.1):
+      return (big[(prev, w)] + alpha) / (uni[prev] + alpha * len(V))
+
+  def bigram_surprisal(sentence):
+      ws = sentence.split()
+      return [(w, -np.log2(p_bigram(w, ws[i - 1]))) for i, w in enumerate(ws) if i > 0]
+
+  for s in ["the farmer milked the cow .", "the farmer milked the bread .", "she spread butter on the bread .", "she spread butter on the socks ."]:
+      print(s, " ".join(f"{w}:{v:.1f}" for w, v in bigram_surprisal(s)))
+`} />
+
+The bigram model sees 'socks' after 'the' as almost impossible, 9 bits, against 3.5 for 'bread', and the full stop after 'socks' is surprising too, because 'socks' never appeared anywhere. But it is blind to the verb: after 'milked the', it finds 'cow' (4.8 bits) no more expected than 'bread' (3.5 bits), because it only sees 'the', and in this corpus 'the bread' is more common than 'the cow'. Any model that predicts from a fixed short window will miss expectations set further back in the sentence.
+
+<Step n={3} title="More context" minutes={30} />
+
+A trigram model conditions on two previous words. With little data most trigrams are unseen, so the estimate is **interpolated** with bigram and unigram estimates:
+
+$$
+P(w \mid u, v) = \lambda_3\,\hat P(w \mid u, v) + \lambda_2\,\hat P(w \mid v) + \lambda_1\,\hat P(w),
+$$
+
+with $\lambda_3 = 0.6$, $\lambda_2 = 0.3$, $\lambda_1 = 0.1$ here.
+
+<PyCell id="trigram" title="Two words of context" tests={String.raw`
+  import numpy as np
+  def test_cow():
+      "the trigram model finds 'cow' after 'milked the' at least 3 bits less surprising than 'bread'"
+      s_cow = dict(trigram_surprisal("the farmer milked the cow ."))["cow"]
+      s_bread = dict(trigram_surprisal("the farmer milked the bread ."))["bread"]
+      assert s_bread > s_cow + 3
+`} prompt="Write p_trigram(w, u, v) by interpolation (use the empirical trigram and bigram frequencies, 0 when the context was never seen, and an add-0.5 unigram estimate), and trigram_surprisal(sentence) for words from the third onwards."
+code={String.raw`
+  tri = Counter(zip(corpus[:-2], corpus[1:-1], corpus[2:])); bictx = Counter(zip(corpus[:-2], corpus[1:-1]))
+  U = Counter(corpus)
+
+  def p_trigram(w, u, v, lam=(0.6, 0.3, 0.1)):
+      pt = tri[(u, v, w)] / bictx[(u, v)] if bictx[(u, v)] else 0.0
+      pb = big[(v, w)] / uni[v] if uni[v] else 0.0
+      pu = (U[w] + 0.5) / (len(corpus) + 0.5 * len(V))
+      return ...
+
+  def trigram_surprisal(sentence):
+      ws = sentence.split()
+      return [(w, -np.log2(p_trigram(w, ws[i - 2], ws[i - 1]))) for i, w in enumerate(ws) if i > 1]
+
+  for s in ["the farmer milked the cow .", "the farmer milked the bread ."]:
+      print(s, " ".join(f"{w}:{v:.1f}" for w, v in trigram_surprisal(s)))
+`}
+hint="return lam[0] * pt + lam[1] * pb + lam[2] * pu."
+solution={String.raw`
+  tri = Counter(zip(corpus[:-2], corpus[1:-1], corpus[2:])); bictx = Counter(zip(corpus[:-2], corpus[1:-1]))
+  U = Counter(corpus)
+
+  def p_trigram(w, u, v, lam=(0.6, 0.3, 0.1)):
+      pt = tri[(u, v, w)] / bictx[(u, v)] if bictx[(u, v)] else 0.0
+      pb = big[(v, w)] / uni[v] if uni[v] else 0.0
+      pu = (U[w] + 0.5) / (len(corpus) + 0.5 * len(V))
+      return lam[0] * pt + lam[1] * pb + lam[2] * pu
+
+  def trigram_surprisal(sentence):
+      ws = sentence.split()
+      return [(w, -np.log2(p_trigram(w, ws[i - 2], ws[i - 1]))) for i, w in enumerate(ws) if i > 1]
+
+  for s in ["the farmer milked the cow .", "the farmer milked the bread ."]:
+      print(s, " ".join(f"{w}:{v:.1f}" for w, v in trigram_surprisal(s)))
+`} />
+
+With two words of context, 'cow' after 'milked the' costs 0.7 bits and 'bread' 5.0: the verb now shapes the expectation for its object, as it does for human readers. The interpolation matters: almost every trigram in a real sentence is unseen in a small corpus, and without falling back on bigrams and unigrams most words would get probability zero. Neural language models solve the same problem by sharing statistical strength between similar contexts instead of counting exact word sequences.
+
+<Step n={4} title="Surprisal and reading time" minutes={30} />
+
+In self-paced reading or eye tracking, each word's reading time is measured. Suppose a reader's times follow $\text{RT} = 250 + 20\,s + 8\,\ell + \varepsilon$ milliseconds, where $s$ is trigram surprisal and $\ell$ word length in letters. Simulate 40 readers reading 12 sentences and estimate the coefficients by least squares, as reading-time studies do (with mixed models in practice; Week 37).
+
+<PyCell id="rt" title="Recovering the surprisal effect" tests={String.raw`
+  import numpy as np
+  def test_slope():
+      "the estimated surprisal coefficient is within 3 ms per bit of 20"
+      assert abs(beta[1] - 20) < 3
+  def test_length():
+      "the length coefficient is within 3 ms per letter of 8"
+      assert abs(beta[2] - 8) < 3
+`} prompt="Build a design matrix with an intercept, surprisal and length for every word of every sentence and reader, simulate reading times with noise of sd 40 ms, and fit by np.linalg.lstsq."
+code={String.raw`
+  sentences = ["the farmer milked the cow .", "the farmer milked the bread .", "she spread butter on the bread .", "she spread butter on the socks .",
+               "the child read the book .", "the child read the milk .", "the dog chased the cat .", "the dog chased the tea .",
+               "the man drove the car .", "the man drove the apple .", "he put sugar in the tea .", "he put sugar in the bus ."]
+  rows = []
+  for s in sentences:
+      for w, sv in trigram_surprisal(s):
+          rows.append((sv, len(w)))
+  rows = np.array(rows)
+  X_one = np.c_[np.ones(len(rows)), rows]
+  X = np.tile(X_one, (40, 1))
+  rt = ...
+  beta = ...
+  print(f"intercept {beta[0]:.0f} ms, surprisal {beta[1]:.1f} ms per bit, length {beta[2]:.1f} ms per letter")
+  plt.scatter(X[:, 1], rt, s=3, alpha=0.3); plt.xlabel("surprisal (bits)"); plt.ylabel("reading time (ms)"); plt.show()
+`}
+hint="rt = X @ np.array([250, 20, 8]) + 40 * np.random.default_rng(2008).normal(size=len(X)); beta = np.linalg.lstsq(X, rt, rcond=None)[0]."
+solution={String.raw`
+  sentences = ["the farmer milked the cow .", "the farmer milked the bread .", "she spread butter on the bread .", "she spread butter on the socks .",
+               "the child read the book .", "the child read the milk .", "the dog chased the cat .", "the dog chased the tea .",
+               "the man drove the car .", "the man drove the apple .", "he put sugar in the tea .", "he put sugar in the bus ."]
+  rows = []
+  for s in sentences:
+      for w, sv in trigram_surprisal(s):
+          rows.append((sv, len(w)))
+  rows = np.array(rows)
+  X_one = np.c_[np.ones(len(rows)), rows]
+  X = np.tile(X_one, (40, 1))
+  rt = X @ np.array([250, 20, 8]) + 40 * np.random.default_rng(2008).normal(size=len(X))
+  beta = np.linalg.lstsq(X, rt, rcond=None)[0]
+  print(f"intercept {beta[0]:.0f} ms, surprisal {beta[1]:.1f} ms per bit, length {beta[2]:.1f} ms per letter")
+  plt.scatter(X[:, 1], rt, s=3, alpha=0.3); plt.xlabel("surprisal (bits)"); plt.ylabel("reading time (ms)"); plt.show()
+`} />
+
+The regression recovers a surprisal effect of about 21 ms per bit and a length effect of about 7 ms per letter, close to the 20 and 8 used to simulate the data. The two predictors are correlated (unexpected words in this set are often longer), which is why both must be included: leaving length out would inflate the surprisal coefficient. Real studies add word frequency, position in the sentence and spill-over from the previous word, and use mixed models with random effects for readers and items.
+
+<Callout kind="research">
+
+Two open questions keep this area active. First, the shape: Smith and Levy (2013) found reading time linear in surprisal over a wide range, but some studies find superlinear effects at high surprisal, which would favour different accounts of processing. Second, which model: surprisal from larger language models predicts reading times better up to a point, after which even better language models predict human reading worse, perhaps because they know rare facts that people do not (Oh and Schuler, 2023). What a 'human-like' predictor should be is not settled.
+
+</Callout>
+
+<Bridge title="Comprehension as prediction"
+  neuro="Reading times, eye movements and the N400 all scale with how unexpected a word is. Language areas respond more strongly to less predictable words, and predictive processing is now a central theme of the neuroscience of language."
+  ai="Language models are trained to minimise average surprisal (cross-entropy), so their output is exactly the quantity that predicts human processing difficulty. That shared objective is one reason these models have become tools for studying the brain (Day 4).">
+
+A word is hard to the extent that it was unexpected, and unexpectedness can be measured in bits.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Surprisal is...", options: ["−log₂ P(word | context)", "Word length", "Word frequency", "Reading time"], answer: 0, explain: "Measured in bits." },
+  { q: "A word with probability 1/8 has surprisal...", options: ["3 bits", "8 bits", "1/8 bit", "0 bits"], answer: 0, explain: "−log₂(1/8)." },
+  { q: "Levy (2008) showed surprisal equals...", options: ["The change in the comprehender's distribution over interpretations", "Syntactic depth", "Working memory load", "Word length"], answer: 0, explain: "A relative entropy." },
+  { q: "A bigram model conditions on...", options: ["The previous word only", "The whole sentence", "Two previous words", "Nothing"], answer: 0, explain: "Hence it misses 'milked'." },
+  { q: "Interpolation combines...", options: ["Trigram, bigram and unigram estimates", "Two corpora", "Readers", "Sentences"], answer: 0, explain: "Handles unseen contexts." },
+  { q: "Smith and Levy (2013) found reading time is...", options: ["Linear in surprisal", "Independent of surprisal", "Exponential in probability", "Linear in probability"], answer: 0, explain: "Logarithmic in probability." },
+  { q: "The N400 is...", options: ["An EEG response larger for unexpected words", "A reading time", "A spike", "A grammar rule"], answer: 0, explain: "Kutas and Hillyard (1980)." },
+  { q: "Language models are trained to minimise...", options: ["Average surprisal", "Reading time", "Word length", "Syntax errors"], answer: 0, explain: "Cross-entropy." },
+]} />
+
+<Flashcards cards={[
+  { front: "Surprisal?", back: "$s(w_t) = -\\log_2 P(w_t \\mid w_{1:t-1})$." },
+  { front: "Levy's result?", back: "Surprisal equals the relative entropy between the comprehender's beliefs about the sentence before and after the word." },
+  { front: "Smoothed bigram?", back: "$P(w \\mid v) = (\\text{count}(v, w) + \\alpha)/(\\text{count}(v) + \\alpha|V|)$." },
+  { front: "Interpolated trigram?", back: "$\\lambda_3\\hat P(w\\mid u,v) + \\lambda_2\\hat P(w\\mid v) + \\lambda_1\\hat P(w)$." },
+  { front: "Surprisal and reading time?", back: "Roughly linear: each extra bit adds a constant number of milliseconds." },
+]} />
+
+<Predict revisit question="A one-word-context model after 'the farmer milked the ...': 'cow' much more expected than 'bread'?" />
+
+<Key title="Before you go">
+<ul>
+<li>Surprisal measures how unexpected a word is, in bits.</li>
+<li>It has a principled meaning as belief change during comprehension.</li>
+<li>Longer context lets models capture expectations short ones miss.</li>
+<li>Reading times grow linearly with surprisal.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Levy (2008), <em>Expectation-based syntactic comprehension</em>.</li>
+<li>Smith and Levy (2013), <em>The effect of word predictability on reading time is logarithmic</em>, Cognition 128(3), 302 to 319.</li>
+<li>Kutas and Hillyard (1980), <em>Reading senseless sentences: brain potentials reflect semantic incongruity</em>, Science 207(4427), 203 to 205.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Write a sentence that is grammatical but very hard to read, such as a garden-path sentence. Mark where you think surprisal peaks, and explain why a model with a short context might miss the difficulty." />

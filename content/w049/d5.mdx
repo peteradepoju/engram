@@ -1,0 +1,254 @@
+export const meta = {
+  title: "Cognitive maps and the successor representation",
+  intro: "Week 43 introduced place and grid cells as a map of space. Week 44 introduced model-free and model-based learning. In 2017 Kimberly Stachenfeld, Matthew Botvinick and Samuel Gershman connected the two with a single idea from reinforcement learning, the successor representation (Dayan, 1993): instead of storing where things are, the hippocampus stores, for each place, how often you expect to visit every other place in the near future. Place fields become predictions; they should therefore skew backwards along habitual routes and stretch around obstacles; and the eigenvectors of the predictive map look like grid cells. The same idea extends from space to abstract cognitive maps of concepts and tasks. Today you compute successor representations, watch fields skew with a biased policy, learn them by temporal differences and find grid-like structure in their eigenvectors.",
+  goals: [
+    "Define the successor representation and compute it from a transition matrix",
+    "Show that place fields derived from it skew against the direction of travel",
+    "Learn the successor representation by temporal-difference updates",
+    "Relate its eigenvectors to grid-like periodic patterns",
+  ],
+  plan: [
+    { label: "Predict and the idea", minutes: 20 },
+    { label: "Fields that predict", minutes: 30 },
+    { label: "Learning by temporal differences", minutes: 25 },
+    { label: "Eigenvectors and grids", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "stachenfeld-2017",
+};
+
+<Predict question="A rat runs repeatedly from left to right along a track. If a place cell represents how strongly each location predicts a future visit to the cell's preferred spot, will its field extend further to the left of that spot, to the right, or equally?" />
+
+<Step n={1} title="Prediction as representation" minutes={20} />
+
+For a policy that moves between states with transition matrix $T$, the **successor representation** (SR) is the expected discounted number of future visits to state $s'$ starting from $s$:
+
+$$
+M(s, s') = \mathbb E\Big[\sum_{t=0}^\infty \gamma^t\,\mathbb 1(s_t = s') \,\Big|\, s_0 = s\Big] = \big[(I - \gamma T)^{-1}\big]_{s s'}.
+$$
+
+Given rewards $\mathbf R$ at each state, values follow immediately as $\mathbf V = M\mathbf R$. The SR sits between model-free and model-based learning (Week 44): like model-free values it is cached and quick to use, and like a model it can re-plan instantly when rewards change, because only $\mathbf R$ must be relearned (Momennejad and colleagues, 2017, found such partial flexibility in human behaviour).
+
+Stachenfeld and colleagues proposed that place cells encode columns of $M$: the cell for location $s'$ fires at $s$ in proportion to how much $s$ predicts future visits to $s'$. The prediction depends on the animal's behaviour, which explains why place fields change with experience, skew along routes and avoid barriers.
+
+<Video id="zTOaBMsG_0s" title="Learning of Associations" by="Wulfram Gerstner (EPFL, Neuronal Dynamics)" note="Gerstner on how Hebbian learning stores associations between patterns, the network principle behind learning which states tend to follow which, as the successor representation does." />
+
+<Step n={2} title="Fields that predict" minutes={30} />
+
+<Figure caption="Successor representation place fields on a linear track. Bias the policy to run rightwards and watch fields skew to the left, the direction the animal comes from; change the discount and watch them widen." credit="Interactive figure by Engram, after Stachenfeld, Botvinick and Gershman (2017).">
+  <SuccessorFields />
+</Figure>
+
+<PyCell id="skew" title="Skew against the direction of travel" tests={String.raw`
+  import numpy as np
+  def test_symmetric():
+      "with an unbiased random walk, the field's centre of mass is at the cell's location"
+      assert abs(com[0.5] - 25) < 0.5
+  def test_skew():
+      "with a rightward policy, the field's mass shifts at least 4 states to the left"
+      assert com[0.9] < 21
+`} prompt="Build T for a 50-state track where the agent steps right with probability p_right and left otherwise (staying put at the ends). Compute M = (I - gamma T)^-1 with gamma = 0.9, take the column for state 25 as that cell's field, and find its centre of mass for p_right of 0.5 and 0.9."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2017)
+  n, gamma = 50, 0.9
+
+  def track_T(p_right):
+      T = np.zeros((n, n))
+      for s in range(n):
+          T[s, min(s + 1, n - 1)] += p_right; T[s, max(s - 1, 0)] += 1 - p_right
+      return T
+
+  com = {}
+  for p in [0.5, 0.9]:
+      M = ...
+      field = M[:, 25]
+      com[p] = (field * np.arange(n)).sum() / field.sum()
+      plt.plot(field / field.max(), label=f"p_right = {p}")
+      print(f"p_right = {p}: field peaks at {np.argmax(field)}, centre of mass {com[p]:.2f}")
+  plt.axvline(25, color="k", ls=":"); plt.xlabel("position"); plt.ylabel("field (normalised)"); plt.legend(); plt.show()
+`}
+hint="M = np.linalg.inv(np.eye(n) - gamma * track_T(p))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(2017)
+  n, gamma = 50, 0.9
+
+  def track_T(p_right):
+      T = np.zeros((n, n))
+      for s in range(n):
+          T[s, min(s + 1, n - 1)] += p_right; T[s, max(s - 1, 0)] += 1 - p_right
+      return T
+
+  com = {}
+  for p in [0.5, 0.9]:
+      M = np.linalg.inv(np.eye(n) - gamma * track_T(p))
+      field = M[:, 25]
+      com[p] = (field * np.arange(n)).sum() / field.sum()
+      plt.plot(field / field.max(), label=f"p_right = {p}")
+      print(f"p_right = {p}: field peaks at {np.argmax(field)}, centre of mass {com[p]:.2f}")
+  plt.axvline(25, color="k", ls=":"); plt.xlabel("position"); plt.ylabel("field (normalised)"); plt.legend(); plt.show()
+`} />
+
+With an unbiased random walk the field is symmetric about state 25. With a rightward habit it still peaks at 25 but its mass shifts to 18.75: positions to the left strongly predict reaching 25 soon, while positions to the right, which the animal will rarely revisit, do not. Mehta, Quirk and Wilson (2000) found this backward expansion and skew of place fields as rats ran repeatedly in one direction, which they explained with STDP (Week 42); the SR explains it as learned prediction.
+
+<Step n={3} title="Learning by temporal differences" minutes={25} />
+
+The SR obeys a Bellman equation, $M(s, \cdot) = \mathbb 1_s + \gamma\,\mathbb E[M(s', \cdot)]$, so it can be learned from experience with a TD rule (Week 44) applied to whole rows:
+
+$$
+M(s, \cdot) \leftarrow M(s, \cdot) + \alpha\big(\mathbb 1_s + \gamma M(s', \cdot) - M(s, \cdot)\big).
+$$
+
+<PyCell id="td" title="An SR learned from running" tests={String.raw`
+  import numpy as np
+  def test_field():
+      "the learned field of state 25 correlates above 0.95 with the true one"
+      assert np.corrcoef(M_td[:, 25], M_true[:, 25])[0, 1] > 0.95
+`} prompt="Let the agent run 40,000 steps with the rightward policy, returning to state 0 when it reaches the end, and update M with the TD rule (alpha = 0.1). Compare the learned field of state 25 with the true one."
+code={String.raw`
+  M_true = np.linalg.inv(np.eye(n) - gamma * track_T(0.9))
+  M_td = np.zeros((n, n)); I = np.eye(n); s = 0
+  moves_right = r.random(40000) < 0.9
+  for t in range(40000):
+      s2 = min(s + 1, n - 1) if moves_right[t] else max(s - 1, 0)
+      ...
+      s = 0 if s2 == n - 1 else s2
+  print(f"correlation between learned and true field of state 25: {np.corrcoef(M_td[:, 25], M_true[:, 25])[0, 1]:.3f}")
+  plt.plot(M_true[:, 25], label="true"); plt.plot(M_td[:, 25], label="learned"); plt.legend(); plt.xlabel("position"); plt.show()
+`}
+hint="M_td[s] += 0.1 * (I[s] + gamma * M_td[s2] - M_td[s])."
+solution={String.raw`
+  M_true = np.linalg.inv(np.eye(n) - gamma * track_T(0.9))
+  M_td = np.zeros((n, n)); I = np.eye(n); s = 0
+  moves_right = r.random(40000) < 0.9
+  for t in range(40000):
+      s2 = min(s + 1, n - 1) if moves_right[t] else max(s - 1, 0)
+      M_td[s] += 0.1 * (I[s] + gamma * M_td[s2] - M_td[s])
+      s = 0 if s2 == n - 1 else s2
+  print(f"correlation between learned and true field of state 25: {np.corrcoef(M_td[:, 25], M_true[:, 25])[0, 1]:.3f}")
+  plt.plot(M_true[:, 25], label="true"); plt.plot(M_td[:, 25], label="learned"); plt.legend(); plt.xlabel("position"); plt.show()
+`} />
+
+After 40,000 steps the learned field of state 25 correlates 0.997 with the true one. The rule needs only the current state, the next state and the current estimates, the same ingredients as Week 44's TD learning of values, and so it is plausible for hippocampal circuits. Replay of sequences during rest (Week 43) could speed it up by supplying extra transitions.
+
+<Step n={4} title="Eigenvectors and grids" minutes={30} />
+
+Stachenfeld and colleagues noted that the eigenvectors of the SR in an open environment are periodic patterns of increasing spatial frequency, like the Fourier modes of the room, and proposed that grid cells (Week 43) provide such a low-dimensional basis for the predictive map, a compressed representation from which the SR can be reconstructed. In a square room they look like stripes and checkerboards; Stachenfeld and colleagues found hexagonal patterns under some conditions, and their irregular eigenvectors in rooms with barriers predicted how grids distort in such rooms.
+
+<PyCell id="eigen" title="Periodic eigenvectors of a predictive map" tests={String.raw`
+  import numpy as np
+  def test_increasing():
+      "eigenvectors further down the spectrum change sign more often across the room"
+      assert changes[0] < changes[2] < changes[3]
+  def test_smooth():
+      "the first non-constant eigenvector changes sign fewer than 30 times across all rows and columns"
+      assert changes[0] < 30
+`} prompt="Build a random-walk transition matrix for a 12 by 12 room (moves to the four neighbours inside the room), compute its SR with gamma 0.95 and the eigenvectors sorted by eigenvalue. For eigenvectors 1, 3, 10 and 20, count sign changes between neighbouring cells along all rows and columns."
+code={String.raw`
+  k = 12; N = k * k; A = np.zeros((N, N))
+  for i in range(k):
+      for j in range(k):
+          for di, dj in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+              a, b = i + di, j + dj
+              if 0 <= a < k and 0 <= b < k:
+                  A[i * k + j, a * k + b] = 1
+  T2 = A / A.sum(1, keepdims=True)
+  M2 = ...
+  w, v = np.linalg.eig(M2); order = np.argsort(-w.real); v = v[:, order].real
+
+  def sign_changes(e):
+      e = np.sign(e.reshape(k, k))
+      return int(np.sum(np.diff(e, axis=0) != 0) + np.sum(np.diff(e, axis=1) != 0))
+
+  idx = [1, 3, 10, 20]
+  changes = [sign_changes(v[:, q]) for q in idx]
+  print(dict(zip(idx, changes)), "sign changes by eigenvector index")
+  fig, ax = plt.subplots(1, 4, figsize=(9, 2.4))
+  for a_, q in zip(ax, idx):
+      a_.imshow(v[:, q].reshape(k, k), cmap="RdBu"); a_.set_title(f"eigenvector {q}"); a_.axis("off")
+  plt.show()
+`}
+hint="M2 = np.linalg.inv(np.eye(N) - 0.95 * T2)."
+solution={String.raw`
+  k = 12; N = k * k; A = np.zeros((N, N))
+  for i in range(k):
+      for j in range(k):
+          for di, dj in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+              a, b = i + di, j + dj
+              if 0 <= a < k and 0 <= b < k:
+                  A[i * k + j, a * k + b] = 1
+  T2 = A / A.sum(1, keepdims=True)
+  M2 = np.linalg.inv(np.eye(N) - 0.95 * T2)
+  w, v = np.linalg.eig(M2); order = np.argsort(-w.real); v = v[:, order].real
+
+  def sign_changes(e):
+      e = np.sign(e.reshape(k, k))
+      return int(np.sum(np.diff(e, axis=0) != 0) + np.sum(np.diff(e, axis=1) != 0))
+
+  idx = [1, 3, 10, 20]
+  changes = [sign_changes(v[:, q]) for q in idx]
+  print(dict(zip(idx, changes)), "sign changes by eigenvector index")
+  fig, ax = plt.subplots(1, 4, figsize=(9, 2.4))
+  for a_, q in zip(ax, idx):
+      a_.imshow(v[:, q].reshape(k, k), cmap="RdBu"); a_.set_title(f"eigenvector {q}"); a_.axis("off")
+  plt.show()
+`} />
+
+The leading non-constant eigenvectors change sign about 22 to 24 times across the rows and columns of the room: one or two broad waves. By eigenvector 10 there are 54 sign changes, and by eigenvector 20, 72. They form a ladder of periodic patterns, coarse to fine, like the modules of grid cells with their increasing frequencies. In a square box the patterns are stripes and checkerboards rather than hexagons; Stachenfeld and colleagues obtained hexagonal patterns only with further assumptions, such as non-negativity, which is one of the open points of the theory.
+
+<Callout kind="research">
+
+The SR has been extended well beyond space. Garvert, Dolan and Behrens (2017) found that the entorhinal cortex represents relations between objects learned from sequences, as an SR over a graph of objects would; Behrens and colleagues (2018) argued that the hippocampal-entorhinal system builds cognitive maps of any structured knowledge. The Tolman-Eichenbaum machine (Whittington and colleagues, 2020) learns grid-like and place-like codes by separating the structure of a task from its sensory details, and has been linked to transformers. Whether the brain's maps are SRs, models, or something else is an active question.
+
+</Callout>
+
+<Bridge title="Maps as predictions"
+  neuro="Place fields may encode predictions of future location under the animal's habits, explaining their backward skew and their dependence on routes and barriers; grid cells may provide a compressed basis for those predictions; and the same machinery may map abstract spaces."
+  ai="The successor representation and its generalisation, successor features, are used in reinforcement learning for transfer between tasks with different rewards, and spectral methods based on graph Laplacian eigenvectors (proto-value functions) learn representations that resemble its eigenvectors.">
+
+A map can store not where things are but where you are likely to be next.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The successor representation M(s, s') is...", options: ["The expected discounted future visits to s' from s", "The reward at s'", "The distance from s to s'", "The policy"], answer: 0, explain: "(I − γT)⁻¹." },
+  { q: "Given the SR, values are computed as...", options: ["V = M R", "V = T R", "V = R", "V = M⁻¹ R"], answer: 0, explain: "Prediction times reward." },
+  { q: "The SR re-plans quickly when...", options: ["Rewards change", "Transitions change", "Nothing changes", "The policy changes completely"], answer: 0, explain: "Only R must be relearned." },
+  { q: "With a rightward running habit, SR place fields skew...", options: ["Backwards, towards the left", "Forwards, to the right", "Not at all", "Upwards"], answer: 0, explain: "Earlier positions predict the cell's location." },
+  { q: "The SR can be learned with...", options: ["A temporal-difference rule over rows", "Gradient descent on images", "Hebbian learning only", "Backpropagation through time"], answer: 0, explain: "It obeys a Bellman equation." },
+  { q: "Eigenvectors of the SR in an open room are...", options: ["Periodic patterns of increasing frequency", "Single place fields", "Random", "Constant"], answer: 0, explain: "Fourier-like modes." },
+  { q: "Stachenfeld et al. proposed grid cells provide...", options: ["A low-dimensional basis for the predictive map", "Reward signals", "Head direction", "Place fields directly"], answer: 0, explain: "Eigendecomposition." },
+  { q: "The SR has been applied to...", options: ["Abstract relational maps as well as space", "Only physical space", "Only motor control", "Only vision"], answer: 0, explain: "Garvert et al. (2017)." },
+]} />
+
+<Flashcards cards={[
+  { front: "Successor representation?", back: "$M = (I - \\gamma T)^{-1}$; $M(s, s')$ is expected discounted future occupancy of $s'$ from $s$." },
+  { front: "Values from the SR?", back: "$\\mathbf V = M\\mathbf R$; reward changes are absorbed instantly." },
+  { front: "TD learning of the SR?", back: "$M(s,\\cdot) \\leftarrow M(s,\\cdot) + \\alpha(\\mathbb 1_s + \\gamma M(s',\\cdot) - M(s,\\cdot))$." },
+  { front: "Predicted place-field skew?", back: "Backward along habitual routes, as found in rat hippocampus (Mehta and colleagues)." },
+  { front: "SR eigenvectors?", back: "Periodic spatial modes resembling grid patterns; proposed as the role of grid cells." },
+]} />
+
+<Predict revisit question="Running repeatedly left to right: does a predictive place field extend left, right, or equally?" />
+
+<Key title="Before you go">
+<ul>
+<li>The SR stores expected future occupancy and turns rewards into values by one multiplication.</li>
+<li>SR place fields skew against the direction of habitual travel.</li>
+<li>The SR can be learned online with temporal differences.</li>
+<li>Its eigenvectors are periodic, suggesting a role for grid cells.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Stachenfeld, Botvinick and Gershman (2017), <em>The hippocampus as a predictive map</em>.</li>
+<li>Dayan (1993), <em>Improving generalization for temporal difference learning: the successor representation</em>, Neural Computation 5(4), 613 to 624.</li>
+<li>Behrens et al. (2018), <em>What is a cognitive map? Organizing knowledge for flexible behavior</em>, Neuron 100(2), 490 to 509.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Think of a route you travel every day. If your memory of it were a successor representation, what would happen when a road closed, and what would happen when you learned that a new café had opened along the way? Which change would your map absorb faster, and why?" />

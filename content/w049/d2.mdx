@@ -1,0 +1,253 @@
+export const meta = {
+  title: "Hubs, modules and functional connectivity",
+  intro: "Small-worldness is the beginning of network neuroscience, not its end. In their 2009 review, Ed Bullmore and Olaf Sporns set out the measures that have proved more informative: brain networks are modular, divided into communities that are densely connected internally and sparsely between; they contain hubs, highly connected regions that link modules and carry much of the traffic; and the networks inferred from correlated activity, functional connectivity, differ in important ways from the anatomical wiring, structural connectivity. Today you find modules with the spectral method of Newman, test how a hub-rich network fails when hubs are removed, and see why correlation between regions does not mean a direct connection.",
+  goals: [
+    "Define modularity and detect communities with the leading eigenvector of the modularity matrix",
+    "Show that networks with hubs are robust to random failure but fragile to targeted attack",
+    "Distinguish structural from functional connectivity",
+    "Use partial correlation to separate direct from indirect dependencies",
+  ],
+  plan: [
+    { label: "Predict and the connectome", minutes: 15 },
+    { label: "Finding modules", minutes: 35 },
+    { label: "Hubs and robustness", minutes: 25 },
+    { label: "Correlation is not connection", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "bullmore-sporns-2009",
+};
+
+<Predict question="Region A projects to B, and B projects to C; A and C are not connected. In resting activity, will A and C be correlated?" />
+
+<Step n={1} title="The connectome" minutes={15} />
+
+Network neuroscience works at several scales: synapses between neurons (the full wiring of C. elegans or the fly), axonal projections between areas traced in animals, and white-matter tracts estimated with diffusion MRI in humans. **Structural connectivity** is the wiring. **Functional connectivity** is statistical dependence between regions' activity, usually correlation of fMRI time series at rest. **Effective connectivity** is the causal influence of one region on another, which requires a model or an intervention.
+
+Bullmore and Sporns highlighted several properties shared across scales and species. Brain networks are **modular**, with modules corresponding to functional systems such as visual, motor and default-mode networks. They have **hubs**, often in association cortex, which are densely interconnected with each other in a **rich club** (van den Heuvel and Sporns, 2011). And they are **economical**: most connections are short, which saves wiring cost, but a few expensive long-range links shorten paths. Damage to hubs has disproportionate effects, and hubs are often implicated in brain disorders.
+
+<Video id="vjBO-S7KNPI" title="Correlation vs causation" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch explains why correlated activity between neurons or regions need not mean that one causes the other, the central caution for functional connectivity." />
+
+<Step n={2} title="Finding modules" minutes={35} />
+
+Newman's **modularity** of a division of nodes into communities is the fraction of links that fall within communities minus the fraction expected if links were placed at random with the same degrees:
+
+$$
+Q = \frac{1}{2m}\sum_{ij}\Big(A_{ij} - \frac{k_ik_j}{2m}\Big)\delta(c_i, c_j),
+$$
+
+where $m$ is the number of links. The matrix $B_{ij} = A_{ij} - k_ik_j/2m$ is the **modularity matrix**. Newman (2006) showed that splitting the network by the signs of $B$'s leading eigenvector approximately maximises $Q$; repeating the split within each part gives more communities.
+
+<Figure caption="Modules and hubs. A network with planted communities, coloured by the communities found from the modularity matrix. Change the density of links between communities and see when detection fails." credit="Interactive figure by Engram, after Newman (2006) and Bullmore and Sporns (2009).">
+  <ModularNetwork />
+</Figure>
+
+<PyCell id="modules" title="Spectral community detection" tests={String.raw`
+  import numpy as np
+  def test_accuracy():
+      "at least 85% of nodes are assigned to their planted community"
+      assert acc > 0.85
+  def test_q():
+      "the found partition has modularity above 0.4"
+      assert modQ(A, c) > 0.4
+`} prompt="Write modQ(A, c) from the formula, and split(A, idx), which builds the modularity matrix restricted to the nodes idx (subtracting each row's sum from the diagonal, as Newman's generalised split requires) and divides them by the sign of its leading eigenvector. Split the network in two, then split each half."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from itertools import permutations
+  from scipy.sparse.csgraph import shortest_path
+  r = np.random.default_rng(2009)
+  M, n = 4, 30; N = M * n; lab = np.repeat(np.arange(M), n)
+  P = np.where(lab[:, None] == lab[None], 0.3, 0.02)
+  A = np.triu(r.random((N, N)) < P, 1); A = (A | A.T).astype(float)
+
+  def modQ(A, c):
+      ...
+
+  def split(A, idx):
+      k = A.sum(1); B = A - np.outer(k, k) / k.sum()
+      Bg = B[np.ix_(idx, idx)]; Bg = Bg - np.diag(Bg.sum(1))
+      ...
+
+  c = np.zeros(N, int); g = 0
+  for part in split(A, np.arange(N)):
+      p1, p2 = split(A, part); c[p1] = g; c[p2] = g + 1; g += 2
+  acc = max(np.mean(np.array(perm)[c] == lab) for perm in permutations(range(4)))
+  print(f"modularity found {modQ(A, c):.3f}, planted {modQ(A, lab):.3f}; nodes correctly assigned {acc:.3f}")
+  order = np.argsort(c); plt.imshow(A[np.ix_(order, order)], cmap="gray_r"); plt.title("adjacency, sorted by found module"); plt.show()
+`}
+hint="modQ: k = A.sum(1); m2 = k.sum(); B = A - np.outer(k, k) / m2; return (B * (c[:, None] == c[None])).sum() / m2. split: w, v = np.linalg.eigh(Bg); return idx[v[:, -1] >= 0], idx[v[:, -1] < 0]."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from itertools import permutations
+  from scipy.sparse.csgraph import shortest_path
+  r = np.random.default_rng(2009)
+  M, n = 4, 30; N = M * n; lab = np.repeat(np.arange(M), n)
+  P = np.where(lab[:, None] == lab[None], 0.3, 0.02)
+  A = np.triu(r.random((N, N)) < P, 1); A = (A | A.T).astype(float)
+
+  def modQ(A, c):
+      k = A.sum(1); m2 = k.sum(); B = A - np.outer(k, k) / m2
+      return (B * (c[:, None] == c[None])).sum() / m2
+
+  def split(A, idx):
+      k = A.sum(1); B = A - np.outer(k, k) / k.sum()
+      Bg = B[np.ix_(idx, idx)]; Bg = Bg - np.diag(Bg.sum(1))
+      w, v = np.linalg.eigh(Bg)
+      return idx[v[:, -1] >= 0], idx[v[:, -1] < 0]
+
+  c = np.zeros(N, int); g = 0
+  for part in split(A, np.arange(N)):
+      p1, p2 = split(A, part); c[p1] = g; c[p2] = g + 1; g += 2
+  acc = max(np.mean(np.array(perm)[c] == lab) for perm in permutations(range(4)))
+  print(f"modularity found {modQ(A, c):.3f}, planted {modQ(A, lab):.3f}; nodes correctly assigned {acc:.3f}")
+  order = np.argsort(c); plt.imshow(A[np.ix_(order, order)], cmap="gray_r"); plt.title("adjacency, sorted by found module"); plt.show()
+`} />
+
+Two rounds of spectral splitting assign 92% of nodes to their planted community and give a modularity of 0.47, a little below the planted partition's 0.55. Repeated bisection cannot undo an early mistake, so practical methods refine the partition afterwards, for example by moving single nodes when that raises $Q$ (the Louvain algorithm of Blondel and colleagues, 2008, is the most used). Modularity also has a resolution limit: it can merge small genuine modules, so the communities found depend on the method as well as the network.
+
+<Step n={3} title="Hubs and robustness" minutes={25} />
+
+Grow a network by preferential attachment (Barabási and Albert, 1999): each new node links to two existing nodes chosen with probability proportional to their degree, so a few nodes become hubs. Measure **global efficiency**, the mean of inverse shortest-path lengths, before and after removing 10% of nodes, either at random or the highest-degree ones.
+
+<PyCell id="hubs" title="Targeted attack against random failure" tests={String.raw`
+  import numpy as np
+  def test_hubs():
+      "the largest hub has more than five times the mean degree"
+      assert k.max() > 5 * k.mean()
+  def test_attack():
+      "removing hubs costs at least five times as much efficiency as removing random nodes"
+      assert (1 - eff_targeted) > 5 * (1 - eff_random)
+`} prompt="Write efficiency(A): the mean of 1 / shortest-path length over all ordered pairs of distinct nodes (unreachable pairs contribute 0). Remove the 20 highest-degree nodes, or 20 random nodes, and compare efficiency with the intact network."
+code={String.raw`
+  def grow(N=200, m=2):
+      B = np.zeros((N, N)); B[0, 1] = B[1, 0] = 1
+      for i in range(2, N):
+          kk = B[:i, :i].sum(1) + 1e-9
+          tg = r.choice(i, size=min(m, i), replace=False, p=kk / kk.sum()); B[i, tg] = B[tg, i] = 1
+      return B
+
+  def efficiency(A):
+      ...
+
+  B = grow(); k = B.sum(1); E0 = efficiency(B)
+  keep = lambda rm: np.setdiff1d(np.arange(len(B)), rm)
+  top, rnd = np.argsort(k)[::-1][:20], r.choice(len(B), 20, replace=False)
+  eff_targeted = efficiency(B[np.ix_(keep(top), keep(top))]) / E0
+  eff_random = efficiency(B[np.ix_(keep(rnd), keep(rnd))]) / E0
+  print(f"degrees: max {k.max():.0f}, mean {k.mean():.1f}; efficiency kept after random removal {eff_random:.2f}, after removing hubs {eff_targeted:.2f}")
+`}
+hint="D = shortest_path(A, unweighted=True); off = ~np.eye(len(A), dtype=bool); return np.mean(1 / D[off]) (1 / inf is 0)."
+solution={String.raw`
+  def grow(N=200, m=2):
+      B = np.zeros((N, N)); B[0, 1] = B[1, 0] = 1
+      for i in range(2, N):
+          kk = B[:i, :i].sum(1) + 1e-9
+          tg = r.choice(i, size=min(m, i), replace=False, p=kk / kk.sum()); B[i, tg] = B[tg, i] = 1
+      return B
+
+  def efficiency(A):
+      D = shortest_path(A, unweighted=True)
+      off = ~np.eye(len(A), dtype=bool)
+      return np.mean(1 / D[off])
+
+  B = grow(); k = B.sum(1); E0 = efficiency(B)
+  keep = lambda rm: np.setdiff1d(np.arange(len(B)), rm)
+  top, rnd = np.argsort(k)[::-1][:20], r.choice(len(B), 20, replace=False)
+  eff_targeted = efficiency(B[np.ix_(keep(top), keep(top))]) / E0
+  eff_random = efficiency(B[np.ix_(keep(rnd), keep(rnd))]) / E0
+  print(f"degrees: max {k.max():.0f}, mean {k.mean():.1f}; efficiency kept after random removal {eff_random:.2f}, after removing hubs {eff_targeted:.2f}")
+`} />
+
+The grown network has hubs: the best-connected node has 33 links against a mean of 4. Removing 20 random nodes leaves 99% of the global efficiency, because most nodes are peripheral and few paths ran through them. Removing the 20 biggest hubs leaves 14%: the network falls apart. Albert, Jeong and Barabási (2000) described this combination of robustness and fragility for the internet; for brains, it suggests why lesions or degeneration that hit hub regions can have outsized effects.
+
+<Step n={4} title="Correlation is not connection" minutes={30} />
+
+Simulate four regions: A drives B, B drives C, and D is independent. Compare correlations with **partial correlations**, the correlation between two regions after removing what all others explain, computed from the inverse covariance (precision) matrix $\Theta$ as $-\Theta_{ij}/\sqrt{\Theta_{ii}\Theta_{jj}}$.
+
+<PyCell id="partial" title="Indirect correlation disappears" tests={String.raw`
+  import numpy as np
+  def test_corr():
+      "A and C are substantially correlated (above 0.3) although not connected"
+      assert Cc[0, 2] > 0.3
+  def test_partial():
+      "their partial correlation is near zero, while A-B and B-C remain strong"
+      assert abs(pc[0, 2]) < 0.05 and pc[0, 1] > 0.3 and pc[1, 2] > 0.3
+`} prompt="Generate 20,000 samples of a = noise, b = 0.8 a + noise, c = 0.8 b + noise, d = noise. Compute the correlation matrix and the partial correlation matrix from the inverse covariance."
+code={String.raw`
+  T = 20000
+  a = r.normal(size=T); b = 0.8 * a + r.normal(size=T); c_ = 0.8 * b + r.normal(size=T); d = r.normal(size=T)
+  X = np.stack([a, b, c_, d], 1)
+  Cc = np.corrcoef(X.T)
+  Theta = ...
+  pc = ...
+  np.fill_diagonal(pc, 1)
+  print("correlation:\n", np.round(Cc, 2)); print("partial correlation:\n", np.round(pc, 2))
+`}
+hint="Theta = np.linalg.inv(np.cov(X.T)); pc = -Theta / np.sqrt(np.outer(np.diag(Theta), np.diag(Theta)))."
+solution={String.raw`
+  T = 20000
+  a = r.normal(size=T); b = 0.8 * a + r.normal(size=T); c_ = 0.8 * b + r.normal(size=T); d = r.normal(size=T)
+  X = np.stack([a, b, c_, d], 1)
+  Cc = np.corrcoef(X.T)
+  Theta = np.linalg.inv(np.cov(X.T))
+  pc = -Theta / np.sqrt(np.outer(np.diag(Theta), np.diag(Theta)))
+  np.fill_diagonal(pc, 1)
+  print("correlation:\n", np.round(Cc, 2)); print("partial correlation:\n", np.round(pc, 2))
+`} />
+
+A and C correlate at 0.46 although nothing connects them: B carries A's influence to C. Their partial correlation is zero, because once B is accounted for, A tells you nothing more about C; the real links, A to B and B to C, keep strong partial correlations, and the independent region D is unrelated to everything. Resting-state functional connectivity is mostly computed as plain correlation, so many of its 'connections' are indirect. Partial correlation and related sparse inverse covariance methods (Smith and colleagues, 2011, compared many such methods on simulated fMRI) are closer to the structural network.
+
+<Callout kind="warning">
+
+Partial correlation removes indirect paths only through measured regions. An unmeasured common input still produces a spurious link, and partial correlation is symmetric, so it cannot tell A to B from B to A. Interventions (stimulation, lesions) or careful causal models are needed for direction, as Neuromatch's causality tutorials develop. Functional connectivity measured with fMRI also depends on head motion, physiological noise and preprocessing choices such as global signal regression, which can change results substantially.
+
+</Callout>
+
+<Bridge title="Structure, function and failure"
+  neuro="Brain networks are modular, with hubs that integrate modules and are costly and vulnerable. Functional connectivity reflects both direct and indirect structural paths, and partial correlation or causal methods are needed to separate them."
+  ai="Graph neural networks, mixture-of-experts layers and modular architectures borrow these ideas; analyses of trained networks find modules and hub-like units, and pruning studies show that some units are far more critical than others, as hubs are.">
+
+Modules process, hubs integrate, and correlation reflects every path between two regions, not just the direct one.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Structural connectivity refers to...", options: ["Anatomical wiring", "Correlated activity", "Causal influence", "Task performance"], answer: 0, explain: "Synapses, projections, tracts." },
+  { q: "Modularity Q compares within-community links with...", options: ["Those expected at random with the same degrees", "The total number of nodes", "Path length", "Clustering"], answer: 0, explain: "Newman's null model." },
+  { q: "Newman's spectral method splits a network by...", options: ["The signs of the leading eigenvector of the modularity matrix", "Degree", "Random assignment", "Path length"], answer: 0, explain: "Newman (2006)." },
+  { q: "Preferential attachment produces...", options: ["A few highly connected hubs", "A regular lattice", "Equal degrees", "Modules"], answer: 0, explain: "Barabási and Albert (1999)." },
+  { q: "Hub-rich networks are...", options: ["Robust to random failure, fragile to targeted attack", "Fragile to random failure", "Unaffected by any removal", "Equally affected by both"], answer: 0, explain: "Hubs carry the paths." },
+  { q: "A and C correlate without a direct link because...", options: ["Both depend on B", "They are connected", "Of measurement error", "Partial correlation"], answer: 0, explain: "Indirect path." },
+  { q: "Partial correlation is computed from...", options: ["The inverse covariance matrix", "The covariance matrix", "The adjacency matrix", "The degree"], answer: 0, explain: "Precision matrix." },
+  { q: "Partial correlation cannot detect...", options: ["The direction of influence", "Indirect links", "Correlation", "Independence"], answer: 0, explain: "It is symmetric." },
+]} />
+
+<Flashcards cards={[
+  { front: "Modularity?", back: "$Q = \\frac1{2m}\\sum_{ij}(A_{ij} - k_ik_j/2m)\\delta(c_i, c_j)$." },
+  { front: "Spectral community detection?", back: "Split by the sign of the leading eigenvector of the modularity matrix; repeat within parts." },
+  { front: "Global efficiency?", back: "Mean of inverse shortest-path lengths; tolerant of disconnected pairs." },
+  { front: "Rich club?", back: "Hubs more densely interconnected with each other than expected from their degrees." },
+  { front: "Partial correlation?", back: "$-\\Theta_{ij}/\\sqrt{\\Theta_{ii}\\Theta_{jj}}$ from the precision matrix; removes dependence explained by other measured variables." },
+]} />
+
+<Predict revisit question="A to B to C, A and C unconnected: will A and C correlate?" />
+
+<Key title="Before you go">
+<ul>
+<li>Modules can be found from the modularity matrix's eigenvectors.</li>
+<li>Hubs make networks robust to random loss and fragile to targeted loss.</li>
+<li>Functional connectivity reflects indirect as well as direct paths.</li>
+<li>Partial correlation removes indirect paths through measured regions, not direction or hidden causes.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Bullmore and Sporns (2009), <em>Complex brain networks: graph theoretical analysis of structural and functional systems</em>.</li>
+<li>Newman (2006), <em>Modularity and community structure in networks</em>, PNAS 103(23), 8577 to 8582.</li>
+<li>van den Heuvel and Sporns (2011), <em>Rich-club organization of the human connectome</em>, Journal of Neuroscience 31(44), 15775 to 15786.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Hub regions are implicated in many brain disorders. Give two explanations for this, one in which hubs are causally vulnerable and one in which the association is an artefact of how networks are measured, and say how you would tell them apart." />

@@ -1,0 +1,212 @@
+export const meta = {
+  title: "Brain networks as graphs: small worlds",
+  intro: "This week zooms out from circuits to the whole brain and to the most human of its abilities, language. We begin with the language of graphs. In 1998 Duncan Watts and Steven Strogatz showed that a regular lattice, in which every node is linked to its neighbours, becomes a 'small world' when a few of its links are rewired at random: paths across the network shrink dramatically while local clustering hardly changes. They found this structure in the nervous system of the worm C. elegans, and it has since been reported for mammalian connectomes. Today you build Watts-Strogatz networks, measure clustering and path length, and compare them with random graphs.",
+  goals: [
+    "Represent a network as an adjacency matrix and compute degree, clustering and path length",
+    "Reproduce the Watts-Strogatz small-world transition",
+    "Compare measured networks with matched random graphs and compute a small-world index",
+    "Discuss what small-world structure does and does not tell us about brains",
+  ],
+  plan: [
+    { label: "Predict and graph basics", minutes: 20 },
+    { label: "From lattice to random", minutes: 35 },
+    { label: "Random-graph baselines", minutes: 25 },
+    { label: "What small-worldness means", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "watts-strogatz-1998",
+};
+
+<Predict question="In a ring of 200 nodes, each linked to its 6 nearest neighbours, you rewire 1% of links at random. Will the average shortest path between nodes shrink a little, by about half, or not at all?" />
+
+<Step n={1} title="Graphs and their measures" minutes={20} />
+
+A network of $N$ nodes is described by an adjacency matrix $A$, with $A_{ij} = 1$ if nodes $i$ and $j$ are linked. Three measures recur:
+
+- **degree** $k_i = \sum_j A_{ij}$, the number of links of node $i$;
+- **clustering** $C_i$, the fraction of pairs of $i$'s neighbours that are linked to each other, $C_i = \frac{(A^3)_{ii}/2}{k_i(k_i - 1)/2}$, averaged over nodes;
+- **characteristic path length** $L$, the average number of steps on the shortest path between pairs of nodes.
+
+A regular lattice has high clustering and long paths; a random graph has low clustering and short paths. Watts and Strogatz found that most of the path shortening happens after only a few random shortcuts are added, while clustering survives far longer. Networks with high clustering and short paths are called **small worlds**. In brains, clustering is thought to support specialised local processing and short paths fast integration across the whole.
+
+<Video id="GjZfhXfn42w" title="Network Causality: Introduction" by="Neuromatch Academy (Computational Neuroscience course)" note="Neuromatch introduces its day on networks and causality: how variables in a network influence one another, and why the structure of a network matters for what it does." />
+
+<Step n={2} title="From lattice to random" minutes={35} />
+
+<Figure caption="The Watts-Strogatz model. A ring lattice with a fraction of links rewired at random. Increase the rewiring probability and watch path length fall long before clustering does." credit="Interactive figure by Engram, after Watts and Strogatz (1998).">
+  <SmallWorld />
+</Figure>
+
+<PyCell id="ws" title="The small-world transition" tests={String.raw`
+  import numpy as np
+  def test_window():
+      "at p = 0.01 clustering is above 90% of the lattice's while path length is below 70%"
+      assert res[0.01][0] > 0.9 and res[0.01][1] < 0.7
+  def test_random():
+      "at p = 1 clustering falls below 10% of the lattice's"
+      assert res[1.0][0] < 0.1
+`} prompt="Write clustering(A) using the diagonal of A cubed, and pathlen(A) using scipy's shortest_path on the unweighted graph. Compute both, relative to the lattice, for rewiring probabilities 0.001, 0.01, 0.1 and 1."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.sparse.csgraph import shortest_path
+  r = np.random.default_rng(1998)
+
+  def ws(N=200, k=6, p=0.0):
+      A = np.zeros((N, N), bool)
+      for i in range(N):
+          for j in range(1, k // 2 + 1):
+              A[i, (i + j) % N] = A[(i + j) % N, i] = True
+      for i in range(N):
+          for j in range(1, k // 2 + 1):
+              t = (i + j) % N
+              if r.random() < p and A[i, t]:
+                  n = r.choice(np.where(~A[i] & (np.arange(N) != i))[0])
+                  A[i, t] = A[t, i] = False; A[i, n] = A[n, i] = True
+      return A
+
+  def clustering(A):
+      ...
+
+  def pathlen(A):
+      ...
+
+  A0 = ws(); C0, L0 = clustering(A0), pathlen(A0)
+  res = {}
+  for p in [0.001, 0.01, 0.1, 1.0]:
+      A = ws(p=p); res[p] = (clustering(A) / C0, pathlen(A) / L0)
+      print(f"p = {p:5.3f}: C/C0 = {res[p][0]:.3f}, L/L0 = {res[p][1]:.3f}")
+  ps = list(res); plt.semilogx(ps, [res[p][0] for p in ps], "o-", label="C(p)/C(0)"); plt.semilogx(ps, [res[p][1] for p in ps], "s-", label="L(p)/L(0)")
+  plt.xlabel("rewiring probability"); plt.legend(); plt.show()
+`}
+hint="clustering: A = A.astype(float); k = A.sum(1); tri = np.diag(A @ A @ A) / 2; return np.mean(np.where(k > 1, tri / (k * (k - 1) / 2), 0)). pathlen: D = shortest_path(A.astype(float), unweighted=True); return D[np.isfinite(D) & (D > 0)].mean()."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.sparse.csgraph import shortest_path
+  r = np.random.default_rng(1998)
+
+  def ws(N=200, k=6, p=0.0):
+      A = np.zeros((N, N), bool)
+      for i in range(N):
+          for j in range(1, k // 2 + 1):
+              A[i, (i + j) % N] = A[(i + j) % N, i] = True
+      for i in range(N):
+          for j in range(1, k // 2 + 1):
+              t = (i + j) % N
+              if r.random() < p and A[i, t]:
+                  n = r.choice(np.where(~A[i] & (np.arange(N) != i))[0])
+                  A[i, t] = A[t, i] = False; A[i, n] = A[n, i] = True
+      return A
+
+  def clustering(A):
+      A = A.astype(float); k = A.sum(1); tri = np.diag(A @ A @ A) / 2
+      return np.mean(np.where(k > 1, tri / (k * (k - 1) / 2), 0))
+
+  def pathlen(A):
+      D = shortest_path(A.astype(float), unweighted=True)
+      return D[np.isfinite(D) & (D > 0)].mean()
+
+  A0 = ws(); C0, L0 = clustering(A0), pathlen(A0)
+  res = {}
+  for p in [0.001, 0.01, 0.1, 1.0]:
+      A = ws(p=p); res[p] = (clustering(A) / C0, pathlen(A) / L0)
+      print(f"p = {p:5.3f}: C/C0 = {res[p][0]:.3f}, L/L0 = {res[p][1]:.3f}")
+  ps = list(res); plt.semilogx(ps, [res[p][0] for p in ps], "o-", label="C(p)/C(0)"); plt.semilogx(ps, [res[p][1] for p in ps], "s-", label="L(p)/L(0)")
+  plt.xlabel("rewiring probability"); plt.legend(); plt.show()
+`} />
+
+Rewiring 0.1% of links changes nothing visible. At 1%, clustering is still 97% of the lattice's but the average path has halved; at 10%, paths are 29% of the lattice's while clustering is still 81%. Only when nearly all links are random does clustering collapse, to 4%. The asymmetry is the whole point: each shortcut shortens many paths at once, because every path that can use it benefits, while it removes only a few triangles.
+
+<Step n={3} title="Random-graph baselines" minutes={25} />
+
+A measured network's clustering and path length mean little on their own; they must be compared with random graphs that have the same number of nodes and links. For an Erdős-Rényi random graph with mean degree $k$, theory gives $C_\text{rand} \approx k/N$ and $L_\text{rand} \approx \ln N/\ln k$. The **small-world index** (Humphries, Gurney and Prescott, 2006) is
+
+$$
+\sigma = \frac{C/C_\text{rand}}{L/L_\text{rand}},
+$$
+
+and values well above 1 indicate a small world.
+
+<PyCell id="sigma" title="How small is this world?" tests={String.raw`
+  import numpy as np
+  def test_theory():
+      "the fully rewired graph's clustering and path length are within 50% and 15% of the random-graph formulas"
+      assert abs(C_rand_sim / (6 / 200) - 1) < 0.5 and abs(L_rand_sim / (np.log(200) / np.log(6)) - 1) < 0.15
+  def test_sigma():
+      "the p = 0.05 network's index is more than twice the lattice's, and the random graph's is near 1"
+      assert sig[0.05] > 2 * sig[0.0] and sig[1.0] < 1.5
+`} prompt="Use a fully rewired network (p = 1) as the random baseline. Compute sigma for p = 0, 0.05 and 1."
+code={String.raw`
+  Ar = ws(p=1.0); C_rand_sim, L_rand_sim = clustering(Ar), pathlen(Ar)
+  print(f"random baseline: C = {C_rand_sim:.3f} (k/N = {6 / 200:.3f}), L = {L_rand_sim:.2f} (ln N / ln k = {np.log(200) / np.log(6):.2f})")
+  sig = {}
+  for p in [0.0, 0.05, 1.0]:
+      A = ws(p=p)
+      sig[p] = ...
+      print(f"p = {p}: small-world index sigma = {sig[p]:.2f}")
+`}
+hint="sig[p] = (clustering(A) / C_rand_sim) / (pathlen(A) / L_rand_sim)."
+solution={String.raw`
+  Ar = ws(p=1.0); C_rand_sim, L_rand_sim = clustering(Ar), pathlen(Ar)
+  print(f"random baseline: C = {C_rand_sim:.3f} (k/N = {6 / 200:.3f}), L = {L_rand_sim:.2f} (ln N / ln k = {np.log(200) / np.log(6):.2f})")
+  sig = {}
+  for p in [0.0, 0.05, 1.0]:
+      A = ws(p=p)
+      sig[p] = (clustering(A) / C_rand_sim) / (pathlen(A) / L_rand_sim)
+      print(f"p = {p}: small-world index sigma = {sig[p]:.2f}")
+`} />
+
+The fully rewired graph matches the random-graph formulas closely: clustering 0.031 against $k/N = 0.030$ and path length 3.1 against 3.0. The network with 5% rewiring has a small-world index of 10, the random graph 0.7. But notice the lattice: its index is 3.5, above the conventional threshold, because its enormous clustering more than compensates for its long paths. This is one reason the index is criticised: a value above 1 does not distinguish a small world from a lattice, and Telesford and colleagues (2011) proposed comparing clustering with a lattice and path length with a random graph instead.
+
+<Step n={4} title="What small-worldness means" minutes={25} />
+
+Watts and Strogatz computed $C$ and $L$ for the neural network of C. elegans (282 neurons at the time), the western US power grid and a film actor collaboration graph, and all three were small worlds. Since then, small-world structure has been reported for anatomical and functional brain networks at every scale (Bullmore and Sporns, 2009; tomorrow's paper). Two cautions temper the finding. First, almost any sparse network with some local structure is a small world by the standard index, so the label alone says little (Papo, Zanin, Martínez and Buldú, 2016). Second, functional networks built by thresholding correlations are biased towards high clustering, because correlation is partly transitive: if A correlates with B and B with C, A tends to correlate with C (Zalesky, Fornito and Bullmore, 2012). The more informative questions concern which nodes are hubs, how the network divides into modules, and how much wiring the structure costs, which are tomorrow's subject.
+
+<Bridge title="Local and global at once"
+  neuro="Brain networks combine dense local clustering with short global paths, a compromise between specialised processing and integration, achieved with limited wiring cost. Graph measures are now routine in connectomics and in comparisons between patient groups."
+  ai="Sparse transformer attention patterns that combine local windows with a few long-range links, and residual or skip connections that shorten paths through deep networks, follow the same principle: a few shortcuts make information travel far without dense wiring.">
+
+A few random shortcuts turn a lattice into a small world.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Clustering measures...", options: ["How often a node's neighbours are linked to each other", "Number of links", "Path length", "Network size"], answer: 0, explain: "Local triangles." },
+  { q: "A regular ring lattice has...", options: ["High clustering and long paths", "Low clustering and short paths", "High clustering and short paths", "No structure"], answer: 0, explain: "Local links only." },
+  { q: "Rewiring 1% of links...", options: ["Cuts path length substantially while clustering barely changes", "Destroys clustering", "Has no effect", "Lengthens paths"], answer: 0, explain: "The small-world window." },
+  { q: "For a random graph, path length scales like...", options: ["ln N / ln k", "N/k", "k/N", "N²"], answer: 0, explain: "Short paths." },
+  { q: "The small-world index σ is...", options: ["(C/C_rand)/(L/L_rand)", "C/L", "L/C", "k/N"], answer: 0, explain: "Humphries et al. (2006)." },
+  { q: "Watts and Strogatz found small-world structure in...", options: ["C. elegans, the power grid and actor collaborations", "Only brains", "Only social networks", "Lattices only"], answer: 0, explain: "1998." },
+  { q: "A caution about small-worldness is that...", options: ["Most sparse networks with local structure qualify", "No brain network has it", "It requires hubs", "It cannot be computed"], answer: 0, explain: "The label is weak." },
+  { q: "Thresholded correlation networks tend to show inflated...", options: ["Clustering", "Path length", "Degree", "Size"], answer: 0, explain: "Correlation is partly transitive." },
+]} />
+
+<Flashcards cards={[
+  { front: "Clustering coefficient?", back: "$C_i = \\frac{(A^3)_{ii}/2}{k_i(k_i - 1)/2}$: fraction of neighbour pairs that are linked." },
+  { front: "Characteristic path length?", back: "Mean shortest-path distance between all pairs of nodes." },
+  { front: "Small world?", back: "Clustering much higher than random, path length close to random." },
+  { front: "Random-graph baselines?", back: "$C_\\text{rand} \\approx k/N$, $L_\\text{rand} \\approx \\ln N/\\ln k$." },
+  { front: "Small-world index?", back: "$\\sigma = (C/C_\\text{rand})/(L/L_\\text{rand})$, well above 1 for small worlds." },
+]} />
+
+<Predict revisit question="Rewiring 1% of a 200-node lattice: path length shrinks a little, by half, or not at all?" />
+
+<Key title="Before you go">
+<ul>
+<li>Degree, clustering and path length summarise network structure.</li>
+<li>A few shortcuts shorten paths dramatically while preserving clustering.</li>
+<li>Compare measured networks with matched random graphs.</li>
+<li>Small-worldness is common; hubs, modules and cost are more informative.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Watts and Strogatz (1998), <em>Collective dynamics of 'small-world' networks</em>.</li>
+<li>Humphries, Gurney and Prescott (2006), <em>The brainstem reticular formation is a small-world, not scale-free, network</em>, Proceedings of the Royal Society B 273(1586), 503 to 511.</li>
+<li>Zalesky, Fornito and Bullmore (2012), <em>On the use of correlation as a measure of network connectivity</em>, NeuroImage 60(4), 2096 to 2106.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Think of a network you belong to: friends, colleagues, a group chat. Is it a small world? Estimate its clustering and path length roughly, and say what the shortcuts are." />
