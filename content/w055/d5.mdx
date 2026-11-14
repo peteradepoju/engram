@@ -1,0 +1,262 @@
+export const meta = {
+  title: "Regularised encoding models: estimating a receptive field",
+  intro: "Today the week's tools meet a classic neuroscience problem: estimating a neuron's receptive field from its responses to stimuli. When the stimuli are white noise, the spike-triggered average of Week 35 does the job. Natural stimuli, which drive many neurons far better, are strongly correlated, and then the spike-triggered average is biased while least squares is unbiased but noisy. Regularisation resolves the dilemma, and the choice of penalty is a choice of prior about what receptive fields look like.",
+  goals: [
+    "Show why the spike-triggered average is biased for correlated stimuli",
+    "Compare least squares, ridge and a smoothness penalty for receptive-field estimation",
+    "Choose penalties by cross-validation and judge estimates by held-out prediction",
+    "Measure how the best estimator depends on the number of trials",
+  ],
+  plan: [
+    { label: "The problem", minutes: 20 },
+    { label: "Spike-triggered average against least squares", minutes: 30 },
+    { label: "Priors as penalties", minutes: 35 },
+    { label: "How many trials?", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "park-pillow-2011",
+};
+
+<Predict question="A neuron's receptive field is estimated from 200 responses to smooth, correlated stimuli. Which estimate will be closest to the truth: the spike-triggered average, least squares, or least squares with a penalty that favours smooth receptive fields?" />
+
+<Step n={1} title="The problem" minutes={20} />
+
+A neuron's response on trial $t$ is modelled as $y_t = \mathbf k^\top\mathbf x_t + \varepsilon_t$, where $\mathbf x_t$ is the stimulus (here 30 pixels of a one-dimensional image) and $\mathbf k$ the receptive field. A Poisson GLM would be more realistic for spikes (Week 35), but the linear Gaussian model shows every issue more simply and the conclusions carry over.
+
+Natural images are smooth: neighbouring pixels are strongly correlated. In this lesson the stimuli are built by smoothing white noise, which gives each pixel a correlation of about 0.8 with its neighbour. Two estimators from Part 2 then disagree. The spike-triggered average, $\hat{\mathbf k}_\text{STA} = \frac1n X^\top\mathbf y$, estimates $C\mathbf k$, where $C$ is the stimulus covariance: the true field blurred by the stimulus correlations. Least squares, $(X^\top X)^{-1}X^\top\mathbf y$, undoes the blur, but dividing by the small eigenvalues of $X^\top X$ amplifies noise. Sound familiar? It is exactly the situation that ridge regression was invented for.
+
+<Figure caption="A one-dimensional receptive field estimated from correlated stimuli by least squares, ridge and a smoothness penalty. Change the number of trials and the penalty." credit="Interactive figure by Engram, after Park and Pillow (2011).">
+  <ReceptiveFieldEstimate />
+</Figure>
+
+<Video id="mhVbJ74upnQ" title="Regularization as shrinkage" by="Neuromatch Academy (Deep Learning course)" note="Neuromatch's video on how penalties shrink weights towards simpler solutions, the idea that today applies to receptive fields." />
+
+<Step n={2} title="Spike-triggered average against least squares" minutes={30} />
+
+<PyCell id="sta" title="Biased or noisy" tests={String.raw`
+  import numpy as np
+  def test_stim():
+      "neighbouring pixels are correlated at about 0.8"
+      c = np.corrcoef(X[:, 10], X[:, 11])[0, 1]; assert 0.7 < c < 0.9
+  def test_estimates():
+      "k_sta is X'y/n rescaled by the mean pixel variance, and k_ols solves the normal equations"
+      assert np.allclose(k_sta, X.T @ y / len(y) / X.var(0).mean()) and np.allclose(X.T @ X @ k_ols, X.T @ y)
+  def test_errors():
+      "the STA is wider than the true field (biased), and least squares is noisier than ridge"
+      assert width(k_sta) > width(k_true) and rel_err(k_ols) > rel_err(k_ridge)
+`} prompt="Compute the spike-triggered average (rescaled by the mean pixel variance so its units match) and the least-squares estimate from 200 trials, and compare both with the true field by relative error and by width (the standard deviation of |k| across pixels)."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(555)
+  P = 30
+  pix = np.arange(P)
+  k_true = np.exp(-((pix - 15) ** 2) / 30) * np.cos((pix - 15) * 0.6)
+
+  def stimuli(n):
+      z = r.normal(size=(n, P + 4))
+      return sum(z[:, i:i + P] for i in range(5)) / np.sqrt(5)
+
+  def responses(X):
+      return X @ k_true + 2.0 * r.normal(size=len(X))
+
+  rel_err = lambda k: np.linalg.norm(k - k_true) / np.linalg.norm(k_true)
+  width = lambda k: np.sqrt(np.sum(np.abs(k) * (pix - np.sum(np.abs(k) * pix) / np.abs(k).sum()) ** 2) / np.abs(k).sum())
+
+  X = stimuli(200); y = responses(X)
+  k_sta = ...
+  k_ols = ...
+  k_ridge = np.linalg.solve(X.T @ X + 30 * np.eye(P), X.T @ y)
+  for name, k in [("STA", k_sta), ("least squares", k_ols), ("ridge (lambda 30)", k_ridge)]:
+      print(f"{name:18s} relative error {rel_err(k):.2f}, width {width(k):.2f} (true width {width(k_true):.2f})")
+  plt.plot(k_true, "k--", label="true"); plt.plot(k_sta, label="STA"); plt.plot(k_ols, label="least squares"); plt.plot(k_ridge, label="ridge"); plt.legend(); plt.show()
+`}
+hint="k_sta = X.T @ y / len(y) / X.var(0).mean(); k_ols = np.linalg.solve(X.T @ X, X.T @ y)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(555)
+  P = 30
+  pix = np.arange(P)
+  k_true = np.exp(-((pix - 15) ** 2) / 30) * np.cos((pix - 15) * 0.6)
+
+  def stimuli(n):
+      z = r.normal(size=(n, P + 4))
+      return sum(z[:, i:i + P] for i in range(5)) / np.sqrt(5)
+
+  def responses(X):
+      return X @ k_true + 2.0 * r.normal(size=len(X))
+
+  rel_err = lambda k: np.linalg.norm(k - k_true) / np.linalg.norm(k_true)
+  width = lambda k: np.sqrt(np.sum(np.abs(k) * (pix - np.sum(np.abs(k) * pix) / np.abs(k).sum()) ** 2) / np.abs(k).sum())
+
+  X = stimuli(200); y = responses(X)
+  k_sta = X.T @ y / len(y) / X.var(0).mean()
+  k_ols = np.linalg.solve(X.T @ X, X.T @ y)
+  k_ridge = np.linalg.solve(X.T @ X + 30 * np.eye(P), X.T @ y)
+  for name, k in [("STA", k_sta), ("least squares", k_ols), ("ridge (lambda 30)", k_ridge)]:
+      print(f"{name:18s} relative error {rel_err(k):.2f}, width {width(k):.2f} (true width {width(k_true):.2f})")
+  plt.plot(k_true, "k--", label="true"); plt.plot(k_sta, label="STA"); plt.plot(k_ols, label="least squares"); plt.plot(k_ridge, label="ridge"); plt.legend(); plt.show()
+`} />
+
+The spike-triggered average is too wide (5.6 pixels against the true 3.9) and has the wrong shape: the stimulus correlations have blurred the field's alternating bands together, so its relative error is large (1.73, partly because blurring also changes its amplitude). Least squares has the right centre but is jagged with noise, wider still because the noise spreads to every pixel (relative error 1.47). Ridge with a modest penalty cuts the error to 0.44. Neither classical estimator is good from 200 trials of correlated stimuli; the remedy is regularisation.
+
+<Step n={3} title="Priors as penalties" minutes={35} />
+
+Ridge assumes each pixel's weight is independently small. Real receptive fields are smooth: neighbouring weights are similar. A **smoothness penalty** encodes that: $\lambda\lVert D\mathbf k\rVert^2$, where $D$ takes second differences ($k_{i-1} - 2k_i + k_{i+1}$). The estimate is $(X^\top X + \lambda D^\top D)^{-1}X^\top\mathbf y$, the posterior mode under a Gaussian prior whose covariance favours smooth shapes. Park and Pillow, today's paper, went further, with priors that are smooth *and* localised in space and frequency, fitted by maximising the evidence. Compare ridge and smoothness here, each with its penalty chosen by five-fold cross-validation.
+
+<PyCell id="priors" title="Ridge against smoothness, both cross-validated" tests={String.raw`
+  import numpy as np
+  def test_D():
+      "D is the (P - 2) x P second-difference matrix"
+      assert D.shape == (P - 2, P) and np.allclose(D @ np.ones(P), 0) and np.allclose(D @ pix, 0)
+  def test_cv():
+      "cv_choose returns the penalty with the lowest five-fold error"
+      lam, errs = cv_choose(X, y, np.eye(P))
+      assert lam == lams[np.argmin(errs)]
+  def test_better():
+      "the smoothness penalty gives the lowest field error, and both penalties beat least squares on held-out R²"
+      assert err["smooth"] < err["ridge"] < err["least squares"] and min(r2["smooth"], r2["ridge"]) > r2["least squares"]
+`} prompt="Build D. Write cv_choose(X, y, R), which picks lambda for the penalty lambda * k' R k by five-fold cross-validation over lams. Fit least squares, ridge (R = I) and smoothness (R = D'D) and compare their field errors and their R² on 5,000 new trials."
+code={String.raw`
+  D = ...
+  lams = np.logspace(-1, 4, 21)
+
+  def fit(X, y, R, lam):
+      return np.linalg.solve(X.T @ X + lam * R, X.T @ y)
+
+  def cv_choose(X, y, R, K=5):
+      folds = np.array_split(np.arange(len(y)), K)
+      errs = []
+      for lam in lams:
+          e = 0.0
+          for te in folds:
+              tr = np.setdiff1d(np.arange(len(y)), te)
+              e += ...
+          errs.append(e / len(y))
+      return lams[int(np.argmin(errs))], np.array(errs)
+
+  X_new = stimuli(5000); y_new = responses(X_new)
+  r2_of = lambda k: 1 - np.mean((y_new - X_new @ k) ** 2) / y_new.var()
+  lam_r, _ = cv_choose(X, y, np.eye(P)); lam_s, _ = cv_choose(X, y, D.T @ D)
+  ests = {"least squares": k_ols, "ridge": fit(X, y, np.eye(P), lam_r), "smooth": fit(X, y, D.T @ D, lam_s)}
+  err = {k: rel_err(v) for k, v in ests.items()}; r2 = {k: r2_of(v) for k, v in ests.items()}
+  print(f"chosen penalties: ridge {lam_r:.1f}, smoothness {lam_s:.1f}")
+  for name in ests:
+      print(f"{name:14s} field error {err[name]:.2f}, held-out R² {r2[name]:.3f}")
+  print(f"the true field's R²: {r2_of(k_true):.3f}")
+`}
+hint="D = np.diff(np.eye(P), n=2, axis=0); e += np.sum((y[te] - X[te] @ fit(X[tr], y[tr], R, lam)) ** 2)."
+solution={String.raw`
+  D = np.diff(np.eye(P), n=2, axis=0)
+  lams = np.logspace(-1, 4, 21)
+
+  def fit(X, y, R, lam):
+      return np.linalg.solve(X.T @ X + lam * R, X.T @ y)
+
+  def cv_choose(X, y, R, K=5):
+      folds = np.array_split(np.arange(len(y)), K)
+      errs = []
+      for lam in lams:
+          e = 0.0
+          for te in folds:
+              tr = np.setdiff1d(np.arange(len(y)), te)
+              e += np.sum((y[te] - X[te] @ fit(X[tr], y[tr], R, lam)) ** 2)
+          errs.append(e / len(y))
+      return lams[int(np.argmin(errs))], np.array(errs)
+
+  X_new = stimuli(5000); y_new = responses(X_new)
+  r2_of = lambda k: 1 - np.mean((y_new - X_new @ k) ** 2) / y_new.var()
+  lam_r, _ = cv_choose(X, y, np.eye(P)); lam_s, _ = cv_choose(X, y, D.T @ D)
+  ests = {"least squares": k_ols, "ridge": fit(X, y, np.eye(P), lam_r), "smooth": fit(X, y, D.T @ D, lam_s)}
+  err = {k: rel_err(v) for k, v in ests.items()}; r2 = {k: r2_of(v) for k, v in ests.items()}
+  print(f"chosen penalties: ridge {lam_r:.1f}, smoothness {lam_s:.1f}")
+  for name in ests:
+      print(f"{name:14s} field error {err[name]:.2f}, held-out R² {r2[name]:.3f}")
+  print(f"the true field's R²: {r2_of(k_true):.3f}")
+`} />
+
+Cross-validation chose penalties of about 32 for ridge and 18 for smoothness. Both regularised estimates beat least squares by a wide margin. The smoothness prior gives the best receptive field, with an error of 0.30 against ridge's 0.43, because it shrinks towards the right kind of shape rather than towards zero. Yet the two predict new responses almost equally well (R² 0.666 and 0.668, against 0.682 for the true field). This is a lesson worth remembering: the stimulus rarely contains patterns along which the two estimates differ, so prediction cannot tell them apart, while their pictures of the receptive field differ visibly. Judge an encoding model by prediction, but do not assume that equal prediction means equally good parameters. That answers the prediction: the smoothness-penalised estimate is closest to the truth.
+
+<Step n={4} title="How many trials?" minutes={20} />
+
+A prior is most valuable when data are scarce. Compare the three estimators' held-out R² from 60 to 1,000 trials.
+
+<PyCell id="trials" title="The value of a prior shrinks with data" tests={String.raw`
+  import numpy as np
+  def test_gap():
+      "the smoothness penalty's advantage over least squares is larger at 60 trials than at 1,000"
+      assert gain[0] > gain[-1] > -0.01
+`} prompt="For each number of trials, draw new stimuli and responses, fit least squares and the cross-validated smoothness estimate, and record their held-out R². Store the difference (smooth minus least squares) in gain."
+code={String.raw`
+  ns = [60, 120, 250, 500, 1000]
+  gain = np.zeros(len(ns))
+  for i, n_ in enumerate(ns):
+      Xn = stimuli(n_); yn = responses(Xn)
+      k_o = np.linalg.solve(Xn.T @ Xn, Xn.T @ yn)
+      lam_n, _ = cv_choose(Xn, yn, D.T @ D)
+      k_s = fit(Xn, yn, D.T @ D, lam_n)
+      gain[i] = ...
+      print(f"{n_:5d} trials: least squares R² {r2_of(k_o):.3f}, smoothness R² {r2_of(k_s):.3f}")
+`}
+hint="gain[i] = r2_of(k_s) - r2_of(k_o)."
+solution={String.raw`
+  ns = [60, 120, 250, 500, 1000]
+  gain = np.zeros(len(ns))
+  for i, n_ in enumerate(ns):
+      Xn = stimuli(n_); yn = responses(Xn)
+      k_o = np.linalg.solve(Xn.T @ Xn, Xn.T @ yn)
+      lam_n, _ = cv_choose(Xn, yn, D.T @ D)
+      k_s = fit(Xn, yn, D.T @ D, lam_n)
+      gain[i] = r2_of(k_s) - r2_of(k_o)
+      print(f"{n_:5d} trials: least squares R² {r2_of(k_o):.3f}, smoothness R² {r2_of(k_s):.3f}")
+`} />
+
+With 60 trials least squares explains only 35% of the variance in new responses, while the smoothness-penalised estimate already explains 62%, close to the ceiling of 68%. The advantage shrinks steadily with data: 0.12 at 120 trials, 0.03 at 250 and essentially nothing at 1,000, where least squares has enough data to average its noise away. A well-chosen prior is worth hundreds of trials when data are scarce and costs almost nothing when they are plentiful, provided the penalty is chosen by the data, as cross-validation did here.
+
+<Bridge title="Priors in brains and machines"
+  neuro="Every receptive field in the literature estimated from natural stimuli rests on a prior, stated or not: a penalty, a smoothing step or a restriction to a few basis functions. Making it explicit, and choosing its strength by cross-validation or evidence, is what separates an estimate from a picture of the stimulus statistics."
+  ai="Convolutional networks build the same priors into their architecture: small, local filters shared across positions. In image restoration, smoothness penalties such as total variation play the role that the second-difference penalty plays here, and learned priors from deep networks now often replace them.">
+
+The penalty you choose is a statement about what the answer should look like.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "With correlated stimuli, the spike-triggered average estimates...", options: ["The receptive field blurred by the stimulus covariance", "The receptive field exactly", "Noise only", "The inverse field"], answer: 0, explain: "STA ∝ Ck." },
+  { q: "Least squares with correlated stimuli is...", options: ["Unbiased but noisy", "Biased and noiseless", "Always best", "Undefined"], answer: 0, explain: "It divides by small eigenvalues." },
+  { q: "A second-difference penalty favours receptive fields that are...", options: ["Smooth", "Sparse", "Large", "Random"], answer: 0, explain: "Neighbouring weights similar." },
+  { q: "The smoothness-penalised estimate is...", options: ["(XᵀX + λDᵀD)⁻¹Xᵀy", "(XᵀX)⁻¹Xᵀy", "Xᵀy/n", "DᵀDy"], answer: 0, explain: "Step 3." },
+  { q: "The value of a good prior is greatest when...", options: ["Data are scarce", "Data are plentiful", "Stimuli are white", "Noise is zero"], answer: 0, explain: "Step 4." },
+  { q: "Penalties should be chosen by...", options: ["Cross-validation or evidence", "Eye", "The test set", "Convention"], answer: 0, explain: "Step 3." },
+  { q: "Park and Pillow's priors favour fields that are...", options: ["Localised and smooth", "White", "Large", "Binary"], answer: 0, explain: "Today's paper." },
+  { q: "An encoding model should be judged by...", options: ["Held-out prediction", "How nice the field looks", "Training R²", "The number of pixels"], answer: 0, explain: "Week 54." },
+]} />
+
+<Flashcards cards={[
+  { front: "STA with correlated stimuli?", back: "Estimates $C\\mathbf k$, the field blurred by the stimulus covariance." },
+  { front: "Whitened STA?", back: "$(X^\\top X)^{-1}X^\\top\\mathbf y$: least squares; unbiased but noisy when C has small eigenvalues." },
+  { front: "Smoothness penalty?", back: "$\\lambda\\lVert D\\mathbf k\\rVert^2$ with D the second-difference operator." },
+  { front: "Penalty as prior?", back: "$\\lambda\\mathbf k^\\top R\\mathbf k$ is a Gaussian prior with precision proportional to R." },
+  { front: "When does the prior matter most?", back: "With few trials relative to the number of parameters." },
+]} />
+
+<Predict revisit question="Which estimate was closest to the true field from 200 trials of correlated stimuli?" />
+
+<Key title="Before you go">
+<ul>
+<li>Correlated stimuli bias the STA and make least squares noisy.</li>
+<li>A penalty resolves the trade-off, and its form encodes a prior about receptive fields.</li>
+<li>Smoothness priors beat plain ridge when fields are smooth.</li>
+<li>Priors help most with little data; with enough trials, the data speak for themselves.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Park and Pillow (2011), <em>Receptive field inference with localized priors</em>.</li>
+<li>Wu, David and Gallant (2006), <em>Complete functional characterization of sensory neurons by system identification</em> (Week 36's paper), on regularised encoding models.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Choose a type of neuron or brain area. Write down what prior you would place on its receptive field or tuning (smooth, localised, sparse, oriented) and why. How would you check whether the prior helped or distorted the estimate?" />

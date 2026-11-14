@@ -1,0 +1,267 @@
+export const meta = {
+  title: "Regularisation paths, the elastic net and choosing λ",
+  intro: "A penalised model is not one model but a family indexed by λ. Computing the whole family at once, the regularisation path, is cheap and shows how each input enters the model as the penalty relaxes. Today you compute lasso paths with warm starts, meet the lasso's weakness with groups of correlated inputs and the elastic net that fixes it, and choose λ by K-fold cross-validation, with the one-standard-error rule that trades a little predictive accuracy for a much simpler model.",
+  goals: [
+    "Compute a lasso regularisation path efficiently with warm starts",
+    "Explain how the lasso behaves with correlated inputs, and how the elastic net groups them",
+    "Choose λ by K-fold cross-validation and report its uncertainty",
+    "Apply the one-standard-error rule and explain what it buys",
+  ],
+  plan: [
+    { label: "The regularisation path", minutes: 25 },
+    { label: "Correlated inputs and the elastic net", minutes: 30 },
+    { label: "Choosing λ by cross-validation", minutes: 35 },
+    { label: "Reading the path", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "zou-hastie-2005",
+};
+
+<Predict question="Three recorded neurons are near-copies of each other (correlation 0.99) and all drive a behaviour equally. Fitting the lasso, do you expect it to give all three similar weights, pick one and zero the others, or zero all three?" />
+
+<Step n={1} title="The regularisation path" minutes={25} />
+
+<Figure caption="Lasso coefficients for eight standardised inputs as the penalty falls from left to right, computed by coordinate descent with warm starts. Move λ and read off which inputs are in the model." credit="Interactive figure by Engram, after Friedman, Hastie and Tibshirani (2010).">
+  <LassoPath />
+</Figure>
+
+The largest useful penalty is $\lambda_\text{max} = \max_j |\mathbf x_j^\top\mathbf y|/n$: at or above it, every weight is zero, by the optimality conditions of yesterday. Starting there and decreasing $\lambda$ on a log scale, each solution is a good starting point, a **warm start**, for the next, so coordinate descent needs only a few sweeps per value. This is how the glmnet software of Friedman, Hastie and Tibshirani computes entire paths in roughly the time of one least-squares fit.
+
+<PyCell id="path" title="A lasso path with warm starts" tests={String.raw`
+  import numpy as np
+  def test_lmax():
+      "lam_max zeroes every weight and anything slightly smaller does not"
+      assert np.all(lasso_cd(X, y, lam_max) == 0) and np.any(lasso_cd(X, y, 0.95 * lam_max) != 0)
+  def test_path():
+      "path has one row per lambda; the number of non-zero weights grows as lambda falls"
+      nz = (path != 0).sum(1)
+      assert path.shape == (len(lams), P) and nz[0] == 0 and nz[-1] > nz[len(lams) // 2]
+  def test_order():
+      "the first input to enter is the one with the largest true effect"
+      assert first_in == 0
+`} prompt="Compute lam_max, then the path over 40 log-spaced values from lam_max down to lam_max / 1000, warm-starting each fit from the previous solution. Record the order in which inputs first become non-zero."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(554)
+
+  def soft_threshold(z, lam):
+      return np.sign(z) * np.maximum(np.abs(z) - lam, 0)
+
+  def lasso_cd(X, y, lam, iters=100, w0=None, alpha=1.0):
+      """Elastic net by coordinate descent: penalty lam * (alpha |w|_1 + (1 - alpha) |w|^2 / 2); alpha = 1 is the lasso."""
+      n = len(y); w = np.zeros(X.shape[1]) if w0 is None else w0.copy(); res = y - X @ w
+      for it in range(iters):
+          for j in range(X.shape[1]):
+              rho = X[:, j] @ (res + X[:, j] * w[j]) / n
+              new = soft_threshold(rho, lam * alpha) / (1 + lam * (1 - alpha))
+              res -= X[:, j] * (new - w[j]); w[j] = new
+      return w
+
+  n, P = 80, 12
+  X = r.normal(size=(n, P)); X = (X - X.mean(0)) / X.std(0)
+  w_true = np.array([1.2, -0.9, 0.7, 0.5, -0.3, 0.2, 0, 0, 0, 0, 0, 0])
+  y = X @ w_true + 0.6 * r.normal(size=n); y = y - y.mean()
+
+  lam_max = ...
+  lams = lam_max * np.logspace(0, -3, 40)
+  path, w = np.zeros((len(lams), P)), np.zeros(P)
+  for k, lam in enumerate(lams):
+      w = ...
+      path[k] = w
+  entry = [np.argmax(path[:, j] != 0) if np.any(path[:, j] != 0) else len(lams) for j in range(P)]
+  first_in = int(np.argmin(entry))
+  print(f"lambda_max = {lam_max:.3f}")
+  print("order of entry:", [int(i) for i in np.argsort(entry)[:8]])
+  plt.semilogx(lams, path); plt.gca().invert_xaxis(); plt.xlabel("lambda"); plt.ylabel("coefficient"); plt.show()
+`}
+hint="lam_max = np.max(np.abs(X.T @ y)) / n; w = lasso_cd(X, y, lam, iters=30, w0=w)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(554)
+
+  def soft_threshold(z, lam):
+      return np.sign(z) * np.maximum(np.abs(z) - lam, 0)
+
+  def lasso_cd(X, y, lam, iters=100, w0=None, alpha=1.0):
+      """Elastic net by coordinate descent: penalty lam * (alpha |w|_1 + (1 - alpha) |w|^2 / 2); alpha = 1 is the lasso."""
+      n = len(y); w = np.zeros(X.shape[1]) if w0 is None else w0.copy(); res = y - X @ w
+      for it in range(iters):
+          for j in range(X.shape[1]):
+              rho = X[:, j] @ (res + X[:, j] * w[j]) / n
+              new = soft_threshold(rho, lam * alpha) / (1 + lam * (1 - alpha))
+              res -= X[:, j] * (new - w[j]); w[j] = new
+      return w
+
+  n, P = 80, 12
+  X = r.normal(size=(n, P)); X = (X - X.mean(0)) / X.std(0)
+  w_true = np.array([1.2, -0.9, 0.7, 0.5, -0.3, 0.2, 0, 0, 0, 0, 0, 0])
+  y = X @ w_true + 0.6 * r.normal(size=n); y = y - y.mean()
+
+  lam_max = np.max(np.abs(X.T @ y)) / n
+  lams = lam_max * np.logspace(0, -3, 40)
+  path, w = np.zeros((len(lams), P)), np.zeros(P)
+  for k, lam in enumerate(lams):
+      w = lasso_cd(X, y, lam, iters=30, w0=w)
+      path[k] = w
+  entry = [np.argmax(path[:, j] != 0) if np.any(path[:, j] != 0) else len(lams) for j in range(P)]
+  first_in = int(np.argmin(entry))
+  print(f"lambda_max = {lam_max:.3f}")
+  print("order of entry:", [int(i) for i in np.argsort(entry)[:8]])
+  plt.semilogx(lams, path); plt.gca().invert_xaxis(); plt.xlabel("lambda"); plt.ylabel("coefficient"); plt.show()
+`} />
+
+At $\lambda_\text{max} = 1.32$ every weight is zero. As the penalty falls, inputs enter in the order 0, 1, 3, 2, 4, 5, which is almost exactly the order of their true effect sizes (1.2, −0.9, 0.7, 0.5, −0.3, 0.2), with inputs 2 and 3 swapping places because of noise. Only after all six real inputs are in do the null inputs 9 and 11 appear, at small penalties where the model begins to fit noise. The whole path of 40 fits took a fraction of a second, because each fit started from its neighbour's solution.
+
+<Step n={2} title="Correlated inputs and the elastic net" minutes={30} />
+
+When several inputs are near-copies of each other, the lasso tends to pick one of the group, more or less arbitrarily, and zero the rest: spreading weight over the copies costs more L1 penalty for the same fit than concentrating it. Zou and Hastie's **elastic net**, today's paper, adds a ridge term, $\lambda\left(\alpha\lVert\mathbf w\rVert_1 + \frac{1-\alpha}{2}\lVert\mathbf w\rVert_2^2\right)$, whose strict convexity encourages correlated inputs to share weight: a grouping effect. The coordinate update just divides the soft threshold by $1 + \lambda(1 - \alpha)$, as in the function above.
+
+<Video id="1dKRdX9bfIo" title="Regularization part 3: elastic net regression" by="StatQuest with Josh Starmer" note="Josh Starmer on combining the lasso and ridge penalties, and why the combination copes better with correlated variables." />
+
+<PyCell id="enet" title="Three copies of one signal" tests={String.raw`
+  import numpy as np
+  def test_lasso():
+      "the lasso concentrates the group's weight: it zeroes at least one member and its largest weight carries over 60% of the total"
+      g = np.abs(w_lasso[:3]); assert np.any(g == 0) and g.max() >= 0.6 * g.sum()
+  def test_enet():
+      "the elastic net spreads it: no weight in the group carries more than 50%"
+      g = np.abs(w_enet[:3]); assert g.max() <= 0.5 * g.sum() and np.all(g > 0)
+`} prompt="Build three near-copies of one signal (correlation about 0.99) plus 7 unrelated inputs; the target depends equally on the three copies. Fit the lasso (alpha = 1) and the elastic net (alpha = 0.3) at lambda = 0.1 and compare how they share weight within the group."
+code={String.raw`
+  g2 = np.random.default_rng(5541)                 # its own generator, so the result does not depend on earlier cells
+  base = g2.normal(size=200)
+  Xg = np.c_[np.stack([base + 0.1 * g2.normal(size=200) for _ in range(3)], axis=1), g2.normal(size=(200, 7))]
+  Xg = (Xg - Xg.mean(0)) / Xg.std(0)
+  yg = Xg[:, :3].sum(1) * 0.5 + 0.5 * g2.normal(size=200); yg = yg - yg.mean()
+  print("correlations within the group:", np.round(np.corrcoef(Xg[:, :3].T)[np.triu_indices(3, 1)], 2))
+  w_lasso = ...
+  w_enet = ...
+  print("lasso, group weights:      ", np.round(w_lasso[:3], 3))
+  print("elastic net, group weights:", np.round(w_enet[:3], 3))
+`}
+hint="w_lasso = lasso_cd(Xg, yg, 0.1, iters=300); w_enet = lasso_cd(Xg, yg, 0.1, iters=300, alpha=0.3)."
+solution={String.raw`
+  g2 = np.random.default_rng(5541)                 # its own generator, so the result does not depend on earlier cells
+  base = g2.normal(size=200)
+  Xg = np.c_[np.stack([base + 0.1 * g2.normal(size=200) for _ in range(3)], axis=1), g2.normal(size=(200, 7))]
+  Xg = (Xg - Xg.mean(0)) / Xg.std(0)
+  yg = Xg[:, :3].sum(1) * 0.5 + 0.5 * g2.normal(size=200); yg = yg - yg.mean()
+  print("correlations within the group:", np.round(np.corrcoef(Xg[:, :3].T)[np.triu_indices(3, 1)], 2))
+  w_lasso = lasso_cd(Xg, yg, 0.1, iters=300)
+  w_enet = lasso_cd(Xg, yg, 0.1, iters=300, alpha=0.3)
+  print("lasso, group weights:      ", np.round(w_lasso[:3], 3))
+  print("elastic net, group weights:", np.round(w_enet[:3], 3))
+`} />
+
+The three inputs are correlated at 0.99 and contribute equally to the target, yet the lasso gives them weights of 0, 0.57 and 0.88: it drops one entirely and loads most of the effect onto another. Which one wins is decided by tiny differences in noise, so a different dataset would choose differently, and an analyst reading the lasso's weights would wrongly conclude that the second neuron does not matter. That answers the prediction. The elastic net gives the three weights of 0.41, 0.52 and 0.55, sharing the effect roughly equally, which is the honest summary when the data cannot tell the copies apart. The price is a little less sparsity elsewhere, since the ridge part of the penalty shrinks without selecting.
+
+<Step n={3} title="Choosing λ by cross-validation" minutes={35} />
+
+K-fold cross-validation splits the trials into K folds, fits on K − 1 of them and tests on the one left out, for every fold and every λ. The mean held-out error traces a curve with a minimum, $\lambda_\text{min}$. Because the curve is itself an estimate, it comes with a standard error at each λ (the spread of the K fold errors divided by $\sqrt K$). The **one-standard-error rule** picks the largest λ whose error is within one standard error of the minimum: a simpler model that is statistically indistinguishable from the best.
+
+<PyCell id="cvlam" title="Ten-fold cross-validation along the path" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "cv_err has one row per fold and one column per lambda"
+      assert cv_err.shape == (10, len(lams))
+  def test_rule():
+      "lam_1se is the largest lambda within one SE of the minimum, and it is at least lam_min"
+      m, se = cv_err.mean(0), cv_err.std(0) / np.sqrt(10)
+      k = np.argmin(m); ok = m <= m[k] + se[k]
+      assert lam_1se == lams[ok].max() and lam_1se >= lam_min
+  def test_sparser():
+      "the one-SE model uses no more inputs than the minimum-error model"
+      assert nz_1se <= nz_min
+`} prompt="For each of 10 folds, fit the whole path on the other nine folds (warm starts) and record the held-out MSE for each lambda. Find lam_min and lam_1se, and count the non-zero weights of each when refitted on all the data."
+code={String.raw`
+  folds = np.array_split(r.permutation(n), 10)
+  cv_err = np.zeros((10, len(lams)))
+  for f, te in enumerate(folds):
+      tr = np.setdiff1d(np.arange(n), te)
+      w = np.zeros(P)
+      for k, lam in enumerate(lams):
+          w = lasso_cd(X[tr], y[tr], lam, iters=30, w0=w)
+          cv_err[f, k] = ...
+  m, se = cv_err.mean(0), cv_err.std(0) / np.sqrt(10)
+  k_min = np.argmin(m)
+  lam_min = lams[k_min]
+  lam_1se = ...
+  nz_min = int(np.sum(lasso_cd(X, y, lam_min) != 0)); nz_1se = int(np.sum(lasso_cd(X, y, lam_1se) != 0))
+  print(f"lambda_min {lam_min:.4f} ({nz_min} inputs); lambda_1se {lam_1se:.4f} ({nz_1se} inputs); 6 inputs truly matter")
+  plt.errorbar(lams, m, yerr=se, fmt="o-", ms=3); plt.xscale("log"); plt.axvline(lam_min, color="k"); plt.axvline(lam_1se, color="k", ls="--")
+  plt.xlabel("lambda"); plt.ylabel("10-fold CV error"); plt.show()
+`}
+hint="cv_err[f, k] = np.mean((y[te] - X[te] @ w) ** 2); lam_1se = lams[m <= m[k_min] + se[k_min]].max()."
+solution={String.raw`
+  folds = np.array_split(r.permutation(n), 10)
+  cv_err = np.zeros((10, len(lams)))
+  for f, te in enumerate(folds):
+      tr = np.setdiff1d(np.arange(n), te)
+      w = np.zeros(P)
+      for k, lam in enumerate(lams):
+          w = lasso_cd(X[tr], y[tr], lam, iters=30, w0=w)
+          cv_err[f, k] = np.mean((y[te] - X[te] @ w) ** 2)
+  m, se = cv_err.mean(0), cv_err.std(0) / np.sqrt(10)
+  k_min = np.argmin(m)
+  lam_min = lams[k_min]
+  lam_1se = lams[m <= m[k_min] + se[k_min]].max()
+  nz_min = int(np.sum(lasso_cd(X, y, lam_min) != 0)); nz_1se = int(np.sum(lasso_cd(X, y, lam_1se) != 0))
+  print(f"lambda_min {lam_min:.4f} ({nz_min} inputs); lambda_1se {lam_1se:.4f} ({nz_1se} inputs); 6 inputs truly matter")
+  plt.errorbar(lams, m, yerr=se, fmt="o-", ms=3); plt.xscale("log"); plt.axvline(lam_min, color="k"); plt.axvline(lam_1se, color="k", ls="--")
+  plt.xlabel("lambda"); plt.ylabel("10-fold CV error"); plt.show()
+`} />
+
+The cross-validation curve is lowest at a very small penalty, $\lambda_\text{min} \approx 0.003$, where all 12 inputs are in the model, but it is almost flat over a wide range. The one-standard-error rule moves up to $\lambda_\text{1se} \approx 0.09$, where the model uses 7 inputs: the 6 that truly matter and one false one. Its predictions are statistically indistinguishable from the best, and it is far easier to interpret. Minimum-error selection is tuned for prediction, which tolerates many small spurious weights; the one-SE rule leans towards selection. Choose by what you will use the model for, and report which rule you used.
+
+<Step n={4} title="Reading the path" minutes={15} />
+
+A path is a summary of the data, not only a route to one model. Three habits help. Look at the order of entry: inputs that enter early carry the strongest, most robust effects. Look for inputs that enter and later leave or change sign: usually a sign of correlation with something that entered after them. And remember that the weights of a selected model are shrunk, so if you want unbiased estimates of the selected effects, refit them by least squares (the "relaxed lasso"), accepting that the selection itself used the data and so ordinary standard errors will be too small.
+
+<Bridge title="Penalties in brains and machines"
+  neuro="Neural recordings are full of groups of correlated signals: neighbouring channels, neurons with shared input, behavioural variables that move together. The lasso's arbitrary choice within such a group can be mistaken for a finding (this neuron matters, that one does not), which is why the elastic net or group penalties are often the safer choice for interpretation."
+  ai="The idea of computing a whole family of models along a penalty and reading off the trade-off between complexity and accuracy reappears in pruning neural networks, in the choice of weight decay schedules, and in the scaling curves that guide how big a model to train.">
+
+A penalty is a dial: look at everything it shows as it turns, then choose a setting with an honest error bar.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "At λ ≥ λ_max, the lasso...", options: ["Sets every weight to zero", "Equals least squares", "Selects every input", "Diverges"], answer: 0, explain: "By the optimality conditions." },
+  { q: "Warm starts speed up a path because...", options: ["Each solution is close to the next", "They skip cross-validation", "They use the test set", "They avoid soft thresholding"], answer: 0, explain: "Only a few sweeps are needed." },
+  { q: "With a group of near-identical inputs, the lasso tends to...", options: ["Pick one and zero the rest", "Give all equal weight", "Zero all", "Double the weights"], answer: 0, explain: "Step 2." },
+  { q: "The elastic net adds to the lasso...", options: ["A ridge penalty that groups correlated inputs", "A second L1 penalty", "A noise term", "A non-convex term"], answer: 0, explain: "Zou and Hastie." },
+  { q: "The one-standard-error rule chooses...", options: ["The simplest model within one SE of the minimum CV error", "The minimum-error λ", "The smallest λ", "A random λ"], answer: 0, explain: "Step 3." },
+  { q: "The SE of a K-fold CV curve is estimated from...", options: ["The spread of the K fold errors", "The training error", "The number of inputs", "λ"], answer: 0, explain: "Divided by √K." },
+  { q: "Inputs that enter the path early usually...", options: ["Have the strongest effects", "Are noise", "Are correlated with everything", "Leave later"], answer: 0, explain: "Step 4." },
+  { q: "Refitting the selected inputs by least squares...", options: ["Removes the shrinkage bias but needs care with inference", "Is never allowed", "Gives exact p values", "Increases sparsity"], answer: 0, explain: "The relaxed lasso." },
+]} />
+
+<Flashcards cards={[
+  { front: "λ_max for the lasso?", back: "$\\max_j |\\mathbf x_j^\\top\\mathbf y|/n$ for standardised inputs: the smallest λ with all weights zero." },
+  { front: "Elastic net penalty?", back: "$\\lambda\\left(\\alpha\\lVert\\mathbf w\\rVert_1 + \\frac{1 - \\alpha}{2}\\lVert\\mathbf w\\rVert_2^2\\right)$." },
+  { front: "Grouping effect?", back: "The elastic net gives highly correlated inputs similar weights instead of picking one." },
+  { front: "One-SE rule?", back: "Largest λ whose CV error is within one standard error of the minimum." },
+  { front: "Warm start?", back: "Initialise each fit along the path at the previous λ's solution." },
+]} />
+
+<Predict revisit question="With three near-copies of a signal, did the lasso share the weight, pick one, or zero all three?" />
+
+<Key title="Before you go">
+<ul>
+<li>A regularisation path is cheap with warm starts and informative in itself.</li>
+<li>The lasso picks arbitrarily within correlated groups; the elastic net shares weight among them.</li>
+<li>K-fold cross-validation chooses λ, and its standard errors show how precisely.</li>
+<li>The one-standard-error rule prefers the simpler of near-equivalent models.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Zou and Hastie (2005), <em>Regularization and variable selection via the elastic net</em>.</li>
+<li>Friedman, Hastie and Tibshirani (2010), <em>Regularization paths for generalized linear models via coordinate descent</em>, Journal of Statistical Software 33(1), 1 to 22, the glmnet paper.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Describe a group of correlated signals in data you know. If a lasso model selected one member of the group, what claim might someone wrongly make? Write the sentence you would put in a methods section to prevent it." />

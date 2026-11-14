@@ -1,0 +1,272 @@
+export const meta = {
+  title: "The lasso: sparsity by soft thresholding",
+  intro: "Ridge shrinks every weight but sets none to zero, so it never tells you which inputs a neuron ignores. The lasso changes one character, penalising the absolute values of the weights instead of their squares, and the result is a model that selects: many weights become exactly zero. Today you see why geometrically, derive the soft-thresholding rule that does the work, implement the lasso by coordinate descent, and test how well it finds the few inputs that truly matter among many that do not.",
+  goals: [
+    "Explain geometrically why an L1 penalty produces exact zeros",
+    "Derive soft thresholding for an orthonormal design",
+    "Implement the lasso by coordinate descent and check its optimality conditions",
+    "Measure how well the lasso recovers a sparse set of true inputs",
+  ],
+  plan: [
+    { label: "Corners make zeros", minutes: 20 },
+    { label: "Soft thresholding", minutes: 25 },
+    { label: "Coordinate descent", minutes: 35 },
+    { label: "Finding the true inputs", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "tibshirani-2011",
+};
+
+<Predict question="A neuron's response depends on 5 of 50 stimulus features. With 100 trials, can the lasso find exactly those 5 and no others, find the 5 plus a few false ones, or not find them at all?" />
+
+<Step n={1} title="Corners make zeros" minutes={20} />
+
+The lasso (least absolute shrinkage and selection operator) minimises
+
+$$
+\frac{1}{2n}\lVert\mathbf y - X\mathbf w\rVert^2 + \lambda\lVert\mathbf w\rVert_1, \qquad \lVert\mathbf w\rVert_1 = \sum_j |w_j|.
+$$
+
+Equivalently, it minimises the squared error subject to $\lVert\mathbf w\rVert_1 \le t$ for some budget $t$. The constraint region is a diamond in two dimensions, a cross-polytope in many, with corners on the axes. The elliptical contours of the squared error usually first touch such a region at a corner, where some weights are exactly zero. Ridge's constraint is a sphere, with no corners, so its solutions almost never lie on an axis.
+
+<Figure caption="Least squares under a lasso or ridge budget. The solution (pink) is where the smallest error contour touches the constraint region. Shrink the budget and compare the two." credit="Interactive figure by Engram, after Tibshirani (1996).">
+  <ConstraintGeometry />
+</Figure>
+
+Tibshirani introduced the lasso in 1996 (you met that paper in Week 17); today's paper is his retrospective fifteen years on, which tells the story of the idea, its computation and the field it started.
+
+<Video id="NGf0voTMlcs" title="Regularization part 2: lasso (L1) regression" by="StatQuest with Josh Starmer" note="Josh Starmer on lasso regression and how, unlike ridge, it can shrink the slopes of useless variables all the way to zero." />
+
+<Step n={2} title="Soft thresholding" minutes={25} />
+
+<Derivation title="The lasso for an orthonormal design">
+<div>
+
+Suppose the columns of $X$ are orthonormal after scaling, $X^\top X = nI$. Then the objective separates into one problem per weight: minimise $\frac12(w_j - z_j)^2 + \lambda|w_j|$, where $z_j = \mathbf x_j^\top\mathbf y/n$ is the least-squares estimate.
+
+</div>
+<div>
+
+For $w_j \gt 0$ the derivative is $w_j - z_j + \lambda$, zero at $w_j = z_j - \lambda$, valid only if $z_j \gt \lambda$. Symmetrically $w_j = z_j + \lambda$ if $z_j \lt -\lambda$. At $w_j = 0$ the absolute value has a kink, and zero is optimal whenever $|z_j| \le \lambda$, because the subgradient of $\lambda|w|$ at zero covers $[-\lambda, \lambda]$.
+
+</div>
+<div>
+
+Together: $\hat w_j = S_\lambda(z_j) = \text{sign}(z_j)\max(|z_j| - \lambda, 0)$, the **soft-thresholding** operator. Small estimates are set to zero and large ones are pulled towards zero by $\lambda$. Ridge would instead scale every estimate by the same factor, and best-subset selection would keep large estimates unchanged (hard thresholding).
+
+</div>
+</Derivation>
+
+<PyCell id="soft" title="Three ways to shrink" tests={String.raw`
+  import numpy as np
+  def test_soft():
+      "soft_threshold implements sign(z) max(|z| - lam, 0)"
+      z = np.array([-3.0, -0.5, 0.0, 0.4, 2.0])
+      assert np.allclose(soft_threshold(z, 1.0), [-2.0, 0.0, 0.0, 0.0, 1.0])
+  def test_orth():
+      "for an orthonormal design, the soft-thresholded least-squares estimates solve the lasso"
+      w = soft_threshold(Q.T @ yq / nq, 0.2)
+      obj = lambda v: 0.5 / nq * np.sum((yq - Q @ v) ** 2) + 0.2 * np.abs(v).sum()
+      assert all(obj(w) <= obj(w + 1e-3 * e) + 1e-12 for e in np.r_[np.eye(5), -np.eye(5)])
+`} prompt="Write soft_threshold(z, lam). Check that, for a design with orthonormal columns scaled so that XᵀX = nI, soft-thresholding the least-squares estimates gives a point that no small step in any coordinate can improve. Then plot the soft, hard and ridge rules."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(553)
+
+  def soft_threshold(z, lam):
+      return ...
+
+  nq = 50
+  Q = np.linalg.qr(r.normal(size=(nq, 5)))[0] * np.sqrt(nq)     # orthogonal columns with Q'Q = n I
+  yq = Q @ np.array([1.0, 0.5, 0.1, 0.0, -0.3]) + 0.3 * r.normal(size=nq)
+  z = Q.T @ yq / nq
+  print("least-squares estimates:", np.round(z, 3))
+  print("lasso (lambda = 0.2):  ", np.round(soft_threshold(z, 0.2), 3))
+  zz = np.linspace(-3, 3, 201)
+  plt.plot(zz, soft_threshold(zz, 1), label="soft (lasso)"); plt.plot(zz, np.where(np.abs(zz) > 1, zz, 0), label="hard (best subset)")
+  plt.plot(zz, zz / 2, label="ridge"); plt.plot(zz, zz, "k:", lw=0.8); plt.xlabel("least-squares estimate"); plt.legend(); plt.show()
+`}
+hint="return np.sign(z) * np.maximum(np.abs(z) - lam, 0)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(553)
+
+  def soft_threshold(z, lam):
+      return np.sign(z) * np.maximum(np.abs(z) - lam, 0)
+
+  nq = 50
+  Q = np.linalg.qr(r.normal(size=(nq, 5)))[0] * np.sqrt(nq)     # orthogonal columns with Q'Q = n I
+  yq = Q @ np.array([1.0, 0.5, 0.1, 0.0, -0.3]) + 0.3 * r.normal(size=nq)
+  z = Q.T @ yq / nq
+  print("least-squares estimates:", np.round(z, 3))
+  print("lasso (lambda = 0.2):  ", np.round(soft_threshold(z, 0.2), 3))
+  zz = np.linspace(-3, 3, 201)
+  plt.plot(zz, soft_threshold(zz, 1), label="soft (lasso)"); plt.plot(zz, np.where(np.abs(zz) > 1, zz, 0), label="hard (best subset)")
+  plt.plot(zz, zz / 2, label="ridge"); plt.plot(zz, zz, "k:", lw=0.8); plt.xlabel("least-squares estimate"); plt.legend(); plt.show()
+`} />
+
+With $\lambda = 0.2$, the least-squares estimates 1.02, 0.49, 0.14, −0.03 and −0.31 become 0.82, 0.29, 0, 0 and −0.11: the two small ones vanish, and every survivor is pulled 0.2 towards zero. The plot shows the three rules side by side. Hard thresholding is discontinuous, so a tiny change in the data can make a weight jump in or out; ridge is smooth but never selects; soft thresholding selects and is continuous, which is why the lasso is stable enough to compute and analyse. Its cost is visible too: the weights it keeps are biased towards zero, by exactly $\lambda$ in this case.
+
+<Step n={3} title="Coordinate descent" minutes={35} />
+
+With correlated columns the weights no longer separate, but a simple algorithm works: cycle through the weights, and set each to its optimal value with the others held fixed. For standardised columns, that optimum is again a soft threshold, of the correlation between column $j$ and the **partial residual** $\mathbf y - \sum_{k \ne j}\mathbf x_kw_k$. Each update can only lower the objective, which is convex, so the cycle converges to the solution.
+
+<PyCell id="cd" title="The lasso by coordinate descent" tests={String.raw`
+  import numpy as np
+  def test_objective():
+      "lasso_cd reaches a lower objective than the starting point and its result satisfies the optimality conditions"
+      w = lasso_cd(X, y, 0.1)
+      g = X.T @ (y - X @ w) / len(y)
+      nz = w != 0
+      assert np.allclose(g[nz], 0.1 * np.sign(w[nz]), atol=1e-4) and np.all(np.abs(g[~nz]) <= 0.1 + 1e-4)
+  def test_sparse():
+      "with lambda = 0.1 most weights are exactly zero"
+      assert np.sum(lasso_cd(X, y, 0.1) == 0) >= 30
+`} prompt="Complete lasso_cd for standardised columns (each with mean 0 and mean square 1): for each j, compute rho = x_j · (partial residual) / n and set w_j = soft_threshold(rho, lam), updating the residual as you go. Then check the optimality (KKT) conditions: for non-zero weights the gradient of the squared-error term equals lam times the sign, and for zero weights its size is at most lam."
+code={String.raw`
+  n, P = 100, 50
+  X = r.normal(size=(n, P)); X[:, 1] = 0.7 * X[:, 0] + 0.7 * X[:, 1]
+  X = (X - X.mean(0)) / X.std(0)
+  w_true = np.zeros(P); w_true[[0, 3, 7, 12, 20]] = [1.0, -0.8, 0.6, 0.5, -0.4]
+  y = X @ w_true + 0.5 * r.normal(size=n); y = y - y.mean()
+
+  def lasso_cd(X, y, lam, iters=200, w0=None):
+      n = len(y)
+      w = np.zeros(X.shape[1]) if w0 is None else w0.copy()
+      res = y - X @ w
+      for it in range(iters):
+          for j in range(X.shape[1]):
+              rho = X[:, j] @ (res + X[:, j] * w[j]) / n
+              new = ...
+              res -= X[:, j] * (new - w[j])
+              w[j] = new
+      return w
+
+  w = lasso_cd(X, y, 0.1)
+  grad = X.T @ (y - X @ w) / n
+  print("non-zero weights at indices:", np.flatnonzero(w), "values", np.round(w[w != 0], 2))
+  print(f"largest |gradient| among zero weights: {np.abs(grad[w == 0]).max():.4f} (must not exceed 0.1)")
+`}
+hint="new = soft_threshold(rho, lam)."
+solution={String.raw`
+  n, P = 100, 50
+  X = r.normal(size=(n, P)); X[:, 1] = 0.7 * X[:, 0] + 0.7 * X[:, 1]
+  X = (X - X.mean(0)) / X.std(0)
+  w_true = np.zeros(P); w_true[[0, 3, 7, 12, 20]] = [1.0, -0.8, 0.6, 0.5, -0.4]
+  y = X @ w_true + 0.5 * r.normal(size=n); y = y - y.mean()
+
+  def lasso_cd(X, y, lam, iters=200, w0=None):
+      n = len(y)
+      w = np.zeros(X.shape[1]) if w0 is None else w0.copy()
+      res = y - X @ w
+      for it in range(iters):
+          for j in range(X.shape[1]):
+              rho = X[:, j] @ (res + X[:, j] * w[j]) / n
+              new = soft_threshold(rho, lam)
+              res -= X[:, j] * (new - w[j])
+              w[j] = new
+      return w
+
+  w = lasso_cd(X, y, 0.1)
+  grad = X.T @ (y - X @ w) / n
+  print("non-zero weights at indices:", np.flatnonzero(w), "values", np.round(w[w != 0], 2))
+  print(f"largest |gradient| among zero weights: {np.abs(grad[w == 0]).max():.4f} (must not exceed 0.1)")
+`} />
+
+With $\lambda = 0.1$, 41 of the 50 weights are exactly zero. The five true inputs (indices 0, 3, 7, 12 and 20) are all selected, with values 0.93, −0.66, 0.53, 0.37 and −0.27 against true values of 1.0, −0.8, 0.6, 0.5 and −0.4: all shrunk towards zero. Four other weights are non-zero but tiny, at most 0.01. The optimality check passes: every zero weight has a gradient of at most 0.098, below $\lambda$, so no single weight could profitably leave zero. Feature 1, built to be correlated with feature 0, is correctly left out here, but correlated features are the lasso's weak point, as the next lesson shows.
+
+<Step n={4} title="Finding the true inputs" minutes={25} />
+
+How reliably does the lasso find the right inputs? Repeat the experiment on 15 fresh datasets at several penalties, and count true positives (true inputs selected) and false positives (others selected).
+
+<PyCell id="support" title="Selection accuracy across penalties" tests={String.raw`
+  import numpy as np
+  def test_tp():
+      "at the smallest penalty all five true inputs are almost always found"
+      assert tp[0] > 4.8
+  def test_fp():
+      "false positives fall as the penalty rises, and true positives eventually fall too"
+      assert fp[0] > fp[-1] and tp[-1] < tp[0]
+`} prompt="For each penalty, fit the lasso to 15 fresh datasets (same design, new noise and new random inputs), and record the mean number of the 5 true inputs selected (tp) and of the 45 others selected (fp)."
+code={String.raw`
+  lams = [0.02, 0.05, 0.1, 0.2, 0.35]
+  truth = w_true != 0
+  tp, fp = np.zeros(len(lams)), np.zeros(len(lams))
+  for k, lam in enumerate(lams):
+      t_, f_ = [], []
+      for rep in range(15):
+          Xr = r.normal(size=(n, P)); Xr = (Xr - Xr.mean(0)) / Xr.std(0)
+          yr = Xr @ w_true + 0.5 * r.normal(size=n); yr = yr - yr.mean()
+          sel = lasso_cd(Xr, yr, lam, iters=50) != 0
+          t_.append(...)
+          f_.append(...)
+      tp[k], fp[k] = np.mean(t_), np.mean(f_)
+      print(f"lambda {lam:.2f}: true inputs found {tp[k]:.2f} of 5, false inputs {fp[k]:.2f} of 45")
+`}
+hint="t_.append(np.sum(sel & truth)); f_.append(np.sum(sel & ~truth))."
+solution={String.raw`
+  lams = [0.02, 0.05, 0.1, 0.2, 0.35]
+  truth = w_true != 0
+  tp, fp = np.zeros(len(lams)), np.zeros(len(lams))
+  for k, lam in enumerate(lams):
+      t_, f_ = [], []
+      for rep in range(15):
+          Xr = r.normal(size=(n, P)); Xr = (Xr - Xr.mean(0)) / Xr.std(0)
+          yr = Xr @ w_true + 0.5 * r.normal(size=n); yr = yr - yr.mean()
+          sel = lasso_cd(Xr, yr, lam, iters=50) != 0
+          t_.append(np.sum(sel & truth))
+          f_.append(np.sum(sel & ~truth))
+      tp[k], fp[k] = np.mean(t_), np.mean(f_)
+      print(f"lambda {lam:.2f}: true inputs found {tp[k]:.2f} of 5, false inputs {fp[k]:.2f} of 45")
+`} />
+
+At small penalties all five true inputs are found, but with many false ones: 27 of 45 at $\lambda = 0.02$, 13 at 0.05, 3 at 0.1. At $\lambda = 0.2$ the lasso finds all five and almost nothing else (0.07 false inputs on average), which answers the prediction: with 100 trials and well-separated effects, near-perfect recovery is possible. Raise the penalty further to 0.35 and the weakest true input (−0.4) starts to be missed. Recovery this clean depends on strong effects, uncorrelated inputs and a well-chosen $\lambda$; in real data, with correlated inputs and a penalty chosen for prediction rather than selection (usually smaller), expect several false positives. This week's Forge measures how stable the selection is across bootstrap samples.
+
+<Bridge title="Sparsity in brains and machines"
+  neuro="Sparse models express a common hypothesis: a neuron, a voxel or a behaviour depends on only a few of the many measured variables. The lasso turns that hypothesis into an estimator, and is widely used to select features in encoding models and connections in network inference. Sparse coding, which you met in Week 39, uses the same L1 penalty on activity rather than on weights."
+  ai="L1 penalties produce sparse, interpretable linear models and are used to prune neural networks. Compressed sensing showed that an L1 penalty can recover a sparse signal exactly from far fewer measurements than unknowns, under conditions on the design, which is the theory behind the support recovery you measured.">
+
+The lasso turns a belief that few inputs matter into an estimate of which ones.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The lasso penalises...", options: ["The sum of absolute weights", "The sum of squared weights", "The number of weights", "The residuals"], answer: 0, explain: "L1." },
+  { q: "The lasso sets weights exactly to zero because...", options: ["Its constraint region has corners on the axes", "It is non-convex", "It removes noise", "Of rounding"], answer: 0, explain: "Step 1." },
+  { q: "Soft thresholding maps a least-squares estimate z to...", options: ["sign(z) max(|z| − λ, 0)", "z / (1 + λ)", "z if |z| > λ, else 0", "λz"], answer: 0, explain: "The derivation." },
+  { q: "Hard thresholding corresponds to...", options: ["Best-subset selection", "The lasso", "Ridge", "Least squares"], answer: 0, explain: "Keep large estimates unchanged." },
+  { q: "Coordinate descent for the lasso updates each weight to...", options: ["A soft threshold of its partial-residual correlation", "Zero", "Its least-squares value", "The average weight"], answer: 0, explain: "Step 3." },
+  { q: "For a zero lasso weight, the optimality condition requires...", options: ["|gradient| ≤ λ", "gradient = 0", "gradient = λ", "Nothing"], answer: 0, explain: "The subgradient covers [−λ, λ]." },
+  { q: "Raising λ usually...", options: ["Reduces false positives but eventually loses true inputs", "Adds inputs", "Has no effect on selection", "Increases false positives"], answer: 0, explain: "Step 4." },
+  { q: "Lasso estimates of selected weights are...", options: ["Biased towards zero by λ", "Unbiased", "Inflated", "Exactly the least-squares values"], answer: 0, explain: "Soft thresholding shrinks them." },
+]} />
+
+<Flashcards cards={[
+  { front: "Lasso objective?", back: "$\\frac{1}{2n}\\lVert\\mathbf y - X\\mathbf w\\rVert^2 + \\lambda\\lVert\\mathbf w\\rVert_1$." },
+  { front: "Soft thresholding?", back: "$S_\\lambda(z) = \\text{sign}(z)\\max(|z| - \\lambda, 0)$." },
+  { front: "Lasso optimality (KKT)?", back: "$\\mathbf x_j^\\top(\\mathbf y - X\\mathbf w)/n = \\lambda\\,\\text{sign}(w_j)$ if $w_j \\ne 0$; its size is at most λ if $w_j = 0$." },
+  { front: "Why corners matter?", back: "Loss contours tend to touch the L1 ball at a corner, where some weights are exactly zero." },
+  { front: "Ridge against lasso?", back: "Ridge shrinks all weights proportionally; the lasso shrinks by a constant and zeroes the small ones." },
+]} />
+
+<Predict revisit question="Could the lasso find exactly the 5 true features among 50, with 100 trials?" />
+
+<Key title="Before you go">
+<ul>
+<li>An L1 penalty selects variables as well as shrinking them.</li>
+<li>For orthonormal designs the lasso is soft thresholding of least-squares estimates.</li>
+<li>Coordinate descent solves the lasso with simple soft-threshold updates, checked by the KKT conditions.</li>
+<li>Selection trades false positives against missed inputs as λ changes; no single λ is perfect.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Tibshirani (2011), <em>Regression shrinkage and selection via the lasso: a retrospective</em>.</li>
+<li>Hastie, Tibshirani and Wainwright, <em>Statistical Learning with Sparsity</em> (2015), chapters 2 and 5, free online from the authors.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Name an analysis in your field where a sparse model is a natural hypothesis (few inputs drive a neuron, few neurons drive a behaviour). Write down what a false positive and a missed input would mean scientifically, and which of the two errors you would rather avoid." />

@@ -246,3 +246,8 @@ export { PolyFit } from "./poly-fit";
 export { TestReuse } from "./test-reuse";
 export { BiasVarianceFits } from "./bias-variance-fits";
 export { LearningCurve } from "./learning-curve";
+export { WeightUncertainty } from "./weight-uncertainty";
+export { RidgeShrinkage } from "./ridge-shrinkage";
+export { ConstraintGeometry } from "./constraint-geometry";
+export { LassoPath } from "./lasso-path";
+export { ReceptiveFieldEstimate } from "./receptive-field-estimate";
