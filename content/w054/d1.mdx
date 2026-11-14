@@ -1,0 +1,258 @@
+export const meta = {
+  title: "What it means to learn from data",
+  intro: "Part 3 turns from the brain to machine learning: the methods that let a computer improve at a task from examples. You have already used many of them, from least squares in Week 5 to the GLMs, decoders and model comparisons of Part 2. This part puts them on a common footing and adds the rest of the classical toolkit. Today sets up the language: inputs and targets, a class of candidate models, a loss, and the distinction on which everything else rests, between how well a model fits the data it has seen and how well it will do on data it has not.",
+  goals: [
+    "Describe a supervised learning problem by its inputs, targets, hypothesis class and loss",
+    "Distinguish empirical risk from expected risk, and explain why they differ",
+    "Minimise empirical risk for a simple hypothesis class and measure the generalisation gap",
+    "Show which summary of the data each common loss function rewards",
+  ],
+  plan: [
+    { label: "The supervised learning set-up", minutes: 25 },
+    { label: "Empirical risk minimisation", minutes: 30 },
+    { label: "The generalisation gap", minutes: 30 },
+    { label: "Losses and what they estimate", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "breiman-2001",
+};
+
+<Predict question="A model fits 20 training examples perfectly, with zero error. On new examples from the same source, will its error be zero, small, or possibly large?" />
+
+<Step n={1} title="The supervised learning set-up" minutes={25} />
+
+In **supervised learning** you are given $n$ examples $(\mathbf x_i, y_i)$, inputs paired with targets, drawn independently from some unknown distribution $p(\mathbf x, y)$. You choose a **hypothesis class** $\mathcal H$, a family of functions $h$ that map inputs to predictions, and a **loss** $\ell(y, h(\mathbf x))$ that says how bad a prediction is. The goal is a function that predicts well on *new* draws from the same distribution.
+
+Neuroscience is full of such problems. An **encoding model** predicts a neuron's response $y$ from stimulus features $\mathbf x$ (Week 35). A **decoder** predicts a stimulus, a movement or a choice from population activity (Week 36). A **behavioural model** predicts a choice from the stimulus and history (Week 51). In each, the question that matters is how well the model predicts trials it was not fitted to.
+
+Two quantities make this precise. The **expected risk**, or test error, is the average loss over the whole distribution,
+
+$$
+R(h) = \mathbb E_{(\mathbf x, y) \sim p}\left[\ell(y, h(\mathbf x))\right],
+$$
+
+which is what you care about but cannot compute, because $p$ is unknown. The **empirical risk**, or training error, is the average over the examples you have,
+
+$$
+\hat R_n(h) = \frac1n\sum_{i=1}^n \ell(y_i, h(\mathbf x_i)).
+$$
+
+**Empirical risk minimisation** picks the $h \in \mathcal H$ with the smallest $\hat R_n$. For any *fixed* $h$, $\hat R_n(h)$ is an unbiased estimate of $R(h)$. But the minimiser was chosen *because* its empirical risk is small, partly by luck, so its empirical risk is biased downwards. The difference $R(\hat h) - \hat R_n(\hat h)$ is the **generalisation gap**, and most of this part of the course is about controlling it.
+
+Breiman's essay on the "two cultures" of statistical modelling, today's paper, contrasts two attitudes to this set-up: the data-modelling culture, which assumes a stochastic model of how the data arose and interprets its parameters, and the algorithmic culture, which treats the mechanism as unknown and judges models by predictive accuracy on new data. Neuroscience needs both, and you will see both this term.
+
+<Video id="Gv9_4yMHFhI" title="A gentle introduction to machine learning" by="StatQuest with Josh Starmer" note="Josh Starmer's opening video of his machine learning series: fitting models to training data and judging them on testing data, the distinction at the heart of today's lesson." />
+
+<Step n={2} title="Empirical risk minimisation" minutes={30} />
+
+<Figure caption="A line fitted to noisy samples of a sine. Move the line and compare its training risk with its expected risk; the dashed line minimises the training risk. Change the number of training points." credit="Interactive figure by Engram.">
+  <EmpiricalRisk />
+</Figure>
+
+Take the simplest case: one input, squared loss $\ell(y, h(x)) = (y - h(x))^2$, and the class of straight lines $h(x) = ax + b$. Minimise the empirical risk by brute force over a grid of slopes and intercepts, and compare with the least-squares solution of Week 5.
+
+<PyCell id="erm" title="Minimising the training error over a class of lines" tests={String.raw`
+  import numpy as np
+  def test_risk():
+      "emp_risk(a, b) is the mean squared error of the line on the training data"
+      assert abs(emp_risk(0.3, -0.1) - np.mean((y - (0.3 * x - 0.1)) ** 2)) < 1e-12
+  def test_grid():
+      "R holds the empirical risk on the grid and (a_grid, b_grid) is its minimiser"
+      i, j = np.unravel_index(np.argmin(R), R.shape)
+      assert R.shape == (len(slopes), len(intercepts)) and a_grid == slopes[i] and b_grid == intercepts[j]
+  def test_ls():
+      "the grid minimiser is within one grid step of the least-squares line"
+      assert abs(a_grid - a_ls) <= 0.02 and abs(b_grid - b_ls) <= 0.02
+`} prompt="Write emp_risk(a, b), the mean squared error of the line ax + b on the training data. Evaluate it on the grid of slopes and intercepts, find the minimiser, and compare it with the least-squares solution from np.linalg.lstsq."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(54)
+  f = lambda x: 0.8 * np.sin(np.pi * x)
+  n, sigma = 20, 0.3
+  x = r.uniform(-1, 1, n); y = f(x) + sigma * r.normal(size=n)
+
+  def emp_risk(a, b):
+      return ...
+
+  slopes, intercepts = np.arange(-2, 2.001, 0.02), np.arange(-1, 1.001, 0.02)
+  R = np.array([[emp_risk(a, b) for b in intercepts] for a in slopes])
+  i, j = np.unravel_index(np.argmin(R), R.shape)
+  a_grid, b_grid = slopes[i], intercepts[j]
+  (a_ls, b_ls), *_ = np.linalg.lstsq(np.c_[x, np.ones(n)], y, rcond=None)
+  print(f"grid search: a = {a_grid:.2f}, b = {b_grid:.2f}, training risk {R[i, j]:.4f}")
+  print(f"least squares: a = {a_ls:.3f}, b = {b_ls:.3f}, training risk {emp_risk(a_ls, b_ls):.4f}")
+  plt.contourf(intercepts, slopes, R, 30); plt.plot(b_ls, a_ls, "w*"); plt.xlabel("intercept b"); plt.ylabel("slope a"); plt.colorbar(); plt.show()
+`}
+hint="return np.mean((y - (a * x + b)) ** 2)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(54)
+  f = lambda x: 0.8 * np.sin(np.pi * x)
+  n, sigma = 20, 0.3
+  x = r.uniform(-1, 1, n); y = f(x) + sigma * r.normal(size=n)
+
+  def emp_risk(a, b):
+      return np.mean((y - (a * x + b)) ** 2)
+
+  slopes, intercepts = np.arange(-2, 2.001, 0.02), np.arange(-1, 1.001, 0.02)
+  R = np.array([[emp_risk(a, b) for b in intercepts] for a in slopes])
+  i, j = np.unravel_index(np.argmin(R), R.shape)
+  a_grid, b_grid = slopes[i], intercepts[j]
+  (a_ls, b_ls), *_ = np.linalg.lstsq(np.c_[x, np.ones(n)], y, rcond=None)
+  print(f"grid search: a = {a_grid:.2f}, b = {b_grid:.2f}, training risk {R[i, j]:.4f}")
+  print(f"least squares: a = {a_ls:.3f}, b = {b_ls:.3f}, training risk {emp_risk(a_ls, b_ls):.4f}")
+  plt.contourf(intercepts, slopes, R, 30); plt.plot(b_ls, a_ls, "w*"); plt.xlabel("intercept b"); plt.ylabel("slope a"); plt.colorbar(); plt.show()
+`} />
+
+The grid search finds a slope of 0.74 and an intercept of 0.00, within a grid step of the least-squares line (0.750 and 0.010), with the same training risk of 0.169. For squared loss and a linear class, empirical risk minimisation *is* least squares, which is why Week 5's normal equations solve it exactly. The contour plot shows why: the empirical risk is a bowl in the parameters, with a single minimum. Most learning problems are not this kind, and later weeks need iterative optimisers, but the principle of picking the hypothesis with the lowest training loss is the same.
+
+<Step n={3} title="The generalisation gap" minutes={30} />
+
+Because the data are simulated, you can do what is impossible with real data: estimate the expected risk of a fitted model by drawing a very large fresh sample. Repeat the whole experiment on many training sets, for a straight line and for a degree-9 polynomial, and at two training-set sizes.
+
+<PyCell id="gap" title="Training error flatters, by how much?" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "results maps (degree, n) to the median training and expected risk over 200 training sets"
+      assert set(results) == {(1, 20), (9, 20), (1, 200), (9, 200)} and all(len(v) == 2 for v in results.values())
+  def test_gap():
+      "the training risk is below the expected risk for every case"
+      assert all(tr < te for tr, te in results.values())
+  def test_pattern():
+      "the gap is largest for the flexible model with little data, and shrinks with more data"
+      gap = {k: te - tr for k, (tr, te) in results.items()}
+      assert gap[(9, 20)] > gap[(1, 20)] and gap[(9, 200)] < gap[(9, 20)] / 5
+`} prompt="For each degree (1 and 9) and training size (20 and 200), draw 200 training sets, fit a polynomial by least squares (np.polyfit), and record its training risk and its expected risk, estimated on a fresh sample of 5,000 points. Store the medians over training sets in results (a few fits explode, so the mean is misleading)."
+code={String.raw`
+  x_big = r.uniform(-1, 1, 5000); y_big = f(x_big) + sigma * r.normal(size=5000)
+  results = {}
+  for deg in [1, 9]:
+      for n_tr in [20, 200]:
+          tr, te = [], []
+          for rep in range(200):
+              xt = r.uniform(-1, 1, n_tr); yt = f(xt) + sigma * r.normal(size=n_tr)
+              w = np.polyfit(xt, yt, deg)
+              tr.append(...)
+              te.append(...)
+          results[deg, n_tr] = (np.median(tr), np.median(te))
+          print(f"degree {deg}, n = {n_tr:3d}: median training risk {np.median(tr):.4f}, median expected risk {np.median(te):.4f}, worst expected risk {np.max(te):.1f}")
+`}
+hint="tr.append(np.mean((yt - np.polyval(w, xt)) ** 2)); te.append(np.mean((y_big - np.polyval(w, x_big)) ** 2))."
+solution={String.raw`
+  x_big = r.uniform(-1, 1, 5000); y_big = f(x_big) + sigma * r.normal(size=5000)
+  results = {}
+  for deg in [1, 9]:
+      for n_tr in [20, 200]:
+          tr, te = [], []
+          for rep in range(200):
+              xt = r.uniform(-1, 1, n_tr); yt = f(xt) + sigma * r.normal(size=n_tr)
+              w = np.polyfit(xt, yt, deg)
+              tr.append(np.mean((yt - np.polyval(w, xt)) ** 2))
+              te.append(np.mean((y_big - np.polyval(w, x_big)) ** 2))
+          results[deg, n_tr] = (np.median(tr), np.median(te))
+          print(f"degree {deg}, n = {n_tr:3d}: median training risk {np.median(tr):.4f}, median expected risk {np.median(te):.4f}, worst expected risk {np.max(te):.1f}")
+`} />
+
+In every case the training risk is lower than the expected risk, but by very different amounts. A straight line fitted to 20 points has a median training risk of 0.189 and an expected risk of 0.238; with 200 points the two nearly agree (0.214 and 0.220), because a two-parameter line cannot chase noise. A degree-9 polynomial on 20 points has a training risk of only 0.042, less than half the noise variance of 0.09, which is impossible for an honest predictor, and a median expected risk of 0.73, eight times the noise. Occasionally such a fit explodes between data points, with an expected risk in the thousands, which is why the medians are reported. With 200 points the same polynomial generalises well (0.086 and 0.097) and beats the line, because it can follow the sine. That answers the prediction: zero training error says nothing reassuring, and with flexible models and little data it usually means overfitting.
+
+<Step n={4} title="Losses and what they estimate" minutes={20} />
+
+The loss is a modelling choice, not a technicality: it decides which summary of the conditional distribution of $y$ the best predictor estimates.
+
+<Derivation title="Squared loss is minimised by the conditional mean">
+<div>
+
+Fix an input $\mathbf x$ and consider predicting $y$ by a constant $c$. The expected squared loss is $\mathbb E[(y - c)^2 \mid \mathbf x]$.
+
+</div>
+<div>
+
+Write $\mu = \mathbb E[y \mid \mathbf x]$. Then $\mathbb E[(y - c)^2 \mid \mathbf x] = \mathbb E[(y - \mu)^2 \mid \mathbf x] + (\mu - c)^2$, because the cross term $2(\mu - c)\,\mathbb E[y - \mu \mid \mathbf x]$ is zero.
+
+</div>
+<div>
+
+The first term does not depend on $c$, so the loss is minimised at $c = \mu$. The best possible predictor under squared loss is $h^*(\mathbf x) = \mathbb E[y \mid \mathbf x]$, and its risk, $\mathbb E[\text{Var}(y \mid \mathbf x)]$, is the irreducible noise. The same argument with absolute loss $|y - c|$ gives the conditional median, and with 0-1 loss for classification the most probable class.
+
+</div>
+</Derivation>
+
+<PyCell id="losses" title="Mean, median and skewed spike counts" tests={String.raw`
+  import numpy as np
+  def test_minimisers():
+      "c_sq and c_abs minimise the squared and absolute losses on the grid"
+      assert c_sq == cs[np.argmin(sq)] and c_abs == cs[np.argmin(ab)]
+  def test_match():
+      "they match the sample mean and median within one grid step"
+      assert abs(c_sq - counts.mean()) <= 0.01 and abs(c_abs - np.median(counts)) <= 0.5
+`} prompt="Spike counts from a bursty neuron are skewed. For each constant prediction c on the grid, compute the mean squared loss and the mean absolute loss over the counts, find each minimiser, and compare with the mean and median."
+code={String.raw`
+  counts = r.negative_binomial(2, 0.25, 2000)          # skewed, overdispersed counts
+  cs = np.arange(0, 15.001, 0.01)
+  sq = ...
+  ab = ...
+  c_sq, c_abs = cs[np.argmin(sq)], cs[np.argmin(ab)]
+  print(f"squared loss minimised at {c_sq:.2f}; sample mean {counts.mean():.3f}")
+  print(f"absolute loss minimised at {c_abs:.2f}; sample median {np.median(counts):.1f}")
+`}
+hint="sq = np.array([np.mean((counts - c) ** 2) for c in cs]); ab = np.array([np.mean(np.abs(counts - c)) for c in cs])."
+solution={String.raw`
+  counts = r.negative_binomial(2, 0.25, 2000)          # skewed, overdispersed counts
+  cs = np.arange(0, 15.001, 0.01)
+  sq = np.array([np.mean((counts - c) ** 2) for c in cs])
+  ab = np.array([np.mean(np.abs(counts - c)) for c in cs])
+  c_sq, c_abs = cs[np.argmin(sq)], cs[np.argmin(ab)]
+  print(f"squared loss minimised at {c_sq:.2f}; sample mean {counts.mean():.3f}")
+  print(f"absolute loss minimised at {c_abs:.2f}; sample median {np.median(counts):.1f}")
+`} />
+
+Squared loss is minimised at 6.16, the sample mean, and absolute loss at 5.00, the sample median. For these skewed counts the two differ by more than a spike. Neither is wrong: they answer different questions. If large errors are much worse than small ones, squared loss and the mean are right; if you want a prediction that is as often too high as too low, absolute loss and the median. For spike counts, Week 35's Poisson likelihood is a third choice, which, like squared loss, is minimised by the mean.
+
+<Bridge title="Learning in brains and machines"
+  neuro="Every model you fitted in Part 2, from GLMs of spike trains to the action kernel of the IBL mice, was an instance of this set-up. The habit that separates a convincing result from a misleading one is the same in each: judge the model on data it did not see."
+  ai="Modern machine learning is empirical risk minimisation at enormous scale. Networks with billions of parameters drive their training error close to zero, and the central puzzle of deep learning theory, which you will meet in Week 67, is why their expected risk often stays low anyway.">
+
+Fitting is easy; predicting new data is the real test.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The expected risk of a model is...", options: ["Its average loss over the whole data distribution", "Its average loss on the training data", "Its number of parameters", "The noise variance"], answer: 0, explain: "It is what you care about but cannot compute directly." },
+  { q: "Empirical risk minimisation chooses the model with the smallest...", options: ["Training error", "Test error", "Number of parameters", "Variance"], answer: 0, explain: "Within the hypothesis class." },
+  { q: "The training error of the chosen model is usually...", options: ["Lower than its expected risk", "Higher", "Equal", "Unrelated"], answer: 0, explain: "It was chosen because it fitted these data well." },
+  { q: "The generalisation gap grows with...", options: ["Model flexibility, and shrinks with more data", "More data", "Less flexibility", "Nothing"], answer: 0, explain: "Step 3." },
+  { q: "Under squared loss, the best possible predictor is...", options: ["The conditional mean of y given x", "The conditional median", "The mode", "Zero"], answer: 0, explain: "Today's derivation." },
+  { q: "Absolute loss is minimised by...", options: ["The median", "The mean", "The maximum", "The variance"], answer: 0, explain: "Robust to skew and outliers." },
+  { q: "Breiman's algorithmic culture judges a model mainly by...", options: ["Predictive accuracy on new data", "The interpretability of its parameters", "Its p-values", "Its elegance"], answer: 0, explain: "The two cultures." },
+  { q: "A decoder predicting choices from neural activity is...", options: ["A supervised learning problem", "Unsupervised learning", "Reinforcement learning", "Not machine learning"], answer: 0, explain: "Inputs paired with targets." },
+]} />
+
+<Flashcards cards={[
+  { front: "Expected risk?", back: "$R(h) = \\mathbb E[\\ell(y, h(\\mathbf x))]$ over the data distribution." },
+  { front: "Empirical risk?", back: "$\\hat R_n(h) = \\frac1n\\sum_i \\ell(y_i, h(\\mathbf x_i))$ over the training data." },
+  { front: "Generalisation gap?", back: "$R(\\hat h) - \\hat R_n(\\hat h)$: how much the training error flatters the chosen model." },
+  { front: "Best predictor under squared loss?", back: "The conditional mean $\\mathbb E[y \\mid \\mathbf x]$; its risk is the irreducible noise." },
+  { front: "Hypothesis class?", back: "The set of functions the learning algorithm can choose from." },
+]} />
+
+<Predict revisit question="A model fits 20 training examples perfectly. Will its error on new examples be zero, small, or possibly large?" />
+
+<Key title="Before you go">
+<ul>
+<li>Supervised learning: inputs, targets, a hypothesis class and a loss.</li>
+<li>Training error is an optimistic estimate of the error that matters.</li>
+<li>The optimism grows with flexibility and shrinks with data.</li>
+<li>The loss decides what the best predictor estimates: the mean, the median or the most probable class.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Breiman (2001), <em>Statistical modeling: the two cultures</em>, with its published discussion.</li>
+<li>Hastie, Tibshirani and Friedman, <em>The Elements of Statistical Learning</em>, chapters 2 and 7 (free online from the authors).</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Pick one model you fitted in Part 2. Write down its inputs, targets, hypothesis class and loss, and say how its expected risk was (or should have been) estimated. Which of Breiman's two cultures did that analysis belong to?" />

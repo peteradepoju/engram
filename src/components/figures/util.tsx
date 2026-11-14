@@ -39,3 +39,38 @@ export function poisson(lambda: number, r: () => number) {
   do { k++; p *= r(); } while (p > L && k < 1000);
   return k - 1;
 }
+
+/** Standard normal sample (Box-Muller). */
+export function gauss(r: () => number): number {
+  return Math.sqrt(-2 * Math.log(1 - r())) * Math.cos(2 * Math.PI * r());
+}
+
+/** Solve A x = b by Gaussian elimination with partial pivoting (small dense systems). */
+export function solve(A: number[][], b: number[]): number[] {
+  const n = b.length, M = A.map((row, i) => [...row, b[i]]);
+  for (let c = 0; c < n; c++) {
+    let p = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+    [M[c], M[p]] = [M[p], M[c]];
+    const d = M[c][c] || 1e-12;
+    for (let r = 0; r < n; r++) if (r !== c) { const f = M[r][c] / d; for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k]; }
+  }
+  return M.map((row, i) => row[n] / (row[i] || 1e-12));
+}
+
+/** Least-squares polynomial fit of degree deg with ridge penalty lam (x scaled to about [-1, 1] by the caller). */
+export function polyFit(xs: number[], ys: number[], deg: number, lam = 1e-8): number[] {
+  const k = deg + 1;
+  const A = Array.from({ length: k }, (): number[] => Array(k).fill(0)), b: number[] = Array(k).fill(0);
+  xs.forEach((x, i) => {
+    const p = Array.from({ length: k }, (_, j): number => x ** j);
+    for (let r = 0; r < k; r++) { b[r] += p[r] * ys[i]; for (let c = 0; c < k; c++) A[r][c] += p[r] * p[c]; }
+  });
+  for (let r = 1; r < k; r++) A[r][r] += lam;
+  A[0][0] += 1e-10;
+  return solve(A, b);
+}
+
+export function polyEval(w: number[], x: number): number {
+  return w.reduce((s, c, j) => s + c * x ** j, 0);
+}

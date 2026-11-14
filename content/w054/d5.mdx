@@ -1,0 +1,267 @@
+export const meta = {
+  title: "Learning curves: how much data is enough?",
+  intro: "Every experiment has a budget of trials, animals and recording time, so one of the most practical questions in machine learning for neuroscience is how performance grows with data. A learning curve plots training and validation error against the size of the training set. Its shape tells you whether a model is limited by bias or by variance, whether more trials would help, and roughly how many. Today you build learning curves for a population decoder, fit the power law that such curves often follow, and see that the best model can depend on how much data you have.",
+  goals: [
+    "Read bias and variance problems from the shape of a learning curve",
+    "Build the learning curve of a population decoder",
+    "Fit a power law to validation error and use it to extrapolate",
+    "Show that two models' learning curves can cross, so the best model depends on the amount of data",
+  ],
+  plan: [
+    { label: "What learning curves show", minutes: 20 },
+    { label: "A decoder's learning curve", minutes: 35 },
+    { label: "Power laws and extrapolation", minutes: 25 },
+    { label: "Curves that cross", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "hestness-2017",
+};
+
+<Predict question="A decoder's excess error (its error above the noise floor) falls with the number of training trials n as n to the power of minus one half. How many times more trials would you need to halve the excess error: 2, 4 or 10?" />
+
+<Step n={1} title="What learning curves show" minutes={20} />
+
+A learning curve has two lines. The **training error** usually rises with $n$: more points are harder to fit exactly. The **validation error** falls: more points pin the model down. Both approach the same limit, the best error the hypothesis class can achieve, which is the noise plus the model's bias.
+
+Two shapes are common. If the curves meet quickly, at an error well above what you need, the model is limited by **bias**: more data will not help, and a richer model or better features will. If there is a wide gap between them that closes slowly, the model is limited by **variance**: more data, or more regularisation, will help. In both cases the curve answers the experimenter's question of whether to record more trials before anyone records them.
+
+<Figure caption="Training and validation error against the number of training points for polynomials of different degree, averaged over 20 training sets. Change the degree and compare the shapes of the curves." credit="Interactive figure by Engram.">
+  <LearningCurve />
+</Figure>
+
+<Video id="-HJ_9HxY38g" title="Overparameterization and overfitting" by="Neuromatch Academy (Deep Learning course)" note="Neuromatch's video on how the balance between model size and data size governs overfitting, the balance a learning curve measures." />
+
+<Step n={2} title="A decoder's learning curve" minutes={35} />
+
+A population of 20 neurons is tuned to a stimulus variable $s$ between −1 and 1, each with a bell-shaped tuning curve, and fires Poisson spike counts. A ridge-regularised linear decoder reads $s$ from the counts. Build its learning curve from 25 to 1,600 training trials.
+
+<PyCell id="lc" title="How decoding error falls with trials" tests={String.raw`
+  import numpy as np
+  def test_counts():
+      "simulate returns stimuli and counts of the right shapes"
+      s_, X_ = simulate(10, np.random.default_rng(0))
+      assert s_.shape == (10,) and X_.shape == (10, N)
+  def test_curves():
+      "training error rises and validation error falls with n"
+      assert tr_err[-1] > tr_err[0] and va_err[-1] < va_err[0]
+  def test_meet():
+      "at 1,600 trials the gap between the curves is under a tenth of the validation error"
+      assert (va_err[-1] - tr_err[-1]) < 0.1 * va_err[-1]
+`} prompt="Complete decoder_fit (ridge with an unpenalised intercept on standardised counts) and, for each n, average the training and validation mean squared error over 10 repetitions."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(545)
+  N = 20
+  centres = np.linspace(-1.2, 1.2, N)
+
+  def simulate(n, g):
+      s = g.uniform(-1, 1, n)
+      rates = 2 + 8 * np.exp(-0.5 * ((s[:, None] - centres) / 0.5) ** 2)
+      return s, g.poisson(rates * 0.25)
+
+  def decoder_fit(X, s, lam=1.0):
+      mu, sd = X.mean(0), X.std(0) + 1e-6
+      A = np.c_[(X - mu) / sd, np.ones(len(s))]
+      D = np.eye(A.shape[1]); D[-1, -1] = 0
+      w = ...
+      return lambda Xn: np.c_[(Xn - mu) / sd, np.ones(len(Xn))] @ w
+
+  ns = np.array([25, 50, 100, 200, 400, 800, 1600])
+  s_va, X_va = simulate(4000, r)
+  tr_err, va_err = np.zeros(len(ns)), np.zeros(len(ns))
+  for k, n in enumerate(ns):
+      tr, va = [], []
+      for rep in range(10):
+          s_tr, X_tr = simulate(n, r)
+          pred = decoder_fit(X_tr, s_tr)
+          tr.append(...)
+          va.append(...)
+      tr_err[k], va_err[k] = np.mean(tr), np.mean(va)
+      print(f"n = {n:4d}: training MSE {tr_err[k]:.4f}, validation MSE {va_err[k]:.4f}")
+  plt.loglog(ns, tr_err, "o-", label="training"); plt.loglog(ns, va_err, "o-", label="validation"); plt.xlabel("training trials"); plt.ylabel("MSE"); plt.legend(); plt.show()
+`}
+hint="w = np.linalg.solve(A.T @ A + lam * D, A.T @ s); tr.append(np.mean((pred(X_tr) - s_tr) ** 2)); va.append(np.mean((pred(X_va) - s_va) ** 2))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(545)
+  N = 20
+  centres = np.linspace(-1.2, 1.2, N)
+
+  def simulate(n, g):
+      s = g.uniform(-1, 1, n)
+      rates = 2 + 8 * np.exp(-0.5 * ((s[:, None] - centres) / 0.5) ** 2)
+      return s, g.poisson(rates * 0.25)
+
+  def decoder_fit(X, s, lam=1.0):
+      mu, sd = X.mean(0), X.std(0) + 1e-6
+      A = np.c_[(X - mu) / sd, np.ones(len(s))]
+      D = np.eye(A.shape[1]); D[-1, -1] = 0
+      w = np.linalg.solve(A.T @ A + lam * D, A.T @ s)
+      return lambda Xn: np.c_[(Xn - mu) / sd, np.ones(len(Xn))] @ w
+
+  ns = np.array([25, 50, 100, 200, 400, 800, 1600])
+  s_va, X_va = simulate(4000, r)
+  tr_err, va_err = np.zeros(len(ns)), np.zeros(len(ns))
+  for k, n in enumerate(ns):
+      tr, va = [], []
+      for rep in range(10):
+          s_tr, X_tr = simulate(n, r)
+          pred = decoder_fit(X_tr, s_tr)
+          tr.append(np.mean((pred(X_tr) - s_tr) ** 2))
+          va.append(np.mean((pred(X_va) - s_va) ** 2))
+      tr_err[k], va_err[k] = np.mean(tr), np.mean(va)
+      print(f"n = {n:4d}: training MSE {tr_err[k]:.4f}, validation MSE {va_err[k]:.4f}")
+  plt.loglog(ns, tr_err, "o-", label="training"); plt.loglog(ns, va_err, "o-", label="validation"); plt.xlabel("training trials"); plt.ylabel("MSE"); plt.legend(); plt.show()
+`} />
+
+With 25 trials the decoder fits its training data with an error of 0.013 but makes errors of 0.17 on new trials: a wide variance gap. By 200 trials the gap has mostly closed (0.050 against 0.068), and by 1,600 the two curves have met at about 0.062. That meeting point is not the noise floor of the spike counts: it is the error of the best *linear* decoder of a population with bell-shaped tuning, so the decoder is now limited by bias. For this population, recording more than about 400 trials would barely improve a linear decoder; improving the decoder would.
+
+<Step n={3} title="Power laws and extrapolation" minutes={25} />
+
+Hestness and colleagues, today's paper, found across speech, translation and vision that validation error falls as a power law in the amount of data, $E(n) \approx a\,n^{-b} + c$, with an exponent $b$ characteristic of the problem and a floor $c$ set by noise and bias. If that holds for a decoder, a pilot experiment can predict how many trials a full one needs.
+
+<PyCell id="powerlaw" title="Fitting and testing a power law" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "the fitted curve passes within 10% of every validation error used to fit it"
+      assert np.all(np.abs(power(ns[:5], *params) - va_err[:5]) / va_err[:5] < 0.1)
+  def test_extrap():
+      "the extrapolation to 1,600 trials is within 15% of the measured error"
+      assert abs(power(1600, *params) - va_err[-1]) / va_err[-1] < 0.15
+`} prompt="Fit E(n) = a n^(-b) + c to the validation errors for the first five sizes (25 to 400 trials) with scipy.optimize.curve_fit, then compare the extrapolation to 800 and 1,600 trials with the measured errors."
+code={String.raw`
+  from scipy.optimize import curve_fit
+
+  def power(n, a, b, c):
+      return ...
+
+  params, _ = curve_fit(power, ns[:5], va_err[:5], p0=[1.0, 0.5, 0.01], bounds=([0, 0, 0], [100, 3, 1]))
+  a, b, c = params
+  print(f"fit: E(n) = {a:.2f} n^(-{b:.2f}) + {c:.4f}")
+  for n_, e in zip(ns[5:], va_err[5:]):
+      print(f"n = {n_}: predicted {power(n_, *params):.4f}, measured {e:.4f}")
+  print(f"trials needed to halve the excess error from n = 400: about {400 * 2 ** (1 / b):.0f}")
+`}
+hint="return a * n ** (-b) + c."
+solution={String.raw`
+  from scipy.optimize import curve_fit
+
+  def power(n, a, b, c):
+      return a * n ** (-b) + c
+
+  params, _ = curve_fit(power, ns[:5], va_err[:5], p0=[1.0, 0.5, 0.01], bounds=([0, 0, 0], [100, 3, 1]))
+  a, b, c = params
+  print(f"fit: E(n) = {a:.2f} n^(-{b:.2f}) + {c:.4f}")
+  for n_, e in zip(ns[5:], va_err[5:]):
+      print(f"n = {n_}: predicted {power(n_, *params):.4f}, measured {e:.4f}")
+  print(f"trials needed to halve the excess error from n = 400: about {400 * 2 ** (1 / b):.0f}")
+`} />
+
+Fitted to the first five sizes only, the power law $E(n) = 10.9\,n^{-1.42} + 0.062$ predicts errors of 0.0630 and 0.0625 at 800 and 1,600 trials, against measured values of 0.0632 and 0.0622: a pilot of 400 trials predicted the rest of the curve almost exactly. The fitted floor, 0.062, is the bias limit seen in Step 2, and the exponent of 1.42 says the excess error shrinks fast, so that halving it from 400 trials needs only about 650. For the prediction, with an exponent of one half, halving the excess error needs $2^{1/0.5} = 4$ times the data; slow exponents of this kind are typical of hard problems such as image and speech recognition, which is why their models need so much data.
+
+<Step n={4} title="Curves that cross" minutes={25} />
+
+Is the linear decoder the best choice? The stimulus is coded by bell-shaped tuning curves, so the relation between counts and $s$ is not linear, and a flexible decoder could in principle do better. Compare it with a $k$-nearest-neighbour decoder, which averages the stimuli of the $k$ training trials whose population vectors are closest, across training-set sizes.
+
+<PyCell id="cross" title="Linear against nearest-neighbour decoding" tests={String.raw`
+  import numpy as np
+  def test_knn():
+      "knn_decode averages the stimuli of the k nearest training trials"
+      Xa = np.array([[0.0], [1.0], [2.0], [10.0]]); sa = np.array([0.0, 1.0, 2.0, 3.0])
+      assert np.allclose(knn_decode(Xa, sa, np.array([[0.9]]), 2), [0.5])
+  def test_cross():
+      "the linear decoder wins with 25 trials and the nearest-neighbour decoder wins with 1,600"
+      assert lin[0] < knn[0] and knn[-1] < lin[-1]
+`} prompt="Write knn_decode(X_tr, s_tr, X_te, k) with Euclidean distances on standardised counts. Compare its validation MSE (k = 15) with the linear decoder's at 25, 100, 400 and 1,600 trials, averaged over 5 training sets, using 1,000 validation trials."
+code={String.raw`
+  def knn_decode(X_tr, s_tr, X_te, k):
+      mu, sd = X_tr.mean(0), X_tr.std(0) + 1e-6
+      A, B = (X_tr - mu) / sd, (X_te - mu) / sd
+      d = (B ** 2).sum(1)[:, None] - 2 * B @ A.T + (A ** 2).sum(1)[None, :]
+      nearest = np.argsort(d, axis=1)[:, :k]
+      return ...
+
+  sizes = [25, 100, 400, 1600]
+  s_v, X_v = s_va[:1000], X_va[:1000]
+  lin, knn = np.zeros(4), np.zeros(4)
+  for k_, n in enumerate(sizes):
+      l_, k_n = [], []
+      for rep in range(5):
+          s_tr, X_tr = simulate(n, r)
+          l_.append(np.mean((decoder_fit(X_tr, s_tr)(X_v) - s_v) ** 2))
+          k_n.append(np.mean((knn_decode(X_tr, s_tr, X_v, 15) - s_v) ** 2))
+      lin[k_], knn[k_] = np.mean(l_), np.mean(k_n)
+      print(f"n = {n:4d}: linear {lin[k_]:.4f}, nearest neighbours {knn[k_]:.4f}")
+`}
+hint="return s_tr[nearest].mean(axis=1)."
+solution={String.raw`
+  def knn_decode(X_tr, s_tr, X_te, k):
+      mu, sd = X_tr.mean(0), X_tr.std(0) + 1e-6
+      A, B = (X_tr - mu) / sd, (X_te - mu) / sd
+      d = (B ** 2).sum(1)[:, None] - 2 * B @ A.T + (A ** 2).sum(1)[None, :]
+      nearest = np.argsort(d, axis=1)[:, :k]
+      return s_tr[nearest].mean(axis=1)
+
+  sizes = [25, 100, 400, 1600]
+  s_v, X_v = s_va[:1000], X_va[:1000]
+  lin, knn = np.zeros(4), np.zeros(4)
+  for k_, n in enumerate(sizes):
+      l_, k_n = [], []
+      for rep in range(5):
+          s_tr, X_tr = simulate(n, r)
+          l_.append(np.mean((decoder_fit(X_tr, s_tr)(X_v) - s_v) ** 2))
+          k_n.append(np.mean((knn_decode(X_tr, s_tr, X_v, 15) - s_v) ** 2))
+      lin[k_], knn[k_] = np.mean(l_), np.mean(k_n)
+      print(f"n = {n:4d}: linear {lin[k_]:.4f}, nearest neighbours {knn[k_]:.4f}")
+`} />
+
+With 25 training trials the linear decoder wins clearly (error 0.134 against 0.190): the nearest-neighbour decoder has too few examples to average over in 20 dimensions. From 100 trials onwards the order reverses, and at 1,600 the nearest-neighbour decoder's error (0.035) is little more than half the linear decoder's (0.059), because it can follow the nonlinear relation between counts and stimulus that the linear decoder cannot. The curves cross. So "which decoder is best?" has no answer without "with how much data?". Perlich and colleagues found the same for logistic regression and decision trees across dozens of real datasets, and it is a reason to report learning curves rather than a single comparison at one size.
+
+<Bridge title="Data budgets in brains and machines"
+  neuro="Learning curves turn the question of how many trials, neurons or animals to record into an empirical one: fit the curve on pilot data and extrapolate. The same logic applies to neurons: decoding accuracy as a function of the number of neurons recorded often saturates, which tells you about redundancy and correlated noise in the code (Week 36)."
+  ai="Power-law learning curves underlie the scaling laws that guide how large language models are trained: they predict how loss falls with data, parameters and compute, and so how to spend a budget. Whether such laws continue indefinitely, and what sets their exponents, is an open question.">
+
+Measure how performance grows with data before deciding how much more to collect.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "On a learning curve, training error usually...", options: ["Rises with the number of training examples", "Falls", "Is constant", "Oscillates"], answer: 0, explain: "More points are harder to fit exactly." },
+  { q: "Curves that meet quickly at a high error indicate...", options: ["High bias: more data will not help", "High variance", "A perfect model", "Leakage"], answer: 0, explain: "Use a richer model or better features." },
+  { q: "A wide gap that closes slowly indicates...", options: ["High variance: more data will help", "High bias", "No noise", "Underfitting"], answer: 0, explain: "Or more regularisation." },
+  { q: "If excess error falls as n to the minus one half, halving it needs...", options: ["Four times the data", "Twice the data", "Ten times the data", "Half the data"], answer: 0, explain: "(1/2)^(-2) = 4." },
+  { q: "The floor c in a power-law fit represents...", options: ["Noise plus the model's bias", "The training error", "Zero", "The number of parameters"], answer: 0, explain: "What infinite data would still leave." },
+  { q: "Two models' learning curves can cross because...", options: ["Flexible models need more data but can reach lower error", "Errors are random", "Training error rises", "Of leakage"], answer: 0, explain: "Step 4." },
+  { q: "Hestness and colleagues found validation error falls with data as...", options: ["A power law", "An exponential", "Linearly", "Not at all"], answer: 0, explain: "Across many domains." },
+  { q: "Extrapolating a learning curve is useful for...", options: ["Deciding how many trials an experiment needs", "Choosing a random seed", "Avoiding validation", "Fitting parameters"], answer: 0, explain: "From pilot data." },
+]} />
+
+<Flashcards cards={[
+  { front: "Learning curve?", back: "Training and validation error plotted against training-set size." },
+  { front: "High-bias learning curve?", back: "Curves converge quickly at a high error; more data does not help." },
+  { front: "High-variance learning curve?", back: "Large gap between training and validation error that closes slowly; more data helps." },
+  { front: "Power-law learning curve?", back: "$E(n) \\approx a n^{-b} + c$; b sets how fast more data helps, c the floor." },
+  { front: "Why can the best model depend on n?", back: "Flexible models have lower bias but higher variance, so they need more data before they overtake simpler ones." },
+]} />
+
+<Predict revisit question="If excess error falls as n to the minus one half, how many times more trials halve it?" />
+
+<Key title="Before you go">
+<ul>
+<li>Learning curves diagnose bias against variance and answer whether more data will help.</li>
+<li>A linear population decoder's learning curve converges within a few hundred trials.</li>
+<li>A power law fitted to a pilot can predict the error at larger sizes.</li>
+<li>Which model is best depends on how much data you have.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Hestness and colleagues (2017), <em>Deep learning scaling is predictable, empirically</em>.</li>
+<li>Perlich, Provost and Simonoff (2003), <em>Tree induction vs. logistic regression: a learning-curve analysis</em>, Journal of Machine Learning Research 4, 211 to 255, on learning curves that cross.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Plan a decoding experiment in a system you care about. Sketch the learning curve you expect, say whether you think the decoder will be limited by bias or variance, and describe the pilot you would run to estimate how many trials the full experiment needs." />

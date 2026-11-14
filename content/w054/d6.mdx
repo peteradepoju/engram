@@ -1,0 +1,236 @@
+export const meta = {
+  title: "Forge: Week 54 challenge, quiz and deep read",
+  intro: "This week laid the foundation for all of Part 3: learning is minimising a loss on training data in the hope of a low loss on new data; the gap between the two grows with flexibility and shrinks with data; test error splits into noise, bias and variance; honest evaluation needs separate data for fitting, choosing and reporting; and learning curves show how much data a model needs. Today's challenge puts these together in a complete model-selection pipeline, then tests Breiman's claim that flexible algorithmic models can beat interpretable data models at prediction. Then the quiz, and a critique of Breiman's essay.",
+  goals: [
+    "Run a complete train, validate and test pipeline that chooses two hyperparameters jointly",
+    "Compare an interpretable model with a flexible one at two data sizes",
+    "Prove why the minimum training error is an optimistic estimate",
+    "Critique Breiman's two cultures from the standpoint of neuroscience",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "breiman-2001",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. A model has bias squared 0.02, variance 0.05 and noise variance 0.1. What is its expected test MSE?
+2. You report the best of 20 chance-level classifiers on 100 test trials. Roughly what accuracy? (The standard deviation of one accuracy is 0.05, and the expected maximum of 20 standard normals is about 1.87.)
+3. Excess error falls as $n^{-0.25}$. How many times more data halve it?
+
+<PyCell code={String.raw`
+  print("1.", 0.02 + 0.05 + 0.1)
+  print("2.", round(0.5 + 0.05 * 1.87, 3))
+  print("3.", 2 ** (1 / 0.25), "times")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: a complete pipeline.** A neuron's response depends nonlinearly on one stimulus variable. You have 150 trials. Fit polynomial encoding models with a ridge penalty, choosing the degree (1 to 10) and the penalty jointly on a validation set of 50 trials, refit on all 150 with the chosen pair, and report the test error once on 5,000 new trials. Compare with the best pair you could have found by peeking at the test set, and with the optimistic validation error of your chosen pair.
+
+<PyCell id="partA" title="Part A: two hyperparameters, chosen honestly" tests={String.raw`
+  import numpy as np
+  def test_grid():
+      "val_err has one entry per degree and penalty"
+      assert val_err.shape == (10, len(lams))
+  def test_choice():
+      "the chosen pair minimises the validation error"
+      i, j = np.unravel_index(np.argmin(val_err), val_err.shape)
+      assert (best_deg, best_lam) == (degs[i], lams[j])
+  def test_honest():
+      "the honest test error is within 15% of the best achievable, and the validation error of the chosen pair is lower than its test error"
+      assert honest_err <= 1.15 * oracle_err and val_err.min() < honest_err
+`} prompt="For every degree and penalty, fit ridge (on scaled polynomial features, intercept unpenalised) to the 100 training trials and record the validation MSE. Refit the chosen pair on all 150 trials and evaluate once on the test set. Also compute oracle_err, the lowest test error over the whole grid when refitting on all 150."
+code={String.raw`
+  import numpy as np
+  r = np.random.default_rng(546)
+  f = lambda s: 3 * np.exp(-((s - 0.3) / 0.35) ** 2) + 1          # a tuning curve
+  s_all = r.uniform(-1, 1, 150); y_all = f(s_all) + 0.5 * r.normal(size=150)
+  s_te = r.uniform(-1, 1, 5000); y_te = f(s_te) + 0.5 * r.normal(size=5000)
+  tr, va = np.arange(100), np.arange(100, 150)
+
+  def feats(s, deg):
+      return np.vander(s, deg + 1, increasing=True)
+
+  def fit(s, y, deg, lam):
+      A = feats(s, deg); D = np.eye(deg + 1); D[0, 0] = 0
+      return np.linalg.solve(A.T @ A + lam * D, A.T @ y)
+
+  mse = lambda s, y, w, deg: np.mean((y - feats(s, deg) @ w) ** 2)
+  degs, lams = np.arange(1, 11), np.logspace(-6, 1, 15)
+  val_err = np.zeros((10, len(lams)))
+  for i, deg in enumerate(degs):
+      for j, lam in enumerate(lams):
+          val_err[i, j] = ...
+  i, j = np.unravel_index(np.argmin(val_err), val_err.shape)
+  best_deg, best_lam = degs[i], lams[j]
+  honest_err = ...
+  oracle_err = min(mse(s_te, y_te, fit(s_all, y_all, d, l), d) for d in degs for l in lams)
+  print(f"chosen: degree {best_deg}, lambda {best_lam:.1e}; validation MSE {val_err.min():.3f}")
+  print(f"honest test MSE {honest_err:.3f}; best possible on the grid {oracle_err:.3f}; noise floor 0.25")
+`}
+hint="val_err[i, j] = mse(s_all[va], y_all[va], fit(s_all[tr], y_all[tr], deg, lam), deg); honest_err = mse(s_te, y_te, fit(s_all, y_all, best_deg, best_lam), best_deg)."
+solution={String.raw`
+  import numpy as np
+  r = np.random.default_rng(546)
+  f = lambda s: 3 * np.exp(-((s - 0.3) / 0.35) ** 2) + 1          # a tuning curve
+  s_all = r.uniform(-1, 1, 150); y_all = f(s_all) + 0.5 * r.normal(size=150)
+  s_te = r.uniform(-1, 1, 5000); y_te = f(s_te) + 0.5 * r.normal(size=5000)
+  tr, va = np.arange(100), np.arange(100, 150)
+
+  def feats(s, deg):
+      return np.vander(s, deg + 1, increasing=True)
+
+  def fit(s, y, deg, lam):
+      A = feats(s, deg); D = np.eye(deg + 1); D[0, 0] = 0
+      return np.linalg.solve(A.T @ A + lam * D, A.T @ y)
+
+  mse = lambda s, y, w, deg: np.mean((y - feats(s, deg) @ w) ** 2)
+  degs, lams = np.arange(1, 11), np.logspace(-6, 1, 15)
+  val_err = np.zeros((10, len(lams)))
+  for i, deg in enumerate(degs):
+      for j, lam in enumerate(lams):
+          val_err[i, j] = mse(s_all[va], y_all[va], fit(s_all[tr], y_all[tr], deg, lam), deg)
+  i, j = np.unravel_index(np.argmin(val_err), val_err.shape)
+  best_deg, best_lam = degs[i], lams[j]
+  honest_err = mse(s_te, y_te, fit(s_all, y_all, best_deg, best_lam), best_deg)
+  oracle_err = min(mse(s_te, y_te, fit(s_all, y_all, d, l), d) for d in degs for l in lams)
+  print(f"chosen: degree {best_deg}, lambda {best_lam:.1e}; validation MSE {val_err.min():.3f}")
+  print(f"honest test MSE {honest_err:.3f}; best possible on the grid {oracle_err:.3f}; noise floor 0.25")
+`} />
+
+The validation set chose a degree-8 polynomial with a tiny penalty, with a validation MSE of 0.246, slightly *below* the noise floor of 0.25 that no model can truly beat: the first sign that it was selected partly for luck among 150 candidates. Refitted on all 150 trials, it scores 0.262 on the test set, within 0.001 of the best pair on the whole grid (0.261), which you could only have found by peeking. The honest pipeline lost almost nothing here because 150 trials are plenty for a smooth one-dimensional tuning curve; with fewer trials, the chosen pair would vary more between splits and cross-validation would be safer (Week 59).
+
+**Part B: the two cultures.** A behavioural variable depends on two neural signals through an interaction that a linear model cannot represent. Compare a linear regression (the data-modelling culture: interpretable coefficients) with a 10-nearest-neighbour regressor (the algorithmic culture: no coefficients at all) at 25 and at 2,000 training trials.
+
+<PyCell id="partB" title="Part B: interpretable or accurate?" tests={String.raw`
+  import numpy as np
+  def test_small():
+      "with 25 trials the linear model is more accurate"
+      assert results[25][0] < results[25][1]
+  def test_large():
+      "with 2,000 trials the nearest-neighbour model is clearly more accurate"
+      assert results[2000][1] < 0.8 * results[2000][0]
+`} prompt="For each training size, average over 10 training sets the test MSE (on 2,000 test trials) of a linear regression with intercept and of 10-nearest-neighbour regression. Store (linear, knn) in results[n]."
+code={String.raw`
+  g = np.random.default_rng(547)
+  truth = lambda X: 0.5 * X[:, 0] * X[:, 1] + X[:, 0]
+  def draw(n):
+      X = g.normal(size=(n, 2)); return X, truth(X) + 0.5 * g.normal(size=n)
+  X_te, y_te2 = draw(2000)
+
+  def knn(X_tr, y_tr, X_q, k=10):
+      d = ((X_q[:, None, :] - X_tr[None, :, :]) ** 2).sum(-1)
+      return y_tr[np.argsort(d, axis=1)[:, :k]].mean(1)
+
+  results = {}
+  for n in [25, 2000]:
+      lin, nn = [], []
+      for rep in range(10):
+          X_tr, y_tr = draw(n)
+          w, *_ = np.linalg.lstsq(np.c_[X_tr, np.ones(n)], y_tr, rcond=None)
+          lin.append(...)
+          nn.append(...)
+      results[n] = (np.mean(lin), np.mean(nn))
+      print(f"n = {n:4d}: linear model {results[n][0]:.3f}, 10 nearest neighbours {results[n][1]:.3f}")
+  print("linear coefficients (last fit):", np.round(w, 2))
+`}
+hint="lin.append(np.mean((np.c_[X_te, np.ones(2000)] @ w - y_te2) ** 2)); nn.append(np.mean((knn(X_tr, y_tr, X_te) - y_te2) ** 2))."
+solution={String.raw`
+  g = np.random.default_rng(547)
+  truth = lambda X: 0.5 * X[:, 0] * X[:, 1] + X[:, 0]
+  def draw(n):
+      X = g.normal(size=(n, 2)); return X, truth(X) + 0.5 * g.normal(size=n)
+  X_te, y_te2 = draw(2000)
+
+  def knn(X_tr, y_tr, X_q, k=10):
+      d = ((X_q[:, None, :] - X_tr[None, :, :]) ** 2).sum(-1)
+      return y_tr[np.argsort(d, axis=1)[:, :k]].mean(1)
+
+  results = {}
+  for n in [25, 2000]:
+      lin, nn = [], []
+      for rep in range(10):
+          X_tr, y_tr = draw(n)
+          w, *_ = np.linalg.lstsq(np.c_[X_tr, np.ones(n)], y_tr, rcond=None)
+          lin.append(np.mean((np.c_[X_te, np.ones(2000)] @ w - y_te2) ** 2))
+          nn.append(np.mean((knn(X_tr, y_tr, X_te) - y_te2) ** 2))
+      results[n] = (np.mean(lin), np.mean(nn))
+      print(f"n = {n:4d}: linear model {results[n][0]:.3f}, 10 nearest neighbours {results[n][1]:.3f}")
+  print("linear coefficients (last fit):", np.round(w, 2))
+`} />
+
+With 25 training trials the linear model is more accurate (test MSE 0.64 against 0.89): ten neighbours out of 25 average over most of the input space, so the nearest-neighbour model is too smooth and too noisy at once. With 2,000 trials the order reverses decisively, 0.29 against 0.49, because the nearest-neighbour model captures the interaction between the two signals, which the linear model cannot represent at all. The linear coefficients, about 1.0 for the first signal and 0 for the second, are perfectly interpretable and describe a world in which the second signal does not matter, while in fact its effect is as large as the first's for many trials, with a sign that depends on the first. Breiman's point exactly: an interpretable model that predicts badly can tell a confident and wrong story. The fix is not always to give up interpretation, but to check it against a flexible model's predictions, and here to add the interaction term the residuals point to.
+
+**Part C (written).** Answer in your journal. First, in Part A, explain why the validation error of the chosen pair is lower than its test error, and what you would change if you had only 60 trials in total. Second, in Part B, the linear model's coefficients are interpretable but describe a relation that does not exist in the data. Write two sentences on when a neuroscientist should prefer the accurate model and when the interpretable one, and one sentence on how you could get both.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. Why the chosen model's training error is optimistic" task="For any fixed hypothesis $h$, show that $\mathbb E[\hat R_n(h)] = R(h)$. Then show that for the empirical risk minimiser $\hat h$ over a class $\mathcal H$, $\mathbb E[\hat R_n(\hat h)] \le \min_{h \in \mathcal H} R(h)$.">
+
+For fixed $h$, $\hat R_n(h)$ is an average of $n$ independent copies of $\ell(y, h(\mathbf x))$, each with expectation $R(h)$, so $\mathbb E[\hat R_n(h)] = R(h)$: the training error of a model chosen *before* seeing the data is unbiased.
+
+The minimiser satisfies $\hat R_n(\hat h) \le \hat R_n(h)$ for every $h \in \mathcal H$, on every dataset. Taking expectations, $\mathbb E[\hat R_n(\hat h)] \le \mathbb E[\hat R_n(h)] = R(h)$ for every $h$, so $\mathbb E[\hat R_n(\hat h)] \le \min_h R(h)$.
+
+And since $\hat h \in \mathcal H$, its expected risk is at least $\min_h R(h)$. So on average the minimiser's training error is below the best achievable risk, which is in turn below the minimiser's own risk: the training error is optimistic twice over. The same argument applies to a validation error used for selection.
+
+</Prove>
+
+<Prove title="2. Bias and variance of a one-dimensional ridge estimate" task="With $y_i = wx_i + \varepsilon_i$, fixed inputs, noise variance $\sigma^2$ and $S = \sum_i x_i^2$, the ridge estimate is $\hat w = \frac{\sum_i x_iy_i}{S + \lambda}$. Show that its bias is $-\frac{\lambda}{S + \lambda}w$ and its variance $\frac{\sigma^2 S}{(S + \lambda)^2}$, and that the mean squared error is minimised at $\lambda = \sigma^2/w^2$.">
+
+$\mathbb E[\hat w] = \frac{\sum_i x_i\,wx_i}{S + \lambda} = \frac{S}{S + \lambda}w$, so the bias is $\frac{S}{S + \lambda}w - w = -\frac{\lambda}{S + \lambda}w$.
+
+$\text{Var}(\hat w) = \frac{\sum_i x_i^2\sigma^2}{(S + \lambda)^2} = \frac{\sigma^2S}{(S + \lambda)^2}$.
+
+The mean squared error is $\frac{\lambda^2w^2 + \sigma^2S}{(S + \lambda)^2}$. Its derivative with respect to $\lambda$ has numerator $2\lambda w^2(S + \lambda) - 2(\lambda^2w^2 + \sigma^2S) = 2S(\lambda w^2 - \sigma^2)$, which is zero at $\lambda = \sigma^2/w^2$: penalise more when the noise is large relative to the effect. Any $\lambda$ between zero and twice this value beats least squares, so some shrinkage always helps.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 54 quiz (15 questions)" questions={[
+  { q: "Expected risk is...", options: ["The average loss over the data distribution", "The training error", "The validation error", "The number of parameters"], answer: 0, explain: "Day 1." },
+  { q: "Under squared loss the best predictor is...", options: ["The conditional mean", "The conditional median", "The mode", "A constant"], answer: 0, explain: "Day 1." },
+  { q: "The generalisation gap is largest for...", options: ["Flexible models with little data", "Simple models with much data", "Any model with much data", "Constant models"], answer: 0, explain: "Day 1." },
+  { q: "A test R² below zero means...", options: ["Worse than predicting the mean", "Perfect prediction", "Underfitting only", "A coding error"], answer: 0, explain: "Day 2." },
+  { q: "Ridge regression penalises...", options: ["The squared size of the weights", "The number of features", "The intercept", "The residuals' absolute values"], answer: 0, explain: "Day 2." },
+  { q: "Hyperparameters should be chosen on...", options: ["Validation data", "Test data", "Training error", "Intuition"], answer: 0, explain: "Day 3." },
+  { q: "Comparing many models on one test set...", options: ["Inflates the reported score of the best", "Is unbiased", "Deflates scores", "Has no effect"], answer: 0, explain: "Day 3." },
+  { q: "Random splits of slowly drifting data can...", options: ["Leak information through time", "Remove drift", "Be pessimistic", "Avoid overfitting"], answer: 0, explain: "Day 3." },
+  { q: "Expected squared error decomposes into...", options: ["Noise, bias squared and variance", "Bias and noise only", "Training and test error", "Mean and median"], answer: 0, explain: "Day 4." },
+  { q: "Bagging mainly reduces...", options: ["Variance", "Bias", "Noise", "Training time"], answer: 0, explain: "Day 4." },
+  { q: "Increasing λ in ridge usually...", options: ["Raises bias and lowers variance", "Lowers both", "Raises both", "Has no effect"], answer: 0, explain: "Day 4." },
+  { q: "Learning curves that meet quickly at a high error indicate...", options: ["High bias", "High variance", "Leakage", "No noise"], answer: 0, explain: "Day 5." },
+  { q: "A power-law learning curve E = a n^(-b) + c has a floor set by...", options: ["Noise and bias", "The training error", "Variance", "The exponent"], answer: 0, explain: "Day 5." },
+  { q: "Learning curves of two models can cross because...", options: ["Flexible models need more data to overtake simple ones", "Errors are random", "Of leakage", "Training error rises"], answer: 0, explain: "Day 5." },
+  { q: "Breiman's algorithmic culture judges models by...", options: ["Predictive accuracy", "Interpretability of parameters", "Goodness-of-fit tests", "p values"], answer: 0, explain: "The deep read." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Breiman (2001) its third pass and write your critique under the five headings. Read the published discussion too (by Cox, Efron, Hoadley and Parzen), and Breiman's rejoinder. Focus on one question: **should neuroscience judge its models mainly by how well they predict?** Consider what an encoding model with excellent predictions but uninterpretable features tells you about a neuron; whether a mechanistic model that predicts worse can still be the better scientific model; how the Week 51 project combined both cultures (interpretable models compared by predictive evidence); what has changed since 2001, when deep networks have become both the best predictors of neural data and objects of interpretation in their own right; and whether Breiman's sharp division survives. End with your own rule for when prediction should be the deciding test.
+
+<Callout kind="research">
+
+Learning curves are almost never reported in decoding studies, though they answer the question every experimenter asks: would more trials help? Pick a public dataset you can reach from the Colab notebook (the Steinmetz or IBL data, or the Allen Brain Observatory), fit a decoder of a task variable at several training-set sizes, fit a power law, and estimate the number of trials needed to reach a target accuracy. Compare the exponent between brain areas: does it say something about how each area encodes the variable?
+
+</Callout>
+
+<Key title="Week 54 review checklist">
+<ul>
+<li>I can state a supervised learning problem and distinguish empirical from expected risk.</li>
+<li>I can diagnose underfitting and overfitting from training and test error.</li>
+<li>I can run an honest train, validate and test pipeline, and recognise leakage through reuse and dependence.</li>
+<li>I can derive and measure the bias-variance decomposition.</li>
+<li>I can build, read and extrapolate a learning curve.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then write a paragraph placing your own research interest in one of Breiman's two cultures, and say what you would gain from borrowing the habits of the other." />

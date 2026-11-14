@@ -241,3 +241,8 @@ export { SwitchCurve } from "./switch-curve";
 export { ErrorSignature } from "./error-signature";
 export { PartTwoMap } from "./part-two-map";
 export { YearOneThreads } from "./year-one-threads";
+export { EmpiricalRisk } from "./empirical-risk";
+export { PolyFit } from "./poly-fit";
+export { TestReuse } from "./test-reuse";
+export { BiasVarianceFits } from "./bias-variance-fits";
+export { LearningCurve } from "./learning-curve";

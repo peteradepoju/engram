@@ -1,0 +1,264 @@
+export const meta = {
+  title: "Training, validation and test sets",
+  intro: "Yesterday you chose a polynomial degree and a ridge penalty by looking at the test error, which is cheating: the test set then becomes part of the fitting, and the error it reports is no longer an honest estimate. Today you learn the discipline that fixes this. Data are split three ways, each with one job: the training set fits parameters, the validation set chooses between models and hyperparameters, and the test set, touched once, reports the result. You will measure how much peeking at a test set inflates performance, and see that how the data are split matters as much as whether they are split.",
+  goals: [
+    "Explain the separate roles of training, validation and test data",
+    "Choose a hyperparameter on a validation set and report an untouched test score",
+    "Quantify the optimism from selecting the best of many models on one test set",
+    "Show how a random split of autocorrelated data leaks information, and fix it with a blocked split",
+  ],
+  plan: [
+    { label: "Three sets, three jobs", minutes: 20 },
+    { label: "Choosing a hyperparameter honestly", minutes: 30 },
+    { label: "The price of peeking", minutes: 30 },
+    { label: "Splits that respect structure", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "recht-2019",
+};
+
+<Predict question="You train 100 decoders that are all truly useless, at chance on new data, evaluate each on the same 200-trial test set, and report the best. What accuracy will you most likely report: about 50%, about 58%, or about 75%?" />
+
+<Step n={1} title="Three sets, three jobs" minutes={20} />
+
+A learning procedure usually has two levels. **Parameters** (the weights of a regression) are fitted by minimising training loss. **Hyperparameters** (the degree of a polynomial, the ridge penalty, the number of features, even the choice between model families) are chosen by the analyst, and choosing them is also a kind of fitting. Each level needs data it was not fitted to:
+
+1. The **training set** fits the parameters, for each candidate setting of the hyperparameters.
+2. The **validation set** compares those candidates and picks one.
+3. The **test set** is used once, at the very end, to estimate how well the chosen model generalises.
+
+Once a model has been chosen by its validation score, that score is optimistic for the same reason that training error is: it was the best of several noisy estimates. Only the untouched test set gives an unbiased estimate. When data are scarce, the validation set can be replaced by cross-validation within the training data (Week 59), but the principle stands. Recht and colleagues, today's paper, tested it at scale by collecting a new test set for ImageNet, the benchmark that drove a decade of computer vision.
+
+<Video id="JokSIuPs-ys" title="Train and test" by="Neuromatch Academy (Deep Learning course)" note="Neuromatch's short video on splitting data into training and test sets before fitting a network, the first step of today's discipline." />
+
+<Step n={2} title="Choosing a hyperparameter honestly" minutes={30} />
+
+Return to yesterday's encoding model with 55 stimulus pixels, now with 120 trials. Hold out 40 of them as a validation set, choose the ridge penalty on it, refit on all 120, and evaluate once on a separate test set.
+
+<PyCell id="holdout" title="Train, validate, test" tests={String.raw`
+  import numpy as np
+  def test_split():
+      "the training and validation trials are disjoint and together make all 120"
+      assert len(set(tr_idx) & set(va_idx)) == 0 and len(tr_idx) + len(va_idx) == 120
+  def test_choice():
+      "lam_val maximises validation R² over the grid"
+      assert lam_val == lams[np.argmax(val_r2)]
+  def honest_r2():
+      "the honest test R² is within 0.1 of the best achievable on the grid"
+      assert honest_r2 > best_possible - 0.1 and honest_r2 <= best_possible + 1e-9
+  def test_spread():
+      "lam_choices holds the lambda chosen on 50 different random splits"
+      assert len(lam_choices) == 50 and len(set(lam_choices)) > 1
+`} prompt="Split the 120 trials at random into 80 for training and 40 for validation. For each lambda, fit ridge on the training trials and record the validation R². Refit on all 120 trials with the chosen lambda and compute the test R² once. Then repeat the split 50 times and record which lambda each split chooses."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(543)
+  P = 55
+  w_true = np.zeros(P); w_true[:5] = [1.0, 0.8, -0.6, 0.5, -0.4]
+  X = r.normal(size=(120, P)); y = X @ w_true + r.normal(size=120)
+  X_te = r.normal(size=(5000, P)); y_te = X_te @ w_true + r.normal(size=5000)
+  A, A_te = np.c_[X, np.ones(120)], np.c_[X_te, np.ones(5000)]
+
+  def ridge_fit(A, y, lam):
+      D = np.eye(A.shape[1]); D[-1, -1] = 0
+      return np.linalg.solve(A.T @ A + lam * D, A.T @ y)
+
+  def r2(y, yhat):
+      return 1 - np.sum((y - yhat) ** 2) / np.sum((y - y.mean()) ** 2)
+
+  lams = np.logspace(-2, 3, 26)
+  perm = r.permutation(120); tr_idx, va_idx = perm[:80], perm[80:]
+  val_r2 = ...
+  lam_val = lams[np.argmax(val_r2)]
+  honest_r2 = r2(y_te, A_te @ ridge_fit(A, y, lam_val))
+  best_possible = max(r2(y_te, A_te @ ridge_fit(A, y, lam)) for lam in lams)
+  lam_choices = []
+  for rep in range(50):
+      p_ = r.permutation(120); t_, v_ = p_[:80], p_[80:]
+      lam_choices.append(...)
+  print(f"chosen lambda {lam_val:.2f}: honest test R² {honest_r2:.3f}; best possible on the grid {best_possible:.3f}")
+  print(f"lambda chosen across 50 splits: median {np.median(lam_choices):.1f}, range {min(lam_choices):.2f} to {max(lam_choices):.0f}")
+`}
+hint="val_r2 = np.array([r2(y[va_idx], A[va_idx] @ ridge_fit(A[tr_idx], y[tr_idx], lam)) for lam in lams]); in the loop, the same with t_ and v_, appending lams[np.argmax(...)]."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(543)
+  P = 55
+  w_true = np.zeros(P); w_true[:5] = [1.0, 0.8, -0.6, 0.5, -0.4]
+  X = r.normal(size=(120, P)); y = X @ w_true + r.normal(size=120)
+  X_te = r.normal(size=(5000, P)); y_te = X_te @ w_true + r.normal(size=5000)
+  A, A_te = np.c_[X, np.ones(120)], np.c_[X_te, np.ones(5000)]
+
+  def ridge_fit(A, y, lam):
+      D = np.eye(A.shape[1]); D[-1, -1] = 0
+      return np.linalg.solve(A.T @ A + lam * D, A.T @ y)
+
+  def r2(y, yhat):
+      return 1 - np.sum((y - yhat) ** 2) / np.sum((y - y.mean()) ** 2)
+
+  lams = np.logspace(-2, 3, 26)
+  perm = r.permutation(120); tr_idx, va_idx = perm[:80], perm[80:]
+  val_r2 = np.array([r2(y[va_idx], A[va_idx] @ ridge_fit(A[tr_idx], y[tr_idx], lam)) for lam in lams])
+  lam_val = lams[np.argmax(val_r2)]
+  honest_r2 = r2(y_te, A_te @ ridge_fit(A, y, lam_val))
+  best_possible = max(r2(y_te, A_te @ ridge_fit(A, y, lam)) for lam in lams)
+  lam_choices = []
+  for rep in range(50):
+      p_ = r.permutation(120); t_, v_ = p_[:80], p_[80:]
+      lam_choices.append(lams[np.argmax([r2(y[v_], A[v_] @ ridge_fit(A[t_], y[t_], lam)) for lam in lams])])
+  print(f"chosen lambda {lam_val:.2f}: honest test R² {honest_r2:.3f}; best possible on the grid {best_possible:.3f}")
+  print(f"lambda chosen across 50 splits: median {np.median(lam_choices):.1f}, range {min(lam_choices):.2f} to {max(lam_choices):.0f}")
+`} />
+
+The validation set chose $\lambda \approx 4$, and the refitted model scores R² = 0.46 on the untouched test set, against 0.53 for the best penalty on the grid, which you could only find by peeking. That gap is the honest cost of having to choose with 40 validation trials. The bigger lesson is in the 50 repeated splits: the chosen $\lambda$ ranges from 0.01 to 40 depending only on which trials happened to be held out. A validation set of 40 trials is a noisy instrument, which is why cross-validation, averaging over many splits, is usually preferred (Week 59). The test score of 0.46 is still honest; it is just the score of one particular, somewhat unlucky, choice.
+
+<Step n={3} title="The price of peeking" minutes={30} />
+
+<Figure caption="The best test accuracy among K classifiers that all guess at random, over 400 repetitions. Change the number of models compared and the size of the test set." credit="Interactive figure by Engram.">
+  <TestReuse />
+</Figure>
+
+Every classifier here has a true accuracy of exactly 50%. Measure how much selecting the best of K on one test set inflates what you would report.
+
+<PyCell id="peek" title="Selection on the test set" tests={String.raw`
+  import numpy as np
+  def test_sim():
+      "best_acc holds the mean best test accuracy for each K, starting near 0.5 for K = 1"
+      assert best_acc.shape == (len(Ks),) and abs(best_acc[0] - 0.5) < 0.01
+  def test_rise():
+      "the reported accuracy rises with K and exceeds 0.56 for K = 100"
+      assert np.all(np.diff(best_acc) > 0) and best_acc[Ks.index(100)] > 0.56
+  def test_fresh():
+      "on a fresh test set, the selected model is back at chance"
+      assert abs(fresh_acc - 0.5) < 0.02
+`} prompt="For each K, run 2,000 repetitions: draw the test-set accuracies of K random classifiers on 200 trials (each a binomial count divided by 200) and keep the largest. Store the mean in best_acc. Then check one selected model on a fresh 200-trial test set: its accuracy is just another binomial draw."
+code={String.raw`
+  Ks = [1, 2, 5, 10, 20, 50, 100, 200]
+  n_test, reps = 200, 2000
+  best_acc = np.zeros(len(Ks))
+  for k, K in enumerate(Ks):
+      accs = r.binomial(n_test, 0.5, size=(reps, K)) / n_test
+      best_acc[k] = ...
+  fresh_acc = np.mean(r.binomial(n_test, 0.5, size=reps) / n_test)
+  for K, b in zip(Ks, best_acc):
+      print(f"best of {K:3d}: reported accuracy {b:.3f}")
+  print(f"the same selected models on a fresh test set: {fresh_acc:.3f}")
+`}
+hint="best_acc[k] = accs.max(axis=1).mean()."
+solution={String.raw`
+  Ks = [1, 2, 5, 10, 20, 50, 100, 200]
+  n_test, reps = 200, 2000
+  best_acc = np.zeros(len(Ks))
+  for k, K in enumerate(Ks):
+      accs = r.binomial(n_test, 0.5, size=(reps, K)) / n_test
+      best_acc[k] = accs.max(axis=1).mean()
+  fresh_acc = np.mean(r.binomial(n_test, 0.5, size=reps) / n_test)
+  for K, b in zip(Ks, best_acc):
+      print(f"best of {K:3d}: reported accuracy {b:.3f}")
+  print(f"the same selected models on a fresh test set: {fresh_acc:.3f}")
+`} />
+
+With one model the reported accuracy is 50%, as it should be. Comparing 10 models and reporting the best gives 55.4%, 100 models 58.8%, and 200 models nearly 60%, all from classifiers that know nothing. That answers the prediction. A selected model checked on a fresh test set falls straight back to 49.9%. Comparing many models is not wrong in itself, provided the comparison is done on validation data and the winner is then evaluated on data it was not chosen with. Note that the figure's histogram also shows that with K = 100 a reported accuracy above 60% is common, so a single published number of that size is weak evidence of anything, unless you know how many alternatives were tried.
+
+<Step n={4} title="Splits that respect structure" minutes={25} />
+
+A random split assumes the examples are independent. Neural and behavioural data rarely are: neighbouring trials share slow drifts in excitability, arousal, electrode position and strategy. Here a neuron's activity drifts slowly for reasons unrelated to the behavioural variable you want to predict, which also drifts slowly. A nearest-neighbour regressor can then "predict" behaviour by recognising *when* a trial happened, if trials adjacent in time land on both sides of the split.
+
+<PyCell id="blocked" title="Random against blocked splits" tests={String.raw`
+  import numpy as np
+  def test_knn():
+      "knn_predict predicts each test point by its nearest training point's target"
+      Xa = np.array([[0.0], [1.0], [5.0]]); ya = np.array([1.0, 2.0, 3.0])
+      assert np.allclose(knn_predict(Xa, ya, np.array([[0.9], [4.0]])), [2.0, 3.0])
+  def test_leak():
+      "the random split reports R² above 0.5; the blocked split reports R² below 0.1"
+      assert r2_random > 0.5 and r2_blocked < 0.1
+`} prompt="Write knn_predict(X_tr, y_tr, X_te), one-nearest-neighbour regression with Euclidean distance. Evaluate it with a random 80/20 split of the 600 trials and with a blocked split that holds out the last 20% of the session."
+code={String.raw`
+  T = 600
+  t = np.arange(T)
+  drift_x = np.cumsum(r.normal(size=(T, 3)), axis=0) / 10      # slow drifts in three neurons, unrelated to y
+  X_neural = drift_x + 0.03 * r.normal(size=(T, 3))
+  y_beh = np.cumsum(r.normal(size=T)) / 10 + 0.1 * r.normal(size=T)   # a slowly drifting behaviour
+
+  def knn_predict(X_tr, y_tr, X_te):
+      d = ((X_te[:, None, :] - X_tr[None, :, :]) ** 2).sum(-1)
+      return ...
+
+  perm = r.permutation(T); tr_r, te_r = perm[:480], perm[480:]
+  r2_random = r2(y_beh[te_r], knn_predict(X_neural[tr_r], y_beh[tr_r], X_neural[te_r]))
+  tr_b, te_b = t[:480], t[480:]
+  r2_blocked = ...
+  print(f"random split: R² {r2_random:.3f}")
+  print(f"blocked split: R² {r2_blocked:.3f}")
+`}
+hint="return y_tr[np.argmin(d, axis=1)]; r2_blocked = r2(y_beh[te_b], knn_predict(X_neural[tr_b], y_beh[tr_b], X_neural[te_b]))."
+solution={String.raw`
+  T = 600
+  t = np.arange(T)
+  drift_x = np.cumsum(r.normal(size=(T, 3)), axis=0) / 10      # slow drifts in three neurons, unrelated to y
+  X_neural = drift_x + 0.03 * r.normal(size=(T, 3))
+  y_beh = np.cumsum(r.normal(size=T)) / 10 + 0.1 * r.normal(size=T)   # a slowly drifting behaviour
+
+  def knn_predict(X_tr, y_tr, X_te):
+      d = ((X_te[:, None, :] - X_tr[None, :, :]) ** 2).sum(-1)
+      return y_tr[np.argmin(d, axis=1)]
+
+  perm = r.permutation(T); tr_r, te_r = perm[:480], perm[480:]
+  r2_random = r2(y_beh[te_r], knn_predict(X_neural[tr_r], y_beh[tr_r], X_neural[te_r]))
+  tr_b, te_b = t[:480], t[480:]
+  r2_blocked = r2(y_beh[te_b], knn_predict(X_neural[tr_b], y_beh[tr_b], X_neural[te_b]))
+  print(f"random split: R² {r2_random:.3f}")
+  print(f"blocked split: R² {r2_blocked:.3f}")
+`} />
+
+The random split reports R² = 0.58: the neurons appear to predict behaviour well. The blocked split, which holds out the last fifth of the session, gives a strongly negative R², because the decoder predicts behavioural values from earlier in the session, which have since drifted away. The neurons carry no information about behaviour at all. In the random split, each test trial's nearest neighbour in neural space is usually a trial from a few seconds earlier or later, whose behaviour was similar simply because both drift slowly: the decoder has learned *when* each trial happened, not anything about behaviour. Any slow signal in neural data, from electrode drift to changes in arousal, can create this illusion. When trials are not independent, split them as new data would arrive, in time blocks or by session.
+
+<Bridge title="Honest evaluation in brains and machines"
+  neuro="Decoding papers report accuracies that readers take at face value. If the decoder, its features or its hyperparameters were chosen by looking at the same data, or if neighbouring trials sat on both sides of the split, the number can be far from what a new experiment would find. Week 59 returns to these traps in detail."
+  ai="Public benchmarks are test sets reused by thousands of researchers. Recht and colleagues found that models lost accuracy on a freshly collected ImageNet test set, but that their ranking was preserved: the reuse inflated scores without destroying their value for comparison.">
+
+Use the test set once; split the data the way the world will present new data.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Hyperparameters such as the ridge penalty are chosen using...", options: ["The validation set", "The training set", "The test set", "Nothing"], answer: 0, explain: "The training set fits parameters for each candidate." },
+  { q: "The test set should be used...", options: ["Once, at the end", "To choose the model", "To fit parameters", "Repeatedly"], answer: 0, explain: "Otherwise it is part of the fitting." },
+  { q: "The validation score of the chosen model is usually...", options: ["Optimistic", "Pessimistic", "Unbiased", "Zero"], answer: 0, explain: "It was the best of several noisy estimates." },
+  { q: "Choosing the best of 100 chance-level models on 200 test trials reports about...", options: ["58%", "50%", "75%", "100%"], answer: 0, explain: "Step 3." },
+  { q: "The optimism from peeking shrinks as...", options: ["The test set grows", "More models are compared", "The models get bigger", "Training data shrink"], answer: 0, explain: "Each estimate becomes less noisy." },
+  { q: "A random split of slowly drifting data can...", options: ["Leak information through temporal neighbours", "Be perfectly honest", "Reduce accuracy", "Remove drift"], answer: 0, explain: "Step 4." },
+  { q: "A blocked split holds out...", options: ["A contiguous stretch of time or a whole session", "Random trials", "The best trials", "Nothing"], answer: 0, explain: "As new data would arrive." },
+  { q: "Recht and colleagues found that on a new ImageNet test set, models...", options: ["Lost accuracy but kept their ranking", "Kept their accuracy", "Changed ranking completely", "Failed"], answer: 0, explain: "Today's paper." },
+]} />
+
+<Flashcards cards={[
+  { front: "Three sets?", back: "Training fits parameters; validation chooses models and hyperparameters; test reports once." },
+  { front: "Why is the chosen model's validation score optimistic?", back: "It is the maximum of several noisy estimates, so it is selected partly for luck." },
+  { front: "Blocked split?", back: "Hold out contiguous time or whole sessions so that test data are as new as future data." },
+  { front: "Hyperparameter?", back: "A setting chosen outside the training loss: degree, penalty, number of features, model family." },
+  { front: "When to refit on training plus validation?", back: "After choosing hyperparameters, refit on all non-test data, then evaluate once on the test set." },
+]} />
+
+<Predict revisit question="What accuracy did the best of 100 useless decoders report on one 200-trial test set?" />
+
+<Key title="Before you go">
+<ul>
+<li>Training, validation and test sets do different jobs; mixing them inflates results.</li>
+<li>Selecting among many models on one test set rewards luck.</li>
+<li>Hyperparameters chosen on small validation sets vary a lot, even when the final model does well.</li>
+<li>Split the data the way new data will arrive: by time block or by session, not at random, when trials are not independent.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Recht, Roelofs, Schmidt and Shankar (2019), <em>Do ImageNet classifiers generalize to ImageNet?</em></li>
+<li>Kriegeskorte, Simmons, Bellgowan and Baker (2009), <em>Circular analysis in systems neuroscience: the dangers of double dipping</em>, Nature Neuroscience 12(5), 535 to 540.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Describe an analysis in which the same data were used both to choose something (features, neurons, a time window, a model) and to report its performance. Redesign it with separate training, validation and test data, and say what you expect would happen to the reported number." />

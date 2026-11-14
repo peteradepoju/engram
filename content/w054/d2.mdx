@@ -1,0 +1,237 @@
+export const meta = {
+  title: "Overfitting and underfitting",
+  intro: "A model can fail to generalise in two opposite ways. It can be too simple to capture the structure in the data, and underfit; or so flexible that it fits the noise as well as the structure, and overfit. Today you watch both happen as the flexibility of a model is turned up, first with polynomials in one dimension and then with an encoding model that has nearly as many features as trials, a situation that is routine in neuroscience. Then you meet the first remedy, which is to penalise flexibility rather than to remove it.",
+  goals: [
+    "Recognise underfitting and overfitting from training and test error",
+    "Trace test error against model complexity and find its minimum",
+    "Show how an encoding model with many features overfits a modest number of trials",
+    "Control overfitting with a ridge penalty instead of a smaller model",
+  ],
+  plan: [
+    { label: "Two ways to fail", minutes: 20 },
+    { label: "Error against complexity", minutes: 30 },
+    { label: "Many features, few trials", minutes: 30 },
+    { label: "Taming flexibility with a penalty", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "domingos-2012",
+};
+
+<Predict question="You fit a linear encoding model with 55 stimulus features to 60 trials of a neuron's responses, although only 5 features truly drive it. On new trials, will the model's R² be about the same as on the training trials, somewhat lower, or below zero (worse than predicting the mean)?" />
+
+<Step n={1} title="Two ways to fail" minutes={20} />
+
+A model **underfits** when its hypothesis class cannot represent the structure in the data: a straight line through a sine, a linear decoder for a nonlinear boundary. Its training error and test error are both high, and close to each other. A model **overfits** when it is flexible enough to fit the particular noise in its training set: its training error is low, its test error high, and the gap between them large.
+
+What makes a model flexible is not only its number of parameters but how freely those parameters can bend the function: the degree of a polynomial, the number of features in a regression, the depth of a tree, the width of a network. The amount of data sets how much flexibility can be afforded. Domingos's overview, today's paper, puts it bluntly: overfitting has many faces, and the cure is never simply more parameters or fewer, but the right balance for the data you have.
+
+<Figure caption="A polynomial fitted to 15 noisy points from a sine, with the training and test error for every degree. Change the degree and watch both errors." credit="Interactive figure by Engram.">
+  <PolyFit />
+</Figure>
+
+<Video id="d4nfTki6Ejc" title="Multiple linear regression and polynomial regression" by="Neuromatch Academy" note="Neuromatch's tutorial video on extending linear regression to several inputs and to polynomial features, the models whose flexibility you vary today." />
+
+<Step n={2} title="Error against complexity" minutes={30} />
+
+One training set can mislead, so average over many. For each degree from 0 to 12, fit 100 training sets of 15 points and measure the mean training and test error.
+
+<PyCell id="complexity" title="The U-shaped test error" tests={String.raw`
+  import numpy as np
+  def test_shapes():
+      "tr_err and te_err have one value per degree"
+      assert tr_err.shape == (13,) and te_err.shape == (13,)
+  def test_train():
+      "training error never increases with degree"
+      assert np.all(np.diff(tr_err) <= 1e-9)
+  def test_best():
+      "best_deg minimises the median test error and is between 3 and 6"
+      assert best_deg == np.argmin(te_err) and 3 <= best_deg <= 6
+`} prompt="For each degree 0 to 12, fit np.polyfit to each of the 100 training sets and record the training MSE and the test MSE on the fixed test set. Use the median over training sets for the test error, because a few high-degree fits explode."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(542)
+  f = lambda x: 0.8 * np.sin(np.pi * x)
+  sets = [(xt := r.uniform(-1, 1, 15), f(xt) + 0.3 * r.normal(size=15)) for _ in range(100)]
+  x_te = r.uniform(-1, 1, 2000); y_te = f(x_te) + 0.3 * r.normal(size=2000)
+  tr_err, te_err = np.zeros(13), np.zeros(13)
+  for deg in range(13):
+      tr, te = [], []
+      for xt, yt in sets:
+          w = np.polyfit(xt, yt, deg)
+          tr.append(...)
+          te.append(...)
+      tr_err[deg], te_err[deg] = np.mean(tr), np.median(te)
+  best_deg = int(np.argmin(te_err))
+  for d in [0, 1, 3, 5, 8, 12]:
+      print(f"degree {d:2d}: training {tr_err[d]:.3f}, test {te_err[d]:.3f}")
+  print(f"best degree by test error: {best_deg}")
+  plt.semilogy(tr_err, "o-", label="training"); plt.semilogy(te_err, "o-", label="test (median)"); plt.axhline(0.09, color="grey", ls="--")
+  plt.xlabel("degree"); plt.ylabel("MSE"); plt.legend(); plt.show()
+`}
+hint="tr.append(np.mean((yt - np.polyval(w, xt)) ** 2)); te.append(np.mean((y_te - np.polyval(w, x_te)) ** 2))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(542)
+  f = lambda x: 0.8 * np.sin(np.pi * x)
+  sets = [(xt := r.uniform(-1, 1, 15), f(xt) + 0.3 * r.normal(size=15)) for _ in range(100)]
+  x_te = r.uniform(-1, 1, 2000); y_te = f(x_te) + 0.3 * r.normal(size=2000)
+  tr_err, te_err = np.zeros(13), np.zeros(13)
+  for deg in range(13):
+      tr, te = [], []
+      for xt, yt in sets:
+          w = np.polyfit(xt, yt, deg)
+          tr.append(np.mean((yt - np.polyval(w, xt)) ** 2))
+          te.append(np.mean((y_te - np.polyval(w, x_te)) ** 2))
+      tr_err[deg], te_err[deg] = np.mean(tr), np.median(te)
+  best_deg = int(np.argmin(te_err))
+  for d in [0, 1, 3, 5, 8, 12]:
+      print(f"degree {d:2d}: training {tr_err[d]:.3f}, test {te_err[d]:.3f}")
+  print(f"best degree by test error: {best_deg}")
+  plt.semilogy(tr_err, "o-", label="training"); plt.semilogy(te_err, "o-", label="test (median)"); plt.axhline(0.09, color="grey", ls="--")
+  plt.xlabel("degree"); plt.ylabel("MSE"); plt.legend(); plt.show()
+`} />
+
+Training error falls steadily from 0.39 at degree 0 to 0.013 at degree 12, far below the noise variance of 0.09. Test error falls too, at first: underfitting gives way as the polynomial gains enough bends to follow the sine, reaching a minimum of 0.117 at degree 3. Then it climbs, to 0.16 at degree 5, 2.5 at degree 8 and a median of over 17,000 at degree 12, where 13 coefficients are pinned by only 15 points and the curve swings wildly between them. The degree with the lowest training error is the worst choice possible, so the training error cannot be used to choose a model: that needs data the model was not fitted to, the subject of tomorrow.
+
+<Step n={3} title="Many features, few trials" minutes={30} />
+
+Polynomials in one variable are a toy. The same failure in neuroscience looks like this: a neuron's response to a white-noise stimulus is modelled as a weighted sum of $p$ stimulus pixels, the receptive field, and fitted to a limited number of trials. Here the true receptive field uses only 5 of the pixels, and you fit models that use the first $p$ pixels, for $p$ from 5 to 55, on 60 trials.
+
+<PyCell id="features" title="An encoding model that fits noise" tests={String.raw`
+  import numpy as np
+  def test_r2_formula():
+      "r2(y, yhat) is one minus the residual sum of squares over the total sum of squares"
+      yy = np.array([1.0, 2, 3, 4]); assert abs(r2(yy, yy + 0.5) - (1 - 1.0 / 5.0)) < 1e-12
+  def test_train():
+      "training R² rises with the number of features"
+      assert np.all(np.diff(tr_r2) > 0)
+  def test_test():
+      "test R² is best with 5 features and below zero with 55"
+      assert np.argmax(te_r2) == 0 and te_r2[-1] < 0
+`} prompt="Write r2(y, yhat). For each p, fit least squares (with an intercept) to the first p pixels of the 60 training trials, and compute R² on the training trials and on 2,000 new test trials."
+code={String.raw`
+  P, n_tr = 60, 60
+  w_true = np.zeros(P); w_true[:5] = [1.0, 0.8, -0.6, 0.5, -0.4]
+  X_tr, X_te = r.normal(size=(n_tr, P)), r.normal(size=(2000, P))
+  y_tr = X_tr @ w_true + 1.0 * r.normal(size=n_tr); y_te = X_te @ w_true + 1.0 * r.normal(size=2000)
+
+  def r2(y, yhat):
+      return ...
+
+  ps = [5, 10, 20, 40, 55]
+  tr_r2, te_r2 = np.zeros(len(ps)), np.zeros(len(ps))
+  for k, p in enumerate(ps):
+      A_tr, A_te = np.c_[X_tr[:, :p], np.ones(n_tr)], np.c_[X_te[:, :p], np.ones(2000)]
+      w, *_ = np.linalg.lstsq(A_tr, y_tr, rcond=None)
+      tr_r2[k], te_r2[k] = ...
+      print(f"{p:2d} features: training R² {tr_r2[k]:.3f}, test R² {te_r2[k]:.3f}")
+`}
+hint="return 1 - np.sum((y - yhat) ** 2) / np.sum((y - y.mean()) ** 2); tr_r2[k], te_r2[k] = r2(y_tr, A_tr @ w), r2(y_te, A_te @ w)."
+solution={String.raw`
+  P, n_tr = 60, 60
+  w_true = np.zeros(P); w_true[:5] = [1.0, 0.8, -0.6, 0.5, -0.4]
+  X_tr, X_te = r.normal(size=(n_tr, P)), r.normal(size=(2000, P))
+  y_tr = X_tr @ w_true + 1.0 * r.normal(size=n_tr); y_te = X_te @ w_true + 1.0 * r.normal(size=2000)
+
+  def r2(y, yhat):
+      return 1 - np.sum((y - yhat) ** 2) / np.sum((y - y.mean()) ** 2)
+
+  ps = [5, 10, 20, 40, 55]
+  tr_r2, te_r2 = np.zeros(len(ps)), np.zeros(len(ps))
+  for k, p in enumerate(ps):
+      A_tr, A_te = np.c_[X_tr[:, :p], np.ones(n_tr)], np.c_[X_te[:, :p], np.ones(2000)]
+      w, *_ = np.linalg.lstsq(A_tr, y_tr, rcond=None)
+      tr_r2[k], te_r2[k] = r2(y_tr, A_tr @ w), r2(y_te, A_te @ w)
+      print(f"{p:2d} features: training R² {tr_r2[k]:.3f}, test R² {te_r2[k]:.3f}")
+`} />
+
+With the 5 true features, the model explains 73% of the variance on its training trials and 71% on new ones: a small, honest gap. Adding irrelevant pixels raises the training R² every time, to 0.97 with 55 features, while the test R² falls, to 0.25 with 40 and to −0.41 with 55. That answers the prediction: the 55-feature model predicts new trials worse than simply guessing their mean, although by its training fit it looks like the best model of all. With 56 parameters and 60 trials, least squares has enough freedom to fit the noise on almost every trial, and the fitted receptive field is mostly noise. An analysis that reported only the training fit would be badly wrong.
+
+<Step n={4} title="Taming flexibility with a penalty" minutes={25} />
+
+Throwing features away works when you know which ones matter, which is rare. A gentler remedy keeps every feature but penalises large weights: **ridge regression** minimises $\lVert\mathbf y - X\mathbf w\rVert^2 + \lambda\lVert\mathbf w\rVert^2$, whose solution $(X^\top X + \lambda I)^{-1}X^\top\mathbf y$ you met in Week 5. Next week is devoted to it; today, just see what it does to the 55-feature model.
+
+<PyCell id="ridge" title="All the features, kept in check" tests={String.raw`
+  import numpy as np
+  def test_ridge():
+      "ridge_fit returns the penalised least-squares weights (intercept unpenalised)"
+      A = np.c_[X_tr[:, :55], np.ones(n_tr)]; D = np.eye(56); D[-1, -1] = 0
+      assert np.allclose(ridge_fit(A, y_tr, 3.0), np.linalg.solve(A.T @ A + 3.0 * D, A.T @ y_tr))
+  def test_rescue():
+      "with the best penalty, the 55-feature model has a positive test R² above 0.3"
+      assert ridge_test.max() > 0.3 and lams[np.argmax(ridge_test)] > 1
+`} prompt="Write ridge_fit(A, y, lam), the ridge solution with the last column (the intercept) unpenalised. Fit the 55-feature model for each lambda and record its test R²."
+code={String.raw`
+  def ridge_fit(A, y, lam):
+      D = np.eye(A.shape[1]); D[-1, -1] = 0           # do not penalise the intercept
+      return ...
+
+  lams = np.logspace(-2, 3, 21)
+  A_tr, A_te = np.c_[X_tr[:, :55], np.ones(n_tr)], np.c_[X_te[:, :55], np.ones(2000)]
+  ridge_test = np.array([r2(y_te, A_te @ ridge_fit(A_tr, y_tr, lam)) for lam in lams])
+  print(f"best lambda {lams[np.argmax(ridge_test)]:.1f}: test R² {ridge_test.max():.3f} (unpenalised: {te_r2[-1]:.3f}; 5 true features: {te_r2[0]:.3f})")
+  plt.semilogx(lams, ridge_test, "o-"); plt.axhline(0, color="grey"); plt.xlabel("lambda"); plt.ylabel("test R²"); plt.show()
+`}
+hint="return np.linalg.solve(A.T @ A + lam * D, A.T @ y)."
+solution={String.raw`
+  def ridge_fit(A, y, lam):
+      D = np.eye(A.shape[1]); D[-1, -1] = 0           # do not penalise the intercept
+      return np.linalg.solve(A.T @ A + lam * D, A.T @ y)
+
+  lams = np.logspace(-2, 3, 21)
+  A_tr, A_te = np.c_[X_tr[:, :55], np.ones(n_tr)], np.c_[X_te[:, :55], np.ones(2000)]
+  ridge_test = np.array([r2(y_te, A_te @ ridge_fit(A_tr, y_tr, lam)) for lam in lams])
+  print(f"best lambda {lams[np.argmax(ridge_test)]:.1f}: test R² {ridge_test.max():.3f} (unpenalised: {te_r2[-1]:.3f}; 5 true features: {te_r2[0]:.3f})")
+  plt.semilogx(lams, ridge_test, "o-"); plt.axhline(0, color="grey"); plt.xlabel("lambda"); plt.ylabel("test R²"); plt.show()
+`} />
+
+With $\lambda \approx 18$, the same 55 features give a test R² of 0.41 instead of −0.41. The penalty shrinks the weights of the 50 irrelevant pixels towards zero, while the 5 real ones, supported by the data, shrink less. It does not reach the 0.71 of the model that used only the true features, because it still has to estimate all 55 weights from 60 trials, but it does this without being told which features matter. Choosing $\lambda$ here used the test set, which is cheating; tomorrow's lesson shows how to choose it honestly.
+
+<Bridge title="Overfitting in brains and machines"
+  neuro="Encoding models of single neurons, voxel-wise fMRI models and decoders all routinely have as many features as trials. Without a penalty or a test on held-out data, they report fits that are artefacts of noise; with them, the same models are among the most reliable tools in systems neuroscience."
+  ai="Machine learning's answer to overfitting has shifted from smaller models to bigger models with stronger regularisation: weight decay, early stopping, dropout and data augmentation. Brains, with far more synapses than they have experiences, face the same problem, and may solve it with the same kinds of constraint.">
+
+Flexibility must be paid for with data, or controlled with a penalty.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A model with high training error and similar test error is...", options: ["Underfitting", "Overfitting", "Perfect", "Leaking"], answer: 0, explain: "Too simple for the structure." },
+  { q: "A model with near-zero training error and high test error is...", options: ["Overfitting", "Underfitting", "Well regularised", "Optimal"], answer: 0, explain: "It fits the noise." },
+  { q: "As polynomial degree rises, training error...", options: ["Never increases", "Always increases", "Is U-shaped", "Is constant"], answer: 0, explain: "Larger classes contain the smaller ones." },
+  { q: "Test error as a function of complexity is typically...", options: ["U-shaped", "Monotonically decreasing", "Monotonically increasing", "Flat"], answer: 0, explain: "Underfitting on the left, overfitting on the right." },
+  { q: "A test R² below zero means the model...", options: ["Predicts worse than the mean of the test data", "Is perfect", "Has no intercept", "Is underfitting only"], answer: 0, explain: "Step 3." },
+  { q: "With nearly as many features as trials, ordinary least squares...", options: ["Fits the noise", "Is optimal", "Cannot be computed", "Underfits"], answer: 0, explain: "It has the flexibility to interpolate." },
+  { q: "Ridge regression controls overfitting by...", options: ["Penalising the squared size of the weights", "Removing features", "Adding noise", "Using fewer trials"], answer: 0, explain: "λ‖w‖²." },
+  { q: "Why is the intercept usually not penalised?", options: ["Shrinking it would bias predictions towards zero for no reason", "It has no effect", "It is always zero", "It cannot be computed"], answer: 0, explain: "The mean response is not evidence of overfitting." },
+]} />
+
+<Flashcards cards={[
+  { front: "Underfitting?", back: "High training and test error, close together: the model is too simple." },
+  { front: "Overfitting?", back: "Low training error, high test error: the model fits the noise." },
+  { front: "R²?", back: "$1 - \\sum(y - \\hat y)^2 / \\sum(y - \\bar y)^2$; negative on test data means worse than the mean." },
+  { front: "Ridge solution?", back: "$(X^\\top X + \\lambda I)^{-1}X^\\top\\mathbf y$." },
+  { front: "Capacity?", back: "How flexible the hypothesis class is: how many different functions it can fit." },
+]} />
+
+<Predict revisit question="With 55 features and 60 trials, was the encoding model's test R² similar, lower, or below zero?" />
+
+<Key title="Before you go">
+<ul>
+<li>Underfitting and overfitting are diagnosed by training and test error together.</li>
+<li>Test error is U-shaped in complexity; training error is not a guide to its minimum.</li>
+<li>Models with nearly as many features as trials can predict worse than a constant.</li>
+<li>A penalty can rescue a flexible model without knowing which features matter.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Domingos (2012), <em>A few useful things to know about machine learning</em>.</li>
+<li>Wu, David and Gallant (2006), <em>Complete functional characterization of sensory neurons by system identification</em>, Annual Review of Neuroscience 29, 477 to 505, on regularised encoding models.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Think of a neuroscience analysis with many features per trial (pixels, voxels, neurons, time bins). How many trials were there per feature? Write down how overfitting could have shown up in its results, and what the authors did, or should have done, about it." />

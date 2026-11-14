@@ -1,0 +1,281 @@
+export const meta = {
+  title: "Bias and variance, measured",
+  intro: "Why is test error U-shaped in complexity? Because it is the sum of three things that pull in different directions. Noise in the data sets a floor that no model can go below. Bias, the error of the model's average prediction, falls as the model becomes more flexible. Variance, how much the prediction changes from one training set to the next, rises. Today you derive this decomposition, then measure all three terms by simulation, watch a ridge penalty trade one for another, and see how averaging many models cuts variance without adding bias.",
+  goals: [
+    "Derive the bias-variance decomposition of expected squared error",
+    "Estimate bias, variance and noise by simulating many training sets",
+    "Show that a ridge penalty trades variance for bias",
+    "Reduce variance by averaging models fitted to bootstrap resamples",
+  ],
+  plan: [
+    { label: "The decomposition", minutes: 25 },
+    { label: "Measuring bias and variance", minutes: 35 },
+    { label: "A penalty as a dial", minutes: 25 },
+    { label: "Averaging away variance", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "geman-1992",
+};
+
+<Predict question="A degree-7 polynomial is fitted to 30 noisy points from a smooth curve. Of the three parts of its expected test error (noise, bias squared and variance), which do you expect to be largest?" />
+
+<Step n={1} title="The decomposition" minutes={25} />
+
+Imagine repeating an experiment many times: each time you collect a fresh training set $\mathcal D$, fit a model $\hat f_{\mathcal D}$, and predict at a fixed input $x$, where the truth is $y = f(x) + \varepsilon$ with noise of variance $\sigma^2$. The prediction is a random variable, because the training set is.
+
+<Derivation title="Bias, variance and noise">
+<div>
+
+Write $\bar f(x) = \mathbb E_{\mathcal D}[\hat f_{\mathcal D}(x)]$ for the average prediction over training sets. The expected squared error at $x$, over both the training set and the new noise, is $\mathbb E[(y - \hat f_{\mathcal D}(x))^2]$.
+
+</div>
+<div>
+
+Add and subtract $f(x)$ and $\bar f(x)$: $y - \hat f = \varepsilon + (f - \bar f) + (\bar f - \hat f)$. The three terms are uncorrelated: $\varepsilon$ is new noise, independent of the training set; $f - \bar f$ is a constant; and $\bar f - \hat f$ has mean zero over training sets.
+
+</div>
+<div>
+
+So the cross terms vanish and
+
+$$
+\mathbb E\left[(y - \hat f_{\mathcal D}(x))^2\right] = \underbrace{\sigma^2}_{\text{noise}} + \underbrace{\left(f(x) - \bar f(x)\right)^2}_{\text{bias}^2} + \underbrace{\mathbb E_{\mathcal D}\left[\left(\hat f_{\mathcal D}(x) - \bar f(x)\right)^2\right]}_{\text{variance}}.
+$$
+
+Averaging over $x$ gives the same split of the expected test error.
+
+</div>
+</Derivation>
+
+Geman, Bienenstock and Doursat's paper, today's paper, introduced this decomposition to the neural network community in 1992, and argued that it limits any learning system that is not given the right prior structure: a flexible enough model has low bias, but must pay in variance unless it has a great deal of data.
+
+<Video id="EuBBz3bI-aA" title="Machine learning fundamentals: bias and variance" by="StatQuest with Josh Starmer" note="Josh Starmer's short explanation of bias and variance with a straight line and a squiggle, the two extremes you measure today." />
+
+<Step n={2} title="Measuring bias and variance" minutes={35} />
+
+<Figure caption="Twenty fits of the same polynomial degree, each to its own 20 noisy points, with their average and the true curve. The spread is the variance; the distance of the average from the truth is the bias." credit="Interactive figure by Engram, after Geman, Bienenstock and Doursat (1992).">
+  <BiasVarianceFits />
+</Figure>
+
+Simulation makes every term measurable. Draw 300 training sets of 30 points, fit polynomials of degree 0 to 7, and evaluate all fits on a grid of inputs.
+
+<PyCell id="bv" title="Three terms, measured" tests={String.raw`
+  import numpy as np
+  def test_terms():
+      "bias2 and var have one value per degree, all non-negative"
+      assert bias2.shape == (8,) and var.shape == (8,) and np.all(bias2 >= 0) and np.all(var >= 0)
+  def test_trends():
+      "bias falls and variance rises from degree 1 to degree 7"
+      assert bias2[1] > bias2[7] and var[7] > var[1]
+  def test_sum():
+      "noise plus bias squared plus variance matches the directly simulated test error within 5%"
+      assert np.all(np.abs(sigma ** 2 + bias2 + var - test_mse) / test_mse < 0.05)
+`} prompt="For each degree, stack the predictions of the 300 fits on the grid into an array of shape (300, len(grid)). Compute bias squared (the squared gap between the average prediction and the truth, averaged over the grid) and variance (the variance across fits, averaged over the grid). Compare their sum plus the noise with the test error measured directly against fresh noisy targets."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(544)
+  f = lambda x: 0.8 * np.sin(np.pi * x)
+  sigma, n, reps = 0.3, 30, 300
+  grid = np.linspace(-0.95, 0.95, 200)
+  sets = [(xt := r.uniform(-1, 1, n), f(xt) + sigma * r.normal(size=n)) for _ in range(reps)]
+  bias2, var, test_mse = np.zeros(8), np.zeros(8), np.zeros(8)
+  for deg in range(8):
+      preds = np.array([np.polyval(np.polyfit(xt, yt, deg), grid) for xt, yt in sets])
+      mean_pred = preds.mean(0)
+      bias2[deg] = ...
+      var[deg] = ...
+      y_new = f(grid) + sigma * r.normal(size=(reps, len(grid)))
+      test_mse[deg] = np.mean((y_new - preds) ** 2)
+  for d in range(8):
+      print(f"degree {d}: bias² {bias2[d]:.4f}, variance {var[d]:.4f}, sum with noise {sigma ** 2 + bias2[d] + var[d]:.4f}, measured {test_mse[d]:.4f}")
+  plt.plot(bias2, "o-", label="bias²"); plt.plot(var, "o-", label="variance"); plt.plot(sigma ** 2 + bias2 + var, "k--", label="total")
+  plt.xlabel("degree"); plt.legend(); plt.show()
+`}
+hint="bias2[deg] = np.mean((mean_pred - f(grid)) ** 2); var[deg] = np.mean(preds.var(axis=0))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(544)
+  f = lambda x: 0.8 * np.sin(np.pi * x)
+  sigma, n, reps = 0.3, 30, 300
+  grid = np.linspace(-0.95, 0.95, 200)
+  sets = [(xt := r.uniform(-1, 1, n), f(xt) + sigma * r.normal(size=n)) for _ in range(reps)]
+  bias2, var, test_mse = np.zeros(8), np.zeros(8), np.zeros(8)
+  for deg in range(8):
+      preds = np.array([np.polyval(np.polyfit(xt, yt, deg), grid) for xt, yt in sets])
+      mean_pred = preds.mean(0)
+      bias2[deg] = np.mean((mean_pred - f(grid)) ** 2)
+      var[deg] = np.mean(preds.var(axis=0))
+      y_new = f(grid) + sigma * r.normal(size=(reps, len(grid)))
+      test_mse[deg] = np.mean((y_new - preds) ** 2)
+  for d in range(8):
+      print(f"degree {d}: bias² {bias2[d]:.4f}, variance {var[d]:.4f}, sum with noise {sigma ** 2 + bias2[d] + var[d]:.4f}, measured {test_mse[d]:.4f}")
+  plt.plot(bias2, "o-", label="bias²"); plt.plot(var, "o-", label="variance"); plt.plot(sigma ** 2 + bias2 + var, "k--", label="total")
+  plt.xlabel("degree"); plt.legend(); plt.show()
+`} />
+
+The three terms add up: noise plus bias squared plus variance matches the directly measured test error to within 1% at every degree. Bias squared falls from 0.335 for a constant to 0.002 at degree 3 and is essentially zero beyond, because a cubic already captures most of a sine on this interval. Variance does the opposite: 0.013 for a constant, 0.015 at degree 3, 0.19 at degree 6 and 0.80 at degree 7. So the answer to the prediction is variance: at degree 7 it is nine times the noise and two hundred times the bias. The best model, degree 3, is where the falling bias meets the rising variance, with a total of 0.107, close to the noise floor of 0.09.
+
+<Step n={3} title="A penalty as a dial" minutes={25} />
+
+Degree is a coarse dial: it changes the model in jumps. A ridge penalty on a flexible model is a smooth one. Fix the degree at 9, too flexible for 30 points, and turn $\lambda$.
+
+<PyCell id="bvridge" title="Trading variance for bias" tests={String.raw`
+  import numpy as np
+  def test_design():
+      "design(x) returns the 10 polynomial features 1, x, ..., x^9"
+      assert np.allclose(design(np.array([2.0]))[0], 2.0 ** np.arange(10))
+  def test_dial():
+      "as lambda grows, variance falls and bias rises"
+      assert var_r[0] > var_r[-1] and bias_r[-1] > bias_r[0]
+  def test_best():
+      "the best lambda is in the interior and beats both ends"
+      tot = bias_r + var_r; k = np.argmin(tot)
+      assert 0 < k < len(lams) - 1
+`} prompt="Write design(x), the matrix of powers 0 to 9. For each lambda, fit ridge (penalising every coefficient except the constant) to each of the 300 training sets, and record the bias squared and variance on the grid."
+code={String.raw`
+  def design(x):
+      return ...
+
+  lams = np.logspace(-6, 1, 15)
+  D = np.eye(10); D[0, 0] = 0
+  G = design(grid)
+  bias_r, var_r = np.zeros(len(lams)), np.zeros(len(lams))
+  for k, lam in enumerate(lams):
+      preds = np.array([G @ np.linalg.solve(design(xt).T @ design(xt) + lam * D, design(xt).T @ yt) for xt, yt in sets])
+      bias_r[k] = np.mean((preds.mean(0) - f(grid)) ** 2)
+      var_r[k] = np.mean(preds.var(axis=0))
+  k = np.argmin(bias_r + var_r)
+  print(f"lambda {lams[0]:.0e}: bias² {bias_r[0]:.4f}, variance {var_r[0]:.4f}")
+  print(f"lambda {lams[k]:.0e} (best): bias² {bias_r[k]:.4f}, variance {var_r[k]:.4f}")
+  print(f"lambda {lams[-1]:.0e}: bias² {bias_r[-1]:.4f}, variance {var_r[-1]:.4f}")
+  plt.loglog(lams, bias_r, "o-", label="bias²"); plt.loglog(lams, var_r, "o-", label="variance"); plt.xlabel("lambda"); plt.legend(); plt.show()
+`}
+hint="return np.vander(x, 10, increasing=True)."
+solution={String.raw`
+  def design(x):
+      return np.vander(x, 10, increasing=True)
+
+  lams = np.logspace(-6, 1, 15)
+  D = np.eye(10); D[0, 0] = 0
+  G = design(grid)
+  bias_r, var_r = np.zeros(len(lams)), np.zeros(len(lams))
+  for k, lam in enumerate(lams):
+      preds = np.array([G @ np.linalg.solve(design(xt).T @ design(xt) + lam * D, design(xt).T @ yt) for xt, yt in sets])
+      bias_r[k] = np.mean((preds.mean(0) - f(grid)) ** 2)
+      var_r[k] = np.mean(preds.var(axis=0))
+  k = np.argmin(bias_r + var_r)
+  print(f"lambda {lams[0]:.0e}: bias² {bias_r[0]:.4f}, variance {var_r[0]:.4f}")
+  print(f"lambda {lams[k]:.0e} (best): bias² {bias_r[k]:.4f}, variance {var_r[k]:.4f}")
+  print(f"lambda {lams[-1]:.0e}: bias² {bias_r[-1]:.4f}, variance {var_r[-1]:.4f}")
+  plt.loglog(lams, bias_r, "o-", label="bias²"); plt.loglog(lams, var_r, "o-", label="variance"); plt.xlabel("lambda"); plt.legend(); plt.show()
+`} />
+
+With almost no penalty, the degree-9 polynomial has a variance of 4.15, hopelessly large. At $\lambda = 0.03$ the variance falls to 0.023 while the bias squared stays tiny at 0.004: the penalty removes the wild swings without stopping the curve following the sine. At $\lambda = 10$ the curve is flattened, the variance is lower still (0.011), but the bias squared has risen to 0.18. Between these extremes lies a best penalty, just as there was a best degree, but reached smoothly and without deciding which powers of $x$ to drop. This is why regularisation, not model shrinking, is the usual tool, and next week studies it in depth.
+
+<Step n={4} title="Averaging away variance" minutes={20} />
+
+Variance comes from the particular training set. If you could fit to many independent training sets and average, the variance would shrink while the bias stayed the same. You have only one training set, but you can imitate many by resampling it with replacement, the bootstrap of Week 18. Averaging fits to bootstrap resamples is called **bagging** (Breiman, 1996), and it returns in Week 58 as the basis of random forests.
+
+<PyCell id="bag" title="Bagging a high-variance model" tests={String.raw`
+  import numpy as np
+  def test_nn():
+      "nn_predict predicts each grid point by its nearest training point's target"
+      assert np.allclose(nn_predict(np.array([-0.5, 0.5]), np.array([1.0, 2.0]))[[0, -1]], [1.0, 2.0])
+  def test_bagged():
+      "bagged_fit averages B nearest-neighbour fits to bootstrap resamples"
+      xt, yt = sets[0]; p = bagged_fit(xt, yt, 5, np.random.default_rng(0))
+      assert p.shape == grid.shape
+  def test_var():
+      "bagging cuts the variance of nearest-neighbour regression by at least a third, with little change in bias"
+      assert var_bag < 0.67 * var_single and b_bag < 0.01
+`} prompt="Nearest-neighbour regression, which predicts each input by the target of the closest training point, has low bias and high variance. Write nn_predict(xt, yt) on the grid, and bagged_fit(xt, yt, B, g), which averages nn_predict over B bootstrap resamples (indices drawn with replacement). Compare the variance and bias of single and bagged fits across the first 100 training sets."
+code={String.raw`
+  def nn_predict(xt, yt):
+      return ...
+
+  def bagged_fit(xt, yt, B, g):
+      preds = []
+      for b in range(B):
+          idx = g.integers(0, len(xt), len(xt))
+          preds.append(...)
+      return np.mean(preds, axis=0)
+
+  g = np.random.default_rng(58)
+  single = np.array([nn_predict(xt, yt) for xt, yt in sets[:100]])
+  bagged = np.array([bagged_fit(xt, yt, 30, g) for xt, yt in sets[:100]])
+  var_single, var_bag = np.mean(single.var(0)), np.mean(bagged.var(0))
+  b_single, b_bag = np.mean((single.mean(0) - f(grid)) ** 2), np.mean((bagged.mean(0) - f(grid)) ** 2)
+  print(f"single nearest-neighbour fit: variance {var_single:.4f}, bias² {b_single:.4f}")
+  print(f"bagged (30 resamples): variance {var_bag:.4f}, bias² {b_bag:.4f}")
+`}
+hint="return yt[np.argmin(np.abs(grid[:, None] - xt[None, :]), axis=1)]; preds.append(nn_predict(xt[idx], yt[idx]))."
+solution={String.raw`
+  def nn_predict(xt, yt):
+      return yt[np.argmin(np.abs(grid[:, None] - xt[None, :]), axis=1)]
+
+  def bagged_fit(xt, yt, B, g):
+      preds = []
+      for b in range(B):
+          idx = g.integers(0, len(xt), len(xt))
+          preds.append(nn_predict(xt[idx], yt[idx]))
+      return np.mean(preds, axis=0)
+
+  g = np.random.default_rng(58)
+  single = np.array([nn_predict(xt, yt) for xt, yt in sets[:100]])
+  bagged = np.array([bagged_fit(xt, yt, 30, g) for xt, yt in sets[:100]])
+  var_single, var_bag = np.mean(single.var(0)), np.mean(bagged.var(0))
+  b_single, b_bag = np.mean((single.mean(0) - f(grid)) ** 2), np.mean((bagged.mean(0) - f(grid)) ** 2)
+  print(f"single nearest-neighbour fit: variance {var_single:.4f}, bias² {b_single:.4f}")
+  print(f"bagged (30 resamples): variance {var_bag:.4f}, bias² {b_bag:.4f}")
+`} />
+
+Bagging halves the variance of nearest-neighbour regression, from 0.093 to 0.047, while the bias squared barely moves (0.0009 to 0.0011). Each bootstrap resample leaves out about a third of the points and duplicates others, so the 30 fits differ; their average smooths over the idiosyncrasies of any one sample, much as averaging over independent training sets would. Bagging helps most for models like this one, or deep decision trees, that are unbiased but unstable. It does not help models that are already stable, and it can even hurt models such as high-degree polynomials whose fits explode on resamples with repeated points, which is worth trying for yourself.
+
+<Bridge title="Bias and variance in brains and machines"
+  neuro="Geman and colleagues argued that brains cannot learn everything from scratch: with limited experience, a flexible learner would drown in variance. Innate structure, from the layout of the retina to the wiring of the hippocampus, can be read as bias that the brain accepts in return for learning quickly and reliably."
+  ai="Inductive biases are built into machine learning models deliberately: convolution assumes that the same features matter everywhere in an image, recurrence that the same rules apply at every time step. Week 67 shows that very large networks complicate the classical U-shaped picture, a phenomenon called double descent.">
+
+A good model accepts the bias that matches the world and pays for as little variance as it can.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Bias measures...", options: ["How far the average prediction is from the truth", "How much predictions vary between training sets", "The noise in the data", "The number of parameters"], answer: 0, explain: "Averaged over training sets." },
+  { q: "Variance measures...", options: ["How much the prediction changes between training sets", "The error of the average prediction", "The noise", "The training error"], answer: 0, explain: "Spread of the fits." },
+  { q: "The noise term is...", options: ["A floor that no model can go below", "Reduced by flexible models", "Reduced by bagging", "Zero for good models"], answer: 0, explain: "σ² is irreducible." },
+  { q: "Increasing a ridge penalty usually...", options: ["Increases bias and decreases variance", "Decreases both", "Increases both", "Changes nothing"], answer: 0, explain: "Step 3." },
+  { q: "Bagging mainly reduces...", options: ["Variance", "Bias", "Noise", "Training time"], answer: 0, explain: "Averaging over resamples." },
+  { q: "The cross terms in the decomposition vanish because...", options: ["The new noise is independent and the fit's deviation has mean zero", "The model is linear", "The data are Gaussian", "Bias is zero"], answer: 0, explain: "The derivation." },
+  { q: "A straight line fitted to a sine has...", options: ["High bias, low variance", "Low bias, high variance", "Low bias, low variance", "No error"], answer: 0, explain: "Stable but wrong." },
+  { q: "Geman and colleagues argued that learning from limited data requires...", options: ["Built-in structure, accepting some bias", "More parameters", "No prior assumptions", "Larger variance"], answer: 0, explain: "Today's paper." },
+]} />
+
+<Flashcards cards={[
+  { front: "Bias-variance decomposition?", back: "$\\mathbb E[(y - \\hat f)^2] = \\sigma^2 + (f - \\bar f)^2 + \\mathbb E[(\\hat f - \\bar f)^2]$." },
+  { front: "How to measure bias and variance?", back: "Simulate many training sets, fit each, and compare the average and spread of the predictions with the truth." },
+  { front: "Bagging?", back: "Average models fitted to bootstrap resamples: lowers variance, leaves bias roughly unchanged." },
+  { front: "Ridge as a dial?", back: "Larger λ: more bias, less variance; the best λ minimises their sum." },
+  { front: "Inductive bias?", back: "Assumptions built into a model that let it generalise from limited data." },
+]} />
+
+<Predict revisit question="For a degree-7 polynomial on 30 points, which of noise, bias squared and variance was largest?" />
+
+<Key title="Before you go">
+<ul>
+<li>Expected test error is noise plus bias squared plus variance.</li>
+<li>Flexibility lowers bias and raises variance; the best model balances them.</li>
+<li>A penalty is a smooth dial between the two.</li>
+<li>Averaging fits to bootstrap resamples lowers variance without much cost in bias.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Geman, Bienenstock and Doursat (1992), <em>Neural networks and the bias/variance dilemma</em>.</li>
+<li>Breiman (1996), <em>Bagging predictors</em>, Machine Learning 24, 123 to 140.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Describe one inductive bias in the brain (a wiring rule, a receptive field shape, an innate behaviour) and argue, in terms of bias and variance, what the animal gains and loses by having it." />
