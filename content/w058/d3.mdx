@@ -1,0 +1,263 @@
+export const meta = {
+  title: "Bagging and random forests",
+  intro: "Yesterday's problem is today's solution. Deep trees have low bias but high variance: grown on slightly different data they disagree a great deal. Averaging many of them, each grown on a bootstrap resample, keeps the low bias and cancels much of the variance. That is bagging. Random forests add one more twist, considering only a random subset of features at each split, which makes the trees less alike and the average better still. Today you build both from your own trees, measure why decorrelation helps, and get a free estimate of test error from the examples each tree never saw.",
+  goals: [
+    "Bag deep trees and watch test accuracy improve with the number of trees",
+    "Add random feature selection and measure how it decorrelates the trees",
+    "Explain the variance of an average of correlated predictors",
+    "Estimate test accuracy from out-of-bag predictions",
+  ],
+  plan: [
+    { label: "Why averaging helps", minutes: 20 },
+    { label: "Bagging trees", minutes: 30 },
+    { label: "Random forests", minutes: 30 },
+    { label: "Out-of-bag error", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "breiman-2001-rf",
+};
+
+<Predict question="The variance of an average of many predictors, each with variance σ² and pairwise correlation ρ, approaches what value as the number of predictors grows: zero, ρσ², or σ²?" />
+
+<Step n={1} title="Why averaging helps" minutes={20} />
+
+Average $B$ predictors, each with variance $\sigma^2$ and pairwise correlation $\rho$. The variance of the average is
+
+$$
+\rho\sigma^2 + \frac{1 - \rho}{B}\sigma^2.
+$$
+
+As $B$ grows, the second term vanishes but the first stays: averaging can remove only the part of the variance that the predictors do not share. Bagging produces trees that are correlated, because they are grown on overlapping resamples of the same data and tend to make the same strong splits. Breiman's random forests, today's paper, reduce $\rho$ by letting each split consider only $m$ randomly chosen features, so that strong features cannot dominate every tree.
+
+<Figure caption="A random forest's probability map as trees are added. One deep tree is ragged and overconfident; the average of many is smooth. Compare the forest's test accuracy with a single tree's." credit="Interactive figure by Engram, after Breiman (2001).">
+  <ForestAverage />
+</Figure>
+
+<Video id="J4Wdy0Wc_xQ" title="StatQuest: random forests part 1, building, using and evaluating" by="StatQuest with Josh Starmer" note="Josh Starmer on building a random forest from bootstrapped datasets and random feature subsets, and on estimating its accuracy from out-of-bag samples." />
+
+<Step n={2} title="Bagging trees" minutes={30} />
+
+The problem: predict an animal's choice (left or right) from 12 neurons on each trial. Four of them carry the choice signal, partly through an interaction between two of them, and they are correlated with each other; the other eight are noise. The setup cell provides the tree code, with an option to choose a random subset of features at each split.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(583)
+  P = 12
+
+  def trials(n, g):
+      shared = g.normal(size=(n, 1))
+      sig = 0.7 * shared + g.normal(size=(n, 4))                    # four correlated choice-related neurons
+      z = 1.5 * sig[:, 0] + 1.0 * sig[:, 1] - 1.0 * sig[:, 2] * sig[:, 3]   # with a nonlinear interaction
+      y = (g.random(n) < 1 / (1 + np.exp(-2 * z))).astype(int)
+      return np.c_[sig, g.normal(size=(n, P - 4))], y
+
+  def gini_counts(c):
+      n = c.sum(-1, keepdims=True); return 1 - np.sum((c / np.maximum(n, 1)) ** 2, axis=-1)
+
+  def best_split(X, y, feats):
+      best = (None, None, np.inf); n = len(y)
+      for j in feats:
+          o = np.argsort(X[:, j]); xs, ys = X[o, j], y[o]
+          left = np.cumsum(np.eye(2)[ys], axis=0)[:-1]; right = left[-1] + np.eye(2)[ys[-1]] - left
+          nl = np.arange(1, n); imp = (nl * gini_counts(left) + (n - nl) * gini_counts(right)) / n
+          imp = np.where(xs[1:] > xs[:-1], imp, np.inf); i = int(np.argmin(imp))
+          if imp[i] < best[2]: best = (j, (xs[i] + xs[i + 1]) / 2, imp[i])
+      return best
+
+  def grow(X, y, g, mtry=None, min_leaf=2):
+      counts = np.bincount(y, minlength=2)
+      if len(y) < 2 * min_leaf or counts.max() == len(y): return ("leaf", counts[1] / counts.sum())
+      feats = range(X.shape[1]) if mtry is None else g.choice(X.shape[1], mtry, replace=False)
+      j, t, imp = best_split(X, y, feats)
+      if j is None: return ("leaf", counts[1] / counts.sum())
+      m = X[:, j] <= t
+      if m.all() or (~m).all(): return ("leaf", counts[1] / counts.sum())
+      return ("node", j, t, grow(X[m], y[m], g, mtry, min_leaf), grow(X[~m], y[~m], g, mtry, min_leaf))
+
+  def predict(tree, X):
+      if tree[0] == "leaf": return np.full(len(X), tree[1])
+      _, j, t, L, R = tree; m = X[:, j] <= t; out = np.empty(len(X))
+      out[m], out[~m] = predict(L, X[m]), predict(R, X[~m]); return out
+
+  X, y = trials(250, r); X_te, y_te = trials(2000, r)
+  acc = lambda p, y_: np.mean((p > 0.5) == (y_ == 1))
+  print("ready: 250 training trials of 12 neurons, 2,000 test trials")
+`} />
+
+<PyCell id="bagging" title="An average of deep trees" tests={String.raw`
+  import numpy as np
+  def test_curve():
+      "bag_acc has one accuracy per ensemble size, and 30 trees beat one"
+      assert len(bag_acc) == len(sizes) and bag_acc[-1] > bag_acc[0] + 0.03
+`} prompt="Grow 30 deep trees, each on a bootstrap resample, using all features at every split. Average their predicted probabilities and record test accuracy for ensembles of 1, 3, 10 and 30 trees."
+code={String.raw`
+  g = np.random.default_rng(1)
+  bag_preds = []
+  for b in range(30):
+      idx = g.integers(0, 250, 250)
+      tree = grow(X[idx], y[idx], g)
+      bag_preds.append(...)
+  bag_preds = np.array(bag_preds)
+  sizes = [1, 3, 10, 30]
+  bag_acc = [acc(bag_preds[:k].mean(0), y_te) for k in sizes]
+  for k, a in zip(sizes, bag_acc):
+      print(f"{k:2d} bagged trees: test accuracy {a:.3f}")
+`}
+hint="bag_preds.append(predict(tree, X_te))."
+solution={String.raw`
+  g = np.random.default_rng(1)
+  bag_preds = []
+  for b in range(30):
+      idx = g.integers(0, 250, 250)
+      tree = grow(X[idx], y[idx], g)
+      bag_preds.append(predict(tree, X_te))
+  bag_preds = np.array(bag_preds)
+  sizes = [1, 3, 10, 30]
+  bag_acc = [acc(bag_preds[:k].mean(0), y_te) for k in sizes]
+  for k, a in zip(sizes, bag_acc):
+      print(f"{k:2d} bagged trees: test accuracy {a:.3f}")
+`} />
+
+A single deep tree, grown on a bootstrap resample, is right on 73% of test trials. Averaging 3 trees gives 76.5%, 10 trees 79.5% and 30 trees 80.5%: a gain of more than seven points from averaging alone, with no change to the trees themselves. The gains shrink as trees are added, because the variance that the trees share does not average away, exactly as the formula of Step 1 says.
+
+<Step n={3} title="Random forests" minutes={30} />
+
+<PyCell id="forest" title="Decorrelating the trees" tests={String.raw`
+  import numpy as np
+  def test_corr():
+      "trees in the random forest are less correlated than bagged trees"
+      assert rho_rf < rho_bag
+  def test_acc():
+      "the 30-tree random forest is at least as accurate as 30 bagged trees"
+      assert acc_rf >= bag_acc[-1] - 0.005
+`} prompt="Grow 30 trees as before, but with mtry = 6 features considered at each split. Compute the mean pairwise correlation between trees' predicted probabilities on the test set, for the bagged trees and the forest, and the forest's test accuracy."
+code={String.raw`
+  rf_preds = []
+  for b in range(30):
+      idx = g.integers(0, 250, 250)
+      rf_preds.append(predict(grow(X[idx], y[idx], g, mtry=6), X_te))
+  rf_preds = np.array(rf_preds)
+
+  def mean_corr(P):
+      C = np.corrcoef(P)
+      return ...
+
+  rho_bag, rho_rf = mean_corr(bag_preds), mean_corr(rf_preds)
+  acc_rf = acc(rf_preds.mean(0), y_te)
+  print(f"mean correlation between trees: bagging {rho_bag:.3f}, random forest {rho_rf:.3f}")
+  print(f"test accuracy with 30 trees: bagging {bag_acc[-1]:.3f}, random forest {acc_rf:.3f}")
+`}
+hint="return C[np.triu_indices(len(P), 1)].mean()."
+solution={String.raw`
+  rf_preds = []
+  for b in range(30):
+      idx = g.integers(0, 250, 250)
+      rf_preds.append(predict(grow(X[idx], y[idx], g, mtry=6), X_te))
+  rf_preds = np.array(rf_preds)
+
+  def mean_corr(P):
+      C = np.corrcoef(P)
+      return C[np.triu_indices(len(P), 1)].mean()
+
+  rho_bag, rho_rf = mean_corr(bag_preds), mean_corr(rf_preds)
+  acc_rf = acc(rf_preds.mean(0), y_te)
+  print(f"mean correlation between trees: bagging {rho_bag:.3f}, random forest {rho_rf:.3f}")
+  print(f"test accuracy with 30 trees: bagging {bag_acc[-1]:.3f}, random forest {acc_rf:.3f}")
+`} />
+
+Considering only 6 of the 12 features at each split lowers the average correlation between trees from 0.47 to 0.39, and the 30-tree forest reaches 81.2% against bagging's 80.5%. The gain is modest here because the strong neurons are themselves correlated, so a split on any of them carries similar information; with more features and a few dominant ones, random feature selection usually helps more. The number of features per split, $m$, is the forest's main tuning parameter: smaller $m$ gives less correlated but individually weaker trees.
+
+<Step n={4} title="Out-of-bag error" minutes={25} />
+
+Each bootstrap resample leaves out about a third of the training examples (the chance that a given example is never drawn in $n$ draws is $(1 - 1/n)^n \approx e^{-1} \approx 0.37$). Predicting each training example using only the trees that did not see it gives an **out-of-bag** estimate of test accuracy, without a separate validation set.
+
+<PyCell id="oob" title="A free estimate of test accuracy" tests={String.raw`
+  import numpy as np
+  def test_frac():
+      "each tree leaves out between 30% and 45% of the training trials"
+      assert 0.3 < np.mean(oob_frac) < 0.45
+  def test_oob():
+      "the out-of-bag accuracy is within 0.05 of the test accuracy"
+      assert abs(oob_acc - test_acc_forest) < 0.05
+`} prompt="Grow a 30-tree random forest, remembering each tree's bootstrap indices. For each training trial, average the predictions of the trees for which it was out of bag, and compute the out-of-bag accuracy. Compare it with the forest's test accuracy."
+code={String.raw`
+  votes, n_votes, oob_frac, te_preds = np.zeros(250), np.zeros(250), [], []
+  for b in range(30):
+      idx = g.integers(0, 250, 250)
+      out = np.setdiff1d(np.arange(250), idx)
+      tree = grow(X[idx], y[idx], g, mtry=6)
+      votes[out] += ...
+      n_votes[out] += 1
+      oob_frac.append(len(out) / 250); te_preds.append(predict(tree, X_te))
+  has = n_votes > 0
+  oob_acc = acc(votes[has] / n_votes[has], y[has])
+  test_acc_forest = acc(np.mean(te_preds, 0), y_te)
+  print(f"each tree left out {100 * np.mean(oob_frac):.1f}% of trials on average")
+  print(f"out-of-bag accuracy {oob_acc:.3f}; test accuracy {test_acc_forest:.3f}")
+`}
+hint="votes[out] += predict(tree, X[out])."
+solution={String.raw`
+  votes, n_votes, oob_frac, te_preds = np.zeros(250), np.zeros(250), [], []
+  for b in range(30):
+      idx = g.integers(0, 250, 250)
+      out = np.setdiff1d(np.arange(250), idx)
+      tree = grow(X[idx], y[idx], g, mtry=6)
+      votes[out] += predict(tree, X[out])
+      n_votes[out] += 1
+      oob_frac.append(len(out) / 250); te_preds.append(predict(tree, X_te))
+  has = n_votes > 0
+  oob_acc = acc(votes[has] / n_votes[has], y[has])
+  test_acc_forest = acc(np.mean(te_preds, 0), y_te)
+  print(f"each tree left out {100 * np.mean(oob_frac):.1f}% of trials on average")
+  print(f"out-of-bag accuracy {oob_acc:.3f}; test accuracy {test_acc_forest:.3f}")
+`} />
+
+Each tree left out 36.5% of the training trials, close to the predicted $e^{-1} \approx 37\%$. Predicting each trial from only the trees that never saw it gives an out-of-bag accuracy of 82.0%, against 80.9% on 2,000 genuinely new trials. Out-of-bag estimates are slightly noisy, and with few trees somewhat pessimistic, since each trial is predicted by only about a third of the forest, but they come for free: no data need be set aside, which matters when trials are precious.
+
+<Bridge title="Ensembles in brains and machines"
+  neuro="Populations of noisy, partly redundant neurons are ensembles too, and the variance formula of Step 1 is the same one that limits how much information a population can carry when neurons share noise (Week 34): averaging removes independent noise, but correlated noise survives any amount of pooling."
+  ai="Random forests were for years the default strong model for tabular data, needing little tuning and giving out-of-bag error and variable importances for free. Ensembling, in many forms, remains a reliable way to improve deep networks too, and is the simplest route to better-calibrated uncertainty (Week 68).">
+
+Averaging removes the variance that predictors do not share; random forests make them share less.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The variance of an average of B correlated predictors approaches...", options: ["ρσ²", "0", "σ²", "σ²/B"], answer: 0, explain: "The shared part cannot be averaged away." },
+  { q: "Bagging stands for...", options: ["Bootstrap aggregating", "Bayesian aggregation", "Balanced grouping", "Batch gradient"], answer: 0, explain: "Breiman, 1996." },
+  { q: "Bagging helps most for models that are...", options: ["Unstable, with high variance", "Stable", "Biased", "Linear"], answer: 0, explain: "Like deep trees." },
+  { q: "Random forests decorrelate trees by...", options: ["Choosing a random subset of features at each split", "Using shallow trees", "Removing examples", "Adding noise to labels"], answer: 0, explain: "Step 3." },
+  { q: "A common choice of m for classification is...", options: ["About the square root of the number of features", "All features", "One", "Half the examples"], answer: 0, explain: "Breiman's default." },
+  { q: "A bootstrap resample leaves out about...", options: ["37% of examples", "10%", "50%", "0%"], answer: 0, explain: "e⁻¹." },
+  { q: "Out-of-bag error estimates...", options: ["Test error without a separate validation set", "Training error", "Bias", "The number of trees"], answer: 0, explain: "Step 4." },
+  { q: "Adding more trees to a random forest...", options: ["Does not cause overfitting in the way deeper trees do", "Always overfits", "Reduces accuracy", "Increases correlation"], answer: 0, explain: "It only reduces the averaging variance." },
+]} />
+
+<Flashcards cards={[
+  { front: "Variance of an average of correlated predictors?", back: "$\\rho\\sigma^2 + \\frac{1 - \\rho}{B}\\sigma^2$." },
+  { front: "Bagging?", back: "Fit the model to many bootstrap resamples and average the predictions." },
+  { front: "Random forest?", back: "Bagged deep trees with only m random features considered at each split." },
+  { front: "Out-of-bag estimate?", back: "Predict each example with the trees that did not see it; about 37% of trees per example." },
+  { front: "Why random features help?", back: "They stop strong features dominating every tree, lowering the correlation ρ between trees." },
+]} />
+
+<Predict revisit question="What does the variance of an average of many correlated predictors approach?" />
+
+<Key title="Before you go">
+<ul>
+<li>Averaging cancels the variance that predictors do not share.</li>
+<li>Bagging deep trees greatly improves on a single tree.</li>
+<li>Random feature selection decorrelates trees and improves the average further.</li>
+<li>Out-of-bag predictions estimate test error for free.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Breiman (2001), <em>Random forests</em>, this week's deep read.</li>
+<li>Breiman (1996), <em>Bagging predictors</em>, Machine Learning 24, 123 to 140.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Connect the variance formula of Step 1 to population coding: if neurons are like trees in a forest, what plays the role of ρ, and what would a brain need to do to decorrelate its 'trees'?" />

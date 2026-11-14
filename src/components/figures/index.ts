@@ -261,3 +261,8 @@ export { KernelRidgeFit } from "./kernel-ridge-fit";
 export { MarginExplorer } from "./margin-explorer";
 export { KernelSvm } from "./kernel-svm";
 export { KernelWidth } from "./kernel-width";
+export { TreeSplits } from "./tree-splits";
+export { TreeInstability } from "./tree-instability";
+export { ForestAverage } from "./forest-average";
+export { BoostingSteps } from "./boosting-steps";
+export { PartialDependence } from "./partial-dependence";

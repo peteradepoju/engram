@@ -1,0 +1,288 @@
+export const meta = {
+  title: "Interpreting ensembles: importance and partial dependence",
+  intro: "A forest of a hundred deep trees predicts well, but no one can read it. Yet in science the point of fitting a model to neural data is usually to learn which variables matter and how. Today you build regression forests that predict a neuron's firing rate from task variables, then interrogate them with the standard tools: impurity importance, permutation importance and partial dependence. Each answers a narrower question than it seems to, and you will find out, on data where the truth is known, exactly where each one misleads.",
+  goals: [
+    "Grow regression trees and forests that predict a continuous firing rate",
+    "Compute impurity and permutation importance, and show the bias of the first towards features with many split points",
+    "Explain why correlated features share or hide importance",
+    "Compute partial dependence and individual conditional expectation curves, and read interactions from them",
+  ],
+  plan: [
+    { label: "Regression forests for a firing rate", minutes: 25 },
+    { label: "Two kinds of importance", minutes: 30 },
+    { label: "Correlated features", minutes: 20 },
+    { label: "Partial dependence and ICE curves", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "strobl-2007",
+};
+
+<Predict question="A forest predicts firing rate from running speed, reward, and a column of pure random numbers. Impurity importance sums how much each feature's splits reduce error. Will the random column get importance near zero, or a substantial share?" />
+
+<Step n={1} title="Regression forests for a firing rate" minutes={25} />
+
+A regression tree predicts the mean of the training targets in each leaf and chooses splits that most reduce the sum of squared errors. A regression forest averages many such trees, each grown on a bootstrap resample with a random subset of features at each split. The setup cell builds one, for a simulated hippocampal or visual cortical neuron whose rate depends on running speed, on the direction of a moving stimulus, and on whether the trial is rewarded, with speed and reward interacting.
+
+<Video id="g9c66TUylZ4" title="Regression trees, clearly explained" by="StatQuest with Josh Starmer" note="Josh Starmer on regression trees: choosing thresholds that minimise the sum of squared residuals, and predicting the average in each leaf. These are the trees in today's forests." />
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(585)
+  names = ["speed", "direction", "reward", "noise_cont", "noise_bin"]
+
+  def session(n, g):
+      speed = g.uniform(0, 1, n)                         # normalised running speed, many distinct values
+      direction = g.integers(0, 4, n)                    # one of four stimulus directions
+      reward = g.integers(0, 2, n)                       # rewarded or not
+      noise_cont = g.uniform(0, 1, n)                    # irrelevant, continuous
+      noise_bin = g.integers(0, 2, n)                    # irrelevant, binary
+      rate = 5 + 4 * speed + 3 * np.cos(np.pi * direction / 2) + 6 * speed * reward
+      X = np.column_stack([speed, direction, reward, noise_cont, noise_bin]).astype(float)
+      return X, rate + 1.5 * g.normal(size=n), rate
+
+  def best_split(X, y, feats, min_leaf):
+      n, best = len(y), (None, 0.0, 0.0)
+      for j in feats:
+          o = np.argsort(X[:, j]); xs, ys = X[o, j], y[o]
+          cs = np.cumsum(ys)[:-1]; nl = np.arange(1, n)
+          gain = cs ** 2 / nl + (ys.sum() - cs) ** 2 / (n - nl) - ys.sum() ** 2 / n
+          ok = (xs[1:] > xs[:-1]) & (nl >= min_leaf) & (n - nl >= min_leaf)
+          gain = np.where(ok, gain, -np.inf); k = int(np.argmax(gain))
+          if gain[k] > best[2]: best = (j, (xs[k] + xs[k + 1]) / 2, gain[k])
+      return best
+
+  def grow(X, y, g, mtry, min_leaf, imp_acc):
+      if len(y) < 2 * min_leaf: return ("leaf", y.mean())
+      feats = g.choice(X.shape[1], mtry, replace=False)
+      j, t, gain = best_split(X, y, feats, min_leaf)
+      if j is None: return ("leaf", y.mean())
+      imp_acc[j] += gain                                 # reduction in squared error from this split
+      m = X[:, j] <= t
+      return ("node", j, t, grow(X[m], y[m], g, mtry, min_leaf, imp_acc), grow(X[~m], y[~m], g, mtry, min_leaf, imp_acc))
+
+  def predict(tree, X):
+      if tree[0] == "leaf": return np.full(len(X), tree[1])
+      _, j, t, L, R = tree; m = X[:, j] <= t; out = np.empty(len(X))
+      out[m], out[~m] = predict(L, X[m]), predict(R, X[~m]); return out
+
+  def forest(X, y, g, n_trees=40, mtry=2, min_leaf=3):
+      imp_acc, trees = np.zeros(X.shape[1]), []
+      for b in range(n_trees):
+          idx = g.integers(0, len(y), len(y))
+          trees.append(grow(X[idx], y[idx], g, mtry, min_leaf, imp_acc))
+      return trees, imp_acc / imp_acc.sum()
+
+  fpredict = lambda trees, X: np.mean([predict(t, X) for t in trees], axis=0)
+  r2 = lambda y_, p: 1 - np.mean((y_ - p) ** 2) / np.var(y_)
+
+  X, y, _ = session(400, r); X_te, y_te, rate_te = session(2000, r)
+  trees, imp_impurity = forest(X, y, np.random.default_rng(1))
+  p_te = fpredict(trees, X_te); r2_te = r2(y_te, p_te)
+  print(f"forest test R squared {r2_te:.3f}; ceiling set by the noise {r2(y_te, rate_te):.3f}")
+`} />
+
+The forest explains about 77% of the variance in test firing rates, against a ceiling of about 84% set by the trial-to-trial noise. That is a good model, and we know the truth: rate depends on speed, direction and reward, with speed's effect larger on rewarded trials, and not at all on the two noise columns. The question for the rest of the day is whether the interpretation tools recover that truth.
+
+<Step n={2} title="Two kinds of importance" minutes={30} />
+
+**Impurity importance**, the default in most software, adds up the error reduction of every split on a feature, across all trees. **Permutation importance** asks a more direct question: if the values of one feature on held-out trials are shuffled, breaking its link to the target while keeping its distribution, how much worse do the predictions become? Strobl and colleagues (2007), today's paper, showed that the first is biased in favour of features with many possible split points.
+
+<PyCell id="importance" title="Impurity against permutation importance" tests={String.raw`
+  import numpy as np
+  def test_perm():
+      "permutation importance is a length-5 array, with speed the most important"
+      assert len(imp_perm) == 5 and int(np.argmax(imp_perm)) == 0
+  def test_bias():
+      "the irrelevant continuous feature gets clear impurity importance but almost no permutation importance"
+      assert imp_impurity[3] > 3 * imp_impurity[4] and imp_impurity[3] > 0.04 and imp_perm[3] < 0.02
+`} prompt="Write permutation_importance(trees, X, y, g, repeats): for each feature, shuffle that column of X (on a copy), predict, and record the rise in mean squared error, averaged over repeats. Normalise it by the variance of y. Compare it with the impurity importance for the five features."
+code={String.raw`
+  def permutation_importance(trees, X, y, g, repeats=3):
+      base = np.mean((y - fpredict(trees, X)) ** 2)
+      out = np.zeros(X.shape[1])
+      for j in range(X.shape[1]):
+          for _ in range(repeats):
+              Xp = X.copy()
+              Xp[:, j] = ...
+              out[j] += (np.mean((y - fpredict(trees, Xp)) ** 2) - base) / repeats
+      return out / np.var(y)
+
+  imp_perm = permutation_importance(trees, X_te[:600], y_te[:600], np.random.default_rng(2))
+  print(f"{'feature':>11}  impurity  permutation")
+  for k, nm in enumerate(names):
+      print(f"{nm:>11}  {imp_impurity[k]:8.3f}  {imp_perm[k]:11.3f}")
+`}
+hint="Xp[:, j] = g.permutation(Xp[:, j])."
+solution={String.raw`
+  def permutation_importance(trees, X, y, g, repeats=3):
+      base = np.mean((y - fpredict(trees, X)) ** 2)
+      out = np.zeros(X.shape[1])
+      for j in range(X.shape[1]):
+          for _ in range(repeats):
+              Xp = X.copy()
+              Xp[:, j] = g.permutation(Xp[:, j])
+              out[j] += (np.mean((y - fpredict(trees, Xp)) ** 2) - base) / repeats
+      return out / np.var(y)
+
+  imp_perm = permutation_importance(trees, X_te[:600], y_te[:600], np.random.default_rng(2))
+  print(f"{'feature':>11}  impurity  permutation")
+  for k, nm in enumerate(names):
+      print(f"{nm:>11}  {imp_impurity[k]:8.3f}  {imp_perm[k]:11.3f}")
+`} />
+
+Permutation importance gets the story right: shuffling speed raises the error by about 68% of the target variance, direction by 48% and reward by 41%, while shuffling either noise column changes nothing (the tiny negative values are chance). Impurity importance ranks the real features in the same order, but gives the continuous noise column about 10% of the total, five times as much as the binary noise column. Deep trees split on the noise column to separate the last few training trials in a leaf, and a continuous feature offers hundreds of thresholds to choose from, so by chance one of them always reduces training error a little. Strobl and colleagues traced this bias to the selection of split variables and proposed conditional inference trees and a conditional permutation importance as remedies. The practical rule: compute importance by permutation, on held-out data.
+
+<Step n={3} title="Correlated features" minutes={20} />
+
+Suppose the rig records running speed twice, from a treadmill encoder and from video, and both go into the model. Permuting one copy now breaks little, because the forest can fall back on the other. Importance is about what the model uses, not about what the brain uses.
+
+<PyCell id="correlated" title="A second copy of speed" tests={String.raw`
+  import numpy as np
+  def test_split():
+      "adding a near copy of speed lowers the permutation importance of the original by at least a third"
+      assert imp_copy[0] < (2 / 3) * imp_perm[0]
+  def test_share():
+      "the copy itself picks up a clear share of importance"
+      assert imp_copy[5] > 0.05
+`} prompt="Add a sixth feature, speed plus a little noise (standard deviation 0.03), to the training and test data. Refit the forest with mtry 3 and recompute permutation importance. Compare the importance of speed with and without the copy."
+code={String.raw`
+  gc = np.random.default_rng(3)
+  X2 = np.column_stack([X, X[:, 0] + 0.03 * gc.normal(size=len(X))])
+  X2_te = ...
+  trees2, _ = forest(X2, y, np.random.default_rng(1), mtry=3)
+  imp_copy = permutation_importance(trees2, X2_te[:600], y_te[:600], np.random.default_rng(2))
+  print(f"speed alone: {imp_perm[0]:.3f}; with a copy present: speed {imp_copy[0]:.3f}, copy {imp_copy[5]:.3f}")
+  print(f"test R squared with the copy: {r2(y_te, fpredict(trees2, X2_te)):.3f}")
+`}
+hint="X2_te = np.column_stack([X_te, X_te[:, 0] + 0.03 * gc.normal(size=len(X_te))])."
+solution={String.raw`
+  gc = np.random.default_rng(3)
+  X2 = np.column_stack([X, X[:, 0] + 0.03 * gc.normal(size=len(X))])
+  X2_te = np.column_stack([X_te, X_te[:, 0] + 0.03 * gc.normal(size=len(X_te))])
+  trees2, _ = forest(X2, y, np.random.default_rng(1), mtry=3)
+  imp_copy = permutation_importance(trees2, X2_te[:600], y_te[:600], np.random.default_rng(2))
+  print(f"speed alone: {imp_perm[0]:.3f}; with a copy present: speed {imp_copy[0]:.3f}, copy {imp_copy[5]:.3f}")
+  print(f"test R squared with the copy: {r2(y_te, fpredict(trees2, X2_te)):.3f}")
+`} />
+
+With the copy present, the permutation importance of speed falls from 0.68 to 0.14, and the copy picks up 0.22. Together they still carry less than speed did alone, because when either is shuffled the forest can lean on the other. Prediction is just as good as before (R squared 0.755 against 0.768), so the model has not changed its view of the neuron; only the attribution has. A careless reading would conclude that speed matters far less than direction or reward. With correlated recordings, from overlapping neurons to related task variables, permute groups of correlated features together, or report the importance of the group.
+
+<Step n={4} title="Partial dependence and ICE curves" minutes={30} />
+
+Importance says how much a feature matters, not how. A **partial dependence** plot answers how, on average: set the feature to a value $v$ on every trial, predict, average, and repeat over a grid of $v$. An **individual conditional expectation** (ICE) curve does the same for a single trial without averaging. Where the ICE curves are parallel the feature acts on its own; where they fan out, it interacts with something else.
+
+<Figure caption="ICE curves (thin) and their average, the partial dependence (thick), for a model in which the effect of one feature depends on another. Raise the interaction and watch the average hide it." credit="Interactive figure by Engram, after Friedman (2001) and Goldstein and colleagues (2015).">
+  <PartialDependence />
+</Figure>
+
+<PyCell id="pdp" title="How firing depends on speed" tests={String.raw`
+  import numpy as np
+  def test_pd():
+      "the partial dependence on speed rises across the grid"
+      assert pd_speed[-1] - pd_speed[0] > 3
+  def test_ice():
+      "ICE slopes are steeper on rewarded trials than on unrewarded ones"
+      assert slope_rew > slope_unrew + 3
+`} prompt="Write ice(trees, X, j, grid), returning an array of predictions with one row per trial and one column per grid value, with feature j set to that value. The partial dependence is its column mean. Then compare the average ICE slope (last column minus first) on rewarded and unrewarded trials."
+code={String.raw`
+  def ice(trees, X, j, grid):
+      out = np.empty((len(X), len(grid)))
+      for k, v in enumerate(grid):
+          Xv = X.copy()
+          Xv[:, j] = v
+          out[:, k] = ...
+      return out
+
+  grid = np.linspace(0.05, 0.95, 10)
+  curves = ice(trees, X_te[:300], 0, grid)
+  pd_speed = curves.mean(0)
+  rew = X_te[:300, 2] == 1
+  slope_rew = np.mean(curves[rew, -1] - curves[rew, 0])
+  slope_unrew = np.mean(curves[~rew, -1] - curves[~rew, 0])
+  print("partial dependence on speed:", np.round(pd_speed, 1))
+  print(f"ICE rise across the grid: rewarded {slope_rew:.1f}, unrewarded {slope_unrew:.1f} (truth 9.0 and 3.6)")
+  fig, ax = plt.subplots(figsize=(5, 3))
+  for c, rw in zip(curves[:60], rew[:60]): ax.plot(grid, c, color="C3" if rw else "C0", alpha=0.3, lw=0.8)
+  ax.plot(grid, pd_speed, "k", lw=2.5); ax.set_xlabel("speed"); ax.set_ylabel("predicted rate")
+  plt.tight_layout(); plt.show()
+`}
+hint="out[:, k] = fpredict(trees, Xv)."
+solution={String.raw`
+  def ice(trees, X, j, grid):
+      out = np.empty((len(X), len(grid)))
+      for k, v in enumerate(grid):
+          Xv = X.copy()
+          Xv[:, j] = v
+          out[:, k] = fpredict(trees, Xv)
+      return out
+
+  grid = np.linspace(0.05, 0.95, 10)
+  curves = ice(trees, X_te[:300], 0, grid)
+  pd_speed = curves.mean(0)
+  rew = X_te[:300, 2] == 1
+  slope_rew = np.mean(curves[rew, -1] - curves[rew, 0])
+  slope_unrew = np.mean(curves[~rew, -1] - curves[~rew, 0])
+  print("partial dependence on speed:", np.round(pd_speed, 1))
+  print(f"ICE rise across the grid: rewarded {slope_rew:.1f}, unrewarded {slope_unrew:.1f} (truth 9.0 and 3.6)")
+  fig, ax = plt.subplots(figsize=(5, 3))
+  for c, rw in zip(curves[:60], rew[:60]): ax.plot(grid, c, color="C3" if rw else "C0", alpha=0.3, lw=0.8)
+  ax.plot(grid, pd_speed, "k", lw=2.5); ax.set_xlabel("speed"); ax.set_ylabel("predicted rate")
+  plt.tight_layout(); plt.show()
+`} />
+
+The partial dependence on speed rises from about 6 to about 11 spikes per second across the grid: speed matters, and its average effect is roughly linear, though the forest's step functions show through. The ICE curves split it apart. On rewarded trials the predicted rate rises by about 7.5 across the grid, on unrewarded trials by about 3.2, against true values of 9.0 and 3.6 (the forest shrinks slopes a little, because leaf averages flatten the edges of the range). The average curve, a single gentle slope, hides that reward multiplies the effect of speed, which is the kind of gain modulation that matters most to a neuroscientist.
+
+<Callout kind="warning" title="A model of the data, not of the brain">
+
+Every tool today describes the fitted forest. A feature can be important to the model because it is correlated with the true cause, and unimportant because a correlated copy took its place. Partial dependence plots also evaluate the model at combinations of features that never occur together, such as high running speed on a trial where the animal sat still, where the forest's predictions are guesses. To make claims about the neuron, combine these tools with experimental control or with the causal methods of Week 72.
+
+</Callout>
+
+<Bridge title="Interpretation in brains and machines"
+  neuro="Permutation importance is the statistical cousin of a lesion or an inactivation: remove the information carried by one variable and measure the loss. The same confounds apply. Silencing one area can do little because another compensates, just as permuting one of two correlated features does little, which is why lesion studies are read with caution."
+  ai="Feature attribution is a large part of explainable AI, from permutation importance to Shapley-value methods such as SHAP and gradient-based saliency maps for deep networks. All of them describe a model's behaviour around its training data, and all inherit the problems of correlated inputs seen here.">
+
+Ask what a model relies on, and remember that the answer is about the model.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Impurity importance is biased towards features with...", options: ["Many possible split points", "Few distinct values", "Large effects only", "Missing values"], answer: 0, explain: "Strobl and colleagues (2007)." },
+  { q: "Permutation importance measures...", options: ["The loss in held-out accuracy when a feature's values are shuffled", "How often a feature is split on", "The feature's variance", "The correlation with the target"], answer: 0, explain: "Step 2." },
+  { q: "Why compute permutation importance on held-out data?", options: ["Training data rewards features the model used to memorise noise", "It is faster", "It removes correlation", "It is unbiased for any model"], answer: 0, explain: "On training data, noise features can look useful." },
+  { q: "Two highly correlated features in a forest tend to...", options: ["Share, and so each understate, their importance", "Both get full importance", "Crash the model", "Get zero importance always"], answer: 0, explain: "Step 3." },
+  { q: "A partial dependence plot shows...", options: ["The average prediction as one feature is varied", "A single tree", "The training error", "Feature correlations"], answer: 0, explain: "Step 4." },
+  { q: "Fanning ICE curves indicate...", options: ["An interaction with another feature", "No effect", "Overfitting", "A linear model"], answer: 0, explain: "Step 4." },
+  { q: "A partial dependence plot can mislead when features are correlated because...", options: ["It evaluates the model at feature combinations that never occur", "It is too slow", "It needs a test set", "It ignores the target"], answer: 0, explain: "The warning callout." },
+  { q: "Permutation importance is most like which experiment?", options: ["A lesion or inactivation", "A recording", "Anatomical tracing", "A behavioural observation"], answer: 0, explain: "The bridge." },
+]} />
+
+<Flashcards cards={[
+  { front: "Impurity importance?", back: "Total error (or impurity) reduction from splits on a feature, summed over trees. Biased towards features with many split points." },
+  { front: "Permutation importance?", back: "Rise in held-out error when one feature's values are shuffled." },
+  { front: "Partial dependence?", back: "$\\bar f(v) = \\frac1n\\sum_i f(v, \\mathbf x_{i,-j})$: average prediction with feature $j$ set to $v$." },
+  { front: "ICE curve?", back: "One trial's prediction as feature $j$ varies; fanning curves reveal interactions." },
+  { front: "Correlated features and importance?", back: "Their importance is shared and understated; permutation also creates unrealistic inputs." },
+]} />
+
+<Predict revisit question="Did the column of random numbers get impurity importance near zero?" />
+
+<Key title="Before you go">
+<ul>
+<li>Regression forests average regression trees, each predicting leaf means.</li>
+<li>Impurity importance favours features with many split points; permutation importance on held-out data does not.</li>
+<li>Correlated features share importance, so a low score does not mean a feature is irrelevant.</li>
+<li>Partial dependence shows average effects; ICE curves show the interactions the average hides.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Strobl, Boulesteix, Zeileis and Hothorn (2007), <em>Bias in random forest variable importance measures: illustrations, sources and a solution</em>.</li>
+<li>Goldstein, Kapelner, Bleich and Pitkin (2015), <em>Peeking inside the black box: visualizing statistical learning with plots of individual conditional expectation</em>, Journal of Computational and Graphical Statistics 24(1), 44 to 65, which introduced ICE curves.</li>
+<li>Molnar, <em>Interpretable Machine Learning</em>, a free online book covering all of today's methods and more.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Think of a paper that reported which task variables a neural population encodes, using a decoder or an encoding model. Which of today's pitfalls could apply to it (correlated variables, bias towards continuous variables, averaging over interactions)? What control would you ask for?" />

@@ -1,0 +1,316 @@
+export const meta = {
+  title: "Growing, pruning and the instability of trees",
+  intro: "Left to grow, a tree keeps splitting until every leaf is pure, which on noisy data means memorising the training set. Yesterday's tree stopped at depth 3 because we told it to. Today you see what happens without that restraint, choose how much to grow by cross-validation, and meet the deeper problem with single trees: they are unstable, so that a small change in the data can produce a completely different tree. That instability is a weakness for interpretation, and the opportunity that random forests exploit.",
+  goals: [
+    "Trace training and test error as a tree is allowed to grow deeper",
+    "Control tree size with depth and minimum leaf size, chosen by cross-validation",
+    "Prune a grown tree using a validation set",
+    "Measure how much trees change across bootstrap resamples of the same data",
+  ],
+  plan: [
+    { label: "How deep?", minutes: 25 },
+    { label: "Choosing size by cross-validation", minutes: 25 },
+    { label: "Pruning back", minutes: 25 },
+    { label: "Instability", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "loh-2011",
+};
+
+<Predict question="You grow 20 trees, each on a bootstrap resample of the same 300 neurons. In how many will the root split use the same feature as the tree grown on the original data: all 20, about half, or almost none?" />
+
+<Step n={1} title="How deep?" minutes={25} />
+
+The setup cell reuses yesterday's tree code and the cell-type data, now with 10% of labels flipped at random, as happens when ground-truth cell types come from imperfect criteria.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(582)
+
+  def cells(n, g, flip=0.1):
+      y = g.integers(0, 3, n)
+      width = np.array([0.25, 0.45, 0.65])[y] + 0.07 * g.normal(size=n)
+      rate = np.array([25, 10, 4])[y] * np.exp(0.35 * g.normal(size=n))
+      burst = np.array([0.05, 0.2, 0.4])[y] + 0.1 * g.normal(size=n)
+      noisy = np.where(g.random(n) < flip, g.integers(0, 3, n), y)
+      return np.c_[width, rate, burst, g.normal(size=n), g.random(n)], noisy
+
+  def gini_counts(c):
+      n = c.sum(-1, keepdims=True); return 1 - np.sum((c / np.maximum(n, 1)) ** 2, axis=-1)
+
+  def best_split(X, y, K, feats=None, min_leaf=1):
+      best = (None, None, np.inf); n = len(y)
+      for j in (range(X.shape[1]) if feats is None else feats):
+          o = np.argsort(X[:, j]); xs, ys = X[o, j], y[o]
+          left = np.cumsum(np.eye(K)[ys], axis=0)[:-1]; right = left[-1] + np.eye(K)[ys[-1]] - left
+          nl = np.arange(1, n); nr = n - nl
+          imp = (nl * gini_counts(left) + nr * gini_counts(right)) / n
+          ok_ = (xs[1:] > xs[:-1]) & (nl >= min_leaf) & (nr >= min_leaf)
+          imp = np.where(ok_, imp, np.inf); i = int(np.argmin(imp))
+          if imp[i] < best[2]: best = (j, (xs[i] + xs[i + 1]) / 2, imp[i])
+      return best
+
+  def grow(X, y, K, depth=99, min_leaf=1, feats_fn=None):
+      counts = np.bincount(y, minlength=K)
+      if depth == 0 or len(y) < 2 * min_leaf or counts.max() == len(y): return ("leaf", counts)
+      j, t, imp = best_split(X, y, K, None if feats_fn is None else feats_fn(), min_leaf)
+      if j is None or imp >= gini_counts(counts): return ("leaf", counts)
+      m = X[:, j] <= t
+      return ("node", j, t, grow(X[m], y[m], K, depth - 1, min_leaf, feats_fn), grow(X[~m], y[~m], K, depth - 1, min_leaf, feats_fn), counts)
+
+  def predict_proba(tree, X, K):
+      if tree[0] == "leaf": return np.tile(tree[1] / tree[1].sum(), (len(X), 1))
+      _, j, t, L, R, _c = tree; m = X[:, j] <= t; out = np.zeros((len(X), K))
+      out[m], out[~m] = predict_proba(L, X[m], K), predict_proba(R, X[~m], K); return out
+
+  def n_leaves(tree):
+      return 1 if tree[0] == "leaf" else n_leaves(tree[3]) + n_leaves(tree[4])
+
+  X, y = cells(300, r); X_te, y_te = cells(3000, r)
+  acc = lambda tree, X_, y_: np.mean(predict_proba(tree, X_, 3).argmax(1) == y_)
+  print("ready: 300 training neurons, 3,000 test neurons, 10% of labels flipped")
+`} />
+
+<PyCell id="depth" title="Error against depth" tests={String.raw`
+  import numpy as np
+  def test_train():
+      "training accuracy rises with depth and is near 1 for the unlimited tree"
+      assert tr_acc[-1] > 0.97 and tr_acc[-1] >= tr_acc[0]
+  def test_test():
+      "the unlimited tree is worse on test data than the best depth"
+      assert te_acc[-1] < max(te_acc) - 0.03
+`} prompt="Grow trees of depth 1, 2, 3, 4, 6, 8 and unlimited (99), and record training accuracy, test accuracy and the number of leaves."
+code={String.raw`
+  depths = [1, 2, 3, 4, 6, 8, 99]
+  tr_acc, te_acc, leaves = [], [], []
+  for d in depths:
+      tree = grow(X, y, 3, depth=d)
+      tr_acc.append(...); te_acc.append(...); leaves.append(n_leaves(tree))
+      print(f"depth {d:2d}: {leaves[-1]:3d} leaves, training accuracy {tr_acc[-1]:.3f}, test accuracy {te_acc[-1]:.3f}")
+`}
+hint="tr_acc.append(acc(tree, X, y)); te_acc.append(acc(tree, X_te, y_te))."
+solution={String.raw`
+  depths = [1, 2, 3, 4, 6, 8, 99]
+  tr_acc, te_acc, leaves = [], [], []
+  for d in depths:
+      tree = grow(X, y, 3, depth=d)
+      tr_acc.append(acc(tree, X, y)); te_acc.append(acc(tree, X_te, y_te)); leaves.append(n_leaves(tree))
+      print(f"depth {d:2d}: {leaves[-1]:3d} leaves, training accuracy {tr_acc[-1]:.3f}, test accuracy {te_acc[-1]:.3f}")
+`} />
+
+Training accuracy climbs steadily with depth, to 100% for the unlimited tree with 39 leaves, which has memorised every flipped label. Test accuracy peaks at depth 3 (86.7%) and falls to 80.1% for the unlimited tree. With 10% of labels flipped, no classifier can beat about 93% here, so the deep tree spends much of its capacity fitting noise. The depth at which a tree should stop depends on the noise in the labels, which is usually unknown; hence cross-validation.
+
+<Step n={2} title="Choosing size by cross-validation" minutes={25} />
+
+Depth is one way to limit a tree. Another is a **minimum leaf size**: never create a leaf with fewer than some number of examples. It adapts better to uneven data, stopping early where data are sparse and growing further where they are dense.
+
+<PyCell id="cvtree" title="Depth and leaf size by five-fold cross-validation" tests={String.raw`
+  import numpy as np
+  def test_grid():
+      "cv has one entry per depth and minimum leaf size"
+      assert cv.shape == (len(cv_depths), len(min_leaves))
+  def test_choice():
+      "the chosen tree's test accuracy is within 0.03 of the best on the grid"
+      assert te_chosen >= te_best - 0.03
+`} prompt="Compute five-fold cross-validated accuracy for each combination of depth and minimum leaf size. Refit the best combination on all training data and report its test accuracy, and the best test accuracy on the grid for comparison."
+code={String.raw`
+  cv_depths, min_leaves = [2, 3, 4, 6, 99], [1, 5, 15, 30]
+  folds = np.array_split(r.permutation(300), 5)
+  cv = np.zeros((len(cv_depths), len(min_leaves)))
+  for i, d in enumerate(cv_depths):
+      for j, ml in enumerate(min_leaves):
+          s = 0
+          for te in folds:
+              tr = np.setdiff1d(np.arange(300), te)
+              s += ...
+          cv[i, j] = s / 300
+  i, j = np.unravel_index(np.argmax(cv), cv.shape)
+  te_chosen = acc(grow(X, y, 3, cv_depths[i], min_leaves[j]), X_te, y_te)
+  te_best = max(acc(grow(X, y, 3, d, ml), X_te, y_te) for d in cv_depths for ml in min_leaves)
+  print(np.round(cv, 3))
+  print(f"chosen depth {cv_depths[i]}, minimum leaf {min_leaves[j]}: test accuracy {te_chosen:.3f} (best on grid {te_best:.3f})")
+`}
+hint="s += np.sum(predict_proba(grow(X[tr], y[tr], 3, d, ml), X[te], 3).argmax(1) == y[te])."
+solution={String.raw`
+  cv_depths, min_leaves = [2, 3, 4, 6, 99], [1, 5, 15, 30]
+  folds = np.array_split(r.permutation(300), 5)
+  cv = np.zeros((len(cv_depths), len(min_leaves)))
+  for i, d in enumerate(cv_depths):
+      for j, ml in enumerate(min_leaves):
+          s = 0
+          for te in folds:
+              tr = np.setdiff1d(np.arange(300), te)
+              s += np.sum(predict_proba(grow(X[tr], y[tr], 3, d, ml), X[te], 3).argmax(1) == y[te])
+          cv[i, j] = s / 300
+  i, j = np.unravel_index(np.argmax(cv), cv.shape)
+  te_chosen = acc(grow(X, y, 3, cv_depths[i], min_leaves[j]), X_te, y_te)
+  te_best = max(acc(grow(X, y, 3, d, ml), X_te, y_te) for d in cv_depths for ml in min_leaves)
+  print(np.round(cv, 3))
+  print(f"chosen depth {cv_depths[i]}, minimum leaf {min_leaves[j]}: test accuracy {te_chosen:.3f} (best on grid {te_best:.3f})")
+`} />
+
+The cross-validation table favours shallow trees with a modest minimum leaf size: depth 3 or 4 with leaves of at least five neurons scores 87.3%. A large minimum leaf (15 or 30) gives the same 83% whatever the depth, because it stops the tree well before depth matters. The chosen combination scores 86.9% on test neurons, within a point of the best on the grid (87.5%). Both controls work; a minimum leaf size has the advantage of adapting to how many examples reach each part of the tree.
+
+<Step n={3} title="Pruning back" minutes={25} />
+
+Stopping rules can stop too early: a split that looks useless may enable good splits below it. The alternative is to grow a full tree and then **prune** it, replacing subtrees by leaves when that does not hurt. CART's cost-complexity pruning does this along a path indexed by a penalty per leaf; a simpler version, **reduced-error pruning**, works bottom-up on a held-out validation set, collapsing any node whose subtree is no better on validation data than a single leaf would be.
+
+<Video id="D0efHEJsfHo" title="How to prune regression trees, clearly explained" by="StatQuest with Josh Starmer" note="Josh Starmer on cost-complexity pruning: growing a full tree, then trading the sum of squared residuals against the number of leaves to find a smaller tree that predicts better." />
+
+<PyCell id="prune" title="Reduced-error pruning" tests={String.raw`
+  import numpy as np
+  def test_smaller():
+      "pruning removes most of the leaves of the full tree"
+      assert n_leaves(pruned) < 0.5 * n_leaves(full)
+  def test_better():
+      "the pruned tree is more accurate on test data than the full tree"
+      assert acc(pruned, X_te, y_te) > acc(full, X_te, y_te)
+`} prompt="Complete prune(tree, Xv, yv): prune the children first, then replace the node by a leaf (with the node's training counts) if that leaf classifies the validation examples reaching this node at least as well as the subtree."
+code={String.raw`
+  perm = r.permutation(300); tr_i, va_i = perm[:200], perm[200:]
+  full = grow(X[tr_i], y[tr_i], 3)
+
+  def prune(tree, Xv, yv):
+      if tree[0] == "leaf" or len(yv) == 0:
+          return tree if tree[0] == "leaf" else ("leaf", tree[5])
+      _, j, t, L, R, counts = tree
+      m = Xv[:, j] <= t
+      L, R = prune(L, Xv[m], yv[m]), prune(R, Xv[~m], yv[~m])
+      node = ("node", j, t, L, R, counts)
+      as_leaf = ...
+      as_node = np.sum(predict_proba(node, Xv, 3).argmax(1) == yv)
+      return ("leaf", counts) if as_leaf >= as_node else node
+
+  pruned = prune(full, X[va_i], y[va_i])
+  print(f"full tree: {n_leaves(full)} leaves, test accuracy {acc(full, X_te, y_te):.3f}")
+  print(f"pruned:    {n_leaves(pruned)} leaves, test accuracy {acc(pruned, X_te, y_te):.3f}")
+`}
+hint="as_leaf = np.sum(np.argmax(counts) == yv)."
+solution={String.raw`
+  perm = r.permutation(300); tr_i, va_i = perm[:200], perm[200:]
+  full = grow(X[tr_i], y[tr_i], 3)
+
+  def prune(tree, Xv, yv):
+      if tree[0] == "leaf" or len(yv) == 0:
+          return tree if tree[0] == "leaf" else ("leaf", tree[5])
+      _, j, t, L, R, counts = tree
+      m = Xv[:, j] <= t
+      L, R = prune(L, Xv[m], yv[m]), prune(R, Xv[~m], yv[~m])
+      node = ("node", j, t, L, R, counts)
+      as_leaf = np.sum(np.argmax(counts) == yv)
+      as_node = np.sum(predict_proba(node, Xv, 3).argmax(1) == yv)
+      return ("leaf", counts) if as_leaf >= as_node else node
+
+  pruned = prune(full, X[va_i], y[va_i])
+  print(f"full tree: {n_leaves(full)} leaves, test accuracy {acc(full, X_te, y_te):.3f}")
+  print(f"pruned:    {n_leaves(pruned)} leaves, test accuracy {acc(pruned, X_te, y_te):.3f}")
+`} />
+
+Grown without limit on 200 training neurons, the tree has 33 leaves and 78.9% test accuracy. Pruning against the 100 validation neurons collapses it to 10 leaves and raises test accuracy to 87.4%, as good as the best depth-limited tree, without having to choose a depth in advance. Pruning bottom-up keeps splits that look weak on their own but enable useful splits below them, which early stopping would never reach. The cost is that 100 neurons were set aside for validation; CART's cost-complexity pruning chooses its penalty by cross-validation instead, using every example.
+
+<Step n={4} title="Instability" minutes={30} />
+
+<Figure caption="Trees grown on bootstrap resamples of the same 120 trials. Strong colour marks where the resampled tree disagrees with the tree grown on the original data. Change the resample and the depth." credit="Interactive figure by Engram, after Breiman (1996).">
+  <TreeInstability />
+</Figure>
+
+A procedure is **unstable** if small changes in the training data cause large changes in the fitted model. Trees are the classic example: if two splits are nearly equally good at the root, a few examples decide which wins, and the whole tree below changes. Measure it.
+
+<PyCell id="instability" title="Twenty trees from one dataset" tests={String.raw`
+  import numpy as np
+  def test_roots():
+      "root_feats holds the root feature of each of the 20 bootstrap trees"
+      assert len(root_feats) == 20
+  def test_disagree():
+      "deep bootstrap trees disagree with each other on more test neurons than shallow ones do"
+      assert disagree_deep > disagree_shallow
+`} prompt="Grow 20 trees on bootstrap resamples, at depth 2 and at unlimited depth. Record each deep tree's root feature and threshold, and compute the average fraction of test neurons on which pairs of trees disagree, for shallow and for deep trees."
+code={String.raw`
+  root_feats, root_thr, preds_shallow, preds_deep = [], [], [], []
+  for b in range(20):
+      idx = r.integers(0, 300, 300)
+      deep = grow(X[idx], y[idx], 3)
+      shallow = grow(X[idx], y[idx], 3, depth=2)
+      root_feats.append(deep[1]); root_thr.append(deep[2])
+      preds_deep.append(predict_proba(deep, X_te, 3).argmax(1)); preds_shallow.append(predict_proba(shallow, X_te, 3).argmax(1))
+
+  def mean_disagreement(P):
+      P = np.array(P)
+      return ...
+
+  disagree_shallow, disagree_deep = mean_disagreement(preds_shallow), mean_disagreement(preds_deep)
+  print("root features of the 20 deep trees:", root_feats)
+  w_thr = [t for f_, t in zip(root_feats, root_thr) if f_ == 0]
+  print(f"original tree root: feature {grow(X, y, 3)[1]}; spike-width thresholds at the root: {min(w_thr):.3f} to {max(w_thr):.3f} ms")
+  print(f"pairwise disagreement on test neurons: depth 2 {disagree_shallow:.3f}, unlimited {disagree_deep:.3f}")
+`}
+hint="return np.mean([np.mean(P[a] != P[b]) for a in range(len(P)) for b in range(a + 1, len(P))])."
+solution={String.raw`
+  root_feats, root_thr, preds_shallow, preds_deep = [], [], [], []
+  for b in range(20):
+      idx = r.integers(0, 300, 300)
+      deep = grow(X[idx], y[idx], 3)
+      shallow = grow(X[idx], y[idx], 3, depth=2)
+      root_feats.append(deep[1]); root_thr.append(deep[2])
+      preds_deep.append(predict_proba(deep, X_te, 3).argmax(1)); preds_shallow.append(predict_proba(shallow, X_te, 3).argmax(1))
+
+  def mean_disagreement(P):
+      P = np.array(P)
+      return np.mean([np.mean(P[a] != P[b]) for a in range(len(P)) for b in range(a + 1, len(P))])
+
+  disagree_shallow, disagree_deep = mean_disagreement(preds_shallow), mean_disagreement(preds_deep)
+  print("root features of the 20 deep trees:", root_feats)
+  w_thr = [t for f_, t in zip(root_feats, root_thr) if f_ == 0]
+  print(f"original tree root: feature {grow(X, y, 3)[1]}; spike-width thresholds at the root: {min(w_thr):.3f} to {max(w_thr):.3f} ms")
+  print(f"pairwise disagreement on test neurons: depth 2 {disagree_shallow:.3f}, unlimited {disagree_deep:.3f}")
+`} />
+
+The tree grown on the original data puts spike width at its root, but across 20 bootstrap resamples only 14 do the same; the other 6 start with firing rate, which answers the prediction (about two thirds, neither all nor almost none). Even among trees that agree on the feature, the threshold wanders, from 0.35 to 0.57 ms: sometimes separating fast-spiking cells from the rest, sometimes pyramidal cells. Deep trees disagree with each other on 18% of test neurons, shallow ones on 12%. Spike width and firing rate carry overlapping information, so the root choice is close to a coin toss decided by a handful of neurons, and everything below the root inherits that choice. Any statement like "spike width is the primary determinant of cell type" drawn from one tree would be fragile.
+
+<Bridge title="Instability in brains and machines"
+  neuro="A tree's rules are tempting to read as findings: 'cells with spike width below 0.35 ms are interneurons'. Instability warns that a slightly different sample could have produced different rules with equal accuracy. Any interpretation of a single tree's structure should be checked against bootstrap resamples, as for the lasso in Week 55."
+  ai="Breiman turned instability into a strength: if trees vary a lot between resamples, averaging many of them cancels much of the variance. Bagging and random forests, tomorrow's topic, work best precisely for unstable base models, and add little to stable ones.">
+
+A tree's structure is a fragile summary of the data; its average over many resamples is not.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "An unlimited tree on noisy data reaches training accuracy of...", options: ["Nearly 100%", "Chance", "About the test accuracy", "Zero"], answer: 0, explain: "It splits until leaves are pure." },
+  { q: "A minimum leaf size limits a tree by...", options: ["Refusing splits that create tiny leaves", "Fixing the depth", "Removing features", "Adding noise"], answer: 0, explain: "Step 2." },
+  { q: "Pruning...", options: ["Grows a full tree, then removes unhelpful subtrees", "Stops growth early", "Adds splits", "Changes thresholds"], answer: 0, explain: "Step 3." },
+  { q: "Reduced-error pruning collapses a node when...", options: ["A leaf does at least as well on validation data", "Training error rises", "The node is deep", "Always"], answer: 0, explain: "Step 3." },
+  { q: "A learning procedure is unstable if...", options: ["Small changes in the data cause large changes in the model", "It never converges", "It is non-convex", "It has many parameters"], answer: 0, explain: "Breiman's definition." },
+  { q: "Trees are unstable mainly because...", options: ["Early splits change, and everything below them follows", "Gini is noisy", "They use thresholds", "They are deep"], answer: 0, explain: "Step 4." },
+  { q: "Instability is a problem for...", options: ["Interpreting a single tree's rules", "Bagging", "Random forests", "Prediction from averages"], answer: 0, explain: "The bridge." },
+  { q: "Averaging unstable models...", options: ["Reduces variance substantially", "Adds bias only", "Has no effect", "Increases variance"], answer: 0, explain: "Tomorrow." },
+]} />
+
+<Flashcards cards={[
+  { front: "Ways to limit tree size?", back: "Maximum depth, minimum leaf size, minimum impurity decrease, or grow fully then prune." },
+  { front: "Cost-complexity pruning?", back: "Minimise error plus α times the number of leaves, giving a nested sequence of subtrees indexed by α." },
+  { front: "Reduced-error pruning?", back: "Bottom-up, replace a subtree by a leaf if that does no worse on validation data." },
+  { front: "Instability?", back: "Small data changes cause large model changes; typical of deep trees." },
+  { front: "Why instability helps bagging?", back: "Unstable models vary a lot across resamples, so averaging removes much variance." },
+]} />
+
+<Predict revisit question="In how many of 20 bootstrap trees did the root split use the original tree's feature?" />
+
+<Key title="Before you go">
+<ul>
+<li>Unrestricted trees memorise noise; depth and leaf size must be chosen by validation.</li>
+<li>Pruning a fully grown tree avoids stopping too early.</li>
+<li>Single trees are unstable: resampling changes their structure and their predictions.</li>
+<li>Read a tree's rules only after checking that they survive resampling.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Loh (2011), <em>Classification and regression trees</em>.</li>
+<li>Breiman, Friedman, Olshen and Stone (1984), <em>Classification and Regression Trees</em>, the book that introduced CART and cost-complexity pruning.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Describe a published classification of neurons or behaviours that used explicit rules or thresholds. How would you test whether those rules are stable under resampling of the data, and what would you conclude if they were not?" />

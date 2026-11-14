@@ -1,0 +1,337 @@
+export const meta = {
+  title: "Forge: Week 58 challenge, quiz and deep read",
+  intro: "This week built models from axis-aligned splits: decision trees grown by impurity, their pruning and instability, bagging and random forests, boosting by reweighting and by gradient descent, and the tools for asking what a forest has learned. Today's challenge puts a linear model, a random forest and gradient-boosted trees side by side on an encoding problem with interactions, choosing the number of boosting rounds honestly, and then tests a classic guarantee: AdaBoost's training error falls at least exponentially fast. Then the quiz, and a critique of Breiman's random forests paper.",
+  goals: [
+    "Compare linear, forest and boosted encoding models on held-out data, with early stopping chosen on validation data",
+    "Check the exponential bound on AdaBoost's training error",
+    "Derive AdaBoost's vote from the exponential loss and the pseudo-residuals of logistic loss",
+    "Critique the random forests paper in the light of what came after",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "breiman-2001-rf",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. What is the Gini impurity of a node with 30 trials of one class and 10 of the other?
+2. A bootstrap resample of 1,000 trials leaves out each trial with probability about $(1 - 1/n)^n$. What fraction is out of bag?
+3. A stump has weighted error 0.3. What is its AdaBoost vote?
+
+<PyCell code={String.raw`
+  import numpy as np
+  p = 30 / 40
+  print("1.", round(1 - p ** 2 - (1 - p) ** 2, 4))
+  print("2.", round((1 - 1 / 1000) ** 1000, 4), "close to 1/e =", round(np.exp(-1), 4))
+  print("3.", round(0.5 * np.log(0.7 / 0.3), 4))
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: three encoding models.** A neuron's rate depends on six task variables: smoothly on two, through a threshold on a third, and through an interaction between the first and a fourth; the last two are irrelevant. Fit a linear model, a random forest and gradient-boosted trees of depth two. For boosting, choose the number of rounds by early stopping on a validation set carved from the training data, and only then measure every model on the test set.
+
+<PyCell id="partA" title="Part A: linear, forest and boosted trees" tests={String.raw`
+  import numpy as np
+  def test_models():
+      "test R squared is recorded for all three models"
+      assert set(scores) == {"linear", "forest", "boosted"}
+  def test_trees_win():
+      "both tree ensembles beat the linear model by at least 0.1"
+      assert scores["forest"] > scores["linear"] + 0.1 and scores["boosted"] > scores["linear"] + 0.1
+  def test_stop():
+      "the number of rounds was chosen by validation, between 20 and 600"
+      assert 20 <= best_round <= 600
+`} prompt="Complete fit_tree (a regression tree of limited depth fitted to residuals) and the boosting loop: update the fitting-set and validation-set predictions, track validation MSE, and refit on the full training set for best_round rounds. Then report the test R squared of all three models."
+code={String.raw`
+  import numpy as np
+  r = np.random.default_rng(586)
+
+  def session(n, g):
+      X = g.uniform(-1, 1, (n, 6))
+      rate = (8 + 3 * np.sin(2 * X[:, 0]) + 2 * X[:, 1] ** 2 + 4 * (X[:, 2] > 0.3)
+              + 4 * X[:, 0] * (X[:, 3] > 0))
+      return X, rate + 1.0 * g.normal(size=n)
+
+  def split(X, y, feats, min_leaf=3):
+      n, best = len(y), (None, 0.0, 0.0)
+      for j in feats:
+          o = np.argsort(X[:, j]); xs, ys = X[o, j], y[o]
+          cs = np.cumsum(ys)[:-1]; nl = np.arange(1, n)
+          gain = cs ** 2 / nl + (ys.sum() - cs) ** 2 / (n - nl) - ys.sum() ** 2 / n
+          ok = (xs[1:] > xs[:-1]) & (nl >= min_leaf) & (n - nl >= min_leaf)
+          gain = np.where(ok, gain, -np.inf); k = int(np.argmax(gain))
+          if gain[k] > best[2]: best = (j, (xs[k] + xs[k + 1]) / 2, gain[k])
+      return best[:2]
+
+  def fit_tree(X, y, depth, g=None, mtry=None):
+      if depth == 0 or len(y) < 6: return ("leaf", y.mean())
+      feats = range(X.shape[1]) if mtry is None else g.choice(X.shape[1], mtry, replace=False)
+      j, t = split(X, y, feats)
+      if j is None: return ("leaf", y.mean())
+      m = X[:, j] <= t
+      return ("node", j, t, ..., ...)
+
+  def predict(tree, X):
+      if tree[0] == "leaf": return np.full(len(X), tree[1])
+      _, j, t, L, R = tree; m = X[:, j] <= t; out = np.empty(len(X))
+      out[m], out[~m] = predict(L, X[m]), predict(R, X[~m]); return out
+
+  r2 = lambda y_, p: float(1 - np.mean((y_ - p) ** 2) / np.var(y_))
+  X, y = session(600, r); X_te, y_te = session(3000, r)
+  scores = {}
+
+  # linear model by least squares
+  A = np.column_stack([np.ones(600), X]); w = np.linalg.lstsq(A, y, rcond=None)[0]
+  scores["linear"] = r2(y_te, np.column_stack([np.ones(3000), X_te]) @ w)
+
+  # random forest: 40 deep trees, 3 features per split
+  gf = np.random.default_rng(1); forest = []
+  for b in range(40):
+      idx = gf.integers(0, 600, 600)
+      forest.append(fit_tree(X[idx], y[idx], 20, gf, 3))
+  scores["forest"] = r2(y_te, np.mean([predict(t, X_te) for t in forest], axis=0))
+
+  # gradient boosting with depth-2 trees: early stopping on a validation split
+  nu, fi, vi = 0.1, np.arange(450), np.arange(450, 600)
+  F, Fv, val_mse = np.full(450, y[fi].mean()), np.full(150, y[fi].mean()), []
+  for m in range(600):
+      h = fit_tree(X[fi], y[fi] - F, 2)
+      F += nu * predict(h, X[fi])
+      Fv += ...
+      val_mse.append(np.mean((y[vi] - Fv) ** 2))
+  best_round = int(np.argmin(val_mse)) + 1
+
+  F, F_te = np.full(600, y.mean()), np.full(3000, y.mean())
+  for m in range(best_round):
+      h = fit_tree(X, y - F, 2)
+      F += nu * predict(h, X)
+      F_te += nu * predict(h, X_te)
+  scores["boosted"] = r2(y_te, F_te)
+  for k, v in scores.items():
+      print(f"{k:8s} test R squared {v:.3f}")
+  print(f"boosting stopped at round {best_round}; noise ceiling about {1 - 1 / np.var(y_te):.3f}")
+`}
+hint="Return ('node', j, t, fit_tree(X[m], y[m], depth - 1, g, mtry), fit_tree(X[~m], y[~m], depth - 1, g, mtry)); Fv += nu * predict(h, X[vi])."
+solution={String.raw`
+  import numpy as np
+  r = np.random.default_rng(586)
+
+  def session(n, g):
+      X = g.uniform(-1, 1, (n, 6))
+      rate = (8 + 3 * np.sin(2 * X[:, 0]) + 2 * X[:, 1] ** 2 + 4 * (X[:, 2] > 0.3)
+              + 4 * X[:, 0] * (X[:, 3] > 0))
+      return X, rate + 1.0 * g.normal(size=n)
+
+  def split(X, y, feats, min_leaf=3):
+      n, best = len(y), (None, 0.0, 0.0)
+      for j in feats:
+          o = np.argsort(X[:, j]); xs, ys = X[o, j], y[o]
+          cs = np.cumsum(ys)[:-1]; nl = np.arange(1, n)
+          gain = cs ** 2 / nl + (ys.sum() - cs) ** 2 / (n - nl) - ys.sum() ** 2 / n
+          ok = (xs[1:] > xs[:-1]) & (nl >= min_leaf) & (n - nl >= min_leaf)
+          gain = np.where(ok, gain, -np.inf); k = int(np.argmax(gain))
+          if gain[k] > best[2]: best = (j, (xs[k] + xs[k + 1]) / 2, gain[k])
+      return best[:2]
+
+  def fit_tree(X, y, depth, g=None, mtry=None):
+      if depth == 0 or len(y) < 6: return ("leaf", y.mean())
+      feats = range(X.shape[1]) if mtry is None else g.choice(X.shape[1], mtry, replace=False)
+      j, t = split(X, y, feats)
+      if j is None: return ("leaf", y.mean())
+      m = X[:, j] <= t
+      return ("node", j, t, fit_tree(X[m], y[m], depth - 1, g, mtry), fit_tree(X[~m], y[~m], depth - 1, g, mtry))
+
+  def predict(tree, X):
+      if tree[0] == "leaf": return np.full(len(X), tree[1])
+      _, j, t, L, R = tree; m = X[:, j] <= t; out = np.empty(len(X))
+      out[m], out[~m] = predict(L, X[m]), predict(R, X[~m]); return out
+
+  r2 = lambda y_, p: float(1 - np.mean((y_ - p) ** 2) / np.var(y_))
+  X, y = session(600, r); X_te, y_te = session(3000, r)
+  scores = {}
+
+  # linear model by least squares
+  A = np.column_stack([np.ones(600), X]); w = np.linalg.lstsq(A, y, rcond=None)[0]
+  scores["linear"] = r2(y_te, np.column_stack([np.ones(3000), X_te]) @ w)
+
+  # random forest: 40 deep trees, 3 features per split
+  gf = np.random.default_rng(1); forest = []
+  for b in range(40):
+      idx = gf.integers(0, 600, 600)
+      forest.append(fit_tree(X[idx], y[idx], 20, gf, 3))
+  scores["forest"] = r2(y_te, np.mean([predict(t, X_te) for t in forest], axis=0))
+
+  # gradient boosting with depth-2 trees: early stopping on a validation split
+  nu, fi, vi = 0.1, np.arange(450), np.arange(450, 600)
+  F, Fv, val_mse = np.full(450, y[fi].mean()), np.full(150, y[fi].mean()), []
+  for m in range(600):
+      h = fit_tree(X[fi], y[fi] - F, 2)
+      F += nu * predict(h, X[fi])
+      Fv += nu * predict(h, X[vi])
+      val_mse.append(np.mean((y[vi] - Fv) ** 2))
+  best_round = int(np.argmin(val_mse)) + 1
+
+  F, F_te = np.full(600, y.mean()), np.full(3000, y.mean())
+  for m in range(best_round):
+      h = fit_tree(X, y - F, 2)
+      F += nu * predict(h, X)
+      F_te += nu * predict(h, X_te)
+  scores["boosted"] = r2(y_te, F_te)
+  for k, v in scores.items():
+      print(f"{k:8s} test R squared {v:.3f}")
+  print(f"boosting stopped at round {best_round}; noise ceiling about {1 - 1 / np.var(y_te):.3f}")
+`} />
+
+The linear model explains 76% of the test variance, a respectable number that hides what it misses: the threshold on the third variable becomes a gentle slope, the quadratic effect of the second disappears, and the interaction is averaged away. The random forest reaches 91.5% and the boosted trees 93%, against a noise ceiling of about 94%. Boosting stopped at round 139 on the validation split; depth-two trees could represent the interaction between the first and fourth variables, which stumps could not (Day 4). Neither ensemble was told the form of the tuning, which is their real advantage as encoding models: they set a target that a hand-built model of the neuron should reach before anyone believes it is complete.
+
+**Part B: AdaBoost's training error falls exponentially.** Freund and Schapire proved that after $T$ rounds the training error of AdaBoost is at most $\prod_t 2\sqrt{\epsilon_t(1 - \epsilon_t)}$. If every stump has error at most $\frac12 - \gamma$, each factor is at most $\sqrt{1 - 4\gamma^2}$, so the bound falls exponentially in $T$. Check the bound, round by round, on the ring problem of Day 4.
+
+<PyCell id="partB" title="Part B: the training-error bound" tests={String.raw`
+  import numpy as np
+  def test_bound():
+      "at every round the training error is at most the product bound"
+      assert len(train_err) == 100 and all(e <= b + 1e-9 for e, b in zip(train_err, bound))
+  def test_falls():
+      "the bound falls below 0.3 within 100 rounds"
+      assert bound[-1] < 0.3
+`} prompt="Run AdaBoost for 100 rounds on 300 noise-free ring examples. After each round, record the training error of the ensemble and the running product of 2 sqrt(eps (1 - eps))."
+code={String.raw`
+  def ring(n, g):
+      X = g.uniform(-1, 1, (n, 2))
+      return X, np.where(X[:, 0] ** 2 + X[:, 1] ** 2 < 0.45, 1.0, -1.0)
+
+  def weighted_stump(X, y, w):
+      best = (0, 0.0, 1, np.inf)
+      for j in range(X.shape[1]):
+          o = np.argsort(X[:, j]); xs, ys, ws = X[o, j], y[o], w[o]
+          pl = np.r_[0, np.cumsum(ws * (ys > 0))]; nl_ = np.r_[0, np.cumsum(ws * (ys < 0))]
+          for s, err in [(1, pl + (nl_[-1] - nl_)), (-1, (pl[-1] - pl) + nl_)]:
+              k = int(np.argmin(err))
+              t = xs[0] - 1 if k == 0 else (xs[-1] + 1 if k == len(xs) else (xs[k - 1] + xs[k]) / 2)
+              if err[k] < best[3]: best = (j, t, s, err[k])
+      return best
+
+  Xb, yb = ring(300, np.random.default_rng(7))
+  w, Fb, train_err, bound, prod = np.ones(300) / 300, np.zeros(300), [], [], 1.0
+  for t_ in range(100):
+      j, t, s, eps = weighted_stump(Xb, yb, w)
+      alpha = 0.5 * np.log((1 - eps) / eps)
+      h = np.where(Xb[:, j] > t, s, -s)
+      w = w * np.exp(-alpha * yb * h); w /= w.sum()
+      Fb += alpha * h
+      prod *= ...
+      train_err.append(float(np.mean(np.sign(Fb) != yb))); bound.append(prod)
+  for k in (0, 9, 29, 99):
+      print(f"round {k + 1:3d}: training error {train_err[k]:.3f}, bound {bound[k]:.3f}")
+`}
+hint="prod *= 2 * np.sqrt(eps * (1 - eps))."
+solution={String.raw`
+  def ring(n, g):
+      X = g.uniform(-1, 1, (n, 2))
+      return X, np.where(X[:, 0] ** 2 + X[:, 1] ** 2 < 0.45, 1.0, -1.0)
+
+  def weighted_stump(X, y, w):
+      best = (0, 0.0, 1, np.inf)
+      for j in range(X.shape[1]):
+          o = np.argsort(X[:, j]); xs, ys, ws = X[o, j], y[o], w[o]
+          pl = np.r_[0, np.cumsum(ws * (ys > 0))]; nl_ = np.r_[0, np.cumsum(ws * (ys < 0))]
+          for s, err in [(1, pl + (nl_[-1] - nl_)), (-1, (pl[-1] - pl) + nl_)]:
+              k = int(np.argmin(err))
+              t = xs[0] - 1 if k == 0 else (xs[-1] + 1 if k == len(xs) else (xs[k - 1] + xs[k]) / 2)
+              if err[k] < best[3]: best = (j, t, s, err[k])
+      return best
+
+  Xb, yb = ring(300, np.random.default_rng(7))
+  w, Fb, train_err, bound, prod = np.ones(300) / 300, np.zeros(300), [], [], 1.0
+  for t_ in range(100):
+      j, t, s, eps = weighted_stump(Xb, yb, w)
+      alpha = 0.5 * np.log((1 - eps) / eps)
+      h = np.where(Xb[:, j] > t, s, -s)
+      w = w * np.exp(-alpha * yb * h); w /= w.sum()
+      Fb += alpha * h
+      prod *= 2 * np.sqrt(eps * (1 - eps))
+      train_err.append(float(np.mean(np.sign(Fb) != yb))); bound.append(prod)
+  for k in (0, 9, 29, 99):
+      print(f"round {k + 1:3d}: training error {train_err[k]:.3f}, bound {bound[k]:.3f}")
+`} />
+
+The bound holds at every round and is far from tight: after 10 rounds the training error is 0.167 against a bound of 0.654, and after 100 rounds 0.003 against 0.125. The bound tracks the exponential loss, which punishes confident errors heavily, rather than the error itself. Its message is qualitative: as long as each stump beats chance by some margin, the training error must go to zero, exponentially fast. That is why weak learners suffice, and also why AdaBoost, with noisy labels, will eventually fit the noise unless it is stopped.
+
+**Part C (written).** Answer in your journal. First, in Part A, the number of boosting rounds was chosen on a validation split and the model then refitted on all 600 training trials for that many rounds. What assumption does that refit make, and what would you do instead if you had to report a single honest number for the whole procedure? Second, the forest and the boosted model reached similar accuracy. Which would you rather interpret with this week's tools, and why?
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. AdaBoost's vote minimises exponential loss" task="AdaBoost adds $\alpha h(\mathbf x)$ to the ensemble, with $h(\mathbf x) = \pm1$, to reduce the exponential loss $\sum_i w_i e^{-\alpha y_ih(\mathbf x_i)}$, where the weights $w_i$ sum to 1 and $\epsilon$ is the total weight of the examples $h$ misclassifies. Show that the best $\alpha$ is $\frac12\log\frac{1 - \epsilon}{\epsilon}$.">
+
+Split the sum into correctly classified examples, where $y_ih(\mathbf x_i) = 1$, and misclassified ones, where it is $-1$:
+
+$$
+L(\alpha) = (1 - \epsilon)e^{-\alpha} + \epsilon e^{\alpha}.
+$$
+
+Differentiate and set to zero: $-(1 - \epsilon)e^{-\alpha} + \epsilon e^{\alpha} = 0$, so $e^{2\alpha} = (1 - \epsilon)/\epsilon$ and $\alpha = \frac12\log\frac{1 - \epsilon}{\epsilon}$. The second derivative is positive, so this is a minimum.
+
+At this $\alpha$, $L = 2\sqrt{\epsilon(1 - \epsilon)}$: the loss is multiplied by this factor each round, which is the bound of Part B, since the exponential loss is never smaller than the training error.
+
+</Prove>
+
+<Prove title="2. Pseudo-residuals for logistic loss" task="For a label $y \in \{0, 1\}$ and a score $F$ with $p = \sigma(F) = 1/(1 + e^{-F})$, the logistic loss is $L = -y\log p - (1 - y)\log(1 - p)$. Show that the pseudo-residual $-\partial L/\partial F$ is $y - p$.">
+
+Use $\partial p/\partial F = p(1 - p)$ (Week 56). Then
+
+$$
+\frac{\partial L}{\partial F} = \left(-\frac yp + \frac{1 - y}{1 - p}\right)p(1 - p) = -y(1 - p) + (1 - y)p = p - y.
+$$
+
+So $-\partial L/\partial F = y - p$: gradient boosting for classification fits each tree to the difference between the label and the current predicted probability, the same form as the residual for squared loss.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 58 quiz (15 questions)" questions={[
+  { q: "A decision tree chooses each split to...", options: ["Most reduce impurity in the children", "Balance the children's sizes", "Use every feature once", "Maximise depth"], answer: 0, explain: "Day 1." },
+  { q: "The Gini impurity of a pure node is...", options: ["0", "0.5", "1", "log 2"], answer: 0, explain: "Day 1." },
+  { q: "A regression tree predicts, in each leaf...", options: ["The mean of the training targets there", "The median of all targets", "A linear fit", "Zero"], answer: 0, explain: "Days 1 and 5." },
+  { q: "Cost-complexity pruning trades error against...", options: ["The number of leaves", "The number of features", "The learning rate", "The sample size"], answer: 0, explain: "Day 2." },
+  { q: "Trees are unstable because...", options: ["A small change in data can change an early split and everything below it", "They are linear", "They have no parameters", "They ignore the data"], answer: 0, explain: "Day 2." },
+  { q: "Averaging B predictors with pairwise correlation ρ leaves variance...", options: ["ρσ² + (1 − ρ)σ²/B", "σ²/B", "0", "σ²"], answer: 0, explain: "Day 3." },
+  { q: "Random forests decorrelate trees by...", options: ["Choosing a random subset of features at each split", "Pruning", "Boosting", "Using fewer trials"], answer: 0, explain: "Day 3." },
+  { q: "Out-of-bag error estimates test error using...", options: ["Trees that did not see each trial", "The training error", "A separate test set", "Cross-validation folds"], answer: 0, explain: "Day 3." },
+  { q: "About what fraction of trials does a bootstrap resample leave out?", options: ["About 37%", "About 10%", "About 50%", "None"], answer: 0, explain: "1/e." },
+  { q: "AdaBoost's training error is bounded by...", options: ["∏ 2√(εₜ(1 − εₜ))", "Σ εₜ", "The margin", "The number of stumps"], answer: 0, explain: "Part B." },
+  { q: "Gradient boosting fits each tree to...", options: ["The negative gradient of the loss", "The labels", "The previous tree's errors squared", "Random targets"], answer: 0, explain: "Day 4." },
+  { q: "Boosted stumps cannot represent...", options: ["Interactions between features", "Main effects", "Steps", "Constants"], answer: 0, explain: "A sum of one-feature functions." },
+  { q: "Impurity importance tends to overrate...", options: ["Continuous features with many split points", "Binary features", "Important features", "Nothing"], answer: 0, explain: "Day 5." },
+  { q: "Permuting one of two highly correlated features...", options: ["Understates its importance", "Overstates it", "Has no effect on the score", "Removes both"], answer: 0, explain: "Day 5." },
+  { q: "Fanning ICE curves reveal...", options: ["An interaction", "No effect", "Noise", "A linear effect"], answer: 0, explain: "Day 5." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Breiman (2001) its third pass and write your critique under the five headings. Focus on one question: **why do random forests work so well with so little tuning, and what do they cost?** Consider the bound on generalisation error in terms of the strength of the trees and the correlation between them, and how the number of features tried at each split moves both (Day 3); the claim that forests do not overfit as trees are added, and what exactly it does and does not mean; out-of-bag estimates as a substitute for cross-validation; the variable importance measure introduced in the paper and what Strobl and colleagues later showed about it (Day 5); and the comparison with AdaBoost in the paper's experiments. End with one neuroscience problem for which you would reach for a random forest first, and one for which you would not.
+
+<Callout kind="research">
+
+Benjamin and colleagues (2018, Frontiers in Computational Neuroscience) and Glaser and colleagues (2020, eNeuro) compared generalised linear models, gradient-boosted trees and neural networks as encoding and decoding models for recordings from motor cortex, somatosensory cortex and hippocampus, and found that modern methods, boosted trees among them, often beat the classic models by a wide margin. Read one of them and repeat its core comparison on the simulated data of Part A with one change: make the rate depend on the recent history of the task variables, as real neurons do. How must the features be built for each model, and does the ranking hold?
+
+</Callout>
+
+<Key title="Week 58 review checklist">
+<ul>
+<li>I can grow classification and regression trees by impurity and prune them by cost complexity.</li>
+<li>I can explain why trees are unstable and how bagging and random forests reduce their variance.</li>
+<li>I can use out-of-bag predictions to estimate test error.</li>
+<li>I can implement AdaBoost and gradient boosting, and control boosting with the learning rate and early stopping.</li>
+<li>I can compute permutation importance and partial dependence, and say when each misleads.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then write a paragraph on the trade-off between accuracy and interpretability in neuroscience models: when is a forest that predicts well more useful than a linear model you can read, and when is it less?" />

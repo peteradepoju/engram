@@ -1,0 +1,324 @@
+export const meta = {
+  title: "Boosting: AdaBoost and gradient boosting",
+  intro: "Bagging grows many strong models independently and averages away their variance. Boosting does the opposite: it grows many weak models one after another, each concentrating on what the ensemble so far gets wrong, and adds them up. Starting from models barely better than chance, it builds very accurate ones, reducing bias as well as variance. Today you implement AdaBoost with one-split trees, then gradient boosting, which recasts the same idea as gradient descent in a space of functions, and learn the two dials, learning rate and number of rounds, that keep it from overfitting.",
+  goals: [
+    "Implement AdaBoost with decision stumps and explain its reweighting of examples",
+    "Derive gradient boosting as gradient descent on a loss in function space",
+    "Fit a gradient-boosted regression model to residuals with shrinkage",
+    "Choose the number of rounds by early stopping on validation data",
+  ],
+  plan: [
+    { label: "Learning from mistakes", minutes: 20 },
+    { label: "AdaBoost with stumps", minutes: 30 },
+    { label: "Gradient boosting", minutes: 30 },
+    { label: "Shrinkage and early stopping", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "friedman-2001",
+};
+
+<Predict question="A boosted model adds one-split trees (stumps), each of which alone is right on only about 60% of trials. After 200 rounds on a problem with a circular boundary, will the ensemble be right on about 60%, about 75%, or close to 90% of test trials?" />
+
+<Step n={1} title="Learning from mistakes" minutes={20} />
+
+A **weak learner** is one that does a little better than chance, such as a decision **stump**, a tree with a single split. Boosting combines many weak learners into a strong one by training them in sequence, each on a version of the problem that emphasises the previous learners' mistakes. Freund and Schapire's AdaBoost (1997) does this by reweighting examples; Friedman's gradient boosting, today's paper, generalised it by noticing that boosting is gradient descent, so that any differentiable loss can be boosted.
+
+<Video id="3CC4N4z3GJc" title="Gradient boost part 1: regression main ideas" by="StatQuest with Josh Starmer" note="Josh Starmer on gradient boosting for regression: start with the average, fit a small tree to the residuals, add a scaled-down copy, and repeat." />
+
+<Step n={2} title="AdaBoost with stumps" minutes={30} />
+
+AdaBoost keeps a weight $w_i$ on each training example, starting equal. In round $t$ it fits a stump $h_t$ that minimises the weighted error $\epsilon_t$, gives it a vote $\alpha_t = \frac12\log\frac{1 - \epsilon_t}{\epsilon_t}$, and multiplies the weights of misclassified examples by $e^{\alpha_t}$ and of correct ones by $e^{-\alpha_t}$, before renormalising. The final classifier is $\text{sign}\left(\sum_t\alpha_th_t(\mathbf x)\right)$. Hard examples gain weight until some stump gets them right.
+
+<PyCell id="adaboost" title="AdaBoost from scratch" tests={String.raw`
+  import numpy as np
+  def test_stump():
+      "weighted_stump finds a perfect stump on a separable one-feature problem"
+      Xs = np.array([[0.0], [1.0], [2.0], [3.0]]); ys = np.array([-1, -1, 1, 1.0])
+      j, t, s, err = weighted_stump(Xs, ys, np.ones(4) / 4)
+      assert err < 1e-12 and 1 < t < 2
+  def test_boost():
+      "single stumps are weak, but 200 rounds reach test accuracy above 0.85"
+      assert stump_acc < 0.7 and ada_acc[-1] > 0.85
+`} prompt="Complete weighted_stump (for each feature and threshold, the weighted error of predicting s on the right and -s on the left, for s = ±1) and the AdaBoost loop: the vote alpha and the weight update. Report the accuracy of one stump and of the boosted ensemble after 10, 50 and 200 rounds."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(584)
+
+  def ring(n, g):
+      X = g.uniform(-1, 1, (n, 2))
+      y = np.where(X[:, 0] ** 2 + X[:, 1] ** 2 < 0.45, 1.0, -1.0)
+      return X, np.where(g.random(n) < 0.05, -y, y)
+
+  def weighted_stump(X, y, w):
+      best = (0, 0.0, 1, np.inf)
+      for j in range(X.shape[1]):
+          o = np.argsort(X[:, j]); xs, ys, ws = X[o, j], y[o], w[o]
+          pos_left = np.r_[0, np.cumsum(ws * (ys > 0))]          # weight of positives at or left of each cut
+          neg_left = np.r_[0, np.cumsum(ws * (ys < 0))]
+          pos_tot, neg_tot = pos_left[-1], neg_left[-1]
+          err_plus = pos_left + (neg_tot - neg_left)             # predict -1 on the left, +1 on the right
+          err_minus = ...
+          for s, err in [(1, err_plus), (-1, err_minus)]:
+              k = int(np.argmin(err))
+              t = xs[0] - 1 if k == 0 else (xs[-1] + 1 if k == len(xs) else (xs[k - 1] + xs[k]) / 2)
+              if err[k] < best[3]:
+                  best = (j, t, s, err[k])
+      return best
+
+  stump_pred = lambda X, j, t, s: np.where(X[:, j] > t, s, -s)
+
+  X, y = ring(400, r); X_te, y_te = ring(3000, r)
+  w = np.ones(400) / 400; F_te = np.zeros(3000); ada_acc = []
+  for t_ in range(200):
+      j, t, s, err = weighted_stump(X, y, w)
+      err = max(err, 1e-10)
+      alpha = ...
+      h = stump_pred(X, j, t, s)
+      w = ...
+      w /= w.sum()
+      F_te += alpha * stump_pred(X_te, j, t, s)
+      if t_ + 1 in (10, 50, 200):
+          ada_acc.append(np.mean(np.sign(F_te) == y_te))
+  j, t, s, _ = weighted_stump(X, y, np.ones(400) / 400)
+  stump_acc = np.mean(stump_pred(X_te, j, t, s) == y_te)
+  print(f"one stump: {stump_acc:.3f}; boosted after 10, 50, 200 rounds: {[round(float(a), 3) for a in ada_acc]}")
+`}
+hint="err_minus = (pos_tot - pos_left) + neg_left; alpha = 0.5 * np.log((1 - err) / err); w = w * np.exp(-alpha * y * h)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(584)
+
+  def ring(n, g):
+      X = g.uniform(-1, 1, (n, 2))
+      y = np.where(X[:, 0] ** 2 + X[:, 1] ** 2 < 0.45, 1.0, -1.0)
+      return X, np.where(g.random(n) < 0.05, -y, y)
+
+  def weighted_stump(X, y, w):
+      best = (0, 0.0, 1, np.inf)
+      for j in range(X.shape[1]):
+          o = np.argsort(X[:, j]); xs, ys, ws = X[o, j], y[o], w[o]
+          pos_left = np.r_[0, np.cumsum(ws * (ys > 0))]          # weight of positives at or left of each cut
+          neg_left = np.r_[0, np.cumsum(ws * (ys < 0))]
+          pos_tot, neg_tot = pos_left[-1], neg_left[-1]
+          err_plus = pos_left + (neg_tot - neg_left)             # predict -1 on the left, +1 on the right
+          err_minus = (pos_tot - pos_left) + neg_left
+          for s, err in [(1, err_plus), (-1, err_minus)]:
+              k = int(np.argmin(err))
+              t = xs[0] - 1 if k == 0 else (xs[-1] + 1 if k == len(xs) else (xs[k - 1] + xs[k]) / 2)
+              if err[k] < best[3]:
+                  best = (j, t, s, err[k])
+      return best
+
+  stump_pred = lambda X, j, t, s: np.where(X[:, j] > t, s, -s)
+
+  X, y = ring(400, r); X_te, y_te = ring(3000, r)
+  w = np.ones(400) / 400; F_te = np.zeros(3000); ada_acc = []
+  for t_ in range(200):
+      j, t, s, err = weighted_stump(X, y, w)
+      err = max(err, 1e-10)
+      alpha = 0.5 * np.log((1 - err) / err)
+      h = stump_pred(X, j, t, s)
+      w = w * np.exp(-alpha * y * h)
+      w /= w.sum()
+      F_te += alpha * stump_pred(X_te, j, t, s)
+      if t_ + 1 in (10, 50, 200):
+          ada_acc.append(np.mean(np.sign(F_te) == y_te))
+  j, t, s, _ = weighted_stump(X, y, np.ones(400) / 400)
+  stump_acc = np.mean(stump_pred(X_te, j, t, s) == y_te)
+  print(f"one stump: {stump_acc:.3f}; boosted after 10, 50, 200 rounds: {[round(float(a), 3) for a in ada_acc]}")
+`} />
+
+A single stump is right on about 63% of test trials, because one straight cut cannot carve a disc out of a square. Ten rounds of AdaBoost lift that to about 87%, and accuracy then stays near 87 to 88% for hundreds more rounds, close to the 95% ceiling set by the flipped labels. Each stump is a step in one coordinate, so the ensemble is a sum of a function of $x_1$ and a function of $x_2$; a circle, $x_1^2 + x_2^2$, happens to be exactly that kind of sum, which is why stumps can approximate it. Notice also that test accuracy hardly falls as rounds pile up even though the training set has noisy labels. This resistance to overfitting puzzled people for years; one explanation is that later rounds keep enlarging the margin of the training examples, the same quantity a support vector machine maximises (Week 57).
+
+<Step n={3} title="Gradient boosting" minutes={30} />
+
+<Derivation title="Boosting is gradient descent on functions">
+<div>
+
+Build a model $F_M(\mathbf x) = F_0 + \sum_{m=1}^M \nu h_m(\mathbf x)$ step by step, to minimise a loss $\sum_i L(y_i, F(\mathbf x_i))$. Think of the vector of predictions $(F(\mathbf x_1), \dots, F(\mathbf x_n))$ as the thing being optimised.
+
+</div>
+<div>
+
+Gradient descent would move each prediction against the gradient, by $-\partial L/\partial F(\mathbf x_i)$. Call these numbers the **pseudo-residuals** $r_i$. For squared loss $\frac12(y - F)^2$, they are exactly the residuals $y_i - F(\mathbf x_i)$.
+
+</div>
+<div>
+
+But a model must predict for new inputs too, so instead of moving each prediction freely, fit a small tree $h_m$ to the pseudo-residuals and move along it: $F_m = F_{m-1} + \nu h_m$. The tree is the closest available direction to the negative gradient, and $\nu$, the **learning rate** or shrinkage, is the step size. Changing the loss changes only the pseudo-residuals, which is how the same algorithm boosts logistic, Poisson or robust losses.
+
+</div>
+</Derivation>
+
+<Figure caption="Gradient boosting with stumps on a one-dimensional regression. Each round adds a shrunken step fitted to the current residuals. Change the number of rounds and the learning rate." credit="Interactive figure by Engram, after Friedman (2001).">
+  <BoostingSteps />
+</Figure>
+
+<PyCell id="gbm" title="Gradient boosting a tuning surface" tests={String.raw`
+  import numpy as np
+  def test_stump():
+      "reg_stump returns the split minimising squared error on the residuals"
+      Xs = np.array([[0.0, 5], [1, 4], [2, 3], [3, 2]]); rs = np.array([-1.0, -1, 1, 1])
+      j, t, a, b = reg_stump(Xs, rs)
+      assert abs(a + 1) < 1e-12 and abs(b - 1) < 1e-12
+  def test_fit():
+      "300 rounds reduce test MSE well below the variance of the target"
+      assert gb_te[-1] < 0.4 * np.var(yr_te)
+`} prompt="Write reg_stump(X, res), returning the feature, threshold and the two leaf means that minimise squared error, using cumulative sums. Then run gradient boosting for squared loss with learning rate 0.1, recording training and test MSE every 50 rounds."
+code={String.raw`
+  def reg_stump(X, res):
+      best = (0, 0.0, 0.0, 0.0, np.inf); n = len(res)
+      for j in range(X.shape[1]):
+          o = np.argsort(X[:, j]); xs, rs = X[o, j], res[o]
+          cs = np.cumsum(rs)[:-1]; nl = np.arange(1, n)
+          score = cs ** 2 / nl + (rs.sum() - cs) ** 2 / (n - nl)        # larger is better (less squared error)
+          score = np.where(xs[1:] > xs[:-1], score, -np.inf)
+          k = int(np.argmax(score))
+          if -score[k] < best[4]:
+              best = (j, (xs[k] + xs[k + 1]) / 2, cs[k] / nl[k], ..., -score[k])
+      return best[:4]
+
+  def surface(n, g):
+      X = g.uniform(-1, 1, (n, 3))                    # stimulus orientation, contrast, and an irrelevant feature
+      f = 10 * np.exp(-(X[:, 0] / 0.4) ** 2) * (1 + X[:, 1]) + 2 * X[:, 1]
+      return X, f + 1.5 * g.normal(size=n)
+
+  Xr, yr = surface(500, r); Xr_te, yr_te = surface(3000, r)
+  nu = 0.1
+  F, F_te = np.full(500, yr.mean()), np.full(3000, yr.mean())
+  gb_tr, gb_te = [], []
+  for m in range(300):
+      j, t, a, b = reg_stump(Xr, yr - F)
+      F += ...
+      F_te += nu * np.where(Xr_te[:, j] <= t, a, b)
+      if (m + 1) % 50 == 0:
+          gb_tr.append(np.mean((yr - F) ** 2)); gb_te.append(np.mean((yr_te - F_te) ** 2))
+  print("rounds 50 to 300, training MSE:", np.round(gb_tr, 2))
+  print("rounds 50 to 300, test MSE:    ", np.round(gb_te, 2), f"(target variance {np.var(yr_te):.1f}, noise 2.25)")
+`}
+hint="The right leaf mean is (rs.sum() - cs[k]) / (n - nl[k]); F += nu * np.where(Xr[:, j] <= t, a, b)."
+solution={String.raw`
+  def reg_stump(X, res):
+      best = (0, 0.0, 0.0, 0.0, np.inf); n = len(res)
+      for j in range(X.shape[1]):
+          o = np.argsort(X[:, j]); xs, rs = X[o, j], res[o]
+          cs = np.cumsum(rs)[:-1]; nl = np.arange(1, n)
+          score = cs ** 2 / nl + (rs.sum() - cs) ** 2 / (n - nl)        # larger is better (less squared error)
+          score = np.where(xs[1:] > xs[:-1], score, -np.inf)
+          k = int(np.argmax(score))
+          if -score[k] < best[4]:
+              best = (j, (xs[k] + xs[k + 1]) / 2, cs[k] / nl[k], (rs.sum() - cs[k]) / (n - nl[k]), -score[k])
+      return best[:4]
+
+  def surface(n, g):
+      X = g.uniform(-1, 1, (n, 3))                    # stimulus orientation, contrast, and an irrelevant feature
+      f = 10 * np.exp(-(X[:, 0] / 0.4) ** 2) * (1 + X[:, 1]) + 2 * X[:, 1]
+      return X, f + 1.5 * g.normal(size=n)
+
+  Xr, yr = surface(500, r); Xr_te, yr_te = surface(3000, r)
+  nu = 0.1
+  F, F_te = np.full(500, yr.mean()), np.full(3000, yr.mean())
+  gb_tr, gb_te = [], []
+  for m in range(300):
+      j, t, a, b = reg_stump(Xr, yr - F)
+      F += nu * np.where(Xr[:, j] <= t, a, b)
+      F_te += nu * np.where(Xr_te[:, j] <= t, a, b)
+      if (m + 1) % 50 == 0:
+          gb_tr.append(np.mean((yr - F) ** 2)); gb_te.append(np.mean((yr_te - F_te) ** 2))
+  print("rounds 50 to 300, training MSE:", np.round(gb_tr, 2))
+  print("rounds 50 to 300, test MSE:    ", np.round(gb_te, 2), f"(target variance {np.var(yr_te):.1f}, noise 2.25)")
+`} />
+
+Training and test error fall together for the first hundred or so rounds, then test error flattens near 6.8 while training error keeps creeping down. The floor is well above the noise variance of 2.25, and the reason is the shape of the model rather than its size: stumps produce a sum of one-feature functions, and the true surface multiplies an orientation tuning curve by a contrast gain. No sum of separate functions of orientation and contrast can represent that product exactly. Trees of depth two or three, which can split on orientation and then on contrast, capture such interactions, and this is why practical gradient boosting uses small trees rather than stumps. Check which features the stumps chose: the irrelevant third feature should be picked rarely, if ever.
+
+<Step n={4} title="Shrinkage and early stopping" minutes={25} />
+
+Boosting keeps reducing training error as rounds are added, so it will eventually fit noise. Two controls work together: a small learning rate makes each round cautious, and **early stopping** halts at the round with the lowest error on validation data.
+
+<PyCell id="early" title="Learning rate against rounds" tests={String.raw`
+  import numpy as np
+  def test_curves():
+      "val holds a validation curve of 400 rounds for each learning rate"
+      assert all(len(v) == 400 for v in val.values())
+  def test_small_lr():
+      "the small learning rate reaches a lower minimum validation error, at a later round"
+      assert min(val[0.05]) <= min(val[0.8]) and np.argmin(val[0.05]) > np.argmin(val[0.8])
+`} prompt="Split the 500 training examples into 350 for fitting and 150 for validation. For learning rates 0.05 and 0.8, boost for 400 rounds and record the validation MSE after every round. Report each curve's minimum and where it occurs."
+code={String.raw`
+  fit_i, val_i = np.arange(350), np.arange(350, 500)
+  val = {}
+  for lr_ in [0.05, 0.8]:
+      F, Fv, curve = np.full(350, yr[fit_i].mean()), np.full(150, yr[fit_i].mean()), []
+      for m in range(400):
+          j, t, a, b = reg_stump(Xr[fit_i], yr[fit_i] - F)
+          F += lr_ * np.where(Xr[fit_i][:, j] <= t, a, b)
+          Fv += ...
+          curve.append(np.mean((yr[val_i] - Fv) ** 2))
+      val[lr_] = curve
+      print(f"learning rate {lr_}: best validation MSE {min(curve):.2f} at round {int(np.argmin(curve)) + 1}; after 400 rounds {curve[-1]:.2f}")
+`}
+hint="Fv += lr_ * np.where(Xr[val_i][:, j] <= t, a, b)."
+solution={String.raw`
+  fit_i, val_i = np.arange(350), np.arange(350, 500)
+  val = {}
+  for lr_ in [0.05, 0.8]:
+      F, Fv, curve = np.full(350, yr[fit_i].mean()), np.full(150, yr[fit_i].mean()), []
+      for m in range(400):
+          j, t, a, b = reg_stump(Xr[fit_i], yr[fit_i] - F)
+          F += lr_ * np.where(Xr[fit_i][:, j] <= t, a, b)
+          Fv += lr_ * np.where(Xr[val_i][:, j] <= t, a, b)
+          curve.append(np.mean((yr[val_i] - Fv) ** 2))
+      val[lr_] = curve
+      print(f"learning rate {lr_}: best validation MSE {min(curve):.2f} at round {int(np.argmin(curve)) + 1}; after 400 rounds {curve[-1]:.2f}")
+`} />
+
+With a learning rate of 0.8 the validation error bottoms out at about 8.6 by round 42 and then climbs to almost 9.9 as later rounds fit noise in the 350 fitting examples. With 0.05 the curve is still falling slowly at round 400 and is already lower, at about 7.8. This is the usual pattern, described by Friedman: smaller steps need more rounds but generalise better, so in practice you fix a small learning rate, boost for many rounds and let early stopping on validation data choose where to stop. Remember that the validation set used to stop is now part of model selection, so the final performance estimate still needs a separate test set (Week 59).
+
+<Bridge title="Boosting in brains and machines"
+  neuro="Learning that concentrates on the errors of what is already known has a long history in theories of the brain, from the Rescorla-Wagner rule, where learning is driven by prediction error (Week 44), to cerebellar models in which each new correction targets the remaining motor error. Boosting is the statistical version: each stage learns only what the previous stages left unexplained."
+  ai="Gradient-boosted trees, in implementations such as XGBoost and LightGBM, win a large share of machine learning competitions on tabular data and are the strongest baseline any neural network for such data must beat. In neuroscience they are a good first model for predicting behaviour from a table of task and neural features.">
+
+Many weak models, each fixing the last one's mistakes, add up to a strong one.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A weak learner is one that is...", options: ["Slightly better than chance", "Perfect", "Always wrong", "Unbiased"], answer: 0, explain: "Like a stump." },
+  { q: "AdaBoost increases the weight of examples that...", options: ["Were misclassified", "Were correct", "Are far from the boundary", "Are support vectors"], answer: 0, explain: "Step 2." },
+  { q: "A stump's vote in AdaBoost is...", options: ["½ log((1 − ε)/ε)", "ε", "1 − ε", "Equal for all"], answer: 0, explain: "Better stumps get bigger votes." },
+  { q: "Gradient boosting fits each new tree to...", options: ["The pseudo-residuals (negative gradient)", "The labels", "Random noise", "The previous tree"], answer: 0, explain: "The derivation." },
+  { q: "For squared loss, the pseudo-residuals are...", options: ["The ordinary residuals", "The labels", "Zero", "Their squares"], answer: 0, explain: "−∂L/∂F = y − F." },
+  { q: "A smaller learning rate usually needs...", options: ["More rounds, and overfits more gently", "Fewer rounds", "No validation", "Deeper trees only"], answer: 0, explain: "Step 4." },
+  { q: "Early stopping chooses the number of rounds by...", options: ["Validation error", "Training error", "The learning rate", "Guessing"], answer: 0, explain: "Step 4." },
+  { q: "Boosting mainly reduces...", options: ["Bias, and also variance", "Only variance", "Only noise", "Nothing"], answer: 0, explain: "Unlike bagging, it builds up a complex model from simple pieces." },
+]} />
+
+<Flashcards cards={[
+  { front: "AdaBoost update?", back: "$\\alpha_t = \\frac12\\log\\frac{1 - \\epsilon_t}{\\epsilon_t}$; $w_i \\leftarrow w_ie^{-\\alpha_ty_ih_t(\\mathbf x_i)}$, then renormalise." },
+  { front: "Gradient boosting step?", back: "Fit $h_m$ to pseudo-residuals $-\\partial L/\\partial F$; $F_m = F_{m-1} + \\nu h_m$." },
+  { front: "Learning rate (shrinkage)?", back: "Scales each tree's contribution; smaller is slower but usually better." },
+  { front: "Bagging against boosting?", back: "Bagging: independent strong models averaged (reduces variance). Boosting: sequential weak models added (reduces bias)." },
+  { front: "Early stopping?", back: "Stop adding rounds where validation error is lowest." },
+]} />
+
+<Predict revisit question="After 200 rounds of boosted stumps on a circular boundary, how accurate was the ensemble?" />
+
+<Key title="Before you go">
+<ul>
+<li>Boosting builds a strong model from weak ones, each focused on the remaining errors.</li>
+<li>AdaBoost reweights examples; gradient boosting fits trees to pseudo-residuals.</li>
+<li>Gradient boosting is gradient descent in function space, so any differentiable loss can be boosted.</li>
+<li>A small learning rate with early stopping controls overfitting.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Friedman (2001), <em>Greedy function approximation: a gradient boosting machine</em>.</li>
+<li>Freund and Schapire (1997), <em>A decision-theoretic generalization of on-line learning and an application to boosting</em>, Journal of Computer and System Sciences 55(1), 119 to 139, which introduced AdaBoost.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Compare boosting with error-driven learning in the brain (Rescorla-Wagner, cerebellar learning). Where is the analogy close, and where does it break down? Write one sentence on what a brain would need in order to implement something like early stopping." />
