@@ -1,0 +1,270 @@
+export const meta = {
+  title: "Learning kernels from data: the marginal likelihood",
+  intro: "A Gaussian process has few parameters, but they matter: the length-scale, the signal variance and the noise variance decide what the model believes. They can be chosen by cross-validation, as in Week 59. Gaussian processes offer something better: the marginal likelihood, the probability of the data with the function integrated out, which can be computed exactly and maximised directly. It rewards fitting the data and penalises flexibility automatically, a quantitative form of Occam's razor. Today you see the trade-off, optimise hyperparameters by gradient, and use the marginal likelihood to choose between kernels.",
+  goals: [
+    "Decompose the GP log marginal likelihood into data fit and complexity terms",
+    "Find hyperparameters by maximising the marginal likelihood with a gradient-based optimiser",
+    "Compare kernels by marginal likelihood and explain the automatic Occam's razor",
+    "Recognise the limits: local optima, overconfidence in hyperparameters and misspecified kernels",
+  ],
+  plan: [
+    { label: "Fit against complexity", minutes: 25 },
+    { label: "Optimising hyperparameters", minutes: 30 },
+    { label: "Choosing between kernels", minutes: 30 },
+    { label: "Cautions", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 20 },
+  ],
+  paper: "mackay-1992",
+};
+
+<Predict question="Data come from a smooth function plus noise. As a GP's length-scale is made very short, the posterior mean can pass through every data point. Does the marginal likelihood keep rising as the length-scale shrinks, or does it peak and then fall?" />
+
+<Step n={1} title="Fit against complexity" minutes={25} />
+
+For a GP with kernel hyperparameters $\boldsymbol\theta$, the marginal likelihood of the data is Gaussian with covariance $K_\theta + \sigma^2I = C$:
+
+$$
+\log p(\mathbf y \mid \boldsymbol\theta) = \underbrace{-\tfrac12\mathbf y^\top C^{-1}\mathbf y}_{\text{data fit}}\ \underbrace{-\tfrac12\log|C|}_{\text{complexity penalty}}\ - \tfrac n2\log2\pi.
+$$
+
+The first term is large when the data are typical of the model. The second penalises models whose prior spreads probability over many possible datasets: a flexible GP with a short length-scale can produce almost anything, so it assigns little probability to any particular dataset, including this one. MacKay (1992), today's paper, made this the basis of his "evidence framework" for choosing regularisation and models in neural networks.
+
+<Video id="S9RbSCpy_pg" title="Gaussian processes, part 1 (MLSS Tübingen 2015)" by="Neil Lawrence" note="Neil Lawrence introduces Gaussian processes from Bayesian regression, with covariance functions, the marginal likelihood and how it balances data fit against model complexity." />
+
+<Figure caption="The log marginal likelihood against length-scale (right) and the GP fit it implies (left). Short length-scales fit the points but pay a large complexity penalty; long ones are simple but miss the data." credit="Interactive figure by Engram, after MacKay (1992).">
+  <MarginalLikelihood />
+</Figure>
+
+<PyCell id="terms" title="The two terms across length-scales" tests={String.raw`
+  import numpy as np
+  def test_terms():
+      "the data-fit term improves and the complexity term worsens as the length-scale shrinks"
+      assert fit_t[0] > fit_t[-1] and comp_t[0] < comp_t[-1]
+  def test_peak():
+      "the log marginal likelihood peaks at an intermediate length-scale, within a factor of 2 of the generating one (0.7)"
+      best = ells[np.argmax(lml_t)]
+      assert ells[0] < best < ells[-1] and 0.35 < best < 1.4
+`} prompt="For length-scales from 0.05 to 10 (log-spaced), compute the data-fit term, the complexity term and their sum (plus the constant) for 40 noisy samples of a function drawn from a GP with length-scale 0.7."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.linalg import cho_factor, cho_solve
+
+  def k_se(A, B, ell, sf2=1.0):
+      return sf2 * np.exp(-0.5 * ((A[:, None] - B[None, :]) / ell) ** 2)
+
+  g0 = np.random.default_rng(644)
+  X = np.sort(g0.uniform(-3, 3, 40))
+  f_true = np.linalg.cholesky(k_se(X, X, 0.7) + 1e-8 * np.eye(40)) @ g0.normal(size=40)
+  y = f_true + 0.3 * g0.normal(size=40)
+
+  def lml_terms(ell, sf2, sn2):
+      C = k_se(X, X, ell, sf2) + sn2 * np.eye(len(X))
+      c, low = cho_factor(C, lower=True)
+      fit = ...
+      comp = -np.sum(np.log(np.diag(c)))
+      return fit, comp, fit + comp - 0.5 * len(X) * np.log(2 * np.pi)
+
+  ells = np.exp(np.linspace(np.log(0.05), np.log(10), 40))
+  fit_t, comp_t, lml_t = map(np.array, zip(*[lml_terms(l, 1.0, 0.09) for l in ells]))
+  print(f"best length-scale {ells[np.argmax(lml_t)]:.2f}")
+  plt.semilogx(ells, fit_t, label="data fit"); plt.semilogx(ells, comp_t, label="complexity"); plt.semilogx(ells, lml_t, "k", label="log marginal likelihood")
+  plt.legend(); plt.xlabel("length-scale"); plt.show()
+`}
+hint="fit = -0.5 * y @ cho_solve((c, low), y). The complexity term is minus half the log determinant, which is minus the sum of the logs of the Cholesky diagonal."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.linalg import cho_factor, cho_solve
+
+  def k_se(A, B, ell, sf2=1.0):
+      return sf2 * np.exp(-0.5 * ((A[:, None] - B[None, :]) / ell) ** 2)
+
+  g0 = np.random.default_rng(644)
+  X = np.sort(g0.uniform(-3, 3, 40))
+  f_true = np.linalg.cholesky(k_se(X, X, 0.7) + 1e-8 * np.eye(40)) @ g0.normal(size=40)
+  y = f_true + 0.3 * g0.normal(size=40)
+
+  def lml_terms(ell, sf2, sn2):
+      C = k_se(X, X, ell, sf2) + sn2 * np.eye(len(X))
+      c, low = cho_factor(C, lower=True)
+      fit = -0.5 * y @ cho_solve((c, low), y)
+      comp = -np.sum(np.log(np.diag(c)))
+      return fit, comp, fit + comp - 0.5 * len(X) * np.log(2 * np.pi)
+
+  ells = np.exp(np.linspace(np.log(0.05), np.log(10), 40))
+  fit_t, comp_t, lml_t = map(np.array, zip(*[lml_terms(l, 1.0, 0.09) for l in ells]))
+  print(f"best length-scale {ells[np.argmax(lml_t)]:.2f}")
+  plt.semilogx(ells, fit_t, label="data fit"); plt.semilogx(ells, comp_t, label="complexity"); plt.semilogx(ells, lml_t, "k", label="log marginal likelihood")
+  plt.legend(); plt.xlabel("length-scale"); plt.show()
+`} />
+
+The two terms pull in opposite directions. As the length-scale shrinks, the data-fit term improves steadily, because the GP can pass through every point; the complexity term falls away just as steadily, because a wiggly prior puts only a tiny probability on any particular dataset. Their sum peaks at 0.76, close to the 0.7 that generated the data. Nothing was held out: the penalty came from integrating over functions, not from a validation set.
+
+<Step n={2} title="Optimising hyperparameters" minutes={30} />
+
+All three hyperparameters can be found together by maximising the log marginal likelihood. Optimise their logarithms, so that they stay positive, with a quasi-Newton method; the gradient has a closed form, $\frac{\partial}{\partial\theta_j}\log p = \frac12\text{tr}\left((\boldsymbol\alpha\boldsymbol\alpha^\top - C^{-1})\frac{\partial C}{\partial\theta_j}\right)$ with $\boldsymbol\alpha = C^{-1}\mathbf y$, though a numerical gradient is fine for three parameters. This is called **type II maximum likelihood**, or empirical Bayes: the function is integrated out, and only the hyperparameters are fitted.
+
+<PyCell id="optimise" title="Type II maximum likelihood" tests={String.raw`
+  import numpy as np
+  def test_recover():
+      "the fitted noise sd is within 30% of 0.3 and the length-scale within a factor of 1.6 of 0.7"
+      assert abs(np.sqrt(sn2_hat) / 0.3 - 1) < 0.3 and 0.7 / 1.6 < ell_hat < 0.7 * 1.6
+`} prompt="Write neg_lml(log_params) returning minus the log marginal likelihood for (log ell, log sf2, log sn2), and minimise it with scipy.optimize.minimize (method L-BFGS-B) from several starting points, keeping the best."
+code={String.raw`
+  from scipy.optimize import minimize
+
+  def neg_lml(lp):
+      ell, sf2, sn2 = np.exp(lp)
+      return ...
+
+  best = None
+  for start in ([0.0, 0.0, -1.0], [-2.0, 1.0, -3.0], [1.5, -1.0, 0.0]):
+      res = minimize(neg_lml, np.array(start), method="L-BFGS-B")
+      if best is None or res.fun < best.fun:
+          best = res
+  ell_hat, sf2_hat, sn2_hat = np.exp(best.x)
+  print(f"length-scale {ell_hat:.3f} (true 0.7), signal sd {np.sqrt(sf2_hat):.3f}, noise sd {np.sqrt(sn2_hat):.3f} (true 0.3); log marginal likelihood {-best.fun:.2f}")
+`}
+hint="return -lml_terms(ell, sf2, sn2)[2]."
+solution={String.raw`
+  from scipy.optimize import minimize
+
+  def neg_lml(lp):
+      ell, sf2, sn2 = np.exp(lp)
+      return -lml_terms(ell, sf2, sn2)[2]
+
+  best = None
+  for start in ([0.0, 0.0, -1.0], [-2.0, 1.0, -3.0], [1.5, -1.0, 0.0]):
+      res = minimize(neg_lml, np.array(start), method="L-BFGS-B")
+      if best is None or res.fun < best.fun:
+          best = res
+  ell_hat, sf2_hat, sn2_hat = np.exp(best.x)
+  print(f"length-scale {ell_hat:.3f} (true 0.7), signal sd {np.sqrt(sf2_hat):.3f}, noise sd {np.sqrt(sn2_hat):.3f} (true 0.3); log marginal likelihood {-best.fun:.2f}")
+`} />
+
+Optimising all three hyperparameters recovers a noise standard deviation of 0.302 against a true 0.3, and a length-scale of 0.61 against 0.7, which is within the uncertainty one should expect from 40 points of a single random function. Three starting points were used because the objective is not convex; with one unlucky start it is possible to land in a solution that calls all the structure noise. In practice always restart, and look at the fit, not only the final number.
+
+<Step n={3} title="Choosing between kernels" minutes={30} />
+
+The marginal likelihood also compares kernels with different structures, each with its own hyperparameters fitted. Because it integrates over functions rather than fitting one, a kernel that could explain many datasets is penalised for not committing, and a kernel whose structure matches the data wins even if a more flexible one fits equally well. This is the **automatic Occam's razor** (MacKay, 1992; Rasmussen and Ghahramani, 2001).
+
+<PyCell id="compare" title="Squared exponential against periodic" tests={String.raw`
+  import numpy as np
+  def test_periodic():
+      "for a rhythmic signal, the periodic kernel has the higher optimised marginal likelihood"
+      assert best_lml["periodic"] > best_lml["se"] + 3
+  def test_extrapolate():
+      "the periodic kernel extrapolates the rhythm better beyond the data"
+      assert err_out["periodic"] < err_out["se"]
+`} prompt="Simulate a firing-rate rhythm (period 1.3 s) observed for 4 s with noise, fit both kernels by maximising the marginal likelihood (the periodic kernel also learns its period), and compare their best marginal likelihoods and their errors when predicting 4 to 6 s."
+code={String.raw`
+  gc = np.random.default_rng(6441)
+  tt = np.sort(gc.uniform(0, 4, 50))
+  rhythm = lambda t: np.sin(2 * np.pi * t / 1.3) + 0.5 * np.sin(4 * np.pi * t / 1.3 + 0.7)
+  yr = rhythm(tt) + 0.25 * gc.normal(size=50)
+  t_out = np.linspace(4, 6, 50)
+
+  kern = {
+      "se": lambda A, B, p: np.exp(p[1]) * np.exp(-0.5 * ((A[:, None] - B[None, :]) / np.exp(p[0])) ** 2),
+      "periodic": lambda A, B, p: np.exp(p[1]) * np.exp(-2 * np.sin(np.pi * np.abs(A[:, None] - B[None, :]) / np.exp(p[3])) ** 2 / np.exp(p[0]) ** 2),
+  }
+  def nlml(p, name):
+      C = kern[name](tt, tt, p) + np.exp(p[2]) * np.eye(len(tt))
+      c, low = cho_factor(C, lower=True)
+      return 0.5 * yr @ cho_solve((c, low), yr) + np.sum(np.log(np.diag(c))) + 0.5 * len(tt) * np.log(2 * np.pi)
+
+  best_lml, err_out = {}, {}
+  starts = {"se": [[0.0, 0.0, -2.0], [-1.0, 0.0, -2.0]], "periodic": [[0.0, 0.0, -2.0, np.log(p0)] for p0 in (1.0, 1.3, 1.6)]}
+  for name in kern:
+      res = min((minimize(nlml, np.array(s0), args=(name,), method="L-BFGS-B") for s0 in starts[name]), key=lambda r: r.fun)
+      best_lml[name] = -res.fun
+      p = res.x
+      C = kern[name](tt, tt, p) + np.exp(p[2]) * np.eye(len(tt))
+      pred = ...                                          # posterior mean at t_out
+      err_out[name] = np.sqrt(np.mean((pred - rhythm(t_out)) ** 2))
+      extra = f", period {np.exp(p[3]):.3f} s" if name == "periodic" else ""
+      print(f"{name:9s} log marginal likelihood {best_lml[name]:8.2f}; error beyond the data {err_out[name]:.3f}{extra}")
+`}
+hint="pred = kern[name](t_out, tt, p) @ np.linalg.solve(C, yr)."
+solution={String.raw`
+  gc = np.random.default_rng(6441)
+  tt = np.sort(gc.uniform(0, 4, 50))
+  rhythm = lambda t: np.sin(2 * np.pi * t / 1.3) + 0.5 * np.sin(4 * np.pi * t / 1.3 + 0.7)
+  yr = rhythm(tt) + 0.25 * gc.normal(size=50)
+  t_out = np.linspace(4, 6, 50)
+
+  kern = {
+      "se": lambda A, B, p: np.exp(p[1]) * np.exp(-0.5 * ((A[:, None] - B[None, :]) / np.exp(p[0])) ** 2),
+      "periodic": lambda A, B, p: np.exp(p[1]) * np.exp(-2 * np.sin(np.pi * np.abs(A[:, None] - B[None, :]) / np.exp(p[3])) ** 2 / np.exp(p[0]) ** 2),
+  }
+  def nlml(p, name):
+      C = kern[name](tt, tt, p) + np.exp(p[2]) * np.eye(len(tt))
+      c, low = cho_factor(C, lower=True)
+      return 0.5 * yr @ cho_solve((c, low), yr) + np.sum(np.log(np.diag(c))) + 0.5 * len(tt) * np.log(2 * np.pi)
+
+  best_lml, err_out = {}, {}
+  starts = {"se": [[0.0, 0.0, -2.0], [-1.0, 0.0, -2.0]], "periodic": [[0.0, 0.0, -2.0, np.log(p0)] for p0 in (1.0, 1.3, 1.6)]}
+  for name in kern:
+      res = min((minimize(nlml, np.array(s0), args=(name,), method="L-BFGS-B") for s0 in starts[name]), key=lambda r: r.fun)
+      best_lml[name] = -res.fun
+      p = res.x
+      C = kern[name](tt, tt, p) + np.exp(p[2]) * np.eye(len(tt))
+      pred = kern[name](t_out, tt, p) @ np.linalg.solve(C, yr)  # posterior mean at t_out
+      err_out[name] = np.sqrt(np.mean((pred - rhythm(t_out)) ** 2))
+      extra = f", period {np.exp(p[3]):.3f} s" if name == "periodic" else ""
+      print(f"{name:9s} log marginal likelihood {best_lml[name]:8.2f}; error beyond the data {err_out[name]:.3f}{extra}")
+`} />
+
+The periodic kernel's marginal likelihood is 13.5 units higher than the squared exponential's, strong evidence, and it learns a period of 1.296 s against the true 1.3. The practical difference shows beyond the data: asked to predict 4 to 6 seconds, the periodic model continues the rhythm with a root mean squared error of 0.15, while the squared exponential decays to its prior mean and errs by 0.75. The squared exponential could fit the observed window just as well by using a short length-scale, but it would then have to admit that it could equally have produced countless other wiggly datasets, and that admission is the complexity penalty.
+
+<Step n={4} title="Cautions" minutes={15} />
+
+The marginal likelihood is a powerful default, but it has blind spots. It can have several local optima, for example one where a short length-scale explains the data as signal and one where a long length-scale explains it as noise, so optimise from several starts. Fixing the hyperparameters at their optimum ignores uncertainty about them, which matters with little data; a fully Bayesian treatment would integrate over them with MCMC. And it trusts the model class: if no kernel in the comparison is right, the marginal likelihood still picks one, sometimes with misplaced confidence, which is why held-out checks like Day 3's coverage remain useful.
+
+<Bridge title="The evidence in brains and machines"
+  neuro="The Bayesian brain hypothesis often appeals to Occam's razor in perception: of the interpretations that fit an image, the visual system prefers the simplest, and the marginal likelihood offers a formal account of why. In data analysis, evidence optimisation sets the smoothness of receptive fields (automatic smoothness determination) and the timescales of latent processes in GPFA."
+  ai="Marginal-likelihood optimisation is how Gaussian-process models are trained in practice, and the same principle reappears in Bayesian model selection, in learning the hyperparameters of Bayesian neural networks, and in recent work linking generalisation in deep learning to marginal likelihood (Week 68).">
+
+Integrating out the function charges each model for the datasets it could have explained but did not.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The GP log marginal likelihood contains a data-fit term and...", options: ["A complexity penalty, −½ log|C|", "A learning rate", "The training error", "A validation term"], answer: 0, explain: "Step 1." },
+  { q: "Very short length-scales are penalised because...", options: ["The prior spreads probability over too many datasets", "They fit the data badly", "They are slow", "They are not valid kernels"], answer: 0, explain: "Step 1." },
+  { q: "Hyperparameters are usually optimised in...", options: ["Log space, so they stay positive", "Linear space only", "Integer steps", "Random order"], answer: 0, explain: "Step 2." },
+  { q: "Type II maximum likelihood fits...", options: ["Hyperparameters, with the function integrated out", "The function values directly", "Only the noise", "Only the mean"], answer: 0, explain: "Step 2." },
+  { q: "The automatic Occam's razor favours...", options: ["Models whose structure matches the data", "The most flexible model", "The simplest model always", "Models with more parameters"], answer: 0, explain: "Step 3." },
+  { q: "For a rhythmic signal, the periodic kernel also wins at...", options: ["Extrapolating beyond the data", "Nothing", "Interpolation only", "Speed"], answer: 0, explain: "Step 3." },
+  { q: "The marginal likelihood can have...", options: ["Several local optima", "No maximum", "Only one optimum always", "Negative variance"], answer: 0, explain: "Step 4." },
+  { q: "Fixing hyperparameters at their optimum ignores...", options: ["Uncertainty about the hyperparameters", "The data", "The kernel", "The noise"], answer: 0, explain: "Step 4." },
+]} />
+
+<Flashcards cards={[
+  { front: "GP log marginal likelihood?", back: "$-\\tfrac12\\mathbf y^\\top C^{-1}\\mathbf y - \\tfrac12\\log|C| - \\tfrac n2\\log2\\pi$, $C = K + \\sigma^2I$." },
+  { front: "Gradient of the log marginal likelihood?", back: "$\\tfrac12\\text{tr}((\\boldsymbol\\alpha\\boldsymbol\\alpha^\\top - C^{-1})\\,\\partial C/\\partial\\theta_j)$, $\\boldsymbol\\alpha = C^{-1}\\mathbf y$." },
+  { front: "Type II maximum likelihood?", back: "Maximise the marginal likelihood over hyperparameters (empirical Bayes)." },
+  { front: "Automatic Occam's razor?", back: "Flexible models spread probability thinly over datasets, so they score lower unless the data need the flexibility." },
+  { front: "Cautions?", back: "Local optima, ignored hyperparameter uncertainty, and the assumption that some kernel in the comparison is right." },
+]} />
+
+<Predict revisit question="Did the marginal likelihood keep rising as the length-scale shrank?" />
+
+<Key title="Before you go">
+<ul>
+<li>The marginal likelihood balances data fit against a log-determinant complexity penalty.</li>
+<li>Maximising it over log hyperparameters fits length-scale, signal and noise together.</li>
+<li>Comparing marginal likelihoods chooses kernel structure: an automatic Occam's razor.</li>
+<li>Use several starts and held-out checks; the evidence trusts the model class.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: MacKay (1992), <em>Bayesian interpolation</em>.</li>
+<li>Rasmussen and Ghahramani (2001), <em>Occam's razor</em>, Advances in Neural Information Processing Systems 13.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Cross-validation and the marginal likelihood both choose hyperparameters. Describe a situation in neural data analysis where you would trust one over the other, and why." />

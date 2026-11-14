@@ -1,0 +1,295 @@
+export const meta = {
+  title: "Gaussian processes for neural data and experiments",
+  intro: "Two uses of Gaussian processes have changed how experiments are analysed and run. In analysis, GP priors over latent time courses turn noisy single-trial population activity into smooth trajectories with timescales learned from the data: Gaussian-process factor analysis. In experimental design, a GP over the response surface lets each stimulus be chosen where it will be most informative, so that a tuning curve or an optimal stimulus can be found in a fraction of the trials. Today you build both, and finish the week by seeing where each fails.",
+  goals: [
+    "Implement Gaussian-process factor analysis for a population of neurons",
+    "Learn each latent's timescale from the data by marginal likelihood",
+    "Implement Bayesian optimisation with expected improvement to find a neuron's preferred stimulus",
+    "Compare adaptive and grid designs, and state the assumptions behind each",
+  ],
+  plan: [
+    { label: "Gaussian-process factor analysis", minutes: 35 },
+    { label: "Learning timescales", minutes: 20 },
+    { label: "Choosing the next stimulus", minutes: 35 },
+    { label: "When adaptive design fails", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "yu-2009",
+};
+
+<Predict question="A neuron's response peaks sharply at one orientation among 100 possible stimuli. An adaptive method chooses each stimulus to maximise expected improvement. Roughly how many trials do you expect it to need to come close to the peak: about 25, about 60, or about 150?" />
+
+<Step n={1} title="Gaussian-process factor analysis" minutes={35} />
+
+**GPFA** (Yu and colleagues, 2009, today's paper) combines factor analysis (Week 61) with Gaussian-process priors over time. Each latent $z_j(t)$ has its own squared exponential kernel with timescale $\tau_j$; the population at time $t$ is $\mathbf x_t = C\mathbf z_t + \mathbf d + \boldsymbol\epsilon_t$ with diagonal noise $\Psi$. Because everything is Gaussian, inference over the whole trajectory is a single large but structured Gaussian conditioning: stack the latents over time, and the posterior is
+
+$$
+\Sigma_{\text{post}} = \left(K^{-1} + \tilde C^\top\tilde\Psi^{-1}\tilde C\right)^{-1},\qquad \boldsymbol\mu_{\text{post}} = \Sigma_{\text{post}}\tilde C^\top\tilde\Psi^{-1}(\tilde{\mathbf x} - \tilde{\mathbf d}),
+$$
+
+with $K$ block-diagonal over latents (one $T \times T$ kernel matrix each) and $\tilde C$ block-diagonal over time. Smoothing and dimensionality reduction happen together, rather than smoothing first and reducing afterwards.
+
+<Video id="cQAPIlMeL_g" title="Learning what we know and knowing what we learn: Gaussian processes in systems neuroscience" by="Cosyne tutorial" note="A tutorial overview of Gaussian processes applied to neural data: smoothing tuning curves and latent trajectories, learning timescales, and using uncertainty to guide experiments." />
+
+<PyCell id="gpfa" title="GPFA on a population" tests={String.raw`
+  import numpy as np
+  def test_shapes():
+      "the posterior mean has one row per time bin and one column per latent"
+      assert Zpost.shape == (T, 2)
+  def test_recovery():
+      "both latents are recovered (absolute correlation above 0.9 after matching)"
+      assert min(match) > 0.9
+  def test_better_than_smoothing():
+      "GPFA beats smoothing each neuron then projecting with the true loadings"
+      assert np.mean(match) > np.mean(match_smooth)
+`} prompt="Complete the GPFA posterior: build the block-diagonal prior covariance K over the two latents, the stacked loading matrix, and solve for the posterior mean. Compare with smoothing each neuron and projecting."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.linalg import block_diag
+  g0 = np.random.default_rng(645)
+  T, N, L = 120, 25, 2
+  t = np.arange(T)
+  taus = np.array([25.0, 8.0])
+  Kl = [np.exp(-0.5 * ((t[:, None] - t[None, :]) / tau) ** 2) + 1e-6 * np.eye(T) for tau in taus]
+  Ztrue = np.column_stack([np.linalg.cholesky(K_) @ g0.normal(size=T) for K_ in Kl])
+  C = g0.normal(0, 1.0, (N, L)); dvec = g0.normal(0, 0.3, N)
+  Psi = g0.uniform(0.5, 2.0, N)
+  X = Ztrue @ C.T + dvec + g0.normal(size=(T, N)) * np.sqrt(Psi)
+
+  K_big = block_diag(*Kl)                                        # (L T) x (L T), latent-major order
+  C_big = np.zeros((T * N, T * L))
+  for i in range(T):
+      C_big[i * N:(i + 1) * N, :][:, [j * T + i for j in range(L)]] = C
+  Psi_big = np.tile(Psi, T)
+  xvec = (X - dvec).reshape(-1)
+  Prec = ...                                                     # posterior precision
+  mu = np.linalg.solve(Prec, C_big.T @ (xvec / Psi_big))
+  Zpost = mu.reshape(L, T).T
+
+  def best_match(Z):
+      Cm = np.abs(np.corrcoef(np.hstack([Ztrue, Z]).T)[:L, L:])
+      return Cm.max(1)
+  match = best_match(Zpost)
+  w = np.exp(-0.5 * ((t[:, None] - t[None, :]) / 10) ** 2); w /= w.sum(1, keepdims=True)
+  Zsmooth = (w @ (X - dvec)) @ np.linalg.pinv(C).T
+  match_smooth = best_match(Zsmooth)
+  print(f"GPFA |corr| with the true latents {np.round(match, 3)}; smooth-then-project {np.round(match_smooth, 3)}")
+  plt.plot(Ztrue[:, 0], "k", label="true latent 1"); plt.plot(Zpost[:, 0], label="GPFA"); plt.plot(Zsmooth[:, 0], alpha=0.7, label="smoothed"); plt.legend(); plt.show()
+`}
+hint="Prec = np.linalg.inv(K_big) + C_big.T @ (C_big / Psi_big[:, None])."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.linalg import block_diag
+  g0 = np.random.default_rng(645)
+  T, N, L = 120, 25, 2
+  t = np.arange(T)
+  taus = np.array([25.0, 8.0])
+  Kl = [np.exp(-0.5 * ((t[:, None] - t[None, :]) / tau) ** 2) + 1e-6 * np.eye(T) for tau in taus]
+  Ztrue = np.column_stack([np.linalg.cholesky(K_) @ g0.normal(size=T) for K_ in Kl])
+  C = g0.normal(0, 1.0, (N, L)); dvec = g0.normal(0, 0.3, N)
+  Psi = g0.uniform(0.5, 2.0, N)
+  X = Ztrue @ C.T + dvec + g0.normal(size=(T, N)) * np.sqrt(Psi)
+
+  K_big = block_diag(*Kl)                                        # (L T) x (L T), latent-major order
+  C_big = np.zeros((T * N, T * L))
+  for i in range(T):
+      C_big[i * N:(i + 1) * N, :][:, [j * T + i for j in range(L)]] = C
+  Psi_big = np.tile(Psi, T)
+  xvec = (X - dvec).reshape(-1)
+  Prec = np.linalg.inv(K_big) + C_big.T @ (C_big / Psi_big[:, None])   # posterior precision
+  mu = np.linalg.solve(Prec, C_big.T @ (xvec / Psi_big))
+  Zpost = mu.reshape(L, T).T
+
+  def best_match(Z):
+      Cm = np.abs(np.corrcoef(np.hstack([Ztrue, Z]).T)[:L, L:])
+      return Cm.max(1)
+  match = best_match(Zpost)
+  w = np.exp(-0.5 * ((t[:, None] - t[None, :]) / 10) ** 2); w /= w.sum(1, keepdims=True)
+  Zsmooth = (w @ (X - dvec)) @ np.linalg.pinv(C).T
+  match_smooth = best_match(Zsmooth)
+  print(f"GPFA |corr| with the true latents {np.round(match, 3)}; smooth-then-project {np.round(match_smooth, 3)}")
+  plt.plot(Ztrue[:, 0], "k", label="true latent 1"); plt.plot(Zpost[:, 0], label="GPFA"); plt.plot(Zsmooth[:, 0], alpha=0.7, label="smoothed"); plt.legend(); plt.show()
+`} />
+
+GPFA recovers both latents with absolute correlations of 0.99, against 0.96 to 0.98 for smoothing each neuron with a fixed window and then projecting. The gap comes from doing both jobs at once: smoothing first applies the same window to every neuron, including the noisy ones, and the projection then inherits that noise, while GPFA weights each neuron by its reliability (through $\Psi$) and each latent by its own timescale. The posterior also comes with a covariance, so single-trial trajectories can be plotted with error bands rather than as if they were measured.
+
+<Step n={2} title="Learning timescales" minutes={20} />
+
+In GPFA the timescales are learned, not chosen: each $\tau_j$ is a hyperparameter of the marginal likelihood, which for fixed loadings is Gaussian with covariance $\tilde C K\tilde C^\top + \tilde\Psi$. Different latents end up with different timescales, which is itself a result: a population can carry a slow signal and a fast one at once.
+
+<PyCell id="timescales" title="Learning each latent's timescale" tests={String.raw`
+  import numpy as np
+  def test_taus():
+      "the learned timescales are within 40% of the true 25 and 8 bins"
+      assert abs(taus_hat[0] / 25 - 1) < 0.4 and abs(taus_hat[1] / 8 - 1) < 0.4
+`} prompt="Write neg_lml(log_taus), the negative log marginal likelihood of the data with the loadings and noise known, and minimise it over the two log timescales."
+code={String.raw`
+  from scipy.optimize import minimize
+  from scipy.linalg import cho_factor, cho_solve
+
+  def neg_lml(log_taus):
+      Kb = block_diag(*[np.exp(-0.5 * ((t[:, None] - t[None, :]) / np.exp(lt)) ** 2) + 1e-6 * np.eye(T) for lt in log_taus])
+      Cov = C_big @ Kb @ C_big.T + np.diag(Psi_big)
+      c, low = cho_factor(Cov, lower=True)
+      return ...
+
+  res = minimize(neg_lml, np.log([12.0, 12.0]), method="Nelder-Mead", options={"xatol": 0.05, "fatol": 0.5})
+  taus_hat = np.sort(np.exp(res.x))[::-1]
+  print(f"learned timescales {np.round(taus_hat, 2)} bins (true {taus})")
+`}
+hint="return 0.5 * xvec @ cho_solve((c, low), xvec) + np.sum(np.log(np.diag(c))) + 0.5 * len(xvec) * np.log(2 * np.pi)."
+solution={String.raw`
+  from scipy.optimize import minimize
+  from scipy.linalg import cho_factor, cho_solve
+
+  def neg_lml(log_taus):
+      Kb = block_diag(*[np.exp(-0.5 * ((t[:, None] - t[None, :]) / np.exp(lt)) ** 2) + 1e-6 * np.eye(T) for lt in log_taus])
+      Cov = C_big @ Kb @ C_big.T + np.diag(Psi_big)
+      c, low = cho_factor(Cov, lower=True)
+      return 0.5 * xvec @ cho_solve((c, low), xvec) + np.sum(np.log(np.diag(c))) + 0.5 * len(xvec) * np.log(2 * np.pi)
+
+  res = minimize(neg_lml, np.log([12.0, 12.0]), method="Nelder-Mead", options={"xatol": 0.05, "fatol": 0.5})
+  taus_hat = np.sort(np.exp(res.x))[::-1]
+  print(f"learned timescales {np.round(taus_hat, 2)} bins (true {taus})")
+`} />
+
+The marginal likelihood recovers timescales of 24.9 and 9.9 bins against the true 25 and 8. The slow latent's timescale is pinned down well, the fast one less so, because a fast latent is harder to distinguish from independent noise: with a bin width of, say, 20 ms, this is a distinction between a 500 ms signal and a 200 ms one. Reporting timescales from GPFA is common in population studies, so it is worth checking how certain they are, for example by profiling the marginal likelihood around its maximum.
+
+<Step n={3} title="Choosing the next stimulus" minutes={35} />
+
+Recording time is the scarce resource in an experiment. **Bayesian optimisation** fits a GP to the responses measured so far and chooses the next stimulus by an **acquisition function** that scores how useful each candidate would be. **Expected improvement** over the best response so far, for a GP with mean $\mu$ and standard deviation $\sigma$ at a candidate and best-so-far $y^+$, is
+
+$$
+\text{EI} = \sigma\left[z\Phi(z) + \phi(z)\right],\qquad z = \frac{\mu - y^+}{\sigma},
+$$
+
+which is large where the response is predicted to be high or is uncertain. The same machinery underlies adaptive stimulus selection in neurophysiology, where the aim may instead be to reduce uncertainty about the whole tuning curve (Lewi, Butera and Paninski, 2009).
+
+<Figure caption="Bayesian optimisation of a neuron's response over a one-dimensional stimulus space. Each new stimulus is chosen where expected improvement is largest." credit="Interactive figure by Engram, after Snoek, Larochelle and Adams (2012).">
+  <BayesOpt />
+</Figure>
+
+<PyCell id="bayesopt" title="Finding the preferred stimulus" tests={String.raw`
+  import numpy as np
+  def test_finds():
+      "Bayesian optimisation gets within 0.05 of the best response in 25 trials, on average over 20 neurons"
+      assert np.mean(best_ei) > true_best - 0.05
+  def test_beats_random():
+      "it beats random stimulus selection with the same number of trials"
+      assert np.mean(best_ei) > np.mean(best_rand) + 0.02
+`} prompt="Complete the expected improvement and the loop: on each trial fit a GP to the responses so far (length-scale 0.06, signal variance 0.3, noise variance 0.01) and test the stimulus with the largest EI. Compare with random selection, averaged over 20 simulated neurons."
+code={String.raw`
+  from scipy.stats import norm
+  grid = np.linspace(0, 1, 200)
+  gb = np.random.default_rng(6451)
+
+  def response(x, pref):
+      return np.exp(-0.5 * ((x - pref) / 0.05) ** 2) + 0.25 * np.exp(-0.5 * ((x - 0.5) / 0.3) ** 2)
+
+  kf = lambda A, B: 0.3 * np.exp(-0.5 * ((A[:, None] - B[None, :]) / 0.06) ** 2)
+  best_ei, best_rand, true_best = [], [], 1.0
+  for rep in range(20):
+      pref = gb.uniform(0.1, 0.9)
+      Xs = [0.1, 0.5, 0.9]; ys = [response(x, pref) + 0.1 * gb.normal() for x in Xs]
+      for trial in range(22):
+          Xa, ya = np.array(Xs), np.array(ys)
+          Kn = kf(Xa, Xa) + 0.01 * np.eye(len(Xa))
+          A = np.linalg.solve(Kn, ya)
+          mu_g = kf(grid, Xa) @ A
+          v_g = np.maximum(0.3 - np.einsum("ij,jk,ik->i", kf(grid, Xa), np.linalg.inv(Kn), kf(grid, Xa)), 1e-9)
+          sd_g = np.sqrt(v_g)
+          z = (mu_g - max(ya)) / sd_g
+          ei = ...
+          x_next = grid[int(np.argmax(ei))]
+          Xs.append(x_next); ys.append(response(x_next, pref) + 0.1 * gb.normal())
+      best_ei.append(max(response(x, pref) for x in Xs))
+      rand_x = gb.uniform(0, 1, 25)
+      best_rand.append(max(response(x, pref) for x in rand_x))
+  print(f"best true response found in 25 trials: Bayesian optimisation {np.mean(best_ei):.3f}, random {np.mean(best_rand):.3f} (maximum {true_best:.2f})")
+`}
+hint="ei = sd_g * (z * norm.cdf(z) + norm.pdf(z))."
+solution={String.raw`
+  from scipy.stats import norm
+  grid = np.linspace(0, 1, 200)
+  gb = np.random.default_rng(6451)
+
+  def response(x, pref):
+      return np.exp(-0.5 * ((x - pref) / 0.05) ** 2) + 0.25 * np.exp(-0.5 * ((x - 0.5) / 0.3) ** 2)
+
+  kf = lambda A, B: 0.3 * np.exp(-0.5 * ((A[:, None] - B[None, :]) / 0.06) ** 2)
+  best_ei, best_rand, true_best = [], [], 1.0
+  for rep in range(20):
+      pref = gb.uniform(0.1, 0.9)
+      Xs = [0.1, 0.5, 0.9]; ys = [response(x, pref) + 0.1 * gb.normal() for x in Xs]
+      for trial in range(22):
+          Xa, ya = np.array(Xs), np.array(ys)
+          Kn = kf(Xa, Xa) + 0.01 * np.eye(len(Xa))
+          A = np.linalg.solve(Kn, ya)
+          mu_g = kf(grid, Xa) @ A
+          v_g = np.maximum(0.3 - np.einsum("ij,jk,ik->i", kf(grid, Xa), np.linalg.inv(Kn), kf(grid, Xa)), 1e-9)
+          sd_g = np.sqrt(v_g)
+          z = (mu_g - max(ya)) / sd_g
+          ei = sd_g * (z * norm.cdf(z) + norm.pdf(z))
+          x_next = grid[int(np.argmax(ei))]
+          Xs.append(x_next); ys.append(response(x_next, pref) + 0.1 * gb.normal())
+      best_ei.append(max(response(x, pref) for x in Xs))
+      rand_x = gb.uniform(0, 1, 25)
+      best_rand.append(max(response(x, pref) for x in rand_x))
+  print(f"best true response found in 25 trials: Bayesian optimisation {np.mean(best_ei):.3f}, random {np.mean(best_rand):.3f} (maximum {true_best:.2f})")
+`} />
+
+Over 20 simulated neurons with randomly placed preferred stimuli, 25 trials of Bayesian optimisation find responses averaging 1.19, against 1.09 for 25 random stimuli (values above 1 include the broad background component). The difference is largest for neurons whose peak falls where random sampling is sparse. Each new stimulus goes where the GP thinks the response may exceed the best so far, either because it is predicted high or because it is uncertain, and that balance is what the expected-improvement formula encodes: $\sigma\phi(z)$ rewards uncertainty and $\sigma z\Phi(z)$ rewards predicted gain.
+
+<Step n={4} title="When adaptive design fails" minutes={15} />
+
+Adaptive stimulus selection assumes that the response surface is well described by the GP's kernel and that the neuron is stable. Both can fail. If the true tuning is sharper than the kernel's length-scale, the GP smooths the peak away and the search may never visit it; if the neuron adapts, drifts or the recording degrades, early and late measurements are not comparable and the procedure chases a moving target. Adaptive designs also produce data that are not independent of the model, which complicates later analysis: a tuning curve estimated from adaptively chosen stimuli is dense near the peak and sparse elsewhere, so comparisons across neurons must account for the design. Standard safeguards are to interleave a few randomly chosen stimuli, to re-measure a reference stimulus periodically to check for drift, and to analyse with the design taken into account.
+
+<Bridge title="Learning what to measure in brains and machines"
+  neuro="Adaptive stimulus selection has been used to find optimal stimuli for neurons in visual cortex, where the space of images is far too large to sample, and GP methods estimate tuning in auditory and somatosensory cortex with far fewer trials. The animal is also doing something similar: active sensing, from whisking to eye movements, chooses the next measurement to reduce uncertainty."
+  ai="Bayesian optimisation is the standard method for tuning expensive systems, from the hyperparameters of neural networks (Snoek and colleagues, 2012) to materials and robot controllers, and the exploration-exploitation trade-off it embodies returns in the bandit problems of Week 69.">
+
+A GP over the response surface turns an experiment into a search with a plan.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "GPFA puts Gaussian-process priors on...", options: ["Each latent's time course", "The loadings", "The noise", "The spike counts"], answer: 0, explain: "Step 1." },
+  { q: "GPFA differs from smoothing then reducing because...", options: ["Smoothing and dimensionality reduction are done jointly", "It is faster", "It uses no kernel", "It needs no loadings"], answer: 0, explain: "Step 1." },
+  { q: "GPFA timescales are...", options: ["Learned from the data by marginal likelihood", "Set by hand always", "The same for all latents", "Equal to the bin width"], answer: 0, explain: "Step 2." },
+  { q: "Expected improvement is large where...", options: ["The response is predicted high or is uncertain", "The GP is confident and low", "There are many data", "The noise is large"], answer: 0, explain: "Step 3." },
+  { q: "In the EI formula, z equals...", options: ["(μ − y⁺)/σ", "μ/σ", "σ/μ", "y⁺"], answer: 0, explain: "Step 3." },
+  { q: "Bayesian optimisation finds a sharp peak faster than random search because...", options: ["It concentrates trials where improvement is likely", "It uses more trials", "It is unbiased", "It ignores the GP"], answer: 0, explain: "Step 3." },
+  { q: "If the true tuning is sharper than the kernel's length-scale...", options: ["The search may miss the peak", "The GP adapts automatically", "Nothing changes", "EI becomes exact"], answer: 0, explain: "Step 4." },
+  { q: "A safeguard for adaptive designs is...", options: ["Interleaving random stimuli and a repeated reference", "Using fewer trials", "Fixing the length-scale at zero", "Dropping the GP"], answer: 0, explain: "Step 4." },
+]} />
+
+<Flashcards cards={[
+  { front: "GPFA?", back: "Factor analysis with a GP prior on each latent's time course; timescales learned by marginal likelihood." },
+  { front: "GPFA posterior?", back: "$\\Sigma = (K^{-1} + \\tilde C^\\top\\tilde\\Psi^{-1}\\tilde C)^{-1}$, $\\boldsymbol\\mu = \\Sigma\\tilde C^\\top\\tilde\\Psi^{-1}(\\tilde{\\mathbf x} - \\tilde{\\mathbf d})$." },
+  { front: "Expected improvement?", back: "$\\sigma[z\\Phi(z) + \\phi(z)]$ with $z = (\\mu - y^+)/\\sigma$." },
+  { front: "Acquisition function?", back: "A score for how useful measuring a candidate would be: EI, upper confidence bound, information gain." },
+  { front: "Risks of adaptive design?", back: "Kernel misspecification, neural drift, and data whose distribution depends on the model." },
+]} />
+
+<Predict revisit question="How many trials did Bayesian optimisation need to find the sharp peak?" />
+
+<Key title="Before you go">
+<ul>
+<li>GPFA smooths and reduces together, with a timescale per latent learned from data.</li>
+<li>Different latents can have different timescales, which is a finding in itself.</li>
+<li>Bayesian optimisation picks stimuli by expected improvement and finds sharp peaks in few trials.</li>
+<li>Adaptive designs rest on the kernel and on stability; interleave random trials and check for drift.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Yu, Cunningham, Santhanam, Ryu, Shenoy and Sahani (2009), <em>Gaussian-process factor analysis for low-dimensional single-trial analysis of neural population activity</em>.</li>
+<li>Snoek, Larochelle and Adams (2012), <em>Practical Bayesian optimization of machine learning algorithms</em>, Advances in Neural Information Processing Systems 25.</li>
+<li>Lewi, Butera and Paninski (2009), <em>Sequential optimal design of neurophysiology experiments</em>, Neural Computation 21(3), 619 to 687.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Design an adaptive experiment for a neuron whose stimulus space has three dimensions, such as orientation, spatial frequency and contrast. What kernel would you use, what would you maximise, and what controls would you include to protect against drift?" />

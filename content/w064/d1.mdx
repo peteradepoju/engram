@@ -1,0 +1,248 @@
+export const meta = {
+  title: "From Bayesian linear regression to Gaussian processes",
+  intro: "A tuning curve is a function, and so is a neuron's firing rate over time. Every model so far has described such functions by a fixed set of weights. Gaussian processes take a different view: put a probability distribution directly on functions, and let the data reshape it. This week builds that idea carefully, starting today from a model you know, Bayesian linear regression, and showing that its predictions depend on the features only through inner products. Replace the inner products by a kernel, let the number of features grow without limit, and a Gaussian process appears.",
+  goals: [
+    "Compute the posterior and predictive distribution of Bayesian linear regression",
+    "Rewrite predictions in function space, using only the kernel matrix of the features",
+    "Show numerically that the weight-space and function-space predictions agree",
+    "Show that many random features with shrinking weights give a fixed kernel, and define a Gaussian process",
+  ],
+  plan: [
+    { label: "Bayesian linear regression for a tuning curve", minutes: 30 },
+    { label: "The function-space view", minutes: 30 },
+    { label: "Infinitely many features", minutes: 25 },
+    { label: "What a Gaussian process is", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "neal-1996",
+};
+
+<Predict question="A Bayesian linear regression uses 1,000 Gaussian bump features to model a tuning curve from 12 data points. To compute its predictions, do you need to invert a 1,000 by 1,000 matrix, a 12 by 12 matrix, or neither?" />
+
+<Step n={1} title="Bayesian linear regression for a tuning curve" minutes={30} />
+
+Model a neuron's response to orientation $\theta$ as $f(\theta) = \boldsymbol\phi(\theta)^\top\mathbf w$ with features $\boldsymbol\phi$, a Gaussian prior $\mathbf w \sim \mathcal N(\mathbf 0, \alpha I)$, and noisy observations $y_i = f(\theta_i) + \epsilon_i$, $\epsilon_i \sim \mathcal N(0, \sigma^2)$. With $\Phi$ the $n \times M$ matrix of features at the data, the posterior over weights is Gaussian, the full distribution around the MAP estimate of Week 17:
+
+$$
+\Sigma_w = \left(\frac{\Phi^\top\Phi}{\sigma^2} + \frac{I}{\alpha}\right)^{-1},\qquad \mathbf m_w = \frac{\Sigma_w\Phi^\top\mathbf y}{\sigma^2},
+$$
+
+and the prediction at a new input has mean $\boldsymbol\phi_*^\top\mathbf m_w$ and variance $\boldsymbol\phi_*^\top\Sigma_w\boldsymbol\phi_*$ (plus $\sigma^2$ for a new noisy observation). The posterior mean is ridge regression with penalty $\sigma^2/\alpha$ (Week 55).
+
+<Video id="EF1BfKnINw0" title="Probabilistic ML, lecture 7: Gaussian parametric regression" by="Philipp Hennig, University of Tübingen" note="Philipp Hennig on regression with a Gaussian prior over the weights of a set of features, the posterior over functions it implies, and how the choice of features shapes the predictions." />
+
+<PyCell id="blr" title="Weight-space Bayesian regression" tests={String.raw`
+  import numpy as np
+  def test_ridge():
+      "the posterior mean of the weights equals ridge regression with penalty sigma^2 / alpha"
+      ridge = np.linalg.solve(Phi.T @ Phi + (s2 / alpha) * np.eye(M), Phi.T @ y)
+      assert np.allclose(m_w, ridge)
+  def test_var():
+      "the predictive standard deviation is smallest near the data and largest far from it"
+      near = np.argmin(np.abs(grid - th[0])); far = np.argmin(np.abs(grid - np.pi))
+      assert sd_pred[near] < sd_pred[far]
+`} prompt="Build 30 Gaussian bump features (width 0.25 radians) across orientation, compute the weight posterior, and the predictive mean and standard deviation of f on a grid. Only orientations in the first half of the range were tested."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  g0 = np.random.default_rng(641)
+  f_true = lambda t: 8 * np.exp(-((t - 1.0) / 0.4) ** 2) + 2
+  th = g0.uniform(0, 1.8, 12)                            # orientations tested, in radians
+  y = f_true(th) + g0.normal(0, 1.0, 12)
+  y = y - y.mean()                                        # centre, so a zero-mean prior is sensible
+  centres = np.linspace(0, np.pi, 30); M = len(centres)
+  feat = lambda t: np.exp(-0.5 * ((np.asarray(t)[:, None] - centres) / 0.25) ** 2)
+  alpha, s2 = 4.0, 1.0
+  Phi = feat(th)
+  Sigma_w = ...
+  m_w = Sigma_w @ Phi.T @ y / s2
+  grid = np.linspace(0, np.pi, 200)
+  Pg = feat(grid)
+  mean_pred = Pg @ m_w
+  sd_pred = np.sqrt(np.einsum("ij,jk,ik->i", Pg, Sigma_w, Pg))
+  plt.fill_between(grid, mean_pred - 2 * sd_pred, mean_pred + 2 * sd_pred, alpha=0.2)
+  plt.plot(grid, mean_pred); plt.plot(th, y, "o"); plt.xlabel("orientation (rad)"); plt.ylabel("centred response"); plt.show()
+  print(f"predictive sd: {sd_pred[np.argmin(np.abs(grid - 1.0))]:.2f} at 1 rad (tested), {sd_pred[-1]:.2f} at pi (untested)")
+`}
+hint="Sigma_w = np.linalg.inv(Phi.T @ Phi / s2 + np.eye(M) / alpha)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  g0 = np.random.default_rng(641)
+  f_true = lambda t: 8 * np.exp(-((t - 1.0) / 0.4) ** 2) + 2
+  th = g0.uniform(0, 1.8, 12)                            # orientations tested, in radians
+  y = f_true(th) + g0.normal(0, 1.0, 12)
+  y = y - y.mean()                                        # centre, so a zero-mean prior is sensible
+  centres = np.linspace(0, np.pi, 30); M = len(centres)
+  feat = lambda t: np.exp(-0.5 * ((np.asarray(t)[:, None] - centres) / 0.25) ** 2)
+  alpha, s2 = 4.0, 1.0
+  Phi = feat(th)
+  Sigma_w = np.linalg.inv(Phi.T @ Phi / s2 + np.eye(M) / alpha)
+  m_w = Sigma_w @ Phi.T @ y / s2
+  grid = np.linspace(0, np.pi, 200)
+  Pg = feat(grid)
+  mean_pred = Pg @ m_w
+  sd_pred = np.sqrt(np.einsum("ij,jk,ik->i", Pg, Sigma_w, Pg))
+  plt.fill_between(grid, mean_pred - 2 * sd_pred, mean_pred + 2 * sd_pred, alpha=0.2)
+  plt.plot(grid, mean_pred); plt.plot(th, y, "o"); plt.xlabel("orientation (rad)"); plt.ylabel("centred response"); plt.show()
+  print(f"predictive sd: {sd_pred[np.argmin(np.abs(grid - 1.0))]:.2f} at 1 rad (tested), {sd_pred[-1]:.2f} at pi (untested)")
+`} />
+
+The posterior mean follows the tuning curve where orientations were tested and relaxes to zero, the prior mean, beyond 1.8 radians, where nothing was measured. The predictive standard deviation says so: 1.4 at 1 radian, where several trials constrain the curve, and 3.2 at $\pi$, almost the prior's own spread. A ridge fit would give the same mean with no warning that the right half of the curve is a guess.
+
+<Step n={2} title="The function-space view" minutes={30} />
+
+<Derivation title="Predictions need only inner products">
+<div>
+
+Under the prior, the function values at any set of inputs are jointly Gaussian with mean zero and covariance $\alpha\Phi\Phi^\top$. Define the **kernel** $k(\theta, \theta') = \alpha\boldsymbol\phi(\theta)^\top\boldsymbol\phi(\theta')$ and the $n \times n$ matrix $K = \alpha\Phi\Phi^\top$.
+
+</div>
+<div>
+
+The observations and a new function value are jointly Gaussian:
+
+$$
+\begin{pmatrix}\mathbf y\\ f_*\end{pmatrix} \sim \mathcal N\left(\mathbf 0, \begin{pmatrix}K + \sigma^2I & \mathbf k_*\\ \mathbf k_*^\top & k_{**}\end{pmatrix}\right),
+$$
+
+with $\mathbf k_*$ the kernel between the data and the new input.
+
+</div>
+<div>
+
+Conditioning a Gaussian (Week 16) gives
+
+$$
+E[f_* \mid \mathbf y] = \mathbf k_*^\top(K + \sigma^2I)^{-1}\mathbf y,\qquad \text{Var}[f_* \mid \mathbf y] = k_{**} - \mathbf k_*^\top(K + \sigma^2I)^{-1}\mathbf k_*.
+$$
+
+Only an $n \times n$ matrix is inverted, however many features there are. The same identity gave kernel ridge regression in Week 57; here it also gives the uncertainty.
+
+</div>
+</Derivation>
+
+<PyCell id="function_space" title="The same predictions from the kernel" tests={String.raw`
+  import numpy as np
+  def test_same():
+      "function-space mean and standard deviation equal the weight-space ones"
+      assert np.allclose(mean_fs, mean_pred, atol=1e-8) and np.allclose(sd_fs, sd_pred, atol=1e-8)
+`} prompt="Form the kernel matrices K = alpha Phi Phi^T, K_star between grid and data, and the prior variances on the grid, and compute the predictive mean and standard deviation in function space."
+code={String.raw`
+  K = alpha * Phi @ Phi.T
+  Ks = alpha * Pg @ Phi.T                               # grid x data
+  kss = alpha * np.sum(Pg ** 2, axis=1)                 # prior variance at each grid point
+  A = np.linalg.solve(K + s2 * np.eye(len(th)), np.eye(len(th)))
+  mean_fs = ...
+  var_fs = kss - np.einsum("ij,jk,ik->i", Ks, A, Ks)
+  sd_fs = np.sqrt(np.maximum(var_fs, 0))
+  print("largest differences from the weight-space results:", np.abs(mean_fs - mean_pred).max(), np.abs(sd_fs - sd_pred).max())
+  print(f"matrix inverted: {K.shape} instead of {Sigma_w.shape}")
+`}
+hint="mean_fs = Ks @ A @ y."
+solution={String.raw`
+  K = alpha * Phi @ Phi.T
+  Ks = alpha * Pg @ Phi.T                               # grid x data
+  kss = alpha * np.sum(Pg ** 2, axis=1)                 # prior variance at each grid point
+  A = np.linalg.solve(K + s2 * np.eye(len(th)), np.eye(len(th)))
+  mean_fs = Ks @ A @ y
+  var_fs = kss - np.einsum("ij,jk,ik->i", Ks, A, Ks)
+  sd_fs = np.sqrt(np.maximum(var_fs, 0))
+  print("largest differences from the weight-space results:", np.abs(mean_fs - mean_pred).max(), np.abs(sd_fs - sd_pred).max())
+  print(f"matrix inverted: {K.shape} instead of {Sigma_w.shape}")
+`} />
+
+The function-space predictions agree with the weight-space ones to $10^{-13}$, rounding error, and needed a 12-by-12 inverse instead of 30-by-30. With 1,000 or a million features the weight-space computation becomes impossible, while the function-space one stays 12-by-12, provided the kernel can be computed without listing the features. That is exactly what the next step arranges.
+
+<Step n={3} title="Infinitely many features" minutes={25} />
+
+Now let the number of bumps $M$ grow, spaced ever more densely, with the prior variance of each weight shrinking in proportion to keep the total variance fixed. The kernel becomes an integral over bump positions, and for Gaussian bumps the integral is again a Gaussian in the distance between inputs: the **squared exponential kernel** $k(\theta, \theta') = s^2\exp(-(\theta - \theta')^2/2\ell^2)$. Neal (1996), today's reference, showed the same for neural networks: as a one-hidden-layer network with random weights gets wider, the distribution of functions it computes converges to a Gaussian process, a result that returned in 2018 as the neural network Gaussian process and neural tangent kernel (Week 67).
+
+<Figure caption="Functions drawn from the prior of Bayesian linear regression on M bumps. As M grows, with the variance scaled down, they become draws from a Gaussian process." credit="Interactive figure by Engram, after Neal (1996).">
+  <BlrToGp />
+</Figure>
+
+<PyCell id="limit" title="The kernel of many bumps" tests={String.raw`
+  import numpy as np
+  def test_converge():
+      "the bump kernel approaches the squared exponential kernel as M grows"
+      assert errs[-1] < 0.02 and errs[-1] < errs[0]
+`} prompt="For M bumps of width w = 0.25 spaced evenly over a wide range, with weight variance proportional to the spacing, compute the kernel between two inputs and compare it with the limit, a squared exponential with length-scale sqrt(2) w and the same value at zero distance."
+code={String.raw`
+  w = 0.25
+  dists = np.linspace(0, 1.5, 31)
+  errs = []
+  for M_ in (5, 20, 100, 1000):
+      c_ = np.linspace(-6, 6, M_); spacing = c_[1] - c_[0]
+      phi0 = np.exp(-0.5 * (c_ / w) ** 2)
+      k_bumps = np.array([spacing * np.sum(phi0 * np.exp(-0.5 * ((dd - c_) / w) ** 2)) for dd in dists])
+      k_limit = ...
+      errs.append(np.abs(k_bumps - k_limit).max() / k_limit[0])
+      print(f"M = {M_:4d}: largest relative difference from the squared exponential {errs[-1]:.4f}")
+`}
+hint="The integral of two Gaussian bumps of width w over their centre is sqrt(pi) w times exp(-d^2 / (4 w^2)): k_limit = np.sqrt(np.pi) * w * np.exp(-dists ** 2 / (4 * w ** 2))."
+solution={String.raw`
+  w = 0.25
+  dists = np.linspace(0, 1.5, 31)
+  errs = []
+  for M_ in (5, 20, 100, 1000):
+      c_ = np.linspace(-6, 6, M_); spacing = c_[1] - c_[0]
+      phi0 = np.exp(-0.5 * (c_ / w) ** 2)
+      k_bumps = np.array([spacing * np.sum(phi0 * np.exp(-0.5 * ((dd - c_) / w) ** 2)) for dd in dists])
+      k_limit = np.sqrt(np.pi) * w * np.exp(-dists ** 2 / (4 * w ** 2))
+      errs.append(np.abs(k_bumps - k_limit).max() / k_limit[0])
+      print(f"M = {M_:4d}: largest relative difference from the squared exponential {errs[-1]:.4f}")
+`} />
+
+With 5 bumps spread over 12 radians, the kernel is nothing like the limit, because the bumps are further apart than their width and the functions are lumpy. With 20 it is within 40%, and with 100 or more the bump kernel equals the squared exponential to four decimals. The length-scale of the limit, $\sqrt2$ times the bump width, comes from convolving two Gaussians. From here on the bumps are forgotten: a squared exponential kernel is the prior of a regression on infinitely many of them.
+
+<Step n={4} title="What a Gaussian process is" minutes={20} />
+
+A **Gaussian process** is a collection of random variables, one for every input, any finite number of which have a joint Gaussian distribution. It is specified by a mean function $m(x)$ and a covariance function, the kernel, $k(x, x')$, written $f \sim \mathcal{GP}(m, k)$. Nothing else is needed: to make predictions at any finite set of inputs, write down the Gaussian over those inputs and the data, and condition. The kernel must produce positive semi-definite matrices for every set of inputs, the same condition as Mercer's in Week 57. The rest of the week asks what kernels mean (Day 2), how to compute with them (Day 3), how to choose their parameters (Day 4) and what they do for neural data (Day 5).
+
+<Bridge title="Distributions over functions in brains and machines"
+  neuro="Many quantities in neuroscience are functions sampled at a few points: a tuning curve measured at eight orientations, a firing rate over time on a few trials, a place field from a short session. Gaussian processes give principled interpolation between the samples, with error bars that grow where data are sparse, and have been used for tuning curves, receptive fields and latent trajectories."
+  ai="The equivalence between wide neural networks and Gaussian processes has become a central tool of deep learning theory: it describes networks at initialisation exactly and, through the neural tangent kernel, their training in a certain regime, which you will meet in Week 67.">
+
+Bayesian regression with enough features is a prior over functions, and only its kernel matters.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The posterior mean of Bayesian linear regression with prior variance α and noise σ² equals...", options: ["Ridge regression with penalty σ²/α", "Least squares always", "Zero", "The prior mean"], answer: 0, explain: "Step 1." },
+  { q: "In function space, predictions require inverting a matrix of size...", options: ["n × n (data points)", "M × M (features)", "1 × 1", "None"], answer: 0, explain: "Step 2." },
+  { q: "The kernel of a linear model with prior variance α is...", options: ["α φ(x)ᵀφ(x')", "φ(x) + φ(x')", "The noise variance", "The data covariance"], answer: 0, explain: "Step 2." },
+  { q: "Predictive variance is largest...", options: ["Far from the data", "At the data", "Uniform", "At zero"], answer: 0, explain: "Step 1." },
+  { q: "Infinitely many Gaussian bump features give...", options: ["A squared exponential kernel", "A linear kernel", "A periodic kernel", "No kernel"], answer: 0, explain: "Step 3." },
+  { q: "Neal showed that wide random neural networks converge to...", options: ["Gaussian processes", "Linear models", "Mixture models", "Decision trees"], answer: 0, explain: "Step 3." },
+  { q: "A Gaussian process is specified by...", options: ["A mean function and a covariance function", "A weight vector", "A training set", "A loss"], answer: 0, explain: "Step 4." },
+  { q: "Any finite set of GP function values is...", options: ["Jointly Gaussian", "Independent", "Uniform", "Deterministic"], answer: 0, explain: "Step 4." },
+]} />
+
+<Flashcards cards={[
+  { front: "Bayesian linear regression posterior?", back: "$\\Sigma_w = (\\Phi^\\top\\Phi/\\sigma^2 + I/\\alpha)^{-1}$, $\\mathbf m_w = \\Sigma_w\\Phi^\\top\\mathbf y/\\sigma^2$" },
+  { front: "GP predictive mean?", back: "$\\mathbf k_*^\\top(K + \\sigma^2I)^{-1}\\mathbf y$" },
+  { front: "GP predictive variance?", back: "$k_{**} - \\mathbf k_*^\\top(K + \\sigma^2I)^{-1}\\mathbf k_*$" },
+  { front: "Gaussian process?", back: "Random function whose values at any finite set of inputs are jointly Gaussian; $f \\sim \\mathcal{GP}(m, k)$." },
+  { front: "Weight space against function space?", back: "Same predictions; weight space inverts M × M, function space inverts n × n." },
+]} />
+
+<Predict revisit question="Which matrix had to be inverted to use 1,000 features with 12 data points?" />
+
+<Key title="Before you go">
+<ul>
+<li>Bayesian linear regression gives Gaussian posteriors over weights and predictions.</li>
+<li>Its predictions depend on the features only through the kernel, so an n × n matrix suffices.</li>
+<li>Infinitely many features with shrinking weights define a fixed kernel.</li>
+<li>A Gaussian process is a distribution over functions, defined by a mean and a kernel.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's reference: Neal (1996), <em>Bayesian Learning for Neural Networks</em>, chapter 2, "Priors for infinite networks".</li>
+<li>Rasmussen and Williams (2006), <em>Gaussian Processes for Machine Learning</em>, chapter 2, free online at gaussianprocess.org/gpml.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Choose a function you have measured or seen measured in neuroscience. Describe it as a Gaussian process: what mean function and what kind of kernel would express what you believe about it before seeing data?" />

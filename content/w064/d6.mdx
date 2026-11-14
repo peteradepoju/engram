@@ -1,0 +1,253 @@
+export const meta = {
+  title: "Forge: Week 64 challenge, quiz and deep read",
+  intro: "This week built Gaussian processes from Bayesian linear regression, read kernels as prior beliefs, computed posteriors stably, learned hyperparameters by marginal likelihood, and used GPs for latent trajectories and for choosing stimuli. Today's challenge fits a receptive field with a GP prior whose smoothness is learned from the data, then extends GPs beyond Gaussian noise by fitting a Poisson tuning curve with a Laplace approximation. Then the quiz, and a critique of Yu and colleagues on GPFA.",
+  goals: [
+    "Estimate a receptive field with a smoothness prior learned by evidence maximisation",
+    "Fit a Gaussian-process tuning curve to spike counts with a Laplace approximation",
+    "Prove the GP predictive equations and the kernel sum and product rules",
+    "Critique the GPFA paper",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "yu-2009",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. How many entries has the kernel matrix for 2,000 data points, and roughly how much memory at 8 bytes each?
+2. A GP has signal variance 4 and noise variance 1. What is the prior variance of a single observation?
+3. Two points are 3 length-scales apart under a squared exponential kernel. What is their correlation?
+
+<PyCell code={String.raw`
+  import numpy as np
+  print("1.", 2000 ** 2, "entries,", round(2000 ** 2 * 8 / 1e6, 1), "MB")
+  print("2.", 4 + 1)
+  print("3.", round(float(np.exp(-0.5 * 3 ** 2)), 5))
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: a receptive field with learned smoothness.** A neuron's response to white-noise stimuli is a linear filter plus noise. Estimating the filter by ridge regression needs a penalty; a GP prior over the filter, smooth in space, does better and lets the smoothness be learned by maximising the evidence, the idea behind automatic smoothness determination (Sahani and Linden, 2003). With a Gaussian prior $\mathbf w \sim \mathcal N(\mathbf 0, K)$ and Gaussian noise, the posterior over the filter is Gaussian and the evidence is available in closed form.
+
+<PyCell id="partA" title="Part A: evidence-optimised receptive field" tests={String.raw`
+  import numpy as np
+  def test_beats_ridge():
+      "the GP-prior estimate is closer to the true filter than the best ridge estimate"
+      assert err_gp < err_ridge
+  def test_learned():
+      "the learned smoothness length-scale is within a factor of 2 of the true 2.5 pixels"
+      assert 1.25 < ell_hat < 5.0
+`} prompt="Complete the evidence (log marginal likelihood) for the linear-Gaussian model with prior covariance K(ell, sf2) and noise variance sn2, maximise it over the three hyperparameters, and compare the posterior mean filter with ridge regression tuned by held-out error."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.linalg import cho_factor, cho_solve
+  from scipy.optimize import minimize
+  gA = np.random.default_rng(646)
+  D = 40
+  pix = np.arange(D)
+  w_true = np.exp(-0.5 * ((pix - 14) / 2.5) ** 2) - 0.6 * np.exp(-0.5 * ((pix - 22) / 3.5) ** 2)
+  S = gA.normal(size=(200, D))                                # white-noise stimuli
+  r = S @ w_true + 0.5 * gA.normal(size=200)
+
+  def K_of(ell, sf2):
+      return sf2 * np.exp(-0.5 * ((pix[:, None] - pix[None, :]) / ell) ** 2) + 1e-8 * np.eye(D)
+
+  def neg_evidence(lp):
+      ell, sf2, sn2 = np.exp(lp)
+      Cov = S @ K_of(ell, sf2) @ S.T + sn2 * np.eye(len(r))
+      c, low = cho_factor(Cov, lower=True)
+      return ...
+
+  res = min((minimize(neg_evidence, np.array(s0), method="L-BFGS-B") for s0 in ([1.0, 0.0, 0.0], [0.0, -1.0, -1.0], [2.0, 1.0, 0.0])), key=lambda q: q.fun)
+  ell_hat, sf2_hat, sn2_hat = np.exp(res.x)
+  Kw = K_of(ell_hat, sf2_hat)
+  w_gp = Kw @ S.T @ np.linalg.solve(S @ Kw @ S.T + sn2_hat * np.eye(len(r)), r)
+  err_gp = np.linalg.norm(w_gp - w_true)
+
+  tr, te = np.arange(150), np.arange(150, 200)
+  lams = np.logspace(-2, 3, 40)
+  ridge = [np.linalg.solve(S[tr].T @ S[tr] + lam * np.eye(D), S[tr].T @ r[tr]) for lam in lams]
+  val = [np.mean((r[te] - S[te] @ w_) ** 2) for w_ in ridge]
+  w_ridge = np.linalg.solve(S.T @ S + lams[int(np.argmin(val))] * np.eye(D), S.T @ r)
+  err_ridge = np.linalg.norm(w_ridge - w_true)
+  print(f"learned length-scale {ell_hat:.2f} pixels, noise sd {np.sqrt(sn2_hat):.2f} (true 0.5)")
+  print(f"error of the filter estimate: GP prior {err_gp:.3f}, best ridge {err_ridge:.3f}")
+  plt.plot(w_true, "k", label="true"); plt.plot(w_gp, label="GP prior"); plt.plot(w_ridge, alpha=0.7, label="ridge"); plt.legend(); plt.show()
+`}
+hint="return 0.5 * r @ cho_solve((c, low), r) + np.sum(np.log(np.diag(c))) + 0.5 * len(r) * np.log(2 * np.pi)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.linalg import cho_factor, cho_solve
+  from scipy.optimize import minimize
+  gA = np.random.default_rng(646)
+  D = 40
+  pix = np.arange(D)
+  w_true = np.exp(-0.5 * ((pix - 14) / 2.5) ** 2) - 0.6 * np.exp(-0.5 * ((pix - 22) / 3.5) ** 2)
+  S = gA.normal(size=(200, D))                                # white-noise stimuli
+  r = S @ w_true + 0.5 * gA.normal(size=200)
+
+  def K_of(ell, sf2):
+      return sf2 * np.exp(-0.5 * ((pix[:, None] - pix[None, :]) / ell) ** 2) + 1e-8 * np.eye(D)
+
+  def neg_evidence(lp):
+      ell, sf2, sn2 = np.exp(lp)
+      Cov = S @ K_of(ell, sf2) @ S.T + sn2 * np.eye(len(r))
+      c, low = cho_factor(Cov, lower=True)
+      return 0.5 * r @ cho_solve((c, low), r) + np.sum(np.log(np.diag(c))) + 0.5 * len(r) * np.log(2 * np.pi)
+
+  res = min((minimize(neg_evidence, np.array(s0), method="L-BFGS-B") for s0 in ([1.0, 0.0, 0.0], [0.0, -1.0, -1.0], [2.0, 1.0, 0.0])), key=lambda q: q.fun)
+  ell_hat, sf2_hat, sn2_hat = np.exp(res.x)
+  Kw = K_of(ell_hat, sf2_hat)
+  w_gp = Kw @ S.T @ np.linalg.solve(S @ Kw @ S.T + sn2_hat * np.eye(len(r)), r)
+  err_gp = np.linalg.norm(w_gp - w_true)
+
+  tr, te = np.arange(150), np.arange(150, 200)
+  lams = np.logspace(-2, 3, 40)
+  ridge = [np.linalg.solve(S[tr].T @ S[tr] + lam * np.eye(D), S[tr].T @ r[tr]) for lam in lams]
+  val = [np.mean((r[te] - S[te] @ w_) ** 2) for w_ in ridge]
+  w_ridge = np.linalg.solve(S.T @ S + lams[int(np.argmin(val))] * np.eye(D), S.T @ r)
+  err_ridge = np.linalg.norm(w_ridge - w_true)
+  print(f"learned length-scale {ell_hat:.2f} pixels, noise sd {np.sqrt(sn2_hat):.2f} (true 0.5)")
+  print(f"error of the filter estimate: GP prior {err_gp:.3f}, best ridge {err_ridge:.3f}")
+  plt.plot(w_true, "k", label="true"); plt.plot(w_gp, label="GP prior"); plt.plot(w_ridge, alpha=0.7, label="ridge"); plt.legend(); plt.show()
+`} />
+
+The evidence chooses a length-scale of 3.45 pixels and a noise standard deviation of 0.48 against a true 0.5, and the resulting filter is less than half as far from the truth as the best ridge estimate (0.11 against 0.24), although ridge had a validation set and the GP did not. Ridge penalises every pixel equally and independently, so its estimate is noisy pixel by pixel; the GP prior says that neighbouring pixels are similar, which is what a receptive field looks like. Sahani and Linden called this automatic smoothness determination, and extensions learn a different smoothness along each axis, which also prunes irrelevant dimensions.
+
+**Part B: a Poisson tuning curve.** Spike counts are not Gaussian, so the posterior over a GP tuning curve is not Gaussian either. The **Laplace approximation** (Rasmussen and Williams, chapter 3) fits a Gaussian at the posterior mode: find $\hat{\mathbf f}$ by Newton's method on $\log p(\mathbf y \mid \mathbf f) - \frac12\mathbf f^\top K^{-1}\mathbf f$, and use the Hessian there as the posterior precision. Predictions at new stimuli follow the usual GP formulas with $\hat{\mathbf f}$ in place of the data.
+
+<PyCell id="partB" title="Part B: GP tuning curve for spike counts" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "the fitted rate curve correlates with the true rate above 0.9"
+      assert r_fit > 0.9
+  def test_bands():
+      "posterior bands are wider where fewer stimuli were presented"
+      assert sd_sparse > sd_dense
+`} prompt="Complete the Newton step for the Laplace approximation of a Poisson GP: the gradient is y - exp(f) - K^-1 f and the Hessian is -(diag(exp(f)) + K^-1). Fit a tuning curve to counts at 24 orientations sampled unevenly, and compute posterior standard deviations in a dense and a sparse region."
+code={String.raw`
+  gB = np.random.default_rng(6461)
+  th_all = np.r_[np.linspace(0, 1.6, 18), np.linspace(1.9, 3.1, 6)]     # dense below 1.6 rad, sparse above
+  rate = lambda a: 10 * np.exp(1.5 * (np.cos(2 * (a - 0.8)) - 1)) + 0.5
+  yB = gB.poisson(rate(th_all))
+  Kth = 4.0 * np.exp(-2 * np.sin(np.abs(th_all[:, None] - th_all[None, :])) ** 2 / 0.6 ** 2) + 1e-6 * np.eye(len(th_all))
+  Kinv = np.linalg.inv(Kth)
+  mu0 = np.log(yB.mean() + 1e-6)
+
+  fhat = np.zeros(len(th_all))
+  for it in range(50):
+      lam = np.exp(fhat + mu0)
+      grad = ...
+      Hess = -(np.diag(lam) + Kinv)
+      fhat = fhat - np.linalg.solve(Hess, grad)
+  W = np.diag(np.exp(fhat + mu0))
+  post_cov = np.linalg.inv(W + Kinv)
+  sd_f = np.sqrt(np.diag(post_cov))
+  r_fit = np.corrcoef(np.exp(fhat + mu0), rate(th_all))[0, 1]
+  sd_dense = sd_f[:18].mean(); sd_sparse = sd_f[18:].mean()
+  print(f"correlation of the fitted rate with the truth {r_fit:.3f}")
+  print(f"posterior sd of log rate: dense region {sd_dense:.3f}, sparse region {sd_sparse:.3f}")
+  plt.plot(th_all, yB, "k.", label="counts"); plt.plot(th_all, rate(th_all), "k--", label="true rate")
+  plt.plot(th_all, np.exp(fhat + mu0), label="GP fit"); plt.legend(); plt.xlabel("orientation (rad)"); plt.show()
+`}
+hint="grad = yB - lam - Kinv @ fhat."
+solution={String.raw`
+  gB = np.random.default_rng(6461)
+  th_all = np.r_[np.linspace(0, 1.6, 18), np.linspace(1.9, 3.1, 6)]     # dense below 1.6 rad, sparse above
+  rate = lambda a: 10 * np.exp(1.5 * (np.cos(2 * (a - 0.8)) - 1)) + 0.5
+  yB = gB.poisson(rate(th_all))
+  Kth = 4.0 * np.exp(-2 * np.sin(np.abs(th_all[:, None] - th_all[None, :])) ** 2 / 0.6 ** 2) + 1e-6 * np.eye(len(th_all))
+  Kinv = np.linalg.inv(Kth)
+  mu0 = np.log(yB.mean() + 1e-6)
+
+  fhat = np.zeros(len(th_all))
+  for it in range(50):
+      lam = np.exp(fhat + mu0)
+      grad = yB - lam - Kinv @ fhat
+      Hess = -(np.diag(lam) + Kinv)
+      fhat = fhat - np.linalg.solve(Hess, grad)
+  W = np.diag(np.exp(fhat + mu0))
+  post_cov = np.linalg.inv(W + Kinv)
+  sd_f = np.sqrt(np.diag(post_cov))
+  r_fit = np.corrcoef(np.exp(fhat + mu0), rate(th_all))[0, 1]
+  sd_dense = sd_f[:18].mean(); sd_sparse = sd_f[18:].mean()
+  print(f"correlation of the fitted rate with the truth {r_fit:.3f}")
+  print(f"posterior sd of log rate: dense region {sd_dense:.3f}, sparse region {sd_sparse:.3f}")
+  plt.plot(th_all, yB, "k.", label="counts"); plt.plot(th_all, rate(th_all), "k--", label="true rate")
+  plt.plot(th_all, np.exp(fhat + mu0), label="GP fit"); plt.legend(); plt.xlabel("orientation (rad)"); plt.show()
+`} />
+
+Newton's method converges in a few steps and the fitted rate correlates at 0.92 with the true tuning curve, from a single presentation of each of 24 orientations. The posterior standard deviation of the log rate is 0.25 where stimuli were dense and 0.65 where they were sparse. The Hessian explains both: its data term is $\text{diag}(\lambda)$, so each stimulus contributes information in proportion to its expected count. Densely sampled regions accumulate more such terms, and high-rate regions contribute more per stimulus, which is why the flanks of a tuning curve, where the rate is near zero, stay uncertain however often they are presented.
+
+**Part C (written).** Answer in your journal. First, in Part A the evidence chose the smoothness without a validation set, while ridge needed one. What does the evidence assume that cross-validation does not? Second, in Part B the posterior is wider where stimuli are sparse, but also wider where the rate is low. Explain the second effect from the Hessian, and say what it implies for measuring the flanks of a tuning curve.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The GP predictive equations" task="With $\mathbf y = \mathbf f + \boldsymbol\epsilon$, $\mathbf f \sim \mathcal N(\mathbf 0, K)$ and $\boldsymbol\epsilon \sim \mathcal N(\mathbf 0, \sigma^2I)$, and $f_*$ the function value at a new input, derive $E[f_* \mid \mathbf y]$ and $\text{Var}[f_* \mid \mathbf y]$.">
+
+$\mathbf y$ and $f_*$ are jointly Gaussian, because both are linear functions of the Gaussian $(\mathbf f, f_*, \boldsymbol\epsilon)$. Their covariances are $\text{Cov}(\mathbf y) = K + \sigma^2I$, $\text{Cov}(f_*, \mathbf y) = \mathbf k_*^\top$ (the noise is independent of $f_*$) and $\text{Var}(f_*) = k_{**}$.
+
+The Gaussian conditioning formula (Week 16) gives $E[f_* \mid \mathbf y] = \text{Cov}(f_*, \mathbf y)\text{Cov}(\mathbf y)^{-1}\mathbf y = \mathbf k_*^\top(K + \sigma^2I)^{-1}\mathbf y$.
+
+And $\text{Var}[f_* \mid \mathbf y] = k_{**} - \mathbf k_*^\top(K + \sigma^2I)^{-1}\mathbf k_*$, which does not depend on $\mathbf y$: in a Gaussian model the uncertainty depends on where you measured, not on what you measured.
+
+</Prove>
+
+<Prove title="2. Sums and products of kernels are kernels" task="Let $k_1$ and $k_2$ be valid (positive semi-definite) kernels. Show that $k_1 + k_2$ and $k_1k_2$ are valid kernels.">
+
+**Sum.** For any inputs and any vector $\mathbf c$, $\mathbf c^\top(K_1 + K_2)\mathbf c = \mathbf c^\top K_1\mathbf c + \mathbf c^\top K_2\mathbf c \ge 0$, so the sum is positive semi-definite. (Interpretation: $f_1 + f_2$ with independent $f_i \sim \mathcal{GP}(0, k_i)$ has covariance $k_1 + k_2$.)
+
+**Product.** The elementwise (Hadamard) product of two positive semi-definite matrices is positive semi-definite, by the Schur product theorem. A direct argument: write $K_1 = E[\mathbf u\mathbf u^\top]$ and $K_2 = E[\mathbf v\mathbf v^\top]$ for independent Gaussian vectors $\mathbf u, \mathbf v$; then the vector with entries $u_iv_i$ has covariance $K_1 \odot K_2$, which is therefore positive semi-definite.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 64 quiz (15 questions)" questions={[
+  { q: "A Gaussian process is defined by...", options: ["A mean function and a kernel", "A weight vector", "A finite basis", "A loss function"], answer: 0, explain: "Day 1." },
+  { q: "GP predictions require inverting a matrix of size...", options: ["n × n", "M × M (features)", "1 × 1", "d × d"], answer: 0, explain: "Day 1." },
+  { q: "Infinitely many Gaussian bumps give which kernel?", options: ["Squared exponential", "Linear", "Periodic", "Matérn 1/2"], answer: 0, explain: "Day 1." },
+  { q: "The Matérn 1/2 kernel generates...", options: ["Rough, non-differentiable functions", "Infinitely smooth functions", "Periodic functions", "Straight lines"], answer: 0, explain: "Day 2." },
+  { q: "Multiplying a periodic kernel by a squared exponential gives...", options: ["A locally periodic process", "A pure rhythm", "White noise", "A linear trend"], answer: 0, explain: "Day 2." },
+  { q: "For orientation, the right kernel is...", options: ["Periodic with period π", "Linear", "Matérn 5/2 on the raw angle", "None"], answer: 0, explain: "Day 2." },
+  { q: "GP regression is computed stably with...", options: ["A Cholesky factorisation", "An explicit inverse", "The SVD of the data", "Gradient descent"], answer: 0, explain: "Day 3." },
+  { q: "The predictive variance for a new observation adds...", options: ["σ² to the latent variance", "Nothing", "k**", "The prior mean"], answer: 0, explain: "Day 3." },
+  { q: "95% intervals containing only 58% of held-out data indicate...", options: ["Overconfidence, probably wrong hyperparameters", "A good fit", "Too much data", "A bug in Cholesky"], answer: 0, explain: "Day 3." },
+  { q: "The complexity term of the GP marginal likelihood is...", options: ["−½ log|K + σ²I|", "The training error", "The number of parameters", "The prior mean"], answer: 0, explain: "Day 4." },
+  { q: "Maximising the marginal likelihood over hyperparameters is called...", options: ["Type II maximum likelihood", "Cross-validation", "Gibbs sampling", "Ridge regression"], answer: 0, explain: "Day 4." },
+  { q: "The automatic Occam's razor penalises models that...", options: ["Could have produced many different datasets", "Fit the data well", "Have few parameters", "Are linear"], answer: 0, explain: "Day 4." },
+  { q: "GPFA learns...", options: ["A timescale for each latent", "One timescale for all latents", "No timescales", "Only loadings"], answer: 0, explain: "Day 5." },
+  { q: "Expected improvement balances...", options: ["Predicted response against uncertainty", "Speed against accuracy", "Bias against variance", "Prior against likelihood"], answer: 0, explain: "Day 5." },
+  { q: "For spike counts, the GP posterior is approximated by...", options: ["A Laplace approximation at the mode", "Exact Gaussian conditioning", "k-means", "Bootstrapping"], answer: 0, explain: "Part B." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Yu and colleagues (2009) its third pass and write your critique under the five headings. Focus on one question: **what does GPFA add over smoothing and PCA, and how convincing is the evidence?** Consider the model and the joint estimation of smoothing and dimensionality reduction; the use of cross-validated prediction of held-out neurons to choose the number of latents and compare methods; the square-root transform of spike counts and what it assumes; the orthonormalisation of the latent space for visualisation; the timescales recovered and what they mean physiologically; and the comparison with two-stage methods. End with the analysis you would run to decide whether GPFA or a model with explicit dynamics, such as the LFADS of Week 63, suits a dataset you know.
+
+<Callout kind="research">
+
+GPFA assumes that latents are independent Gaussian processes with fixed timescales, which rules out rotations and other dynamics. Compare it with a linear dynamical system (Week 65) on simulated data with rotational dynamics: fit both, and compare their cross-validated prediction of held-out neurons and their inferred trajectories. At what noise level and trial count does the dynamical model's extra structure begin to pay?
+
+</Callout>
+
+<Key title="Week 64 review checklist">
+<ul>
+<li>I can move between the weight-space and function-space views of Bayesian regression.</li>
+<li>I can choose kernels to express beliefs, and combine them by sums and products.</li>
+<li>I can implement GP regression stably and check its calibration.</li>
+<li>I can learn hyperparameters and compare kernels by marginal likelihood.</li>
+<li>I can apply GPs to latent trajectories, receptive fields, tuning curves and adaptive experiments.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then write a short plan for using a Gaussian process in your own work: what function, what kernel, what hyperparameters, and what check that the uncertainty it reports is trustworthy." />

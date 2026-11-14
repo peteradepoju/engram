@@ -1,0 +1,274 @@
+export const meta = {
+  title: "Gaussian-process regression in practice",
+  intro: "With a kernel chosen, Gaussian-process regression is a few lines of linear algebra. Doing it well is a little more: computing with a Cholesky factor rather than an inverse, separating uncertainty about the function from noise in new observations, and checking that the error bars mean what they say. Today you implement the standard algorithm, test whether its 95% intervals contain 95% of held-out data, and use a two-dimensional GP to map a place cell's firing field from a rat's wandering path.",
+  goals: [
+    "Implement GP regression with a Cholesky factorisation and compute its log marginal likelihood",
+    "Distinguish the predictive distribution of the latent function from that of a new noisy observation",
+    "Check the calibration of GP predictive intervals on held-out data",
+    "Fit a two-dimensional GP to estimate a place field from position-tagged activity",
+  ],
+  plan: [
+    { label: "The algorithm", minutes: 30 },
+    { label: "Are the error bars right?", minutes: 25 },
+    { label: "A place field in two dimensions", minutes: 35 },
+    { label: "Costs and shortcuts", minutes: 10 },
+    { label: "Quiz, flashcards, journal", minutes: 20 },
+  ],
+  paper: "rasmussen-2004",
+};
+
+<Predict question="A GP is fitted with the noise variance set to a tenth of its true value. On held-out data, will its 95% predictive intervals contain about 95% of the observations, more, or far fewer?" />
+
+<Step n={1} title="The algorithm" minutes={30} />
+
+Inverting $K + \sigma^2I$ directly is slow and numerically fragile. The standard algorithm (Rasmussen and Williams, 2006, algorithm 2.1; Rasmussen, 2004, today's paper) uses the Cholesky factor $L$ with $LL^\top = K + \sigma^2I$:
+
+$$
+\boldsymbol\alpha = L^{-\top}L^{-1}\mathbf y,\quad \bar f_* = \mathbf k_*^\top\boldsymbol\alpha,\quad \mathbf v = L^{-1}\mathbf k_*,\quad \text{Var}[f_*] = k_{**} - \mathbf v^\top\mathbf v,
+$$
+
+$$
+\log p(\mathbf y) = -\tfrac12\mathbf y^\top\boldsymbol\alpha - \textstyle\sum_i\log L_{ii} - \tfrac n2\log 2\pi.
+$$
+
+Triangular solves cost $O(n^2)$ each, and the factorisation $O(n^3)$ once. $\text{Var}[f_*]$ is the uncertainty about the underlying function; a new observation $y_* = f_* + \epsilon$ has variance $\text{Var}[f_*] + \sigma^2$.
+
+<Video id="s2_L86D4kUE" title="Probabilistic ML, lecture 9: Gaussian processes" by="Philipp Hennig, University of Tübingen" note="Philipp Hennig on Gaussian process regression: the posterior mean and covariance, the role of the kernel, and how to compute them stably." />
+
+<Figure caption="GP regression on noisy samples of a smooth function. Add observations and change the noise level, and watch the posterior mean and its two-standard-deviation band." credit="Interactive figure by Engram, after Rasmussen and Williams (2006).">
+  <GpPosterior />
+</Figure>
+
+<PyCell id="gp" title="GP regression by Cholesky" tests={String.raw`
+  import numpy as np
+  def test_direct():
+      "the Cholesky results match direct formulas with an explicit inverse"
+      Kn = k_se(X, X) + noise * np.eye(len(X)); Ki = np.linalg.inv(Kn); Ks = k_se(Xs, X)
+      assert np.allclose(mean, Ks @ Ki @ y) and np.allclose(var_f, 1.0 - np.einsum("ij,jk,ik->i", Ks, Ki, Ks))
+  def test_logml():
+      "the log marginal likelihood matches scipy's multivariate normal"
+      from scipy.stats import multivariate_normal as mvn
+      assert abs(logml - mvn.logpdf(y, np.zeros(len(X)), k_se(X, X) + noise * np.eye(len(X)))) < 1e-8
+`} prompt="Complete gp_fit(X, y, Xs, kernel, noise) using a Cholesky factor and triangular solves (scipy.linalg.solve_triangular), returning the predictive mean, the latent variance, and the log marginal likelihood."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.linalg import cholesky, solve_triangular
+
+  k_se = lambda A, B, ell=0.8: np.exp(-0.5 * ((A[:, None] - B[None, :]) / ell) ** 2)
+
+  def gp_fit(X, y, Xs, kernel, noise):
+      L = cholesky(kernel(X, X) + noise * np.eye(len(X)), lower=True)
+      alpha = solve_triangular(L.T, solve_triangular(L, y, lower=True), lower=False)
+      Ks = kernel(Xs, X)
+      mean = Ks @ alpha
+      V = ...                                            # L^-1 K_star^T
+      var_f = np.diag(kernel(Xs, Xs)) - np.sum(V ** 2, axis=0)
+      logml = ...
+      return mean, var_f, logml
+
+  g0 = np.random.default_rng(643)
+  f = lambda x: np.sin(1.5 * x) + 0.3 * x
+  X = g0.uniform(-3, 3, 25); noise = 0.04
+  y = f(X) + np.sqrt(noise) * g0.normal(size=25)
+  Xs = np.linspace(-4, 4, 200)
+  mean, var_f, logml = gp_fit(X, y, Xs, k_se, noise)
+  sd_f, sd_y = np.sqrt(var_f), np.sqrt(var_f + noise)
+  plt.fill_between(Xs, mean - 2 * sd_y, mean + 2 * sd_y, alpha=0.15, label="new observation")
+  plt.fill_between(Xs, mean - 2 * sd_f, mean + 2 * sd_f, alpha=0.3, label="latent function")
+  plt.plot(Xs, mean); plt.plot(X, y, "k.", ms=8); plt.legend(); plt.show()
+  print(f"log marginal likelihood {logml:.3f}")
+`}
+hint="V = solve_triangular(L, Ks.T, lower=True); logml = -0.5 * y @ alpha - np.sum(np.log(np.diag(L))) - 0.5 * len(X) * np.log(2 * np.pi)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.linalg import cholesky, solve_triangular
+
+  k_se = lambda A, B, ell=0.8: np.exp(-0.5 * ((A[:, None] - B[None, :]) / ell) ** 2)
+
+  def gp_fit(X, y, Xs, kernel, noise):
+      L = cholesky(kernel(X, X) + noise * np.eye(len(X)), lower=True)
+      alpha = solve_triangular(L.T, solve_triangular(L, y, lower=True), lower=False)
+      Ks = kernel(Xs, X)
+      mean = Ks @ alpha
+      V = solve_triangular(L, Ks.T, lower=True)          # L^-1 K_star^T
+      var_f = np.diag(kernel(Xs, Xs)) - np.sum(V ** 2, axis=0)
+      logml = -0.5 * y @ alpha - np.sum(np.log(np.diag(L))) - 0.5 * len(X) * np.log(2 * np.pi)
+      return mean, var_f, logml
+
+  g0 = np.random.default_rng(643)
+  f = lambda x: np.sin(1.5 * x) + 0.3 * x
+  X = g0.uniform(-3, 3, 25); noise = 0.04
+  y = f(X) + np.sqrt(noise) * g0.normal(size=25)
+  Xs = np.linspace(-4, 4, 200)
+  mean, var_f, logml = gp_fit(X, y, Xs, k_se, noise)
+  sd_f, sd_y = np.sqrt(var_f), np.sqrt(var_f + noise)
+  plt.fill_between(Xs, mean - 2 * sd_y, mean + 2 * sd_y, alpha=0.15, label="new observation")
+  plt.fill_between(Xs, mean - 2 * sd_f, mean + 2 * sd_f, alpha=0.3, label="latent function")
+  plt.plot(Xs, mean); plt.plot(X, y, "k.", ms=8); plt.legend(); plt.show()
+  print(f"log marginal likelihood {logml:.3f}")
+`} />
+
+The Cholesky computations agree with the explicit-inverse formulas and with scipy's Gaussian log-density, and the plot shows the two kinds of interval. The inner band, for the latent function, is narrow where the 25 points are dense and opens up beyond $\pm3$, where there are none. The outer band adds the observation noise, a constant $\sigma^2 = 0.04$ everywhere, and is the one to use when predicting a new measurement. Confusing the two is a common error: reporting the latent band as the range of future data understates how variable the data will be.
+
+<Step n={2} title="Are the error bars right?" minutes={25} />
+
+A GP's intervals are only as good as its assumptions. A simple check is **coverage**: the fraction of held-out observations that fall inside the 95% predictive interval for a new observation, mean ± 1.96 times $\sqrt{\text{Var}[f_*] + \sigma^2}$. Too few means overconfidence, too many means caution, and either says a hyperparameter or the kernel is wrong.
+
+<PyCell id="coverage" title="Coverage of predictive intervals" tests={String.raw`
+  import numpy as np
+  def test_right():
+      "with the true noise variance, coverage is between 0.9 and 0.99"
+      assert 0.9 < cover[0.04] < 0.99
+  def test_wrong():
+      "with the noise variance ten times too small, coverage falls below 0.8"
+      assert cover[0.004] < 0.8
+`} prompt="Draw 2,000 held-out points from the same function and noise, and compute the coverage of the 95% intervals for new observations, with the noise variance set correctly (0.04) and ten times too small (0.004)."
+code={String.raw`
+  gh = np.random.default_rng(6431)
+  Xh = gh.uniform(-3, 3, 2000)
+  yh = f(Xh) + np.sqrt(0.04) * gh.normal(size=2000)
+  cover = {}
+  for nv in (0.04, 0.004):
+      mh, vh, _ = gp_fit(X, y, Xh, k_se, nv)
+      half = 1.96 * np.sqrt(vh + nv)
+      cover[nv] = ...
+      print(f"assumed noise variance {nv}: coverage of 95% intervals {cover[nv]:.3f}")
+`}
+hint="cover[nv] = np.mean(np.abs(yh - mh) < half)."
+solution={String.raw`
+  gh = np.random.default_rng(6431)
+  Xh = gh.uniform(-3, 3, 2000)
+  yh = f(Xh) + np.sqrt(0.04) * gh.normal(size=2000)
+  cover = {}
+  for nv in (0.04, 0.004):
+      mh, vh, _ = gp_fit(X, y, Xh, k_se, nv)
+      half = 1.96 * np.sqrt(vh + nv)
+      cover[nv] = np.mean(np.abs(yh - mh) < half)
+      print(f"assumed noise variance {nv}: coverage of 95% intervals {cover[nv]:.3f}")
+`} />
+
+With the noise variance set correctly, 96.3% of 2,000 held-out observations fall inside the nominal 95% intervals, close to right (the slight excess is because the GP's length-scale was a guess, not fitted). With the noise variance ten times too small, coverage collapses to 58%: the model believes the data lie almost exactly on the latent function, and both its function intervals and its noise term are too narrow. Day 4 removes the guesswork by learning the noise and the length-scale from the data.
+
+<Step n={3} title="A place field in two dimensions" minutes={35} />
+
+A rat explores a square arena while a hippocampal place cell fires when it is near one location. The firing map is a function of two variables, position $x$ and $y$; a GP with a squared exponential kernel in two dimensions, $k = s^2\exp(-\lVert\mathbf p - \mathbf p'\rVert^2/2\ell^2)$, estimates it from activity recorded along the path, and its variance shows where the rat never went. Here the activity in each 200 ms bin is a square-root-transformed spike count, which makes Poisson noise roughly Gaussian with constant variance.
+
+<PyCell id="place" title="Mapping a place field" tests={String.raw`
+  import numpy as np
+  def test_map():
+      "the GP map correlates with the true field above 0.85 within the visited region"
+      assert r_map > 0.85
+  def test_unvisited():
+      "posterior sd is larger in the unvisited corner than at the field centre"
+      assert sd_corner > sd_centre
+`} prompt="Simulate a random-walk path that avoids the top-right corner, spike counts from a Gaussian place field, and fit a two-dimensional GP to the square-root counts (length-scale 0.12, signal variance 0.5, noise variance 0.25). Predict on a 30 by 30 grid and compare with the true field."
+code={String.raw`
+  gp_ = np.random.default_rng(6432)
+  steps = 400
+  pos = np.zeros((steps, 2)); pos[0] = [0.3, 0.3]
+  for t_ in range(1, steps):
+      nxt = pos[t_ - 1] + 0.05 * gp_.normal(size=2)
+      nxt = np.clip(nxt, 0, 1)
+      if nxt[0] > 0.7 and nxt[1] > 0.7: nxt = pos[t_ - 1]                 # the corner is never entered
+      pos[t_] = nxt
+  field = lambda P: 0.3 + 6 * np.exp(-np.sum((P - [0.4, 0.55]) ** 2, axis=-1) / (2 * 0.1 ** 2))   # spikes per bin
+  counts = gp_.poisson(field(pos))
+  ys = np.sqrt(counts) - np.sqrt(counts).mean()
+
+  k2 = lambda A, B: 0.5 * np.exp(-np.sum((A[:, None, :] - B[None, :, :]) ** 2, axis=-1) / (2 * 0.12 ** 2))
+  gx = np.linspace(0, 1, 30); G = np.array([[a, b] for b in gx for a in gx])
+  mean2, var2, _ = gp_fit(pos, ys, G, k2, 0.25)
+  visited = np.min(np.sum((G[:, None, :] - pos[None]) ** 2, -1), 1) < 0.05 ** 2 * 4
+  r_map = ...
+  sd2 = np.sqrt(var2)
+  sd_centre = sd2[np.argmin(np.sum((G - [0.4, 0.55]) ** 2, 1))]
+  sd_corner = sd2[np.argmin(np.sum((G - [0.95, 0.95]) ** 2, 1))]
+  print(f"correlation with the true field where visited: {r_map:.3f}; posterior sd at field centre {sd_centre:.2f}, in the unvisited corner {sd_corner:.2f}")
+  fig, ax = plt.subplots(1, 3, figsize=(10, 3))
+  ax[0].plot(*pos.T, lw=0.5); ax[0].set_title("path"); ax[0].set_aspect("equal")
+  ax[1].imshow(mean2.reshape(30, 30), origin="lower", extent=(0, 1, 0, 1)); ax[1].set_title("GP mean")
+  ax[2].imshow(sd2.reshape(30, 30), origin="lower", extent=(0, 1, 0, 1)); ax[2].set_title("GP sd"); plt.tight_layout(); plt.show()
+`}
+hint="r_map = np.corrcoef(mean2[visited], np.sqrt(field(G[visited])))[0, 1]."
+solution={String.raw`
+  gp_ = np.random.default_rng(6432)
+  steps = 400
+  pos = np.zeros((steps, 2)); pos[0] = [0.3, 0.3]
+  for t_ in range(1, steps):
+      nxt = pos[t_ - 1] + 0.05 * gp_.normal(size=2)
+      nxt = np.clip(nxt, 0, 1)
+      if nxt[0] > 0.7 and nxt[1] > 0.7: nxt = pos[t_ - 1]                 # the corner is never entered
+      pos[t_] = nxt
+  field = lambda P: 0.3 + 6 * np.exp(-np.sum((P - [0.4, 0.55]) ** 2, axis=-1) / (2 * 0.1 ** 2))   # spikes per bin
+  counts = gp_.poisson(field(pos))
+  ys = np.sqrt(counts) - np.sqrt(counts).mean()
+
+  k2 = lambda A, B: 0.5 * np.exp(-np.sum((A[:, None, :] - B[None, :, :]) ** 2, axis=-1) / (2 * 0.12 ** 2))
+  gx = np.linspace(0, 1, 30); G = np.array([[a, b] for b in gx for a in gx])
+  mean2, var2, _ = gp_fit(pos, ys, G, k2, 0.25)
+  visited = np.min(np.sum((G[:, None, :] - pos[None]) ** 2, -1), 1) < 0.05 ** 2 * 4
+  r_map = np.corrcoef(mean2[visited], np.sqrt(field(G[visited])))[0, 1]
+  sd2 = np.sqrt(var2)
+  sd_centre = sd2[np.argmin(np.sum((G - [0.4, 0.55]) ** 2, 1))]
+  sd_corner = sd2[np.argmin(np.sum((G - [0.95, 0.95]) ** 2, 1))]
+  print(f"correlation with the true field where visited: {r_map:.3f}; posterior sd at field centre {sd_centre:.2f}, in the unvisited corner {sd_corner:.2f}")
+  fig, ax = plt.subplots(1, 3, figsize=(10, 3))
+  ax[0].plot(*pos.T, lw=0.5); ax[0].set_title("path"); ax[0].set_aspect("equal")
+  ax[1].imshow(mean2.reshape(30, 30), origin="lower", extent=(0, 1, 0, 1)); ax[1].set_title("GP mean")
+  ax[2].imshow(sd2.reshape(30, 30), origin="lower", extent=(0, 1, 0, 1)); ax[2].set_title("GP sd"); plt.tight_layout(); plt.show()
+`} />
+
+From 400 bins of a meandering path, the GP map correlates at 0.92 with the true field wherever the rat went, and places the field's peak correctly. Its standard deviation is 0.53 at the field centre and 0.71, the prior value, in the corner the rat never entered: there the map shows the prior mean, and the variance map says so plainly. A histogram-based rate map would leave the corner empty or, with smoothing, fill it with whatever the smoothing kernel drags in, with no indication of either.
+
+<Step n={4} title="Costs and shortcuts" minutes={10} />
+
+Exact GP regression costs $O(n^3)$ time and $O(n^2)$ memory, which is comfortable for a few thousand points and impossible for a million. The main shortcuts approximate the kernel matrix by a low-rank one: **inducing points** summarise the data through $m \ll n$ pseudo-inputs (Titsias, 2009, gave the variational version), and **random features** (Week 57) turn the GP back into Bayesian linear regression with $m$ features. For one-dimensional time series, Matérn kernels can be written as linear state-space models and solved in linear time by the Kalman filter of Week 65.
+
+<Bridge title="Gaussian-process regression in brains and machines"
+  neuro="GPs are used to estimate tuning curves, place fields and receptive fields with honest uncertainty, and the variance map is as useful as the mean: it shows which parts of a field are measured and which are interpolation. Rad and Paninski (2010) developed efficient GP estimation of place fields from spike trains."
+  ai="GP regression is the standard surrogate model for expensive functions in engineering and science, and calibration checks like today's are central to uncertainty quantification in machine learning, where deep networks are notoriously overconfident and GPs often serve as the reference.">
+
+The mean is the guess; the variance says where the guess is only a guess.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "GP regression is usually computed with...", options: ["A Cholesky factorisation", "An explicit matrix inverse", "Gradient descent", "Sampling"], answer: 0, explain: "Step 1." },
+  { q: "The cost of exact GP regression grows with n as...", options: ["n³", "n", "log n", "n²·⁵ only for prediction"], answer: 0, explain: "Step 4." },
+  { q: "The predictive variance for a new noisy observation is...", options: ["Var[f*] + σ²", "Var[f*]", "σ²", "k** only"], answer: 0, explain: "Step 1." },
+  { q: "Coverage of 95% intervals below 0.95 suggests...", options: ["Overconfidence, for example noise set too small", "Too much caution", "A perfect model", "Too many data"], answer: 0, explain: "Step 2." },
+  { q: "Far from the data, the GP posterior mean returns to...", options: ["The prior mean", "The last observation", "Infinity", "The data mean always"], answer: 0, explain: "Step 1." },
+  { q: "Square-root counts are used for spike data because...", options: ["They make Poisson noise roughly constant in variance", "They are always integers", "They remove the mean", "They are exact"], answer: 0, explain: "Step 3." },
+  { q: "Inducing points approximate the kernel matrix by...", options: ["A low-rank matrix from m pseudo-inputs", "Its diagonal", "The identity", "Its inverse"], answer: 0, explain: "Step 4." },
+  { q: "One-dimensional Matérn GPs can be solved in linear time with...", options: ["The Kalman filter", "k-means", "PCA", "Cholesky on the full matrix"], answer: 0, explain: "Step 4." },
+]} />
+
+<Flashcards cards={[
+  { front: "GP algorithm with Cholesky?", back: "$L = \\text{chol}(K + \\sigma^2I)$; $\\boldsymbol\\alpha = L^{-\\top}L^{-1}\\mathbf y$; mean $\\mathbf k_*^\\top\\boldsymbol\\alpha$; variance $k_{**} - \\lVert L^{-1}\\mathbf k_*\\rVert^2$." },
+  { front: "GP log marginal likelihood?", back: "$-\\tfrac12\\mathbf y^\\top\\boldsymbol\\alpha - \\sum_i\\log L_{ii} - \\tfrac n2\\log2\\pi$" },
+  { front: "Latent against observation variance?", back: "Var[f*] for the function; Var[f*] + σ² for a new noisy measurement." },
+  { front: "Coverage check?", back: "Fraction of held-out points inside nominal intervals; should match the nominal level." },
+  { front: "Scaling GPs?", back: "Inducing points, random features, or state-space (Kalman) methods for time series." },
+]} />
+
+<Predict revisit question="With the noise variance set ten times too small, what coverage did the 95% intervals achieve?" />
+
+<Key title="Before you go">
+<ul>
+<li>Compute GPs with a Cholesky factor: stable and O(n³) once.</li>
+<li>Separate uncertainty about the function from noise in new observations.</li>
+<li>Check calibration on held-out data; wrong hyperparameters show up as wrong coverage.</li>
+<li>Two-dimensional GPs map fields and show where the data never reached.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Rasmussen (2004), <em>Gaussian processes in machine learning</em>.</li>
+<li>Rad and Paninski (2010), <em>Efficient, adaptive estimation of two-dimensional firing rate surfaces via Gaussian process methods</em>, Network: Computation in Neural Systems 21(3-4), 142 to 168.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A GP place-field map shows a second, weaker field in a part of the arena the animal visited only twice. How would you use the GP's variance, and further analyses, to decide whether to report it?" />

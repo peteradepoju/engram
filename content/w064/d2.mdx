@@ -1,0 +1,236 @@
+export const meta = {
+  title: "Kernels as prior beliefs about functions",
+  intro: "In Week 57 a kernel was a similarity between inputs. In a Gaussian process it is something more concrete: a complete statement of what functions you expect to see before any data arrive, how smooth, how fast they vary, whether they repeat, whether they trend. Today you sample functions from different kernels until you can read a kernel's beliefs from its formula, build new kernels by adding and multiplying old ones, and give a tuning curve over orientation the circular prior it needs.",
+  goals: [
+    "Sample from Gaussian-process priors and relate kernel properties to the functions produced",
+    "Compare squared exponential, Matérn, periodic and linear kernels",
+    "Build valid kernels from sums and products, and say what each combination means",
+    "Use a periodic kernel for a tuning curve over orientation",
+  ],
+  plan: [
+    { label: "Sampling from a prior over functions", minutes: 25 },
+    { label: "A gallery of kernels", minutes: 25 },
+    { label: "Adding and multiplying kernels", minutes: 25 },
+    { label: "A kernel for orientation", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "duvenaud-2013",
+};
+
+<Predict question="A neuron's orientation tuning curve is fitted with a Gaussian process using a squared exponential kernel on the raw angle from 0 to 180 degrees. Will its predictions at 1 degree and at 179 degrees, which are the same physical orientation give or take two degrees, automatically agree?" />
+
+<Step n={1} title="Sampling from a prior over functions" minutes={25} />
+
+To see what a kernel believes, draw functions from it. Choose a grid of inputs, form the covariance matrix $K_{ij} = k(x_i, x_j)$, factor it as $K = LL^\top$ (Cholesky, adding a tiny "jitter" to the diagonal for numerical stability), and set $\mathbf f = L\boldsymbol\epsilon$ with $\boldsymbol\epsilon \sim \mathcal N(\mathbf 0, I)$. Each draw is a whole function on the grid.
+
+<Video id="92-98SYOdlY" title="ML tutorial: Gaussian processes" by="Richard Turner, University of Cambridge (2017)" note="Richard Turner builds Gaussian processes from multivariate Gaussians: sampling functions from a prior, the role of the kernel, conditioning on data, and how hyperparameters change what the model believes." />
+
+<Figure caption="Three functions drawn from a Gaussian-process prior. Choose the kernel and its length-scale and watch what kinds of function it believes in." credit="Interactive figure by Engram, after Rasmussen and Williams (2006).">
+  <KernelPrior />
+</Figure>
+
+<PyCell id="kernels" title="Drawing functions from kernels" tests={String.raw`
+  import numpy as np
+  def test_psd():
+      "every kernel matrix on the grid is positive semi-definite"
+      for kf in kernels.values():
+          assert np.linalg.eigvalsh(kf(xg[:, None], xg[None, :])).min() > -1e-8
+  def test_rough():
+      "Matérn 1/2 samples are much rougher than squared exponential samples (larger mean squared step)"
+      assert roughness["matern12"] > 10 * roughness["se"]
+`} prompt="Complete the Matérn 1/2 and periodic kernels, draw 3 sample functions from each kernel on a grid of 200 points with a Cholesky factor, and measure roughness as the mean squared difference between neighbouring grid values."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  xg = np.linspace(-3, 3, 200)
+  ell = 1.0
+  kernels = {
+      "se": lambda a, b: np.exp(-0.5 * ((a - b) / ell) ** 2),
+      "matern12": lambda a, b: ...,
+      "periodic": lambda a, b: ...,            # period 2: exp(-2 sin^2(pi |a - b| / 2) / ell^2)
+      "linear": lambda a, b: a * b / 4 + 0.05,
+  }
+  gk = np.random.default_rng(642)
+  roughness = {}
+  fig, ax = plt.subplots(1, 4, figsize=(11, 2.5), sharey=True)
+  for a_, (name, kf) in zip(ax, kernels.items()):
+      K = kf(xg[:, None], xg[None, :]) + 1e-8 * np.eye(len(xg))
+      L = np.linalg.cholesky(K)
+      F = L @ gk.normal(size=(len(xg), 3))
+      roughness[name] = np.mean(np.diff(F, axis=0) ** 2)
+      a_.plot(xg, F); a_.set_title(name)
+  plt.tight_layout(); plt.show()
+  print({k: round(float(v), 5) for k, v in roughness.items()})
+`}
+hint="matern12: np.exp(-np.abs(a - b) / ell); periodic: np.exp(-2 * np.sin(np.pi * np.abs(a - b) / 2) ** 2 / ell ** 2)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  xg = np.linspace(-3, 3, 200)
+  ell = 1.0
+  kernels = {
+      "se": lambda a, b: np.exp(-0.5 * ((a - b) / ell) ** 2),
+      "matern12": lambda a, b: np.exp(-np.abs(a - b) / ell),
+      "periodic": lambda a, b: np.exp(-2 * np.sin(np.pi * np.abs(a - b) / 2) ** 2 / ell ** 2),            # period 2: exp(-2 sin^2(pi |a - b| / 2) / ell^2)
+      "linear": lambda a, b: a * b / 4 + 0.05,
+  }
+  gk = np.random.default_rng(642)
+  roughness = {}
+  fig, ax = plt.subplots(1, 4, figsize=(11, 2.5), sharey=True)
+  for a_, (name, kf) in zip(ax, kernels.items()):
+      K = kf(xg[:, None], xg[None, :]) + 1e-8 * np.eye(len(xg))
+      L = np.linalg.cholesky(K)
+      F = L @ gk.normal(size=(len(xg), 3))
+      roughness[name] = np.mean(np.diff(F, axis=0) ** 2)
+      a_.plot(xg, F); a_.set_title(name)
+  plt.tight_layout(); plt.show()
+  print({k: round(float(v), 5) for k, v in roughness.items()})
+`} />
+
+Every kernel matrix is positive semi-definite, as a covariance must be. The samples differ in character, not just in scale: Matérn 1/2 draws are jagged, with a mean squared step between neighbouring grid points 60 times that of the squared exponential's smooth curves; periodic draws repeat exactly every 2 units; linear draws are straight lines through a common region. None of these properties was fitted to anything. They are what each kernel asserts before seeing data, and a GP posterior can only ever be a reweighting of functions like these.
+
+<Step n={2} title="A gallery of kernels" minutes={25} />
+
+The **squared exponential** $k = s^2e^{-r^2/2\ell^2}$, with $r = |x - x'|$, gives infinitely differentiable functions; its length-scale $\ell$ sets how far apart inputs must be before their values become nearly independent, and $s^2$ sets the vertical scale. The **Matérn** family $k_\nu$ controls smoothness directly: $\nu = 1/2$ gives $e^{-r/\ell}$, the covariance of the Ornstein-Uhlenbeck process of Week 24, continuous but nowhere differentiable; $\nu = 3/2$ and $5/2$ give once and twice differentiable functions, often more realistic than the squared exponential for physical signals. The **periodic** kernel repeats with a fixed period. The **linear** kernel gives straight lines, and is Bayesian linear regression with one feature. Duvenaud and colleagues (2013), today's paper, treated this gallery as a grammar.
+
+<Step n={3} title="Adding and multiplying kernels" minutes={25} />
+
+Sums and products of kernels are kernels. Adding two independent Gaussian processes gives a process whose kernel is the sum, so **sums model superpositions**: a slow drift plus an oscillation. Multiplying kernels gives a process that has both properties at once, so **products model interactions**: a periodic kernel times a squared exponential is a rhythm whose shape slowly changes, and a linear kernel times anything makes the amplitude grow with the input. Duvenaud and colleagues searched over such compositions automatically, choosing among them by marginal likelihood (Day 4), and recovered interpretable structure from time series.
+
+<PyCell id="compose" title="Drift plus rhythm, and a changing rhythm" tests={String.raw`
+  import numpy as np
+  def test_valid():
+      "sum and product kernels are positive semi-definite"
+      assert np.linalg.eigvalsh(K_sum).min() > -1e-8 and np.linalg.eigvalsh(K_prod).min() > -1e-8
+  def test_memory():
+      "the locally periodic kernel's correlation one period apart decays with distance, unlike the pure periodic kernel"
+      assert corr_far_prod < 0.5 * corr_near_prod and abs(corr_far_per - 1) < 1e-9
+`} prompt="Build the kernel for a slow drift (squared exponential, length-scale 3) plus a rhythm (periodic, period 2), and the locally periodic kernel (periodic times squared exponential, length-scale 4). For the product kernel, compare the correlation between points 1 period apart and 3 periods apart."
+code={String.raw`
+  se = lambda a, b, l: np.exp(-0.5 * ((a - b) / l) ** 2)
+  per = lambda a, b: np.exp(-2 * np.sin(np.pi * np.abs(a - b) / 2) ** 2)
+  xa = np.linspace(-6, 6, 240)
+  K_sum = 1.0 * se(xa[:, None], xa[None, :], 3.0) + 0.5 * per(xa[:, None], xa[None, :])
+  K_prod = ...
+  corr_near_prod = per(0.0, 2.0) * se(0.0, 2.0, 4.0)
+  corr_far_prod = per(0.0, 6.0) * se(0.0, 6.0, 4.0)
+  corr_far_per = per(0.0, 6.0)
+  gc = np.random.default_rng(6421)
+  fig, ax = plt.subplots(1, 2, figsize=(9, 2.5))
+  for a_, K_, t_ in zip(ax, (K_sum, K_prod), ("drift + rhythm", "locally periodic")):
+      a_.plot(xa, np.linalg.cholesky(K_ + 1e-8 * np.eye(len(xa))) @ gc.normal(size=(len(xa), 2))); a_.set_title(t_)
+  plt.tight_layout(); plt.show()
+  print(f"locally periodic correlation 1 period apart {corr_near_prod:.3f}, 3 periods apart {corr_far_prod:.3f}; pure periodic 3 apart {corr_far_per:.3f}")
+`}
+hint="K_prod = per(xa[:, None], xa[None, :]) * se(xa[:, None], xa[None, :], 4.0)."
+solution={String.raw`
+  se = lambda a, b, l: np.exp(-0.5 * ((a - b) / l) ** 2)
+  per = lambda a, b: np.exp(-2 * np.sin(np.pi * np.abs(a - b) / 2) ** 2)
+  xa = np.linspace(-6, 6, 240)
+  K_sum = 1.0 * se(xa[:, None], xa[None, :], 3.0) + 0.5 * per(xa[:, None], xa[None, :])
+  K_prod = per(xa[:, None], xa[None, :]) * se(xa[:, None], xa[None, :], 4.0)
+  corr_near_prod = per(0.0, 2.0) * se(0.0, 2.0, 4.0)
+  corr_far_prod = per(0.0, 6.0) * se(0.0, 6.0, 4.0)
+  corr_far_per = per(0.0, 6.0)
+  gc = np.random.default_rng(6421)
+  fig, ax = plt.subplots(1, 2, figsize=(9, 2.5))
+  for a_, K_, t_ in zip(ax, (K_sum, K_prod), ("drift + rhythm", "locally periodic")):
+      a_.plot(xa, np.linalg.cholesky(K_ + 1e-8 * np.eye(len(xa))) @ gc.normal(size=(len(xa), 2))); a_.set_title(t_)
+  plt.tight_layout(); plt.show()
+  print(f"locally periodic correlation 1 period apart {corr_near_prod:.3f}, 3 periods apart {corr_far_prod:.3f}; pure periodic 3 apart {corr_far_per:.3f}")
+`} />
+
+Both combinations are valid kernels. Under the pure periodic kernel, points three periods apart are perfectly correlated, 1.000: the rhythm can never change. Multiplying by a squared exponential of length-scale 4 keeps the correlation one period apart high, 0.88, but lets it fall to 0.33 three periods apart, so the waveform can slowly drift in shape, the right prior for an oscillation in a recording whose shape changes over a session. The samples show the difference: drift plus rhythm wobbles around a slowly wandering baseline; the locally periodic kernel keeps repeating but forgets its exact shape.
+
+<Step n={4} title="A kernel for orientation" minutes={30} />
+
+Orientation is circular: 0 and 180 degrees are the same stimulus. A squared exponential on the raw angle treats them as far apart, so a tuning curve fitted with it can disagree with itself at the ends. A periodic kernel with period $\pi$ (in radians) builds the circle into the prior, and every function it allows wraps round.
+
+<PyCell id="orientation" title="Wrapping a tuning curve" tests={String.raw`
+  import numpy as np
+  def test_wrap():
+      "the periodic GP predicts the same value at both ends of the orientation range; the squared exponential GP does not"
+      assert abs(pred_per[0] - pred_per[-1]) < 0.05 and abs(pred_se[0] - pred_se[-1]) > 0.5
+`} prompt="Twelve orientations were tested, none near 0 or 180 degrees, for a neuron preferring about 26 degrees. Fit GP posterior means with a squared exponential kernel and with a periodic kernel of period pi (length-scale 0.5 for both, noise variance 0.5), and compare predictions at 0 and at pi."
+code={String.raw`
+  def gp_mean(kf, X, y, Xs, noise):
+      K = kf(X[:, None], X[None, :]) + noise * np.eye(len(X))
+      return kf(Xs[:, None], X[None, :]) @ np.linalg.solve(K, y)
+
+  go = np.random.default_rng(6422)
+  tuning = lambda t: 4 * np.exp(2 * (np.cos(2 * (t - 0.45)) - 1))   # prefers 0.45 rad (about 26 degrees)
+  th = np.sort(go.uniform(0.35, np.pi - 0.35, 12))
+  yo = tuning(th) + go.normal(0, 0.5, 12); yo -= yo.mean()
+  ts = np.linspace(0, np.pi, 181)
+  k_se = lambda a, b: 4 * np.exp(-0.5 * ((a - b) / 0.5) ** 2)
+  k_per = lambda a, b: ...                                       # period pi: exp(-2 sin^2(|a - b|) / 0.5^2), scaled by 4
+  pred_se, pred_per = gp_mean(k_se, th, yo, ts, 0.5), gp_mean(k_per, th, yo, ts, 0.5)
+  print(f"prediction at 0 and at pi: squared exponential {pred_se[0]:.2f} and {pred_se[-1]:.2f}; periodic {pred_per[0]:.2f} and {pred_per[-1]:.2f}")
+  plt.plot(th, yo, "o"); plt.plot(ts, pred_se, label="squared exponential"); plt.plot(ts, pred_per, label="periodic"); plt.legend(); plt.xlabel("orientation (rad)"); plt.show()
+`}
+hint="k_per = lambda a, b: 4 * np.exp(-2 * np.sin(np.abs(a - b)) ** 2 / 0.5 ** 2). With period pi, sin(pi |a - b| / period) is sin(|a - b|)."
+solution={String.raw`
+  def gp_mean(kf, X, y, Xs, noise):
+      K = kf(X[:, None], X[None, :]) + noise * np.eye(len(X))
+      return kf(Xs[:, None], X[None, :]) @ np.linalg.solve(K, y)
+
+  go = np.random.default_rng(6422)
+  tuning = lambda t: 4 * np.exp(2 * (np.cos(2 * (t - 0.45)) - 1))   # prefers 0.45 rad (about 26 degrees)
+  th = np.sort(go.uniform(0.35, np.pi - 0.35, 12))
+  yo = tuning(th) + go.normal(0, 0.5, 12); yo -= yo.mean()
+  ts = np.linspace(0, np.pi, 181)
+  k_se = lambda a, b: 4 * np.exp(-0.5 * ((a - b) / 0.5) ** 2)
+  k_per = lambda a, b: 4 * np.exp(-2 * np.sin(np.abs(a - b)) ** 2 / 0.5 ** 2)                                       # period pi: exp(-2 sin^2(|a - b|) / 0.5^2), scaled by 4
+  pred_se, pred_per = gp_mean(k_se, th, yo, ts, 0.5), gp_mean(k_per, th, yo, ts, 0.5)
+  print(f"prediction at 0 and at pi: squared exponential {pred_se[0]:.2f} and {pred_se[-1]:.2f}; periodic {pred_per[0]:.2f} and {pred_per[-1]:.2f}")
+  plt.plot(th, yo, "o"); plt.plot(ts, pred_se, label="squared exponential"); plt.plot(ts, pred_per, label="periodic"); plt.legend(); plt.xlabel("orientation (rad)"); plt.show()
+`} />
+
+The data stop at 0.48 radians on the left and 2.62 on the right, so both ends of the range are extrapolations. With the squared exponential kernel they are separate extrapolations: the fit predicts 1.79 at 0 and $-0.34$ at $\pi$, two different answers for the same physical orientation. The periodic kernel predicts 0.21 at both, because every function it allows wraps round. It is still uncertain there (the true value is about 0.5), but it is consistently uncertain, and the measurements near 0.5 and near 2.6 both inform the gap between them, as they should.
+
+<Bridge title="Priors over functions in brains and machines"
+  neuro="Choosing a kernel is choosing a hypothesis about a neural function: smooth or rough tuning, a fixed or drifting rhythm, a periodic variable such as orientation or head direction. Receptive field estimation methods such as automatic smoothness determination (Sahani and Linden, 2003) put Gaussian-process-like priors on receptive fields and learn their smoothness from data."
+  ai="Kernel design is how Gaussian-process models encode structure, and compositional kernel search was an early example of automated model discovery. In deep learning the same role is played by architecture: convolutions build in translation equivariance much as a periodic kernel builds in a circle.">
+
+A kernel says, before any data, which functions are plausible.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "To draw a function from a GP prior on a grid, compute...", options: ["L ε with L the Cholesky factor of the kernel matrix", "The kernel's eigenvalues only", "The data mean", "A least-squares fit"], answer: 0, explain: "Step 1." },
+  { q: "The length-scale of a squared exponential kernel sets...", options: ["How far apart inputs must be to become nearly independent", "The noise", "The mean", "The number of samples"], answer: 0, explain: "Step 2." },
+  { q: "The Matérn 1/2 kernel gives functions that are...", options: ["Continuous but rough", "Infinitely smooth", "Periodic", "Linear"], answer: 0, explain: "Step 2." },
+  { q: "The Matérn 1/2 kernel is the covariance of...", options: ["The Ornstein-Uhlenbeck process", "Brownian bridges only", "A sine wave", "White noise"], answer: 0, explain: "Step 2." },
+  { q: "Adding two kernels models...", options: ["A sum of independent processes", "An interaction", "A product of functions", "Nothing"], answer: 0, explain: "Step 3." },
+  { q: "Periodic times squared exponential gives...", options: ["A rhythm whose shape slowly changes", "A pure rhythm", "A straight line", "White noise"], answer: 0, explain: "Step 3." },
+  { q: "For orientation tuning, the natural kernel is...", options: ["Periodic with period π", "Linear", "Squared exponential on the raw angle", "Matérn with ν = 1/2"], answer: 0, explain: "Step 4." },
+  { q: "Duvenaud and colleagues chose kernel structures by...", options: ["Marginal likelihood", "Training error", "Random choice", "Visual inspection only"], answer: 0, explain: "Step 3." },
+]} />
+
+<Flashcards cards={[
+  { front: "Squared exponential kernel?", back: "$s^2\\exp(-(x - x')^2/2\\ell^2)$: smooth functions varying on scale $\\ell$." },
+  { front: "Matérn 1/2 kernel?", back: "$s^2\\exp(-|x - x'|/\\ell)$: rough, Ornstein-Uhlenbeck-like functions." },
+  { front: "Periodic kernel?", back: "$s^2\\exp(-2\\sin^2(\\pi|x - x'|/p)/\\ell^2)$ with period $p$." },
+  { front: "Sum of kernels?", back: "Superposition of independent processes, such as drift plus rhythm." },
+  { front: "Product of kernels?", back: "Interaction of properties, such as a locally periodic process." },
+]} />
+
+<Predict revisit question="Did the squared exponential GP agree with itself at 0 and 180 degrees?" />
+
+<Key title="Before you go">
+<ul>
+<li>Sampling from a kernel shows what functions it believes in.</li>
+<li>Length-scale, smoothness and periodicity are properties you choose through the kernel.</li>
+<li>Sums of kernels superpose processes; products combine their properties.</li>
+<li>Circular variables need periodic kernels.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Duvenaud, Lloyd, Grosse, Tenenbaum and Ghahramani (2013), <em>Structure discovery in nonparametric regression through compositional kernel search</em>.</li>
+<li>Rasmussen and Williams (2006), <em>Gaussian Processes for Machine Learning</em>, chapter 4, on covariance functions.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Design a kernel for the firing rate of a hippocampal place cell recorded over a whole session, as a function of position and time. Which kernels would you combine, by sum or product, and what belief does each piece express?" />

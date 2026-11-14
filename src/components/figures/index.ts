@@ -291,3 +291,8 @@ export { EmBound } from "./em-bound";
 export { MeanFieldIsing } from "./mean-field-ising";
 export { ReparamGradient } from "./reparam-gradient";
 export { LatentTrajectory } from "./latent-trajectory";
+export { BlrToGp } from "./blr-to-gp";
+export { KernelPrior } from "./kernel-prior";
+export { GpPosterior } from "./gp-posterior";
+export { MarginalLikelihood } from "./marginal-likelihood";
+export { BayesOpt } from "./bayes-opt";
