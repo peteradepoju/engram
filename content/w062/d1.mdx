@@ -1,0 +1,257 @@
+export const meta = {
+  title: "Bayesian networks: joint distributions from local pieces",
+  intro: "An experiment has many variables at once: the stimulus, the animal's attention and arousal, a neuron's response, the pupil, the choice. Their joint distribution is far too large to write down, but most variables depend directly on only a few others. A Bayesian network draws those direct dependencies as a directed graph and writes the joint as a product of small local pieces. Today you build a network for a perceptual experiment, compute posteriors by brute-force enumeration, see explaining away happen, and sample from the network, setting up the week's question: how to do inference efficiently when enumeration is impossible.",
+  goals: [
+    "Write a joint distribution as a product of conditional distributions given parents",
+    "Count the parameters saved by a sparse graph",
+    "Compute posteriors in a small network by enumeration, and observe explaining away",
+    "Generate data by ancestral sampling and estimate posteriors by rejection",
+  ],
+  plan: [
+    { label: "Graphs as factorisations", minutes: 25 },
+    { label: "Inference by enumeration", minutes: 30 },
+    { label: "Explaining away", minutes: 20 },
+    { label: "Ancestral sampling", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "lauritzen-1988",
+};
+
+<Predict question="A neuron fires, which makes it more likely that a faint stimulus was shown. Then you learn from the pupil that the animal was highly aroused, which also makes the neuron fire. Does the probability of the stimulus go up, go down, or stay the same?" />
+
+<Step n={1} title="Graphs as factorisations" minutes={25} />
+
+A **Bayesian network** is a directed acyclic graph whose nodes are random variables, together with a conditional distribution for each node given its parents. It represents the joint distribution
+
+$$
+p(x_1, \dots, x_n) = \prod_{i=1}^np(x_i \mid \text{pa}(x_i)).
+$$
+
+By the chain rule, any joint can be written as $\prod_ip(x_i \mid x_1, \dots, x_{i-1})$; the graph's content is in the parents it leaves out, each missing edge an assertion of conditional independence. With $n$ binary variables the full joint needs $2^n - 1$ numbers, while a network whose nodes have at most $k$ parents needs at most $n2^k$. Lauritzen and Spiegelhalter (1988), today's paper, showed how to compute exact posteriors in such networks by local operations, using a small medical example, the "Asia" network, that became a standard test case.
+
+<Video id="T4l6ltMMcec" title="Bayes nets, part 1: representation" by="Pieter Abbeel, UC Berkeley CS188" note="Pieter Abbeel on Bayes nets as a compact representation of a joint distribution: the graph, the conditional probability tables, and how the joint is recovered as their product." />
+
+Today's network describes a detection experiment. A faint stimulus ($S$) is present on 20% of trials; arousal ($U$) is high on 30%; attention ($A$) is cued on half. A neuron's response ($R$) depends on the stimulus, attention and arousal; the pupil ($P$) reports arousal; the animal's report ($B$) depends on the neuron.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import itertools
+  nodes = ["S", "A", "U", "R", "P", "B"]
+  parents = {"S": [], "A": [], "U": [], "R": ["S", "A", "U"], "P": ["U"], "B": ["R"]}
+  # probability that each node is 1, given its parents' values (in the order listed)
+  cpt = {
+      "S": {(): 0.2}, "A": {(): 0.5}, "U": {(): 0.3},
+      "R": {(s, a, u): min(0.97, 0.05 + 0.55 * s + 0.15 * s * a + 0.5 * u) for s in (0, 1) for a in (0, 1) for u in (0, 1)},
+      "P": {(0,): 0.1, (1,): 0.85},
+      "B": {(0,): 0.1, (1,): 0.8},
+  }
+  print("P(R = 1 | S, A, U):", {k: round(v, 2) for k, v in cpt["R"].items()})
+`} />
+
+<PyCell id="factorise" title="The joint as a product" tests={String.raw`
+  import numpy as np
+  def test_sum():
+      "the joint sums to one over all 64 configurations"
+      assert abs(sum(joint(dict(zip(nodes, x))) for x in itertools.product((0, 1), repeat=6)) - 1) < 1e-12
+  def test_count():
+      "the network needs 15 numbers, against 63 for the full joint"
+      assert n_params == 15
+`} prompt="Write joint(x), the probability of a full assignment (a dict from node name to 0 or 1), as the product of each node's conditional probability given its parents. Then count the free parameters of the network: one per row of each conditional table."
+code={String.raw`
+  def joint(x):
+      p = 1.0
+      for v in nodes:
+          p1 = cpt[v][tuple(x[u] for u in parents[v])]
+          p *= ...
+      return p
+
+  n_params = ...
+  print(f"the network needs {n_params} numbers; the full joint over 6 binary variables needs {2 ** 6 - 1}")
+`}
+hint="p *= p1 if x[v] == 1 else 1 - p1; n_params = sum(len(cpt[v]) for v in nodes)."
+solution={String.raw`
+  def joint(x):
+      p = 1.0
+      for v in nodes:
+          p1 = cpt[v][tuple(x[u] for u in parents[v])]
+          p *= p1 if x[v] == 1 else 1 - p1
+      return p
+
+  n_params = sum(len(cpt[v]) for v in nodes)
+  print(f"the network needs {n_params} numbers; the full joint over 6 binary variables needs {2 ** 6 - 1}")
+`} />
+
+The 64 probabilities sum to one, as they must, but they were specified by only 15 numbers: one for each of the three root nodes, eight for the neuron (one per combination of its three parents), and two each for the pupil and the report. The saving grows quickly: with 30 binary variables, each with three parents, it is 240 numbers against a billion. Every numerical saving is also a scientific claim. Drawing no arrow from attention to the pupil, for example, asserts that attention affects the pupil only through arousal, which a dataset could refute.
+
+<Step n={2} title="Inference by enumeration" minutes={30} />
+
+To compute a posterior such as $p(S = 1 \mid B = 1)$, sum the joint over all configurations consistent with the evidence, with and without $S = 1$, and divide. This is exact and always works, but the number of terms grows as $2^n$, which is why the rest of the week looks for better methods.
+
+<PyCell id="enumerate" title="Posteriors by summing the joint" tests={String.raw`
+  import numpy as np
+  def test_post():
+      "posterior returns P(query = 1 | evidence) and agrees with the prior when there is no evidence"
+      assert abs(posterior("S", {}) - 0.2) < 1e-12
+  def test_report():
+      "a seen report roughly doubles the probability that the stimulus was present"
+      assert post_B > 0.3
+`} prompt="Write posterior(query, evidence), which enumerates all 64 configurations, keeps those consistent with the evidence, and returns the probability that the query node is 1. Compute P(S = 1 | B = 1) and P(S = 1 | R = 1)."
+code={String.raw`
+  def posterior(query, evidence):
+      num = den = 0.0
+      for vals in itertools.product((0, 1), repeat=len(nodes)):
+          x = dict(zip(nodes, vals))
+          if any(x[k] != v for k, v in evidence.items()):
+              continue
+          p = joint(x)
+          den += p
+          num += ...
+      return num / den
+
+  post_B = posterior("S", {"B": 1})
+  post_R = posterior("S", {"R": 1})
+  print(f"P(S = 1) = 0.200; P(S = 1 | report 'seen') = {post_B:.3f}; P(S = 1 | neuron fired) = {post_R:.3f}")
+`}
+hint="num += p if x[query] == 1 else 0."
+solution={String.raw`
+  def posterior(query, evidence):
+      num = den = 0.0
+      for vals in itertools.product((0, 1), repeat=len(nodes)):
+          x = dict(zip(nodes, vals))
+          if any(x[k] != v for k, v in evidence.items()):
+              continue
+          p = joint(x)
+          den += p
+          num += p if x[query] == 1 else 0
+      return num / den
+
+  post_B = posterior("S", {"B": 1})
+  post_R = posterior("S", {"R": 1})
+  print(f"P(S = 1) = 0.200; P(S = 1 | report 'seen') = {post_B:.3f}; P(S = 1 | neuron fired) = {post_R:.3f}")
+`} />
+
+A report of "seen" doubles the probability that the stimulus was present, from 0.20 to 0.40, and a spike from the neuron raises it to 0.49. The report is weaker evidence than the neuron because it is a noisy readout of the neuron: the network contains no path from stimulus to report except through it. Each posterior here summed 64 terms. With 40 binary variables it would be about $10^{12}$ terms, which is the cost that the exact algorithm of Day 4 and the sampling of Day 5 avoid.
+
+<Step n={3} title="Explaining away" minutes={20} />
+
+Stimulus and arousal are independent causes in this network; nothing links them except their common effect, the neuron. Once the neuron's response is known, they are no longer independent: evidence for one cause weakens the case for the other. This is **explaining away**, the signature of a collider, and Day 2 turns it into a general rule.
+
+<Figure caption="Stimulus and arousal both drive a neuron. Observe the response, then observe arousal, and watch the posterior on the stimulus." credit="Interactive figure by Engram, after Pearl (1988).">
+  <ExplainingAway />
+</Figure>
+
+<PyCell id="explain" title="The pupil explains the response away" tests={String.raw`
+  import numpy as np
+  def test_away():
+      "learning that the pupil was dilated lowers the probability of the stimulus given that the neuron fired; a constricted pupil raises it"
+      assert post_RP1 < post_R < post_RP0
+  def test_independent():
+      "without observing the neuron, the pupil says nothing about the stimulus"
+      assert abs(posterior("S", {"P": 1}) - 0.2) < 1e-12
+`} prompt="Compute P(S = 1 | R = 1, P = 1) and P(S = 1 | R = 1, P = 0), and compare them with P(S = 1 | R = 1)."
+code={String.raw`
+  post_RP1 = ...
+  post_RP0 = ...
+  print(f"P(S | neuron fired) = {post_R:.3f}; with a dilated pupil {post_RP1:.3f}; with a constricted pupil {post_RP0:.3f}")
+`}
+hint="post_RP1 = posterior('S', {'R': 1, 'P': 1}); post_RP0 = posterior('S', {'R': 1, 'P': 0})."
+solution={String.raw`
+  post_RP1 = posterior("S", {"R": 1, "P": 1})
+  post_RP0 = posterior("S", {"R": 1, "P": 0})
+  print(f"P(S | neuron fired) = {post_R:.3f}; with a dilated pupil {post_RP1:.3f}; with a constricted pupil {post_RP0:.3f}")
+`} />
+
+Given that the neuron fired, the stimulus has probability 0.49. Learn that the pupil was dilated, which makes high arousal likely, and it falls to 0.34; learn that the pupil was constricted and it rises to 0.68. Yet the pupil on its own says nothing about the stimulus, 0.20 either way. The dependence appears only once the common effect is observed. In data analysis the same mechanism creates spurious associations: selecting trials on a neural response, then relating the stimulus to arousal within them, produces a correlation that does not exist across all trials.
+
+<Step n={4} title="Ancestral sampling" minutes={30} />
+
+A Bayesian network is also a simulator. Sample each node in an order where parents come before children (a topological order), drawing it from its conditional distribution given its parents' sampled values. Posteriors can then be estimated by keeping only samples that match the evidence, **rejection sampling**, which is simple and unbiased but wastes most samples when the evidence is unlikely.
+
+<PyCell id="sample" title="Simulating trials and rejecting" tests={String.raw`
+  import numpy as np
+  def test_marginal():
+      "the sampled frequency of reports matches the exact marginal to within 0.01"
+      assert abs(samples["B"].mean() - posterior("B", {})) < 0.01
+  def test_reject():
+      "the rejection estimate of P(S = 1 | R = 1, P = 1) is within 0.03 of the exact value"
+      assert abs(est - post_RP1) < 0.03
+`} prompt="Write ancestral_sample(n, g), which samples n trials node by node in the order of the nodes list (already topological), using vectorised lookups into the conditional tables. Estimate P(S = 1 | R = 1, P = 1) from the trials that match the evidence, and report how many were kept."
+code={String.raw`
+  def ancestral_sample(n, g):
+      out = {}
+      for v in nodes:
+          pa = parents[v]
+          p1 = np.array([cpt[v][tuple(int(out[u][i]) for u in pa)] for i in range(n)]) if pa else np.full(n, cpt[v][()])
+          out[v] = ...
+      return out
+
+  samples = ancestral_sample(20000, np.random.default_rng(621))
+  keep = (samples["R"] == 1) & (samples["P"] == 1)
+  est = samples["S"][keep].mean()
+  print(f"kept {keep.sum()} of 20000 samples; estimate {est:.3f}, exact {post_RP1:.3f}")
+`}
+hint="out[v] = (g.random(n) < p1).astype(int)."
+solution={String.raw`
+  def ancestral_sample(n, g):
+      out = {}
+      for v in nodes:
+          pa = parents[v]
+          p1 = np.array([cpt[v][tuple(int(out[u][i]) for u in pa)] for i in range(n)]) if pa else np.full(n, cpt[v][()])
+          out[v] = (g.random(n) < p1).astype(int)
+      return out
+
+  samples = ancestral_sample(20000, np.random.default_rng(621))
+  keep = (samples["R"] == 1) & (samples["P"] == 1)
+  est = samples["S"][keep].mean()
+  print(f"kept {keep.sum()} of 20000 samples; estimate {est:.3f}, exact {post_RP1:.3f}")
+`} />
+
+The sampler reproduces the exact marginals, and keeping the 3,502 of 20,000 trials in which the neuron fired and the pupil was dilated gives an estimate of 0.341 against the exact 0.339. Rejection used only 18% of the samples here; for evidence with probability one in a million it would keep almost none. Week 19's Gibbs sampler avoids this by sampling directly from conditionals given the evidence, and Day 5 uses it on a model of a whole population of neurons.
+
+<Bridge title="Bayesian networks in brains and machines"
+  neuro="Explaining away is a hallmark of human perception: a shadow explains away a dark patch on a surface, so the surface is seen as light. Kersten, Mamassian and Yuille (2004) described object perception as inference in such networks, and models of how cortex might perform this inference, by sampling or by passing messages, are a current topic of theoretical neuroscience."
+  ai="Bayesian networks were the dominant representation of uncertain knowledge in artificial intelligence from the late 1980s, in medical diagnosis and expert systems, and they are the foundation of causal inference (Week 72), where the arrows are given a causal meaning and interventions cut them.">
+
+A graph of direct dependencies turns an impossible table into a few small ones.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A Bayesian network represents the joint as...", options: ["The product of each node's distribution given its parents", "A sum of marginals", "A single table", "A Gaussian"], answer: 0, explain: "Step 1." },
+  { q: "A missing edge in a Bayesian network asserts...", options: ["A conditional independence", "Nothing", "A causal effect", "Zero correlation always"], answer: 0, explain: "Step 1." },
+  { q: "The full joint over 6 binary variables needs how many numbers?", options: ["63", "6", "12", "36"], answer: 0, explain: "2⁶ − 1." },
+  { q: "Inference by enumeration costs time that grows...", options: ["Exponentially with the number of variables", "Linearly", "Not at all", "Logarithmically"], answer: 0, explain: "Step 2." },
+  { q: "Explaining away happens between...", options: ["Two causes of an observed common effect", "A cause and its effect", "Two effects of one cause", "Unconnected variables"], answer: 0, explain: "Step 3." },
+  { q: "Without observing the neuron, the pupil says ... about the stimulus.", options: ["Nothing", "A lot", "The opposite", "Everything"], answer: 0, explain: "Step 3." },
+  { q: "Ancestral sampling draws each node...", options: ["After its parents, from its conditional distribution", "In random order", "From its marginal", "From the posterior"], answer: 0, explain: "Step 4." },
+  { q: "Rejection sampling becomes inefficient when...", options: ["The evidence is unlikely", "There are few nodes", "The evidence is likely", "The graph is a chain"], answer: 0, explain: "Step 4." },
+]} />
+
+<Flashcards cards={[
+  { front: "Bayesian network factorisation?", back: "$p(\\mathbf x) = \\prod_ip(x_i \\mid \\text{pa}(x_i))$" },
+  { front: "Parameter count?", back: "Binary nodes: one number per parent configuration, $\\sum_i2^{|\\text{pa}_i|}$, against $2^n - 1$." },
+  { front: "Explaining away?", back: "Observing a common effect makes its independent causes dependent; evidence for one lowers belief in the other." },
+  { front: "Ancestral sampling?", back: "Sample nodes in topological order from $p(x_i \\mid \\text{pa}(x_i))$." },
+  { front: "Rejection sampling for posteriors?", back: "Keep samples consistent with the evidence and take frequencies; unbiased but wasteful for rare evidence." },
+]} />
+
+<Predict revisit question="Did learning that arousal was high raise or lower the probability of the stimulus?" />
+
+<Key title="Before you go">
+<ul>
+<li>A Bayesian network writes the joint as a product of local conditionals given parents.</li>
+<li>Sparse graphs need far fewer parameters than the full joint.</li>
+<li>Enumeration gives exact posteriors but costs exponential time.</li>
+<li>Observed common effects create dependence between causes: explaining away.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Lauritzen and Spiegelhalter (1988), <em>Local computations with probabilities on graphical structures and their application to expert systems</em>.</li>
+<li>Pearl (1988), <em>Probabilistic Reasoning in Intelligent Systems</em>, Morgan Kaufmann: the book that established Bayesian networks.</li>
+<li>Kersten, Mamassian and Yuille (2004), <em>Object perception as Bayesian inference</em>, Annual Review of Psychology 55, 271 to 304.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Draw a Bayesian network for an experiment you know, with at least five variables, including one you do not measure. Mark one place where explaining away could mislead an analysis that conditions on the wrong variable." />

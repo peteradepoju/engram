@@ -1,0 +1,269 @@
+export const meta = {
+  title: "Forge: Week 62 challenge, quiz and deep read",
+  intro: "This week built probability models from graphs: Bayesian networks and explaining away, d-separation, Markov random fields and maximum entropy, exact inference by message passing, and pairwise models of spiking populations. Today's challenge tests the pairwise model on data it was not built for, a population driven by a shared fluctuating input, and then runs belief propagation on a graph with a loop to see how far the exact algorithm survives outside its home ground. Then the quiz and a critique of Schneidman and colleagues.",
+  goals: [
+    "Detect higher-order structure that a pairwise maximum entropy model cannot capture",
+    "Run loopy belief propagation and compare it with exact marginals",
+    "Prove that maximum likelihood in exponential families is moment matching, and that colliders block",
+    "Critique the pairwise maximum entropy paper",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "schneidman-2006",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. How many numbers specify a Bayesian network of 10 binary nodes, each with 2 parents?
+2. How many pairwise couplings has an Ising model of 40 neurons?
+3. A chain has 100 variables with 4 states each. How many multiplications does one forward pass need, roughly?
+
+<PyCell code={String.raw`
+  print("1.", 10 * 2 ** 2)
+  print("2.", 40 * 39 // 2)
+  print("3. about", 99 * 4 * 4, "(one 4-by-4 matrix-vector product per step)")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: when pairs are not enough.** Ten neurons share a slowly varying input that, in a tenth of time bins, raises every neuron's firing together, a crude model of the up and down states of Week 60. Fit the independent and pairwise models to 40,000 bins and ask how well each predicts how many neurons fire together.
+
+<PyCell id="partA" title="Part A: a shared input defeats the pairwise model" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "the pairwise model matches the data's rates and pairwise moments"
+      p = model_probs(h_fit, J_fit)
+      assert np.abs(W.T @ p - rates).max() < 3e-3
+  def test_tail():
+      "the pairwise model misses the shape of the synchrony distribution: too few bins with 4 to 6 neurons active, too many with 9 or 10"
+      assert mid_emp / mid_pair > 1.3 and top_pair / top_emp > 3
+`} prompt="Simulate the data, fit the pairwise model by moment matching as on Day 5, and compare how the data, the independent model and the pairwise model distribute the number of neurons active in a bin, in particular the probability of 4 to 6 and of 9 or 10 active."
+code={String.raw`
+  import numpy as np
+  import itertools
+  N = 10
+  W = np.array(list(itertools.product((0, 1), repeat=N)), dtype=float)
+
+  def model_probs(h, J):
+      E = W @ h + 0.5 * np.einsum("ki,ij,kj->k", W, J, W)
+      p = np.exp(E - E.max())
+      return p / p.sum()
+
+  gA = np.random.default_rng(626)
+  T = 40000
+  up = gA.random(T) < 0.1                                  # shared input high in 10% of bins
+  p_fire = np.where(up[:, None], 0.55, 0.05) * gA.uniform(0.8, 1.2, N)[None, :]
+  words = (gA.random((T, N)) < p_fire).astype(float)
+  idx = (words @ (2 ** np.arange(N - 1, -1, -1))).astype(int)
+  p_emp = np.bincount(idx, minlength=2 ** N) / T
+  rates = words.mean(0); M2 = words.T @ words / T
+
+  h_fit = np.log(rates / (1 - rates)); J_fit = np.zeros((N, N))
+  for it in range(3000):
+      p = model_probs(h_fit, J_fit)
+      h_fit += ...
+      dJ = M2 - (W * p[:, None]).T @ W; np.fill_diagonal(dJ, 0)
+      J_fit += dJ
+  p_pair = model_probs(h_fit, J_fit)
+  p_ind = np.prod(np.where(W == 1, rates, 1 - rates), axis=1)
+  k_on = W.sum(1)
+  mid_emp, mid_ind, mid_pair = (p[(k_on >= 4) & (k_on <= 6)].sum() for p in (p_emp, p_ind, p_pair))
+  top_emp, top_ind, top_pair = (p[k_on >= 9].sum() for p in (p_emp, p_ind, p_pair))
+  print(f"P(4 to 6 active): data {mid_emp:.4f}, independent {mid_ind:.2e}, pairwise {mid_pair:.4f}")
+  print(f"P(9 or 10 active): data {top_emp:.4f}, independent {top_ind:.2e}, pairwise {top_pair:.4f}")
+  print("P(K neurons firing), K = 0 to 10:")
+  for name, p in [("data", p_emp), ("pairwise", p_pair)]:
+      print(f"  {name:9s}", np.round([p[k_on == k].sum() for k in range(11)], 4))
+`}
+hint="h_fit += rates - W.T @ p."
+solution={String.raw`
+  import numpy as np
+  import itertools
+  N = 10
+  W = np.array(list(itertools.product((0, 1), repeat=N)), dtype=float)
+
+  def model_probs(h, J):
+      E = W @ h + 0.5 * np.einsum("ki,ij,kj->k", W, J, W)
+      p = np.exp(E - E.max())
+      return p / p.sum()
+
+  gA = np.random.default_rng(626)
+  T = 40000
+  up = gA.random(T) < 0.1                                  # shared input high in 10% of bins
+  p_fire = np.where(up[:, None], 0.55, 0.05) * gA.uniform(0.8, 1.2, N)[None, :]
+  words = (gA.random((T, N)) < p_fire).astype(float)
+  idx = (words @ (2 ** np.arange(N - 1, -1, -1))).astype(int)
+  p_emp = np.bincount(idx, minlength=2 ** N) / T
+  rates = words.mean(0); M2 = words.T @ words / T
+
+  h_fit = np.log(rates / (1 - rates)); J_fit = np.zeros((N, N))
+  for it in range(3000):
+      p = model_probs(h_fit, J_fit)
+      h_fit += rates - W.T @ p
+      dJ = M2 - (W * p[:, None]).T @ W; np.fill_diagonal(dJ, 0)
+      J_fit += dJ
+  p_pair = model_probs(h_fit, J_fit)
+  p_ind = np.prod(np.where(W == 1, rates, 1 - rates), axis=1)
+  k_on = W.sum(1)
+  mid_emp, mid_ind, mid_pair = (p[(k_on >= 4) & (k_on <= 6)].sum() for p in (p_emp, p_ind, p_pair))
+  top_emp, top_ind, top_pair = (p[k_on >= 9].sum() for p in (p_emp, p_ind, p_pair))
+  print(f"P(4 to 6 active): data {mid_emp:.4f}, independent {mid_ind:.2e}, pairwise {mid_pair:.4f}")
+  print(f"P(9 or 10 active): data {top_emp:.4f}, independent {top_ind:.2e}, pairwise {top_pair:.4f}")
+  print("P(K neurons firing), K = 0 to 10:")
+  for name, p in [("data", p_emp), ("pairwise", p_pair)]:
+      print(f"  {name:9s}", np.round([p[k_on == k].sum() for k in range(11)], 4))
+`} />
+
+The shared input makes the number of active neurons bimodal: most bins have zero or one active neuron, but there is a second bump at four to seven, the up states. The independent model sees none of it, giving 4 to 6 active neurons a probability of 1% instead of 6%. The pairwise model, which matches every rate and correlation, does much better but still has the wrong shape: it spreads the probability of large events into a smooth tail, underestimating 4 to 6 active neurons by a third and overestimating 9 or 10 by a factor of five. A single hidden cause that switches all neurons together produces interactions of every order, and no set of pairwise terms can mimic them exactly. This is what Okun and colleagues (2015) and Tkačik and colleagues (2014) found in large cortical and retinal populations.
+
+**Part B: belief propagation on a loop.** Add one edge to a chain and it becomes a cycle. Run the message updates of Day 4 anyway, in parallel, until they stop changing, and compare the resulting beliefs with exact marginals from enumeration, for weak and for strong couplings.
+
+<PyCell id="partB" title="Part B: loopy belief propagation" tests={String.raw`
+  import numpy as np
+  def test_weak():
+      "with weak couplings, loopy beliefs are within 0.02 of the exact marginals"
+      assert err[0.3] < 0.02
+  def test_strong():
+      "with strong couplings, the error grows"
+      assert err[1.5] > err[0.3] and err[1.5] > 0.03
+`} prompt="Complete the parallel message update on a 6-node cycle of binary units: each new message from i to j is the edge potential applied to i's evidence times the message into i from its other neighbour. Iterate 200 times, form beliefs, and compare with enumeration for coupling strengths 0.3 and 1.5."
+code={String.raw`
+  n6 = 6
+  cyc = [(i, (i + 1) % n6) for i in range(n6)]
+  nb6 = {i: [(i - 1) % n6, (i + 1) % n6] for i in range(n6)}
+  gB = np.random.default_rng(6261)
+  phi6 = np.exp(gB.normal(0, 0.8, (n6, 2)))
+
+  def exact(psi):
+      m = np.zeros((n6, 2))
+      for xs in itertools.product((0, 1), repeat=n6):
+          w = np.prod([phi6[i, xs[i]] for i in range(n6)]) * np.prod([psi[xs[a], xs[b]] for a, b in cyc])
+          for i in range(n6):
+              m[i, xs[i]] += w
+      return m / m.sum(1, keepdims=True)
+
+  def loopy(psi, iters=200):
+      msg = {(i, j): np.ones(2) / 2 for i in range(n6) for j in nb6[i]}
+      for _ in range(iters):
+          new = {}
+          for (i, j) in msg:
+              k = [x for x in nb6[i] if x != j][0]
+              m = ...
+              new[(i, j)] = m / m.sum()
+          msg = new
+      b = np.array([phi6[i] * np.prod([msg[(k, i)] for k in nb6[i]], axis=0) for i in range(n6)])
+      return b / b.sum(1, keepdims=True)
+
+  err = {}
+  for c in (0.3, 1.5):
+      psi = np.exp(c * np.array([[1.0, -1.0], [-1.0, 1.0]]))
+      err[c] = np.abs(loopy(psi) - exact(psi)).max()
+      print(f"coupling {c}: largest error of loopy beliefs {err[c]:.4f}")
+`}
+hint="m = psi.T @ (phi6[i] * msg[(k, i)])."
+solution={String.raw`
+  n6 = 6
+  cyc = [(i, (i + 1) % n6) for i in range(n6)]
+  nb6 = {i: [(i - 1) % n6, (i + 1) % n6] for i in range(n6)}
+  gB = np.random.default_rng(6261)
+  phi6 = np.exp(gB.normal(0, 0.8, (n6, 2)))
+
+  def exact(psi):
+      m = np.zeros((n6, 2))
+      for xs in itertools.product((0, 1), repeat=n6):
+          w = np.prod([phi6[i, xs[i]] for i in range(n6)]) * np.prod([psi[xs[a], xs[b]] for a, b in cyc])
+          for i in range(n6):
+              m[i, xs[i]] += w
+      return m / m.sum(1, keepdims=True)
+
+  def loopy(psi, iters=200):
+      msg = {(i, j): np.ones(2) / 2 for i in range(n6) for j in nb6[i]}
+      for _ in range(iters):
+          new = {}
+          for (i, j) in msg:
+              k = [x for x in nb6[i] if x != j][0]
+              m = psi.T @ (phi6[i] * msg[(k, i)])
+              new[(i, j)] = m / m.sum()
+          msg = new
+      b = np.array([phi6[i] * np.prod([msg[(k, i)] for k in nb6[i]], axis=0) for i in range(n6)])
+      return b / b.sum(1, keepdims=True)
+
+  err = {}
+  for c in (0.3, 1.5):
+      psi = np.exp(c * np.array([[1.0, -1.0], [-1.0, 1.0]]))
+      err[c] = np.abs(loopy(psi) - exact(psi)).max()
+      print(f"coupling {c}: largest error of loopy beliefs {err[c]:.4f}")
+`} />
+
+With weak couplings, loopy belief propagation converges to beliefs within 0.0001 of the exact marginals; with strong couplings the error rises to 0.08. On a cycle, the message a node sends around the loop eventually returns to it, so its own evidence is counted again as if it came from elsewhere. When couplings are weak the echo is faint by the time it returns; when they are strong it arrives nearly undiminished and the beliefs become overconfident. For a single cycle the error is well understood (Weiss, 2000); for graphs with many short loops, loopy belief propagation may oscillate and never converge.
+
+**Part C (written).** Answer in your journal. First, in Part A the pairwise model matched every rate and pairwise correlation yet missed the synchrony. Explain in terms of maximum entropy why it must, and propose the smallest addition to the model that would fix it (Tkačik and colleagues used a term depending only on the number of neurons firing). Second, in Part B, explain in a few sentences why a loop makes belief propagation count evidence twice, and why strong couplings make this worse.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. Maximum likelihood is moment matching" task="For $p_\theta(\mathbf x) = \exp(\theta^\top f(\mathbf x))/Z(\theta)$ with $Z(\theta) = \sum_{\mathbf x}\exp(\theta^\top f(\mathbf x))$, show that $\nabla_\theta\log Z(\theta) = E_{p_\theta}[f(\mathbf x)]$, and hence that the gradient of the average log-likelihood of data $\mathbf x_1, \dots, \mathbf x_n$ is the data average of $f$ minus its model average.">
+
+Differentiate: $\nabla_\theta\log Z = \frac{1}{Z}\sum_{\mathbf x}f(\mathbf x)\exp(\theta^\top f(\mathbf x)) = \sum_{\mathbf x}f(\mathbf x)p_\theta(\mathbf x) = E_{p_\theta}[f]$.
+
+The average log-likelihood is $\frac1n\sum_i\theta^\top f(\mathbf x_i) - \log Z(\theta)$, so its gradient is $\frac1n\sum_if(\mathbf x_i) - E_{p_\theta}[f]$.
+
+Setting it to zero gives moment matching. The Hessian of $\log Z$ is the covariance of $f$ under $p_\theta$, which is positive semi-definite, so the log-likelihood is concave and any stationary point is a global maximum.
+
+</Prove>
+
+<Prove title="2. A collider blocks when unobserved" task="In the network $A \to B \leftarrow C$ with $p(a, b, c) = p(a)p(c)p(b \mid a, c)$, show that $A$ and $C$ are independent, and give a numerical example showing that they are dependent given $B$.">
+
+Marginalise $B$: $p(a, c) = \sum_bp(a)p(c)p(b \mid a, c) = p(a)p(c)\sum_bp(b \mid a, c) = p(a)p(c)$, since the conditional distribution of $B$ sums to one. So $A$ and $C$ are independent.
+
+Example: $A$ and $C$ are fair coins and $B = A \text{ or } C$. Given $B = 1$, the three configurations $(1, 0), (0, 1), (1, 1)$ are equally likely, so $p(A = 1 \mid B = 1) = 2/3$ but $p(A = 1 \mid B = 1, C = 1) = 1/2$: learning $C$ changes the belief about $A$. They are dependent given $B$, which is explaining away.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 62 quiz (15 questions)" questions={[
+  { q: "A Bayesian network factorises the joint into...", options: ["Conditionals of each node given its parents", "Clique potentials", "Marginals", "Pairwise terms only"], answer: 0, explain: "Day 1." },
+  { q: "Explaining away arises at...", options: ["An observed common effect", "A common cause", "A chain", "An unobserved collider"], answer: 0, explain: "Day 1." },
+  { q: "Inference by enumeration is exponential in...", options: ["The number of variables", "The number of edges", "The evidence", "The parents"], answer: 0, explain: "Day 1." },
+  { q: "In a fork, observing the common cause...", options: ["Makes its effects independent", "Makes them dependent", "Does nothing", "Reverses arrows"], answer: 0, explain: "Day 2." },
+  { q: "Selecting trials on a common target of two neurons...", options: ["Induces a correlation between them", "Removes correlations", "Is harmless", "Proves a connection"], answer: 0, explain: "Day 2." },
+  { q: "Markov equivalent graphs...", options: ["Imply the same independences", "Have the same edges and directions", "Are always chains", "Can be told apart from observational data"], answer: 0, explain: "Day 2." },
+  { q: "An MRF's joint is normalised by...", options: ["The partition function Z", "The parents", "The evidence", "A prior"], answer: 0, explain: "Day 3." },
+  { q: "Maximum entropy with pairwise constraints on binary units gives...", options: ["An Ising model", "Independence", "A Gaussian", "A hidden Markov model"], answer: 0, explain: "Day 3." },
+  { q: "The square-lattice Ising model shows...", options: ["A phase transition near J = 0.44", "No transition", "A transition at J = 2", "Only disorder"], answer: 0, explain: "Day 3." },
+  { q: "On a chain, the sum-product algorithm costs...", options: ["Linear time in the length", "Exponential time", "Quadratic in length", "Nothing"], answer: 0, explain: "Day 4." },
+  { q: "A chain marginal is proportional to...", options: ["Forward times backward message", "Forward message only", "The evidence only", "The prior"], answer: 0, explain: "Day 4." },
+  { q: "Belief propagation on a graph with loops is...", options: ["Approximate", "Exact", "Undefined", "Faster than on trees"], answer: 0, explain: "Part B." },
+  { q: "The pairwise maxent model is fitted by...", options: ["Matching rates and pairwise moments", "Matching waveforms", "PCA", "k-means"], answer: 0, explain: "Day 5." },
+  { q: "Weak pairwise correlations can make synchronous patterns...", options: ["Far more common than independence predicts", "Rarer", "Impossible", "Exactly as predicted by independence"], answer: 0, explain: "Day 5." },
+  { q: "A shared input that turns many neurons on together creates...", options: ["Higher-order structure beyond pairs", "Only pairwise structure", "Independence", "Negative correlations"], answer: 0, explain: "Part A." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Schneidman, Berry, Segev and Bialek (2006) its third pass and write your critique under the five headings. Focus on one question: **what does it mean that pairwise models explain about 90% of the multi-information, and how far does the claim reach?** Consider the choice of bin size and how it affects correlations and the binary description; the use of groups of ten cells and the extrapolation to larger populations; how the multi-information and its fraction were estimated from finite data; what kinds of structure the pairwise model leaves out, such as shared inputs and stimulus-driven correlations (Part A); and the later work on larger populations and criticality that grew from this paper. End with one experiment or analysis that would test whether pairwise models describe a population you know.
+
+<Callout kind="research">
+
+Tkačik and colleagues (2014) added to the pairwise model a term depending only on the total number of active neurons, the "K-pairwise" model, and found that it captured large retinal populations much better. Implement it for Part A by adding a parameter for each value of K, fitted by matching the observed distribution of K, and measure how much of the remaining error it removes. Then simulate a population whose higher-order structure is not a function of K, and ask whether the K term still helps.
+
+</Callout>
+
+<Key title="Week 62 review checklist">
+<ul>
+<li>I can write a joint distribution as a Bayesian network and compute posteriors by enumeration and sampling.</li>
+<li>I can read conditional independences from a graph with d-separation.</li>
+<li>I can write undirected models, derive maximum entropy distributions and sample an Ising model.</li>
+<li>I can compute exact marginals on chains and trees by message passing.</li>
+<li>I can fit pairwise maximum entropy models to spike words and test what they miss.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then write a paragraph on which graphical model you would choose to describe a population recording you know, directed or undirected, and why." />

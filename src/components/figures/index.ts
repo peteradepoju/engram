@@ -281,3 +281,8 @@ export { IcaMixing } from "./ica-mixing";
 export { NmfParts } from "./nmf-parts";
 export { TsnePerplexity } from "./tsne-perplexity";
 export { EmbeddingDistortion } from "./embedding-distortion";
+export { ExplainingAway } from "./explaining-away";
+export { DSeparation } from "./d-separation";
+export { IsingSample } from "./ising-sample";
+export { ChainMessages } from "./chain-messages";
+export { PairwiseSpikes } from "./pairwise-spikes";

@@ -20,7 +20,7 @@ export function IcaMixing() {
     const ev = [c[0][0] * Math.cos(th) ** 2 + 2 * c[0][1] * Math.sin(th) * Math.cos(th) + c[1][1] * Math.sin(th) ** 2, c[0][0] * Math.sin(th) ** 2 - 2 * c[0][1] * Math.sin(th) * Math.cos(th) + c[1][1] * Math.cos(th) ** 2];
     const Z = Xc.map((x) => { const u = Math.cos(th) * x[0] + Math.sin(th) * x[1], v = -Math.sin(th) * x[0] + Math.cos(th) * x[1]; return [u / Math.sqrt(ev[0]), v / Math.sqrt(ev[1])]; });
     let best = 0, bk = -1;
-    for (let k = 0; k < 90; k++) {
+    for (let k = 0; k < 180; k++) {
       const p = (k * Math.PI) / 180, kurt = Z.reduce((s, z) => s + (Math.cos(p) * z[0] + Math.sin(p) * z[1]) ** 4, 0) / n - 3;
       if (Math.abs(kurt) > bk) { bk = Math.abs(kurt); best = p; }
     }

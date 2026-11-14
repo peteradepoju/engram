@@ -1,0 +1,288 @@
+export const meta = {
+  title: "Exact inference by message passing",
+  intro: "Enumeration computes any posterior, at a cost that doubles with every binary variable. For graphs without loops there is a far better way. Each node collects messages from its neighbours, each message summarising everything on the far side of an edge, and multiplies them to get its exact marginal. On a chain this is the forward-backward algorithm; on any tree it is belief propagation, the sum-product algorithm. Today you derive it, implement it on chains and trees, check it against brute force, and use it to track an animal's hidden engagement through a long session.",
+  goals: [
+    "Derive message passing on a chain by pushing sums inside products",
+    "Implement the sum-product algorithm on a chain and on a tree, and verify it against enumeration",
+    "Explain why message passing is linear in the size of a tree and what goes wrong with loops",
+    "Infer a hidden behavioural state from noisy trial-by-trial observations",
+  ],
+  plan: [
+    { label: "Pushing sums inside products", minutes: 25 },
+    { label: "Forward and backward messages", minutes: 30 },
+    { label: "A hidden state through a session", minutes: 25 },
+    { label: "Trees and loops", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "kschischang-2001",
+};
+
+<Predict question="A chain of 500 binary variables has 2 to the power 500 joint states. Roughly how many arithmetic operations does message passing need to compute every variable's exact marginal: about 500, about 2,000, or about 500 squared?" />
+
+<Step n={1} title="Pushing sums inside products" minutes={25} />
+
+Take a chain $x_1 - x_2 - \cdots - x_T$ with $p(\mathbf x) \propto \prod_t\phi_t(x_t)\prod_t\psi(x_t, x_{t+1})$, where $\phi_t$ holds the evidence about $x_t$ and $\psi$ the coupling between neighbours. The marginal of $x_T$ is
+
+$$
+p(x_T) \propto \phi_T(x_T)\sum_{x_{T-1}}\psi(x_{T-1}, x_T)\phi_{T-1}(x_{T-1})\sum_{x_{T-2}}\psi(x_{T-2}, x_{T-1})\cdots\sum_{x_1}\psi(x_1, x_2)\phi_1(x_1).
+$$
+
+Because each factor involves only neighbouring variables, every sum can be moved as far right as possible and done once. The innermost sum is a function of $x_2$ alone, a **message** from $x_1$ to $x_2$; it is combined with $x_2$'s evidence and passed on. Instead of $K^T$ terms, the cost is $T$ sums of $K \times K$ products. Kschischang, Frey and Loeliger (2001), today's paper, showed that this single idea, the **sum-product algorithm** on a factor graph, includes the forward-backward algorithm, the Kalman filter, Viterbi decoding, turbo decoding and Pearl's belief propagation as special cases.
+
+<Video id="VHLvOHwvbzs" title="Probabilistic ML, lecture 18: the sum-product algorithm" by="Philipp Hennig, University of Tübingen" note="Philipp Hennig derives the sum-product algorithm on factor graphs, shows how messages flowing along a chain give every marginal at linear cost, and how the same scheme works on any tree." />
+
+<Step n={2} title="Forward and backward messages" minutes={30} />
+
+Messages flow in both directions. The **forward** message $\alpha_t(x_t)$ summarises the evidence from $1, \dots, t$; the **backward** message $\beta_t(x_t)$ the evidence from $t + 1, \dots, T$:
+
+$$
+\alpha_t(x_t) = \phi_t(x_t)\sum_{x_{t-1}}\alpha_{t-1}(x_{t-1})\psi(x_{t-1}, x_t),\qquad \beta_t(x_t) = \sum_{x_{t+1}}\psi(x_t, x_{t+1})\phi_{t+1}(x_{t+1})\beta_{t+1}(x_{t+1}),
+$$
+
+and the marginal is $p(x_t \mid \text{all evidence}) \propto \alpha_t(x_t)\beta_t(x_t)$. Messages are normalised at each step to avoid underflow, which changes nothing but a constant.
+
+<Figure caption="A hidden binary state that tends to persist, seen through unreliable observations. Blue bars are exact marginals from forward and backward messages; pink bars use the forward messages only." credit="Interactive figure by Engram, after Kschischang, Frey and Loeliger (2001).">
+  <ChainMessages />
+</Figure>
+
+<PyCell id="chain" title="Sum-product on a chain" tests={String.raw`
+  import numpy as np
+  def test_brute():
+      "chain_marginals matches brute-force enumeration on a short chain with 3 states"
+      assert np.allclose(marg_bp, marg_brute, atol=1e-10)
+  def test_norm():
+      "each marginal sums to one"
+      assert np.allclose(marg_bp.sum(1), 1)
+`} prompt="Complete chain_marginals(phi, psi), where phi is a T by K array of evidence and psi a K by K coupling matrix: compute normalised forward and backward messages and return the T by K array of marginals. Check it against enumeration of all 3 to the power 7 states of a short chain."
+code={String.raw`
+  import numpy as np
+  import itertools
+
+  def chain_marginals(phi, psi):
+      T, K = phi.shape
+      alpha = np.zeros((T, K)); beta = np.ones((T, K))
+      alpha[0] = phi[0] / phi[0].sum()
+      for t in range(1, T):
+          a = phi[t] * (alpha[t - 1] @ psi)
+          alpha[t] = a / a.sum()
+      for t in range(T - 2, -1, -1):
+          b = ...
+          beta[t] = b / b.sum()
+      m = alpha * beta
+      return m / m.sum(1, keepdims=True)
+
+  gc = np.random.default_rng(624)
+  T7, K3 = 7, 3
+  phi7 = gc.uniform(0.1, 1, (T7, K3))
+  psi3 = np.array([[0.8, 0.15, 0.05], [0.1, 0.8, 0.1], [0.05, 0.15, 0.8]])
+  marg_bp = chain_marginals(phi7, psi3)
+  marg_brute = np.zeros((T7, K3))
+  for xs in itertools.product(range(K3), repeat=T7):
+      w = np.prod([phi7[t, xs[t]] for t in range(T7)]) * np.prod([psi3[xs[t], xs[t + 1]] for t in range(T7 - 1)])
+      for t in range(T7):
+          marg_brute[t, xs[t]] += w
+  marg_brute /= marg_brute.sum(1, keepdims=True)
+  print("largest difference from enumeration:", np.abs(marg_bp - marg_brute).max())
+  print(f"enumeration summed {K3 ** T7} configurations; message passing did {2 * (T7 - 1)} K-by-K products")
+`}
+hint="b = psi @ (phi[t + 1] * beta[t + 1])."
+solution={String.raw`
+  import numpy as np
+  import itertools
+
+  def chain_marginals(phi, psi):
+      T, K = phi.shape
+      alpha = np.zeros((T, K)); beta = np.ones((T, K))
+      alpha[0] = phi[0] / phi[0].sum()
+      for t in range(1, T):
+          a = phi[t] * (alpha[t - 1] @ psi)
+          alpha[t] = a / a.sum()
+      for t in range(T - 2, -1, -1):
+          b = psi @ (phi[t + 1] * beta[t + 1])
+          beta[t] = b / b.sum()
+      m = alpha * beta
+      return m / m.sum(1, keepdims=True)
+
+  gc = np.random.default_rng(624)
+  T7, K3 = 7, 3
+  phi7 = gc.uniform(0.1, 1, (T7, K3))
+  psi3 = np.array([[0.8, 0.15, 0.05], [0.1, 0.8, 0.1], [0.05, 0.15, 0.8]])
+  marg_bp = chain_marginals(phi7, psi3)
+  marg_brute = np.zeros((T7, K3))
+  for xs in itertools.product(range(K3), repeat=T7):
+      w = np.prod([phi7[t, xs[t]] for t in range(T7)]) * np.prod([psi3[xs[t], xs[t + 1]] for t in range(T7 - 1)])
+      for t in range(T7):
+          marg_brute[t, xs[t]] += w
+  marg_brute /= marg_brute.sum(1, keepdims=True)
+  print("largest difference from enumeration:", np.abs(marg_bp - marg_brute).max())
+  print(f"enumeration summed {K3 ** T7} configurations; message passing did {2 * (T7 - 1)} K-by-K products")
+`} />
+
+Message passing agrees with enumeration to the last bit of floating-point precision, about $10^{-16}$. Enumeration summed 2,187 configurations; message passing did 12 small matrix-vector products. The gap is exponential: for 500 variables with 3 states, enumeration would need $3^{500}$ terms, more than the number of atoms in the universe, while message passing needs about a thousand products of 3-by-3 matrices.
+
+<Step n={3} title="A hidden state through a session" minutes={25} />
+
+Animals drift in and out of engagement during a session, and their choices on a trial reflect it: engaged, they are mostly correct; disengaged, they guess (Ashwood and colleagues, 2022, found such states in mice). Treat engagement as a hidden chain that persists from trial to trial, and each trial's outcome as evidence.
+
+<PyCell id="engage" title="Tracking engagement" tests={String.raw`
+  import numpy as np
+  def test_better():
+      "the chain's marginals classify engagement better than each trial's outcome alone, by more than 0.1"
+      assert acc_chain > acc_single + 0.1 and acc_chain > 0.85
+`} prompt="Simulate 600 trials in which engagement switches with probability 0.03 per trial; engaged trials are correct with probability 0.9, disengaged with 0.55. Classify engagement on each trial from its outcome alone (correct means engaged) and from the chain's marginals, and compare accuracies."
+code={String.raw`
+  ge = np.random.default_rng(6241)
+  Tn = 600
+  z = np.zeros(Tn, int); z[0] = 1
+  for t in range(1, Tn):
+      z[t] = 1 - z[t - 1] if ge.random() < 0.03 else z[t - 1]
+  p_correct = np.where(z == 1, 0.9, 0.55)
+  correct = (ge.random(Tn) < p_correct).astype(int)
+
+  psi_e = np.array([[0.97, 0.03], [0.03, 0.97]])
+  phi_e = ...                                            # T x 2: likelihood of each outcome under disengaged (0) and engaged (1)
+  marg_e = chain_marginals(phi_e, psi_e)
+  acc_chain = np.mean((marg_e[:, 1] > 0.5) == z)
+  acc_single = np.mean(correct == z)
+  print(f"fraction of trials engaged {z.mean():.2f}; accuracy from single outcomes {acc_single:.3f}, from the chain {acc_chain:.3f}")
+`}
+hint="phi_e = np.column_stack([np.where(correct == 1, 0.55, 0.45), np.where(correct == 1, 0.9, 0.1)])."
+solution={String.raw`
+  ge = np.random.default_rng(6241)
+  Tn = 600
+  z = np.zeros(Tn, int); z[0] = 1
+  for t in range(1, Tn):
+      z[t] = 1 - z[t - 1] if ge.random() < 0.03 else z[t - 1]
+  p_correct = np.where(z == 1, 0.9, 0.55)
+  correct = (ge.random(Tn) < p_correct).astype(int)
+
+  psi_e = np.array([[0.97, 0.03], [0.03, 0.97]])
+  phi_e = np.column_stack([np.where(correct == 1, 0.55, 0.45), np.where(correct == 1, 0.9, 0.1)])
+  marg_e = chain_marginals(phi_e, psi_e)
+  acc_chain = np.mean((marg_e[:, 1] > 0.5) == z)
+  acc_single = np.mean(correct == z)
+  print(f"fraction of trials engaged {z.mean():.2f}; accuracy from single outcomes {acc_single:.3f}, from the chain {acc_chain:.3f}")
+`} />
+
+Calling a trial engaged whenever the animal was correct gets the state right on 71% of trials, because disengaged animals are still right by luck 55% of the time. The chain gets 89%: a run of correct trials is strong evidence of engagement, and a single error within it is treated as a lapse rather than a switch. The persistence probability, here 0.97 per trial, sets how much evidence it takes to believe a switch. In practice it, and the accuracies in each state, are unknown and must be learned from the data with EM, which is exactly the hidden Markov model of Week 65.
+
+<Step n={4} title="Trees and loops" minutes={25} />
+
+On any tree, the same rule works. The message from node $i$ to neighbour $j$ is
+
+$$
+m_{i \to j}(x_j) = \sum_{x_i}\phi_i(x_i)\psi_{ij}(x_i, x_j)\prod_{k \in N(i) \setminus j}m_{k \to i}(x_i),
+$$
+
+the evidence at $i$ times everything $i$ has heard from its other neighbours, pushed through the edge. A node's marginal is its evidence times all incoming messages. Two passes, inwards to a root and outwards again, compute every marginal exactly. On graphs with loops, messages can circulate and double-count evidence; running the same updates anyway, **loopy belief propagation**, often gives good approximations, as in turbo codes, but carries no guarantee. Exact inference on loopy graphs needs clustering nodes into a tree of cliques (the junction tree of Lauritzen and Spiegelhalter, Day 1), at a cost exponential in the size of the largest clique.
+
+<PyCell id="tree" title="Belief propagation on a tree" tests={String.raw`
+  import numpy as np
+  def test_tree():
+      "tree_marginals matches enumeration on a 7-node tree"
+      assert np.allclose(tree_m, brute_m, atol=1e-10)
+`} prompt="Complete message(i, j), which computes the message from node i to node j recursively from i's evidence, the edge potential, and the messages into i from its other neighbours. Compute every node's marginal and compare with enumeration."
+code={String.raw`
+  edges = [(0, 1), (0, 2), (1, 3), (1, 4), (2, 5), (2, 6)]           # a binary tree of 7 nodes
+  nbrs = {i: [] for i in range(7)}
+  for a, b in edges:
+      nbrs[a].append(b); nbrs[b].append(a)
+  gtr = np.random.default_rng(6242)
+  phi_t = gtr.uniform(0.2, 1, (7, 2))
+  psi_t = {}
+  for a, b in edges:
+      M = gtr.uniform(0.2, 1, (2, 2)); psi_t[(a, b)] = M; psi_t[(b, a)] = M.T
+
+  def message(i, j):
+      incoming = np.prod([message(k, i) for k in nbrs[i] if k != j], axis=0) if len(nbrs[i]) > 1 else np.ones(2)
+      m = ...
+      return m / m.sum()
+
+  tree_m = np.array([phi_t[i] * np.prod([message(k, i) for k in nbrs[i]], axis=0) for i in range(7)])
+  tree_m /= tree_m.sum(1, keepdims=True)
+
+  brute_m = np.zeros((7, 2))
+  for xs in itertools.product((0, 1), repeat=7):
+      w = np.prod([phi_t[i, xs[i]] for i in range(7)]) * np.prod([psi_t[(a, b)][xs[a], xs[b]] for a, b in edges])
+      for i in range(7):
+          brute_m[i, xs[i]] += w
+  brute_m /= brute_m.sum(1, keepdims=True)
+  print("largest difference from enumeration:", np.abs(tree_m - brute_m).max())
+`}
+hint="m = psi_t[(i, j)].T @ (phi_t[i] * incoming): sum over the states of node i of its evidence, its incoming messages and the edge potential."
+solution={String.raw`
+  edges = [(0, 1), (0, 2), (1, 3), (1, 4), (2, 5), (2, 6)]           # a binary tree of 7 nodes
+  nbrs = {i: [] for i in range(7)}
+  for a, b in edges:
+      nbrs[a].append(b); nbrs[b].append(a)
+  gtr = np.random.default_rng(6242)
+  phi_t = gtr.uniform(0.2, 1, (7, 2))
+  psi_t = {}
+  for a, b in edges:
+      M = gtr.uniform(0.2, 1, (2, 2)); psi_t[(a, b)] = M; psi_t[(b, a)] = M.T
+
+  def message(i, j):
+      incoming = np.prod([message(k, i) for k in nbrs[i] if k != j], axis=0) if len(nbrs[i]) > 1 else np.ones(2)
+      m = psi_t[(i, j)].T @ (phi_t[i] * incoming)
+      return m / m.sum()
+
+  tree_m = np.array([phi_t[i] * np.prod([message(k, i) for k in nbrs[i]], axis=0) for i in range(7)])
+  tree_m /= tree_m.sum(1, keepdims=True)
+
+  brute_m = np.zeros((7, 2))
+  for xs in itertools.product((0, 1), repeat=7):
+      w = np.prod([phi_t[i, xs[i]] for i in range(7)]) * np.prod([psi_t[(a, b)][xs[a], xs[b]] for a, b in edges])
+      for i in range(7):
+          brute_m[i, xs[i]] += w
+  brute_m /= brute_m.sum(1, keepdims=True)
+  print("largest difference from enumeration:", np.abs(tree_m - brute_m).max())
+`} />
+
+Recursive messages on the seven-node tree reproduce the enumerated marginals exactly. The recursion recomputes some messages several times, which is wasteful but harmless here; a real implementation schedules them, inwards then outwards, so that each of the $2(n - 1)$ messages is computed once. Add a single edge between two leaves and the graph has a loop: the recursion would never terminate, and the iterative loopy version would count some evidence twice.
+
+<Bridge title="Message passing in brains and machines"
+  neuro="Belief propagation has been proposed as a model of cortical computation: local circuits exchanging messages about the probable causes of their inputs, with feedforward and feedback pathways carrying messages in the two directions (Lee and Mumford, 2003; George and Hawkins, 2009). Whether cortex computes anything like exact or loopy messages is open, but the idea that inference can be distributed into local exchanges fits the brain's architecture."
+  ai="Sum-product decoding of low-density parity-check and turbo codes brings mobile phones close to the Shannon limit, and Kalman filtering and smoothing, which you will meet in Week 65, are message passing with Gaussian messages. Graph neural networks generalise the idea by learning the message functions from data.">
+
+On a tree, every marginal is a product of messages, and every message is a local sum.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Message passing is efficient because...", options: ["Each sum involves only neighbouring variables", "It samples", "It ignores evidence", "It uses gradients"], answer: 0, explain: "Step 1." },
+  { q: "On a chain of T variables with K states, the cost of all marginals is about...", options: ["T K²", "K^T", "T²", "K"], answer: 0, explain: "Step 1." },
+  { q: "The forward message αₜ summarises...", options: ["Evidence from steps 1 to t", "Evidence from the future", "The prior only", "Nothing"], answer: 0, explain: "Step 2." },
+  { q: "A marginal on a chain is proportional to...", options: ["αₜ βₜ", "αₜ + βₜ", "αₜ only", "βₜ / αₜ"], answer: 0, explain: "Step 2." },
+  { q: "Messages are normalised at each step to...", options: ["Avoid numerical underflow", "Change the marginals", "Speed convergence", "Remove evidence"], answer: 0, explain: "Step 2." },
+  { q: "Tracking engagement with a chain helps because...", options: ["Neighbouring trials share the hidden state", "Each trial is independent", "Outcomes are noise-free", "It uses more data"], answer: 0, explain: "Step 3." },
+  { q: "On graphs with loops, belief propagation...", options: ["Can double-count evidence and is approximate", "Is exact", "Cannot run", "Is faster"], answer: 0, explain: "Step 4." },
+  { q: "The sum-product algorithm includes as special cases...", options: ["Forward-backward and Kalman smoothing", "k-means", "PCA", "Gradient descent"], answer: 0, explain: "Kschischang and colleagues." },
+]} />
+
+<Flashcards cards={[
+  { front: "Forward message?", back: "$\\alpha_t(x_t) = \\phi_t(x_t)\\sum_{x_{t-1}}\\alpha_{t-1}(x_{t-1})\\psi(x_{t-1}, x_t)$" },
+  { front: "Backward message?", back: "$\\beta_t(x_t) = \\sum_{x_{t+1}}\\psi(x_t, x_{t+1})\\phi_{t+1}(x_{t+1})\\beta_{t+1}(x_{t+1})$" },
+  { front: "Message on a tree?", back: "$m_{i\\to j}(x_j) = \\sum_{x_i}\\phi_i\\psi_{ij}\\prod_{k \\ne j}m_{k\\to i}(x_i)$" },
+  { front: "Loopy belief propagation?", back: "The same updates on graphs with cycles; often useful, not guaranteed exact or convergent." },
+  { front: "Junction tree?", back: "Exact inference on loopy graphs by grouping nodes into cliques arranged as a tree; cost exponential in clique size." },
+]} />
+
+<Predict revisit question="How many operations did message passing need on a long chain, compared with enumeration?" />
+
+<Key title="Before you go">
+<ul>
+<li>Pushing sums inside products turns exponential enumeration into local messages.</li>
+<li>On chains, forward and backward messages give every exact marginal in linear time.</li>
+<li>On trees, the sum-product algorithm does the same in two passes.</li>
+<li>Loops break exactness; junction trees restore it at a price.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Kschischang, Frey and Loeliger (2001), <em>Factor graphs and the sum-product algorithm</em>.</li>
+<li>Ashwood, Roy, Stone, the International Brain Laboratory, Urai, Churchland, Pouget and Pillow (2022), <em>Mice alternate between discrete strategies during perceptual decision-making</em>, Nature Neuroscience 25(2), 201 to 212.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Lee and Mumford proposed that feedback connections in visual cortex carry messages from higher to lower areas. What would a backward message mean for a neuron in V1, and what experiment could test whether V1 responses reflect it?" />

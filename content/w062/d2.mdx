@@ -1,0 +1,278 @@
+export const meta = {
+  title: "Reading independence from a graph: d-separation",
+  intro: "Yesterday's network made claims of independence by leaving out arrows. Which variables are independent, and given what? For any directed graph the answer can be read off without a single probability, using a rule called d-separation that rests on three small patterns: chains, forks and colliders. Today you check each pattern by simulation, implement d-separation for any graph, and apply it to a question that matters for every recording of several neurons: when does a correlation between two neurons mean a connection, and when does conditioning make things worse?",
+  goals: [
+    "State and verify the independence properties of chains, forks and colliders",
+    "Implement a d-separation test using the moralised ancestral graph",
+    "Use d-separation to predict which partial correlations vanish",
+    "Explain how common inputs and selection on a common effect create spurious correlations between neurons",
+  ],
+  plan: [
+    { label: "Three patterns", minutes: 25 },
+    { label: "d-separation for any graph", minutes: 35 },
+    { label: "Correlations between neurons", minutes: 30 },
+    { label: "What graphs can and cannot tell", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "pearl-1986",
+};
+
+<Predict question="Two neurons are completely independent, but both project to a third. You analyse only the trials on which the third neuron fired a burst. Will the two neurons appear correlated on those trials?" />
+
+<Step n={1} title="Three patterns" minutes={25} />
+
+Every path between two variables in a directed graph passes through intermediate nodes of three kinds. In a **chain** $A \to B \to C$, information flows through $B$; observing $B$ blocks it. In a **fork** $A \leftarrow B \to C$, $B$ is a common cause; observing it blocks the path too. In a **collider** $A \to B \leftarrow C$, the path is blocked unless $B$, or one of its descendants, is observed, which opens it: explaining away. Pearl (1986), today's paper, set out how beliefs propagate through such networks and why these patterns govern which pieces of evidence are relevant to which.
+
+<Video id="yDs_q6jKHb0" title="d-separation" by="Pieter Abbeel, UC Berkeley CS188" note="Pieter Abbeel works through d-separation: active and inactive triples (chains, common causes, common effects) and how to check whether any path between two variables is active given the evidence." />
+
+<Figure caption="The three elementary structures, simulated with linear Gaussian variables. Choose a structure and whether B is observed, and compare the correlation with the graph's verdict." credit="Interactive figure by Engram, after Pearl (1988).">
+  <DSeparation />
+</Figure>
+
+<PyCell id="triples" title="Partial correlations in three structures" tests={String.raw`
+  import numpy as np
+  def test_partial():
+      "partial_corr removes the linear effect of the conditioning variable"
+      g = np.random.default_rng(0); z = g.normal(size=5000); a = z + g.normal(size=5000); c = z + g.normal(size=5000)
+      assert abs(partial_corr(a, c, z)) < 0.05 and abs(np.corrcoef(a, c)[0, 1] - 0.5) < 0.05
+  def test_patterns():
+      "chain and fork: dependent until B is given; collider: independent until B is given"
+      for k in ("chain", "fork"):
+          assert abs(results[k][0]) > 0.2 and abs(results[k][1]) < 0.05
+      assert abs(results["collider"][0]) < 0.05 and abs(results["collider"][1]) > 0.2
+`} prompt="Write partial_corr(a, c, b), the correlation of the residuals of a and c after regressing each on b. Then simulate 5,000 samples from each structure and record the correlation of A and C, and their partial correlation given B."
+code={String.raw`
+  import numpy as np
+
+  def partial_corr(a, c, b):
+      B = np.column_stack([np.ones_like(b), b])
+      ra = a - B @ np.linalg.lstsq(B, a, rcond=None)[0]
+      rc = ...
+      return np.corrcoef(ra, rc)[0, 1]
+
+  gt = np.random.default_rng(622)
+  n = 5000
+  results = {}
+  a = gt.normal(size=n); b = a + gt.normal(size=n); c = b + gt.normal(size=n)
+  results["chain"] = (np.corrcoef(a, c)[0, 1], partial_corr(a, c, b))
+  b = gt.normal(size=n); a = b + gt.normal(size=n); c = b + gt.normal(size=n)
+  results["fork"] = (np.corrcoef(a, c)[0, 1], partial_corr(a, c, b))
+  a = gt.normal(size=n); c = gt.normal(size=n); b = a + c + 0.5 * gt.normal(size=n)
+  results["collider"] = (np.corrcoef(a, c)[0, 1], partial_corr(a, c, b))
+  for k, (r0, r1) in results.items():
+      print(f"{k:9s} corr(A, C) = {r0:+.3f}   corr(A, C | B) = {r1:+.3f}")
+`}
+hint="rc = c - B @ np.linalg.lstsq(B, c, rcond=None)[0]."
+solution={String.raw`
+  import numpy as np
+
+  def partial_corr(a, c, b):
+      B = np.column_stack([np.ones_like(b), b])
+      ra = a - B @ np.linalg.lstsq(B, a, rcond=None)[0]
+      rc = c - B @ np.linalg.lstsq(B, c, rcond=None)[0]
+      return np.corrcoef(ra, rc)[0, 1]
+
+  gt = np.random.default_rng(622)
+  n = 5000
+  results = {}
+  a = gt.normal(size=n); b = a + gt.normal(size=n); c = b + gt.normal(size=n)
+  results["chain"] = (np.corrcoef(a, c)[0, 1], partial_corr(a, c, b))
+  b = gt.normal(size=n); a = b + gt.normal(size=n); c = b + gt.normal(size=n)
+  results["fork"] = (np.corrcoef(a, c)[0, 1], partial_corr(a, c, b))
+  a = gt.normal(size=n); c = gt.normal(size=n); b = a + c + 0.5 * gt.normal(size=n)
+  results["collider"] = (np.corrcoef(a, c)[0, 1], partial_corr(a, c, b))
+  for k, (r0, r1) in results.items():
+      print(f"{k:9s} corr(A, C) = {r0:+.3f}   corr(A, C | B) = {r1:+.3f}")
+`} />
+
+The chain and the fork behave alike: $A$ and $C$ are correlated (0.58 and 0.49), and the correlation vanishes once $B$ is accounted for. The collider is the mirror image: $A$ and $C$ are uncorrelated, $-0.005$, but given $B$ their partial correlation is $-0.80$. Knowing that $B = A + C$ is large, a high $A$ implies a lower $C$. The partial correlation is the linear-Gaussian version of conditioning; for non-Gaussian variables, conditional independence is a stronger property than zero partial correlation.
+
+<Step n={2} title="d-separation for any graph" minutes={35} />
+
+Two sets of nodes $X$ and $Y$ are **d-separated** by a set $Z$ if every path between them is blocked: some chain or fork node on it is in $Z$, or some collider on it is neither in $Z$ nor has a descendant in $Z$. If they are d-separated, they are conditionally independent given $Z$ in every distribution that factorises over the graph. Checking every path is tedious, but there is an equivalent test (Lauritzen and colleagues, 1990):
+
+1. Keep only the **ancestors** of $X \cup Y \cup Z$ (including those nodes).
+2. **Moralise**: connect every pair of parents that share a child, then drop the directions.
+3. Delete $Z$. $X$ and $Y$ are d-separated by $Z$ exactly when no path connects them in what remains.
+
+Marrying the parents is how colliders are handled: two causes become linked only if their common effect, or a descendant, survives the first step, which happens only if it is observed.
+
+<PyCell id="dsep" title="A d-separation test" tests={String.raw`
+  import numpy as np
+  def test_cases():
+      "dsep gives the right answers on the experiment network of Day 1"
+      assert dsep({"S"}, {"U"}, set()) and not dsep({"S"}, {"U"}, {"R"})
+      assert not dsep({"S"}, {"U"}, {"B"}) and dsep({"S"}, {"P"}, set())
+      assert dsep({"P"}, {"B"}, {"R"}) and not dsep({"P"}, {"B"}, set())
+`} prompt="Complete dsep(X, Y, Z) for the Day 1 network: find the ancestors of X, Y and Z, moralise, remove Z, and search for a path from X to Y."
+code={String.raw`
+  parents = {"S": [], "A": [], "U": [], "R": ["S", "A", "U"], "P": ["U"], "B": ["R"]}
+
+  def ancestors(nodes_):
+      out, stack = set(nodes_), list(nodes_)
+      while stack:
+          for p in parents[stack.pop()]:
+              if p not in out:
+                  out.add(p); stack.append(p)
+      return out
+
+  def dsep(X, Y, Z):
+      keep = ancestors(X | Y | Z)
+      edges = set()
+      for v in keep:
+          ps = [p for p in parents[v] if p in keep]
+          for p in ps:
+              edges.add(frozenset((p, v)))
+          for i in range(len(ps)):                       # marry parents of a common child
+              for j in range(i + 1, len(ps)):
+                  edges.add(...)
+      reach, stack = set(X), list(X)
+      while stack:
+          u = stack.pop()
+          for e in edges:
+              if u in e:
+                  (w,) = e - {u}
+                  if ... :
+                      reach.add(w); stack.append(w)
+      return not (reach & Y)
+
+  for q in [({"S"}, {"U"}, set()), ({"S"}, {"U"}, {"R"}), ({"S"}, {"U"}, {"B"}), ({"P"}, {"B"}, {"R"})]:
+      print(f"{sorted(q[0])} independent of {sorted(q[1])} given {sorted(q[2]) or 'nothing'}: {dsep(*q)}")
+`}
+hint="edges.add(frozenset((ps[i], ps[j]))); the search condition is w not in reach and w not in Z."
+solution={String.raw`
+  parents = {"S": [], "A": [], "U": [], "R": ["S", "A", "U"], "P": ["U"], "B": ["R"]}
+
+  def ancestors(nodes_):
+      out, stack = set(nodes_), list(nodes_)
+      while stack:
+          for p in parents[stack.pop()]:
+              if p not in out:
+                  out.add(p); stack.append(p)
+      return out
+
+  def dsep(X, Y, Z):
+      keep = ancestors(X | Y | Z)
+      edges = set()
+      for v in keep:
+          ps = [p for p in parents[v] if p in keep]
+          for p in ps:
+              edges.add(frozenset((p, v)))
+          for i in range(len(ps)):                       # marry parents of a common child
+              for j in range(i + 1, len(ps)):
+                  edges.add(frozenset((ps[i], ps[j])))
+      reach, stack = set(X), list(X)
+      while stack:
+          u = stack.pop()
+          for e in edges:
+              if u in e:
+                  (w,) = e - {u}
+                  if w not in reach and w not in Z:
+                      reach.add(w); stack.append(w)
+      return not (reach & Y)
+
+  for q in [({"S"}, {"U"}, set()), ({"S"}, {"U"}, {"R"}), ({"S"}, {"U"}, {"B"}), ({"P"}, {"B"}, {"R"})]:
+      print(f"{sorted(q[0])} independent of {sorted(q[1])} given {sorted(q[2]) or 'nothing'}: {dsep(*q)}")
+`} />
+
+The test agrees with Day 1's enumeration. Stimulus and arousal are independent with nothing observed, and become dependent given the neuron's response, or given the report, a descendant of the response, which also opens the collider. The pupil and the report are dependent, through the path pupil, arousal, response, report, and independent given the response, which blocks the chain. Each verdict took a graph search, with no probabilities at all, and holds for every set of conditional tables that could be attached to this graph.
+
+<Step n={3} title="Correlations between neurons" minutes={30} />
+
+Correlations between simultaneously recorded neurons are often read as evidence of connections ("functional connectivity"). d-separation says when that reading fails. A **common input** (a fork) correlates two unconnected neurons, and conditioning on the input removes the correlation, but only if the input is recorded. **Selection** on a common target (a collider) does the opposite: two independent neurons become correlated within the selected trials.
+
+<PyCell id="neurons" title="Common input and selection" tests={String.raw`
+  import numpy as np
+  def test_fork():
+      "a shared input correlates two unconnected neurons, and conditioning on it removes the correlation"
+      assert r_fork > 0.2 and abs(r_fork_given) < 0.05
+  def test_selection():
+      "two independent neurons become negatively correlated on trials selected for a burst in their common target"
+      assert abs(r_all) < 0.05 and r_selected < -0.15
+`} prompt="Neurons X and Y receive a common input I but are not connected. Compute their correlation and their partial correlation given I. Then make X and Y independent, drive a target neuron T by both, and compute the correlation of X and Y on all trials and on the trials where T is in its top 10%."
+code={String.raw`
+  gn = np.random.default_rng(6221)
+  n = 20000
+  I = gn.normal(size=n)
+  X = 0.6 * I + gn.normal(size=n)
+  Y = 0.6 * I + gn.normal(size=n)
+  r_fork, r_fork_given = np.corrcoef(X, Y)[0, 1], partial_corr(X, Y, I)
+
+  X2, Y2 = gn.normal(size=n), gn.normal(size=n)
+  T = X2 + Y2 + 0.5 * gn.normal(size=n)
+  burst = T > np.percentile(T, 90)
+  r_all = np.corrcoef(X2, Y2)[0, 1]
+  r_selected = ...
+  print(f"common input: corr(X, Y) = {r_fork:+.3f}, given the input {r_fork_given:+.3f}")
+  print(f"common target: corr(X, Y) on all trials {r_all:+.3f}, on burst trials {r_selected:+.3f}")
+`}
+hint="r_selected = np.corrcoef(X2[burst], Y2[burst])[0, 1]."
+solution={String.raw`
+  gn = np.random.default_rng(6221)
+  n = 20000
+  I = gn.normal(size=n)
+  X = 0.6 * I + gn.normal(size=n)
+  Y = 0.6 * I + gn.normal(size=n)
+  r_fork, r_fork_given = np.corrcoef(X, Y)[0, 1], partial_corr(X, Y, I)
+
+  X2, Y2 = gn.normal(size=n), gn.normal(size=n)
+  T = X2 + Y2 + 0.5 * gn.normal(size=n)
+  burst = T > np.percentile(T, 90)
+  r_all = np.corrcoef(X2, Y2)[0, 1]
+  r_selected = np.corrcoef(X2[burst], Y2[burst])[0, 1]
+  print(f"common input: corr(X, Y) = {r_fork:+.3f}, given the input {r_fork_given:+.3f}")
+  print(f"common target: corr(X, Y) on all trials {r_all:+.3f}, on burst trials {r_selected:+.3f}")
+`} />
+
+A shared input with modest weights gives two unconnected neurons a correlation of 0.27, as large as many correlations reported between connected cells, and conditioning on the input removes it entirely. In a real recording the input is usually one of thousands of unrecorded neurons, so the conditioning cannot be done. The second case is subtler. Two neurons with no relation at all are correlated at $-0.57$ on the trials where their common target burst: if one contributed little, the other must have contributed a lot. Any analysis that selects trials on a downstream event, such as a burst, a correct response or a fast reaction, conditions on a collider.
+
+<Step n={4} title="What graphs can and cannot tell" minutes={15} />
+
+d-separation goes from graph to independences. Going backwards, from independences found in data to a graph, is the problem of **structure learning**, and it has a fundamental limit: different graphs can imply exactly the same independences. The chain $A \to B \to C$, the reversed chain $A \leftarrow B \leftarrow C$ and the fork $A \leftarrow B \to C$ all say only that $A$ and $C$ are independent given $B$; they form a **Markov equivalence class**, and observational data cannot tell them apart. The collider $A \to B \leftarrow C$ is different, which is why colliders, when they can be found, fix the direction of arrows. Telling the members of a class apart needs interventions or extra assumptions, the subject of Week 72.
+
+<Bridge title="Independence in brains and machines"
+  neuro="Inferring connectivity from recordings is a central problem of systems neuroscience, and d-separation explains its main traps: unrecorded common inputs make unconnected neurons look connected, and analyses restricted to trials with a particular outcome can create correlations that do not exist. The thousands of unrecorded neurons in any brain area are hidden common causes for every pair that is recorded."
+  ai="The same structure appears as selection bias in machine learning datasets: a dataset of admitted students, or of published papers, is selected on a common effect of its variables, and associations within it can be pure artefacts. Causal discovery algorithms such as PC search for graphs consistent with the independences they find, up to Markov equivalence.">
+
+Observing a cause blocks; observing a common effect connects.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In a chain A → B → C, observing B...", options: ["Makes A and C independent", "Makes them dependent", "Has no effect", "Reverses the arrows"], answer: 0, explain: "Step 1." },
+  { q: "In a fork A ← B → C, A and C are...", options: ["Dependent unless B is observed", "Always independent", "Independent unless B is observed", "Identical"], answer: 0, explain: "Step 1." },
+  { q: "In a collider A → B ← C, observing B...", options: ["Makes A and C dependent", "Makes them independent", "Has no effect", "Removes B"], answer: 0, explain: "Step 1." },
+  { q: "A collider path is also opened by observing...", options: ["A descendant of the collider", "An ancestor of A", "Nothing", "A parent of C only"], answer: 0, explain: "Step 2." },
+  { q: "Moralising a graph means...", options: ["Connecting parents that share a child and dropping directions", "Removing cycles", "Reversing edges", "Deleting leaves"], answer: 0, explain: "Step 2." },
+  { q: "Two neurons correlated because of an unrecorded common input...", options: ["Look connected though they are not", "Must be connected", "Are always independent", "Cannot be recorded"], answer: 0, explain: "Step 3." },
+  { q: "Selecting trials on a common target of two independent neurons...", options: ["Creates a correlation between them", "Removes correlations", "Has no effect", "Makes them identical"], answer: 0, explain: "Step 3." },
+  { q: "A → B → C and A ← B → C are...", options: ["Markov equivalent", "Distinguishable from observational data", "Both colliders", "Different in their independences"], answer: 0, explain: "Step 4." },
+]} />
+
+<Flashcards cards={[
+  { front: "Chain, fork, collider?", back: "Chain and fork: dependent, blocked by observing the middle. Collider: independent, opened by observing the middle or a descendant." },
+  { front: "d-separation?", back: "Every path between X and Y is blocked by Z; implies X ⟂ Y | Z in every distribution that factorises over the graph." },
+  { front: "Moral graph test?", back: "Ancestral subgraph of X ∪ Y ∪ Z, marry co-parents, drop directions, delete Z, check connectivity." },
+  { front: "Markov equivalence?", back: "Graphs with the same independences, such as chains and forks; observational data cannot separate them." },
+  { front: "Selection bias as a collider?", back: "Selecting on a common effect induces dependence between its causes." },
+]} />
+
+<Predict revisit question="Did the two independent neurons appear correlated on trials when their common target burst?" />
+
+<Key title="Before you go">
+<ul>
+<li>Chains and forks are blocked by observing the middle node; colliders are opened by it.</li>
+<li>d-separation reads conditional independences from any directed graph.</li>
+<li>The moral ancestral graph turns d-separation into a connectivity check.</li>
+<li>Common inputs and selection on common effects create spurious correlations between neurons.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Pearl (1986), <em>Fusion, propagation, and structuring in belief networks</em>.</li>
+<li>Lauritzen, Dawid, Larsen and Leimer (1990), <em>Independence properties of directed Markov fields</em>, Networks 20(5), 491 to 505.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A study reports that two recorded neurons are functionally connected because their spike counts correlate across trials. List the graphs that could produce the same correlation, and for each say what extra measurement or experiment would rule it out." />

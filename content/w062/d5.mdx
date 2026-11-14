@@ -1,0 +1,279 @@
+export const meta = {
+  title: "Pairwise maximum entropy models of neural populations",
+  intro: "In 2006 Schneidman, Berry, Segev and Bialek recorded groups of retinal ganglion cells and asked how much of the structure in their joint activity can be explained by pairwise correlations alone. The correlations were weak, a few hundredths, and the independent model looked almost good enough. It was not: it missed the probabilities of common patterns by orders of magnitude, while the maximum entropy model fitted to the same pairwise correlations predicted them closely. Today you reproduce their analysis: fit independent and pairwise models by matching moments, compare their predictions, and then fit a larger population where the partition function is out of reach, using Gibbs sampling as Boltzmann machines do.",
+  goals: [
+    "Fit a pairwise maximum entropy (Ising) model to binary spike patterns by matching moments",
+    "Compare independent and pairwise models on pattern probabilities and synchrony",
+    "Quantify how much of the departure from independence the pairwise model captures",
+    "Fit a larger model by Boltzmann learning with Gibbs-sampled expectations",
+  ],
+  plan: [
+    { label: "Spike words", minutes: 20 },
+    { label: "Fitting by moment matching", minutes: 30 },
+    { label: "What pairwise correlations explain", minutes: 25 },
+    { label: "Boltzmann learning for larger populations", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "schneidman-2006",
+};
+
+<Predict question="Ten neurons have pairwise correlations of only about 0.05. An independent model is fitted to their firing rates. For the pattern in which all ten fire together, will the independent model's predicted probability be roughly right, too low by a factor of ten, or too low by a factor of a thousand or more?" />
+
+<Step n={1} title="Spike words" minutes={20} />
+
+Bin the spike trains of $N$ neurons into short windows, 20 ms in Schneidman and colleagues' study, and write each window as a binary **word** $\boldsymbol\sigma \in \{0, 1\}^N$. With ten neurons there are 1,024 possible words, few enough to estimate each one's frequency from an hour of recording and to compute any model's partition function exactly. The question is how well models with few parameters predict those 1,024 frequencies. The independent model uses $N$ firing rates; the pairwise model adds $N(N - 1)/2$ correlations,
+
+$$
+p(\boldsymbol\sigma) = \frac1Z\exp\left(\sum_ih_i\sigma_i + \sum_{i \lt j}J_{ij}\sigma_i\sigma_j\right),
+$$
+
+the maximum entropy distribution with those rates and correlations (Day 3).
+
+<Video id="XDE9DjpcSdI" title="Nobel Prize lecture: Boltzmann machines" by="Geoffrey Hinton (2024)" note="Geoffrey Hinton on Hopfield nets and Boltzmann machines: binary units with symmetric connections, an energy like the Ising model's, and a learning rule that matches the statistics of the data with those of the model's own samples, the rule used in Step 4." />
+
+The setup cell simulates a "recording": 30,000 bins from ten neurons whose true statistics come from a pairwise model with weak couplings.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import itertools
+  import matplotlib.pyplot as plt
+  N = 10
+  W = np.array(list(itertools.product((0, 1), repeat=N)), dtype=float)       # all 1,024 words
+
+  def model_probs(h, J):
+      E = W @ h + 0.5 * np.einsum("ki,ij,kj->k", W, J, W)
+      E -= E.max()
+      p = np.exp(E)
+      return p / p.sum()
+
+  g0 = np.random.default_rng(625)
+  h_true = g0.uniform(-3.0, -2.2, N)
+  J_true = np.triu(g0.normal(0.25, 0.25, (N, N)), 1); J_true = J_true + J_true.T
+  p_true = model_probs(h_true, J_true)
+  idx = g0.choice(len(W), size=30000, p=p_true)
+  words = W[idx]
+  counts = np.bincount(idx, minlength=len(W))
+  p_emp = counts / counts.sum()
+  rates = words.mean(0)
+  C = np.corrcoef(words.T)
+  print(f"firing probability per bin: {rates.min():.3f} to {rates.max():.3f}")
+  print(f"pairwise correlations: mean {C[np.triu_indices(N, 1)].mean():.3f}, range {C[np.triu_indices(N, 1)].min():.3f} to {C[np.triu_indices(N, 1)].max():.3f}")
+`} />
+
+<Step n={2} title="Fitting by moment matching" minutes={30} />
+
+The log-likelihood of an exponential-family model has a simple gradient: the data average of each statistic minus its model average. For the pairwise model,
+
+$$
+\frac{\partial\ell}{\partial h_i} = \langle\sigma_i\rangle_{\text{data}} - \langle\sigma_i\rangle_{\text{model}},\qquad \frac{\partial\ell}{\partial J_{ij}} = \langle\sigma_i\sigma_j\rangle_{\text{data}} - \langle\sigma_i\sigma_j\rangle_{\text{model}}.
+$$
+
+At the maximum the model's moments equal the data's: maximum likelihood and maximum entropy give the same answer. The likelihood is concave, so gradient ascent finds the unique optimum. With ten neurons the model averages are exact sums over the 1,024 words.
+
+<PyCell id="fit" title="Fitting the pairwise model" tests={String.raw`
+  import numpy as np
+  def test_moments():
+      "the fitted model reproduces the data's firing rates and pairwise products to within 0.002"
+      p = model_probs(h_fit, J_fit)
+      assert np.abs(W.T @ p - rates).max() < 2e-3 and np.abs((W * p[:, None]).T @ W - M2).max() < 2e-3
+`} prompt="Complete the gradient ascent: compute the model's first and second moments from its word probabilities, and step h and J along the differences from the data's moments (keep J symmetric with zero diagonal)."
+code={String.raw`
+  M2 = words.T @ words / len(words)                    # data second moments <s_i s_j>
+  h_fit = np.log(rates / (1 - rates)); J_fit = np.zeros((N, N))
+  for it in range(3000):
+      p = model_probs(h_fit, J_fit)
+      m1 = W.T @ p
+      m2 = ...
+      h_fit += 1.0 * (rates - m1)
+      dJ = 1.0 * (M2 - m2); np.fill_diagonal(dJ, 0)
+      J_fit += ...
+  p_pair = model_probs(h_fit, J_fit)
+  p_ind = np.prod(np.where(W == 1, rates, 1 - rates), axis=1)
+  print(f"largest moment errors: rates {np.abs(W.T @ p_pair - rates).max():.5f}, pairs {np.abs((W * p_pair[:, None]).T @ W - M2).max():.5f}")
+  print(f"couplings: fitted against true, correlation {np.corrcoef(J_fit[np.triu_indices(N, 1)], J_true[np.triu_indices(N, 1)])[0, 1]:.3f}")
+`}
+hint="m2 = (W * p[:, None]).T @ W; J_fit += dJ."
+solution={String.raw`
+  M2 = words.T @ words / len(words)                    # data second moments <s_i s_j>
+  h_fit = np.log(rates / (1 - rates)); J_fit = np.zeros((N, N))
+  for it in range(3000):
+      p = model_probs(h_fit, J_fit)
+      m1 = W.T @ p
+      m2 = (W * p[:, None]).T @ W
+      h_fit += 1.0 * (rates - m1)
+      dJ = 1.0 * (M2 - m2); np.fill_diagonal(dJ, 0)
+      J_fit += dJ
+  p_pair = model_probs(h_fit, J_fit)
+  p_ind = np.prod(np.where(W == 1, rates, 1 - rates), axis=1)
+  print(f"largest moment errors: rates {np.abs(W.T @ p_pair - rates).max():.5f}, pairs {np.abs((W * p_pair[:, None]).T @ W - M2).max():.5f}")
+  print(f"couplings: fitted against true, correlation {np.corrcoef(J_fit[np.triu_indices(N, 1)], J_true[np.triu_indices(N, 1)])[0, 1]:.3f}")
+`} />
+
+After gradient ascent the fitted model reproduces every firing rate and every pairwise product of the data to five decimal places, as maximum entropy requires, and its couplings correlate at 0.97 with the true ones. The likelihood is concave, so there are no local optima to worry about; the only difficulty is computing the model's moments, which here took a sum over 1,024 words per step. Note that the couplings are not the correlations: a pair with a near-zero correlation can have a clearly non-zero coupling, offset by indirect paths through other neurons.
+
+<Step n={3} title="What pairwise correlations explain" minutes={25} />
+
+<Figure caption="The probability that K of 40 neurons fire together, for a pairwise model and for an independent model with the same rates. Weak couplings fatten the tail by orders of magnitude." credit="Interactive figure by Engram, after Schneidman, Berry, Segev and Bialek (2006).">
+  <PairwiseSpikes />
+</Figure>
+
+Schneidman and colleagues summarised the comparison with the **multi-information**, $I_N = S_1 - S_N$, the entropy of the independent model minus the true entropy: the total amount of structure beyond independence. The pairwise model has entropy $S_2$ between them, and the fraction $(S_1 - S_2)/(S_1 - S_N)$ is how much of that structure pairwise correlations account for. In the retina they found about 90%.
+
+<PyCell id="explain" title="Patterns, synchrony and multi-information" tests={String.raw`
+  import numpy as np
+  def test_sync():
+      "the independent model underestimates the probability of 6 or more neurons firing together by more than tenfold; the pairwise model is within a factor of 2"
+      assert sync_emp / sync_ind > 10 and 0.5 < sync_emp / sync_pair < 2
+  def test_fraction():
+      "the pairwise model captures more than 80% of the multi-information"
+      assert frac > 0.8
+`} prompt="Compute the probability of 6 or more neurons firing in the same bin under the data, the independent model and the pairwise model. Then compute the entropies S1 (independent), S2 (pairwise) and SN (the true model, which the simulation lets you know), and the fraction of multi-information captured."
+code={String.raw`
+  k_on = W.sum(1)
+  sync_emp, sync_ind, sync_pair = (p[k_on >= 6].sum() for p in (p_emp, p_ind, p_pair))
+  H = lambda p: -(p[p > 0] * np.log2(p[p > 0])).sum()
+  S1, S2, SN = H(p_ind), H(p_pair), H(p_true)
+  frac = ...
+  print(f"P(6 or more together): data {sync_emp:.2e}, independent {sync_ind:.2e}, pairwise {sync_pair:.2e}")
+  print(f"entropies (bits): independent {S1:.4f}, pairwise {S2:.4f}, true {SN:.4f}; fraction of multi-information captured {frac:.3f}")
+  plt.loglog(p_emp[p_emp > 0], p_ind[p_emp > 0], ".", ms=4, label="independent")
+  plt.loglog(p_emp[p_emp > 0], p_pair[p_emp > 0], ".", ms=4, label="pairwise")
+  plt.plot([1e-5, 1], [1e-5, 1], "k", lw=0.8); plt.xlabel("observed frequency of a word"); plt.ylabel("predicted"); plt.legend(); plt.show()
+`}
+hint="frac = (S1 - S2) / (S1 - SN)."
+solution={String.raw`
+  k_on = W.sum(1)
+  sync_emp, sync_ind, sync_pair = (p[k_on >= 6].sum() for p in (p_emp, p_ind, p_pair))
+  H = lambda p: -(p[p > 0] * np.log2(p[p > 0])).sum()
+  S1, S2, SN = H(p_ind), H(p_pair), H(p_true)
+  frac = (S1 - S2) / (S1 - SN)
+  print(f"P(6 or more together): data {sync_emp:.2e}, independent {sync_ind:.2e}, pairwise {sync_pair:.2e}")
+  print(f"entropies (bits): independent {S1:.4f}, pairwise {S2:.4f}, true {SN:.4f}; fraction of multi-information captured {frac:.3f}")
+  plt.loglog(p_emp[p_emp > 0], p_ind[p_emp > 0], ".", ms=4, label="independent")
+  plt.loglog(p_emp[p_emp > 0], p_pair[p_emp > 0], ".", ms=4, label="pairwise")
+  plt.plot([1e-5, 1], [1e-5, 1], "k", lw=0.8); plt.xlabel("observed frequency of a word"); plt.ylabel("predicted"); plt.legend(); plt.show()
+`} />
+
+In the data, six or more of the ten neurons fire together in 0.17% of bins. The independent model predicts 0.009%, almost twenty times too rare; the pairwise model predicts 0.21%, close to the truth. The scatter plot tells the same story word by word: the independent model's predictions for common multi-spike words fall far below the diagonal, while the pairwise model's lie along it. Pairwise correlations account for 91% of the multi-information. Because the data here came from a pairwise model, the remaining 9% is the cost of estimating from finite data; in the real retina, the missing fraction also includes genuine higher-order structure.
+
+<Step n={4} title="Boltzmann learning for larger populations" minutes={30} />
+
+With 40 neurons there are about $10^{12}$ words and the model averages cannot be summed. Ackley, Hinton and Sejnowski (1985) faced the same problem in **Boltzmann machines** and estimated the model averages from samples: run Gibbs sampling in the current model, measure its moments, and step the parameters along the difference from the data. Keeping a set of sampling chains running between parameter updates, rather than restarting them, makes each step cheap (**persistent contrastive divergence**, Tieleman, 2008).
+
+<PyCell id="boltzmann" title="Fitting 25 neurons with sampled moments" tests={String.raw`
+  import numpy as np
+  def test_corr():
+      "after Boltzmann learning, the model's pairwise correlations track the data's (correlation above 0.85)"
+      assert r_fit > 0.85
+`} prompt="For 25 neurons, data come from a known pairwise model sampled by long Gibbs runs. Complete the learning loop: after a few Gibbs sweeps of the persistent chains, update h and J along the differences between data and chain moments. Then compare the pairwise correlations of the final chains with those of the data."
+code={String.raw`
+  def gibbs_sweeps(S, h, J, sweeps, g):
+      for _ in range(sweeps):
+          for i in range(S.shape[1]):
+              field = h[i] + S @ J[:, i]
+              S[:, i] = (g.random(len(S)) < 1 / (1 + np.exp(-field))).astype(float)
+      return S
+
+  gb = np.random.default_rng(6251)
+  N25 = 25
+  hb = gb.uniform(-2.8, -2.0, N25)
+  Jb = np.triu(gb.normal(0.15, 0.2, (N25, N25)), 1); Jb = Jb + Jb.T
+  data25 = gibbs_sweeps((gb.random((8000, N25)) < 0.1).astype(float), hb, Jb, 60, gb)
+  r_d = data25.mean(0); M_d = data25.T @ data25 / len(data25)
+
+  h_l = np.log(r_d / (1 - r_d)); J_l = np.zeros((N25, N25))
+  chains = (gb.random((3000, N25)) < r_d).astype(float)
+  for it in range(150):
+      chains = gibbs_sweeps(chains, h_l, J_l, 2, gb)
+      r_m = chains.mean(0); M_m = chains.T @ chains / len(chains)
+      h_l += ...
+      dJ = 0.5 * (M_d - M_m); np.fill_diagonal(dJ, 0)
+      J_l += dJ
+  chains = gibbs_sweeps(chains, h_l, J_l, 20, gb)
+  iu = np.triu_indices(N25, 1)
+  corr_data = np.corrcoef(data25.T)[iu]
+  corr_model = np.corrcoef(chains.T)[iu]
+  r_fit = np.corrcoef(corr_data, corr_model)[0, 1]
+  print(f"pairwise correlations, model against data: r = {r_fit:.3f}; mean data correlation {corr_data.mean():.3f}, model {corr_model.mean():.3f}")
+`}
+hint="h_l += 0.5 * (r_d - r_m)."
+solution={String.raw`
+  def gibbs_sweeps(S, h, J, sweeps, g):
+      for _ in range(sweeps):
+          for i in range(S.shape[1]):
+              field = h[i] + S @ J[:, i]
+              S[:, i] = (g.random(len(S)) < 1 / (1 + np.exp(-field))).astype(float)
+      return S
+
+  gb = np.random.default_rng(6251)
+  N25 = 25
+  hb = gb.uniform(-2.8, -2.0, N25)
+  Jb = np.triu(gb.normal(0.15, 0.2, (N25, N25)), 1); Jb = Jb + Jb.T
+  data25 = gibbs_sweeps((gb.random((8000, N25)) < 0.1).astype(float), hb, Jb, 60, gb)
+  r_d = data25.mean(0); M_d = data25.T @ data25 / len(data25)
+
+  h_l = np.log(r_d / (1 - r_d)); J_l = np.zeros((N25, N25))
+  chains = (gb.random((3000, N25)) < r_d).astype(float)
+  for it in range(150):
+      chains = gibbs_sweeps(chains, h_l, J_l, 2, gb)
+      r_m = chains.mean(0); M_m = chains.T @ chains / len(chains)
+      h_l += 0.5 * (r_d - r_m)
+      dJ = 0.5 * (M_d - M_m); np.fill_diagonal(dJ, 0)
+      J_l += dJ
+  chains = gibbs_sweeps(chains, h_l, J_l, 20, gb)
+  iu = np.triu_indices(N25, 1)
+  corr_data = np.corrcoef(data25.T)[iu]
+  corr_model = np.corrcoef(chains.T)[iu]
+  r_fit = np.corrcoef(corr_data, corr_model)[0, 1]
+  print(f"pairwise correlations, model against data: r = {r_fit:.3f}; mean data correlation {corr_data.mean():.3f}, model {corr_model.mean():.3f}")
+`} />
+
+With moments estimated from 3,000 persistent chains, 150 learning steps bring the model's pairwise correlations into line with the data's (r = 0.89 across the 300 pairs), with no partition function ever computed. The match is limited by sampling noise in both the data and the chains, since correlations of a few hundredths are hard to estimate, and the mean model correlation, 0.059 against 0.067, is still slightly low after 150 steps. Real applications run thousands of steps with careful learning rates, or use faster approximations such as pseudo-likelihood.
+
+<Bridge title="Maximum entropy in brains and machines"
+  neuro="Pairwise maximum entropy models have been fitted to the retina, cortex and hippocampus. They capture much of the collective structure of small groups, but for larger populations, higher-order interactions and shared inputs become important (Tkačik and colleagues, 2014; Okun and colleagues, 2015), and some populations appear poised near a critical point. The approach also shows what weak correlations can do: a network-wide pattern that no pair predicts."
+  ai="The Boltzmann machine was one of the first neural networks that learned a probability distribution, with exactly today's learning rule. Restricted Boltzmann machines, stacked into deep belief networks, helped start the deep learning revival in 2006, and the same moment-matching gradients appear in modern energy-based models.">
+
+Weak pairwise correlations, summed over a population, can make collective patterns common.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A spike word is...", options: ["A binary vector of which neurons fired in a time bin", "A spike train", "A firing rate", "A waveform"], answer: 0, explain: "Step 1." },
+  { q: "The pairwise maximum entropy model matches...", options: ["Firing rates and pairwise correlations", "All word probabilities", "Only rates", "Waveforms"], answer: 0, explain: "Step 1." },
+  { q: "The gradient of the log-likelihood for J_ij is...", options: ["Data minus model average of σᵢσⱼ", "The data average", "Zero", "The model average"], answer: 0, explain: "Step 2." },
+  { q: "At the maximum-likelihood solution...", options: ["Model moments equal data moments", "Entropy is zero", "J is zero", "Z is one"], answer: 0, explain: "Step 2." },
+  { q: "Multi-information measures...", options: ["Total structure beyond independence", "Pairwise correlation", "Firing rate", "Coupling strength"], answer: 0, explain: "Step 3." },
+  { q: "Schneidman and colleagues found that pairwise models captured about...", options: ["90% of the multi-information in the retina", "10%", "None", "All of it in every population"], answer: 0, explain: "Step 3." },
+  { q: "For large populations, model averages are estimated by...", options: ["Gibbs sampling", "Enumeration", "PCA", "Bootstrapping"], answer: 0, explain: "Step 4." },
+  { q: "Persistent contrastive divergence keeps...", options: ["Sampling chains running between parameter updates", "The data fixed", "J at zero", "One chain only"], answer: 0, explain: "Step 4." },
+]} />
+
+<Flashcards cards={[
+  { front: "Pairwise maxent model of spikes?", back: "$p(\\boldsymbol\\sigma) \\propto \\exp(\\sum_ih_i\\sigma_i + \\sum_{i \\lt j}J_{ij}\\sigma_i\\sigma_j)$" },
+  { front: "Learning rule?", back: "$\\Delta h_i \\propto \\langle\\sigma_i\\rangle_{\\text{data}} - \\langle\\sigma_i\\rangle_{\\text{model}}$; $\\Delta J_{ij} \\propto \\langle\\sigma_i\\sigma_j\\rangle_{\\text{data}} - \\langle\\sigma_i\\sigma_j\\rangle_{\\text{model}}$." },
+  { front: "Multi-information?", back: "$I_N = S_1 - S_N$; fraction captured by pairs $(S_1 - S_2)/(S_1 - S_N)$." },
+  { front: "Why are synchronous patterns underestimated by independence?", back: "Weak positive correlations among many pairs compound into large effects on joint events." },
+  { front: "Boltzmann machine?", back: "A pairwise energy model, possibly with hidden units, trained by matching data and model statistics." },
+]} />
+
+<Predict revisit question="How badly did the independent model underestimate the most synchronous patterns?" />
+
+<Key title="Before you go">
+<ul>
+<li>Binary spike words can be modelled with rates alone or with rates and pairwise correlations.</li>
+<li>The pairwise maximum entropy model is fitted by matching moments, a concave problem.</li>
+<li>Weak correlations make synchronous patterns far more likely than independence predicts.</li>
+<li>For large populations, sampled moments replace exact sums: Boltzmann learning.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Schneidman, Berry, Segev and Bialek (2006), <em>Weak pairwise correlations imply strongly correlated network states in a neural population</em>.</li>
+<li>Ackley, Hinton and Sejnowski (1985), <em>A learning algorithm for Boltzmann machines</em>, Cognitive Science 9(1), 147 to 169.</li>
+<li>Tkačik, Marre, Amodei, Schneidman, Bialek and Berry (2014), <em>Searching for collective behavior in a large network of sensory neurons</em>, PLoS Computational Biology 10(1), e1003408.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A pairwise model fits ten retinal neurons well. Why might it fail for a hundred neurons from the same retina? Name two kinds of structure it could miss, and how you would detect each." />

@@ -1,0 +1,265 @@
+export const meta = {
+  title: "Markov random fields, the Ising model and maximum entropy",
+  intro: "Not every dependence has a direction. Two neurons that excite each other, neighbouring pixels in an image, spins in a magnet: here an undirected graph is the natural description, and the joint distribution is a product of compatibility functions on cliques, normalised by a partition function. The most famous example, the Ising model, came from physics, and it reappears in neuroscience through a deep principle: of all distributions that match the mean firing rates and pairwise correlations of a population, the least committal is an Ising model. Today you build undirected models, derive the maximum entropy principle, and watch collective order emerge from pairwise couplings.",
+  goals: [
+    "Write an undirected graphical model as a normalised product of clique potentials",
+    "Compute marginals and correlations of a small Ising model by exact enumeration",
+    "Derive the maximum entropy distribution under moment constraints and recognise the Ising model",
+    "Sample a large Ising model by Gibbs sampling and see a phase transition",
+  ],
+  plan: [
+    { label: "Undirected models", minutes: 25 },
+    { label: "Maximum entropy", minutes: 30 },
+    { label: "Exact computation in a small model", minutes: 20 },
+    { label: "Order from pairwise couplings", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "jaynes-1957",
+};
+
+<Predict question="Units on a large grid each prefer, weakly, to agree with their four neighbours, with no preference for either state on their own. As the strength of that preference is increased smoothly, does the fraction of units in the majority state rise smoothly, or does it jump?" />
+
+<Step n={1} title="Undirected models" minutes={25} />
+
+A **Markov random field** (MRF) is an undirected graph with a non-negative **potential** $\psi_C$ on each clique $C$ (a set of mutually connected nodes):
+
+$$
+p(\mathbf x) = \frac{1}{Z}\prod_C\psi_C(\mathbf x_C),\qquad Z = \sum_{\mathbf x}\prod_C\psi_C(\mathbf x_C).
+$$
+
+The independences are simpler than in directed graphs: two sets of nodes are independent given a third set if every path between them passes through it, with no colliders to worry about. In return, the local potentials are not probabilities, and the **partition function** $Z$ couples them all, which is what makes undirected models hard to fit. Writing $\psi_C = e^{-E_C}$ gives an **energy-based model**, $p(\mathbf x) \propto e^{-E(\mathbf x)}$. The **Ising model** for binary units $s_i \in \{-1, +1\}$ has energy
+
+$$
+E(\mathbf s) = -\sum_ih_is_i - \sum_{i \lt j}J_{ij}s_is_j,
+$$
+
+with biases $h_i$ and pairwise couplings $J_{ij}$.
+
+<Video id="BosZK5E_q70" title="Probabilistic ML, lecture 16: graphical models" by="Philipp Hennig, University of Tübingen" note="Philipp Hennig on directed and undirected graphical models, the conditional independences each can express, and factor graphs, which unify them and set up message passing." />
+
+<Step n={2} title="Maximum entropy" minutes={30} />
+
+<Derivation title="The least committal distribution with given moments">
+<div>
+
+Jaynes (1957), today's paper, argued that when all we know about a distribution is the averages of some functions, $E_p[f_k(\mathbf x)] = \mu_k$, we should choose the distribution with the largest **entropy** $H(p) = -\sum_{\mathbf x}p(\mathbf x)\log p(\mathbf x)$ among those that match them: it adds no structure beyond what the constraints force.
+
+</div>
+<div>
+
+Maximise $H(p)$ subject to $\sum_{\mathbf x}p(\mathbf x) = 1$ and the moment constraints, with Lagrange multipliers $\lambda_0$ and $\lambda_k$. Setting the derivative with respect to each $p(\mathbf x)$ to zero gives $-\log p(\mathbf x) - 1 + \lambda_0 + \sum_k\lambda_kf_k(\mathbf x) = 0$, so
+
+$$
+p(\mathbf x) = \frac{1}{Z}\exp\left(\sum_k\lambda_kf_k(\mathbf x)\right).
+$$
+
+</div>
+<div>
+
+If the constraints are the mean of each unit, $E[s_i]$, the solution is a product of independent units. If they also include all pairwise products $E[s_is_j]$, the solution is exactly the Ising model, with $h_i$ and $J_{ij}$ as the multipliers. Matching more statistics adds more terms: triplets give three-way couplings, and so on.
+
+</div>
+</Derivation>
+
+<PyCell id="maxent" title="Independence has the most entropy" tests={String.raw`
+  import numpy as np
+  def test_same_means():
+      "the correlated distribution has the same means as the independent one"
+      assert np.allclose(means(p_corr), means(p_ind))
+  def test_entropy():
+      "the independent distribution has higher entropy than any correlated one with the same means"
+      assert all(entropy(p_ind) > entropy(q) for q in p_others)
+`} prompt="For three binary units with means 0.2, 0.5 and 0.7 (probability of being on), build the independent distribution over the 8 states. Build correlated distributions with the same means by moving probability mass along a direction that leaves all three means unchanged, and check that each has lower entropy."
+code={String.raw`
+  import numpy as np
+  import itertools
+  states = np.array(list(itertools.product((0, 1), repeat=3)))
+  m = np.array([0.2, 0.5, 0.7])
+  p_ind = ...                                            # product of Bernoulli probabilities, one per state
+
+  def means(p):
+      return states.T @ p
+
+  def entropy(p):
+      p = p[p > 0]
+      return -(p * np.log(p)).sum()
+
+  # a direction in the space of distributions that leaves total mass and all three means unchanged
+  d = np.array([1, -1, -1, 1, -1, 1, 1, -1], dtype=float)
+  p_others = [p_ind + t * d for t in (-0.02, 0.01, 0.02, 0.025)]
+  p_corr = p_others[2]
+  print("means:", means(p_ind), means(p_corr))
+  print(f"entropy: independent {entropy(p_ind):.4f}; correlated", [round(float(entropy(q)), 4) for q in p_others])
+`}
+hint="p_ind = np.prod(np.where(states == 1, m, 1 - m), axis=1)."
+solution={String.raw`
+  import numpy as np
+  import itertools
+  states = np.array(list(itertools.product((0, 1), repeat=3)))
+  m = np.array([0.2, 0.5, 0.7])
+  p_ind = np.prod(np.where(states == 1, m, 1 - m), axis=1)   # product of Bernoulli probabilities, one per state
+
+  def means(p):
+      return states.T @ p
+
+  def entropy(p):
+      p = p[p > 0]
+      return -(p * np.log(p)).sum()
+
+  # a direction in the space of distributions that leaves total mass and all three means unchanged
+  d = np.array([1, -1, -1, 1, -1, 1, 1, -1], dtype=float)
+  p_others = [p_ind + t * d for t in (-0.02, 0.01, 0.02, 0.025)]
+  p_corr = p_others[2]
+  print("means:", means(p_ind), means(p_corr))
+  print(f"entropy: independent {entropy(p_ind):.4f}; correlated", [round(float(entropy(q)), 4) for q in p_others])
+`} />
+
+All four alternative distributions have exactly the same three means as the independent one, and every one has lower entropy, from 1.763 to 1.798 nats against 1.804. The direction used to build them changes only the three-way structure, so the alternatives assert a dependence among the units that the means alone give no reason to believe. Maximum entropy forbids that: it adds structure only where a constraint requires it. Fitting a model with measured pairwise correlations is therefore a test, since any structure the data show beyond the Ising model's predictions is evidence of higher-order interactions.
+
+<Step n={3} title="Exact computation in a small model" minutes={20} />
+
+For a handful of units, $Z$ can be computed by summing over all $2^N$ states, and with it every marginal and correlation. This is how small maximum entropy models of neurons are evaluated, and it makes the effect of couplings concrete.
+
+<PyCell id="small_ising" title="An Ising model of eight neurons" tests={String.raw`
+  import numpy as np
+  def test_norm():
+      "probabilities over all 256 states sum to one"
+      assert abs(P8.sum() - 1) < 1e-12
+  def test_effect():
+      "a positive coupling between neurons 0 and 1 raises their correlation above that of an uncoupled pair"
+      assert C8[0, 1] > C8[0, 7] + 0.1
+`} prompt="Enumerate all 256 states of 8 units with values -1 and +1, compute the Ising energy with biases h and couplings J (a symmetric matrix with zero diagonal), the probabilities, and from them the mean of each unit and the correlation matrix."
+code={String.raw`
+  S8 = np.array(list(itertools.product((-1, 1), repeat=8)))
+  h = np.full(8, -0.8)                                   # neurons are mostly silent
+  J = np.zeros((8, 8)); J[0, 1] = J[1, 0] = 0.6; J[2, 3] = J[3, 2] = -0.4
+  E = -(S8 @ h) - 0.5 * np.einsum("ki,ij,kj->k", S8, J, S8)
+  P8 = ...
+  mean8 = S8.T @ P8
+  cov8 = (S8 * P8[:, None]).T @ S8 - np.outer(mean8, mean8)
+  C8 = cov8 / np.sqrt(np.outer(np.diag(cov8), np.diag(cov8)))
+  print("mean of each unit:", np.round(mean8, 3))
+  print(f"correlation 0-1 (coupled +0.6) {C8[0, 1]:.3f}; 2-3 (coupled -0.4) {C8[2, 3]:.3f}; 0-7 (uncoupled) {C8[0, 7]:.3f}")
+`}
+hint="P8 = np.exp(-E) / np.exp(-E).sum()."
+solution={String.raw`
+  S8 = np.array(list(itertools.product((-1, 1), repeat=8)))
+  h = np.full(8, -0.8)                                   # neurons are mostly silent
+  J = np.zeros((8, 8)); J[0, 1] = J[1, 0] = 0.6; J[2, 3] = J[3, 2] = -0.4
+  E = -(S8 @ h) - 0.5 * np.einsum("ki,ij,kj->k", S8, J, S8)
+  P8 = np.exp(-E) / np.exp(-E).sum()
+  mean8 = S8.T @ P8
+  cov8 = (S8 * P8[:, None]).T @ S8 - np.outer(mean8, mean8)
+  C8 = cov8 / np.sqrt(np.outer(np.diag(cov8), np.diag(cov8)))
+  print("mean of each unit:", np.round(mean8, 3))
+  print(f"correlation 0-1 (coupled +0.6) {C8[0, 1]:.3f}; 2-3 (coupled -0.4) {C8[2, 3]:.3f}; 0-7 (uncoupled) {C8[0, 7]:.3f}")
+`} />
+
+The coupled pair has a correlation of 0.34 and the anti-coupled pair $-0.23$, while uncoupled pairs are exactly uncorrelated, because in this model nothing connects them. Couplings also change means: neurons 0 and 1 are more often silent (mean $-0.83$) than uncoupled neurons ($-0.66$), since when both are mostly silent, agreement favours silence. Correlations and couplings are not the same thing: in larger networks, a chain of couplings correlates neurons that are not directly coupled, and inverting correlations into couplings is the hard problem Day 5 tackles.
+
+<Step n={4} title="Order from pairwise couplings" minutes={30} />
+
+For large $N$, $Z$ cannot be computed, but the model can still be sampled. Gibbs sampling (Week 19) needs only each unit's conditional given the others, which in an Ising model depends only on its neighbours: $p(s_i = +1 \mid \text{rest}) = \sigma\left(2(h_i + \sum_jJ_{ij}s_j)\right)$. On a square lattice with uniform coupling $J$ and no field, Onsager showed in 1944 that a **phase transition** occurs at $J_c = \frac12\log(1 + \sqrt2) \approx 0.44$: below it, agreement stays local; above it, one state spreads across the whole lattice.
+
+<Figure caption="Gibbs samples of a 32 by 32 Ising model. Raise the coupling past about 0.44 and local agreement becomes global order." credit="Interactive figure by Engram, after Ising (1925) and Onsager (1944).">
+  <IsingSample />
+</Figure>
+
+<PyCell id="lattice" title="Gibbs sampling a lattice" tests={String.raw`
+  import numpy as np
+  def test_transition():
+      "magnetisation is small below the critical coupling and large above it"
+      assert mag[0.2] < 0.2 and mag[0.7] > 0.8
+`} prompt="Complete the checkerboard Gibbs sampler: update all 'black' squares at once given their neighbours, then all 'white' ones. Run 300 sweeps on a 40 by 40 lattice for couplings 0.2, 0.44 and 0.7, starting from random states, and record the absolute mean state over the last 100 sweeps."
+code={String.raw`
+  def gibbs_lattice(J_, n_side, sweeps, g):
+      s = g.choice([-1, 1], size=(n_side, n_side))
+      colour = (np.add.outer(np.arange(n_side), np.arange(n_side)) % 2).astype(bool)
+      trace = []
+      for _ in range(sweeps):
+          for c in (colour, ~colour):
+              nb = np.roll(s, 1, 0) + np.roll(s, -1, 0) + np.roll(s, 1, 1) + np.roll(s, -1, 1)
+              p_up = ...
+              new = np.where(g.random(s.shape) < p_up, 1, -1)
+              s = np.where(c, new, s)
+          trace.append(abs(s.mean()))
+      return s, np.array(trace)
+
+  gl = np.random.default_rng(623)
+  mag = {}
+  for J_ in (0.2, 0.44, 0.7):
+      _, tr = gibbs_lattice(J_, 40, 300, gl)
+      mag[J_] = tr[-100:].mean()
+  print({k: round(float(v), 3) for k, v in mag.items()})
+`}
+hint="p_up = 1 / (1 + np.exp(-2 * J_ * nb))."
+solution={String.raw`
+  def gibbs_lattice(J_, n_side, sweeps, g):
+      s = g.choice([-1, 1], size=(n_side, n_side))
+      colour = (np.add.outer(np.arange(n_side), np.arange(n_side)) % 2).astype(bool)
+      trace = []
+      for _ in range(sweeps):
+          for c in (colour, ~colour):
+              nb = np.roll(s, 1, 0) + np.roll(s, -1, 0) + np.roll(s, 1, 1) + np.roll(s, -1, 1)
+              p_up = 1 / (1 + np.exp(-2 * J_ * nb))
+              new = np.where(g.random(s.shape) < p_up, 1, -1)
+              s = np.where(c, new, s)
+          trace.append(abs(s.mean()))
+      return s, np.array(trace)
+
+  gl = np.random.default_rng(623)
+  mag = {}
+  for J_ in (0.2, 0.44, 0.7):
+      _, tr = gibbs_lattice(J_, 40, 300, gl)
+      mag[J_] = tr[-100:].mean()
+  print({k: round(float(v), 3) for k, v in mag.items()})
+`} />
+
+At $J = 0.2$ the lattice stays disordered, with an absolute mean state of 0.03; at $J = 0.7$ it is almost uniform, 0.93. At $J = 0.44$, close to the critical point, the value of 0.23 is unstable from run to run: large patches form and dissolve, and 300 sweeps are not enough to settle. That slowing down near the critical point is real, and it is also a warning for samplers in general: Gibbs sampling mixes slowly when variables are strongly coupled, because it changes one unit at a time.
+
+<Bridge title="Energy models in brains and machines"
+  neuro="Hopfield (1982) showed that a network of binary neurons with symmetric connections has an energy function of Ising form, and that its stable states can store memories as attractors (Week 49). Maximum entropy models with the measured rates and correlations have since been fitted to retinal, cortical and hippocampal populations, and some appear to sit close to a critical point, like the lattice at J ≈ 0.44."
+  ai="Boltzmann machines are Ising models with hidden units, trained by matching the statistics of the data, and they were among the first deep generative models. Today's energy-based models and diffusion models keep the same core idea, a probability defined by an energy up to an intractable normalising constant.">
+
+Constrain only what you have measured, and the least committal model is exponential in those measurements.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A Markov random field defines the joint as...", options: ["A normalised product of clique potentials", "A product of conditionals given parents", "A sum of marginals", "A Gaussian"], answer: 0, explain: "Step 1." },
+  { q: "The partition function Z...", options: ["Normalises the product of potentials", "Is a potential", "Is always 1", "Counts cliques"], answer: 0, explain: "Step 1." },
+  { q: "In an undirected graph, A and C are independent given B if...", options: ["Every path between them passes through B", "They share a child", "B is a collider", "They are adjacent"], answer: 0, explain: "Step 1." },
+  { q: "The maximum entropy distribution with given means of binary units is...", options: ["Independent", "Ising with couplings", "Gaussian", "Uniform"], answer: 0, explain: "The derivation." },
+  { q: "Adding pairwise correlation constraints gives...", options: ["The Ising model", "A Gaussian mixture", "An independent model", "A Bayesian network"], answer: 0, explain: "The derivation." },
+  { q: "In a Gibbs sampler for an Ising model, each unit's update depends on...", options: ["Its neighbours and its bias", "All units equally", "Z", "Nothing"], answer: 0, explain: "Step 4." },
+  { q: "The square-lattice Ising model orders above a coupling of about...", options: ["0.44", "0.1", "1", "2"], answer: 0, explain: "Step 4." },
+  { q: "Hopfield networks have an energy of the form of...", options: ["An Ising model", "A Gaussian mixture", "A hidden Markov model", "PCA"], answer: 0, explain: "The bridge." },
+]} />
+
+<Flashcards cards={[
+  { front: "MRF joint?", back: "$p(\\mathbf x) = \\frac1Z\\prod_C\\psi_C(\\mathbf x_C)$" },
+  { front: "Ising energy?", back: "$E(\\mathbf s) = -\\sum_ih_is_i - \\sum_{i \\lt j}J_{ij}s_is_j$, with $p \\propto e^{-E}$." },
+  { front: "Maximum entropy solution?", back: "$p(\\mathbf x) = \\frac1Z\\exp(\\sum_k\\lambda_kf_k(\\mathbf x))$ for constraints on $E[f_k]$." },
+  { front: "Gibbs update for an Ising unit?", back: "$p(s_i = +1 \\mid \\text{rest}) = \\sigma(2(h_i + \\sum_jJ_{ij}s_j))$" },
+  { front: "Onsager's critical coupling?", back: "$J_c = \\frac12\\log(1 + \\sqrt2) \\approx 0.44$ for the square lattice without field." },
+]} />
+
+<Predict revisit question="Did global order rise smoothly with the coupling, or appear suddenly?" />
+
+<Key title="Before you go">
+<ul>
+<li>Undirected models are normalised products of potentials; Z is the hard part.</li>
+<li>Maximum entropy under mean constraints gives independence; adding pairwise constraints gives the Ising model.</li>
+<li>Small models can be enumerated exactly; large ones can be sampled by Gibbs sampling.</li>
+<li>Pairwise couplings can produce sudden collective order: a phase transition.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Jaynes (1957), <em>Information theory and statistical mechanics</em>.</li>
+<li>Hopfield (1982), <em>Neural networks and physical systems with emergent collective computational abilities</em>, PNAS 79(8), 2554 to 2558.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="The maximum entropy principle says to assume nothing beyond the measured statistics. Is that a statement about the brain, about the data, or about the scientist? Write a short argument for one of these readings." />
