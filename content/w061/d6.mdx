@@ -1,0 +1,245 @@
+export const meta = {
+  title: "Forge: Week 61 challenge, quiz and deep read",
+  intro: "This week went beyond PCA: factor analysis for shared and private variability, ICA for unmixing, NMF for parts, and t-SNE and UMAP for neighbourhoods, with a long look at how embeddings mislead. Today's challenge asks which linear method gives the best low-dimensional summary of a population for decoding behaviour, and then chooses the rank of an NMF by holding out entries of the data, a cross-validation trick that works for any factorisation. Then the quiz, and a critique of the t-SNE paper.",
+  goals: [
+    "Compare PCA and factor analysis latents as summaries for decoding behaviour",
+    "Choose the rank of a non-negative factorisation by held-out entries",
+    "Derive the factor-analysis posterior and prove that Gaussian sources are unidentifiable",
+    "Critique the t-SNE paper in the light of what came after",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "van-der-maaten-2008",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. A neighbour distribution is uniform over 20 points. What is its perplexity?
+2. A neuron has shared variance 0.6 and private variance 1.4. What is its percent shared variance?
+3. A uniform random variable on [−√3, √3] has unit variance. What is its excess kurtosis?
+
+<PyCell code={String.raw`
+  import numpy as np
+  p = np.full(20, 1 / 20)
+  print("1.", round(float(np.exp(-(p * np.log(p)).sum())), 3))
+  print("2.", 100 * 0.6 / (0.6 + 1.4), "%")
+  u = np.linspace(-np.sqrt(3), np.sqrt(3), 200001)
+  print("3.", round(float(np.mean(u ** 4) - 3), 3), "(exactly -1.2)")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: which summary of the population?** Thirty neurons share three latent variables, one of which is the animal's running speed; the neurons differ widely in private noise. Summarise the population in three dimensions with PCA and with factor analysis (the posterior means of the factors), and decode running speed from each summary on held-out trials.
+
+<PyCell id="partA" title="Part A: PCA against factor analysis for decoding" tests={String.raw`
+  import numpy as np
+  def test_decode():
+      "speed is decoded better from the factor-analysis latents than from the principal components"
+      assert r2_fa > r2_pca + 0.05 and r2_fa > 0.7
+`} prompt="Fit factor analysis with three factors on the 400 training trials and compute the posterior means E[z | x] = beta (x - mu) for training and test trials. Fit a linear regression from each three-dimensional summary to speed on the training trials and compute R squared on the test trials."
+code={String.raw`
+  import numpy as np
+  gA = np.random.default_rng(616)
+  n, d = 600, 30
+  speed = gA.normal(size=n)
+  Zlat = np.column_stack([speed, gA.normal(size=(n, 2))])
+  L_true = gA.normal(size=(d, 3))
+  psi = gA.uniform(0.2, 1.0, d); psi[gA.choice(d, 6, replace=False)] = 15.0       # six very noisy neurons
+  X = Zlat @ L_true.T + gA.normal(size=(n, d)) * np.sqrt(psi)
+  tr, te = np.arange(400), np.arange(400, 600)
+
+  def fa_em(X, q, iters=500):
+      n, d = X.shape; Xc = X - X.mean(0); S = Xc.T @ Xc / n
+      L = np.random.default_rng(0).normal(size=(d, q)); Psi = np.diag(S).copy()
+      for _ in range(iters):
+          beta = L.T @ np.linalg.inv(L @ L.T + np.diag(Psi))
+          Ezz = np.eye(q) - beta @ L + beta @ S @ beta.T
+          L = S @ beta.T @ np.linalg.inv(Ezz)
+          Psi = np.maximum(np.diag(S - L @ beta @ S), 1e-6)
+      return L, Psi
+
+  def r2_linear(Ftr, ytr, Fte, yte):
+      A = np.column_stack([np.ones(len(Ftr)), Ftr]); w = np.linalg.lstsq(A, ytr, rcond=None)[0]
+      p = np.column_stack([np.ones(len(Fte)), Fte]) @ w
+      return 1 - np.mean((yte - p) ** 2) / np.var(yte)
+
+  mu = X[tr].mean(0)
+  Vt = np.linalg.svd(X[tr] - mu, full_matrices=False)[2][:3]
+  r2_pca = r2_linear((X[tr] - mu) @ Vt.T, speed[tr], (X[te] - mu) @ Vt.T, speed[te])
+  L_fa, Psi_fa = fa_em(X[tr], 3)
+  beta = ...
+  Ztr, Zte = ..., ...
+  r2_fa = r2_linear(Ztr, speed[tr], Zte, speed[te])
+  print(f"decoding speed from 3 dimensions, test R squared: PCA {r2_pca:.3f}, factor analysis {r2_fa:.3f}")
+`}
+hint="beta = L_fa.T @ np.linalg.inv(L_fa @ L_fa.T + np.diag(Psi_fa)); Ztr, Zte = (X[tr] - mu) @ beta.T, (X[te] - mu) @ beta.T."
+solution={String.raw`
+  import numpy as np
+  gA = np.random.default_rng(616)
+  n, d = 600, 30
+  speed = gA.normal(size=n)
+  Zlat = np.column_stack([speed, gA.normal(size=(n, 2))])
+  L_true = gA.normal(size=(d, 3))
+  psi = gA.uniform(0.2, 1.0, d); psi[gA.choice(d, 6, replace=False)] = 15.0       # six very noisy neurons
+  X = Zlat @ L_true.T + gA.normal(size=(n, d)) * np.sqrt(psi)
+  tr, te = np.arange(400), np.arange(400, 600)
+
+  def fa_em(X, q, iters=500):
+      n, d = X.shape; Xc = X - X.mean(0); S = Xc.T @ Xc / n
+      L = np.random.default_rng(0).normal(size=(d, q)); Psi = np.diag(S).copy()
+      for _ in range(iters):
+          beta = L.T @ np.linalg.inv(L @ L.T + np.diag(Psi))
+          Ezz = np.eye(q) - beta @ L + beta @ S @ beta.T
+          L = S @ beta.T @ np.linalg.inv(Ezz)
+          Psi = np.maximum(np.diag(S - L @ beta @ S), 1e-6)
+      return L, Psi
+
+  def r2_linear(Ftr, ytr, Fte, yte):
+      A = np.column_stack([np.ones(len(Ftr)), Ftr]); w = np.linalg.lstsq(A, ytr, rcond=None)[0]
+      p = np.column_stack([np.ones(len(Fte)), Fte]) @ w
+      return 1 - np.mean((yte - p) ** 2) / np.var(yte)
+
+  mu = X[tr].mean(0)
+  Vt = np.linalg.svd(X[tr] - mu, full_matrices=False)[2][:3]
+  r2_pca = r2_linear((X[tr] - mu) @ Vt.T, speed[tr], (X[te] - mu) @ Vt.T, speed[te])
+  L_fa, Psi_fa = fa_em(X[tr], 3)
+  beta = L_fa.T @ np.linalg.inv(L_fa @ L_fa.T + np.diag(Psi_fa))
+  Ztr, Zte = (X[tr] - mu) @ beta.T, (X[te] - mu) @ beta.T
+  r2_fa = r2_linear(Ztr, speed[tr], Zte, speed[te])
+  print(f"decoding speed from 3 dimensions, test R squared: PCA {r2_pca:.3f}, factor analysis {r2_fa:.3f}")
+`} />
+
+From three principal components, speed is decoded with a test R squared of 0.69; from three factor-analysis latents, 0.97. The six very noisy neurons have the largest variances, so PCA devotes much of its three dimensions to their private noise, which carries no information about speed. Factor analysis attributes that variance to $\Psi$, and its posterior mean weights each neuron by its reliability, through the $\Psi^{-1}$ hidden in $\beta$. The two would agree if all neurons were equally noisy, which is never true of real recordings. Santhanam and colleagues found the same advantage for decoding reach targets.
+
+**Part B: choosing the rank of NMF by held-out entries.** There is no test set in a single movie, but there are held-out entries: hide a random 10% of the matrix, fit NMF to the rest with a mask, and measure the error on the hidden entries. Too low a rank cannot reconstruct them; too high a rank fits noise in the visible entries and predicts the hidden ones worse. The masked updates are $H \leftarrow H \odot \frac{W^\top(M \odot X)}{W^\top(M \odot WH)}$ and the same for $W$, with $M$ the mask of visible entries.
+
+<PyCell id="partB" title="Part B: rank by held-out entries" tests={String.raw`
+  import numpy as np
+  def test_rank():
+      "the parsimonious choice by held-out error is the true rank, 4"
+      assert best_rank == 4
+`} prompt="Complete masked_nmf, then for ranks 1 to 7 fit it with 10% of entries hidden and record the mean squared error on the hidden entries. Choose the smallest rank whose error is within 15% of the lowest."
+code={String.raw`
+  gB = np.random.default_rng(6161)
+  W0 = gB.exponential(1.0, (200, 4)) * (gB.random((200, 4)) < 0.3)
+  H0 = gB.exponential(1.0, (4, 60))
+  Xnmf = W0 @ H0 + 0.3 * gB.exponential(1.0, (200, 60))
+  mask = gB.random(Xnmf.shape) > 0.1                     # True where visible
+
+  def masked_nmf(X, M, k, seed, iters=500):
+      g = np.random.default_rng(seed)
+      W = g.uniform(0.1, 1, (X.shape[0], k)); H = g.uniform(0.1, 1, (k, X.shape[1]))
+      MX = M * X
+      for _ in range(iters):
+          H *= (W.T @ MX) / (W.T @ (M * (W @ H)) + 1e-12)
+          W *= ...
+      return W, H
+
+  heldout_err = {}
+  for k in range(1, 8):
+      W, H = masked_nmf(Xnmf, mask, k, seed=k)
+      heldout_err[k] = np.mean((Xnmf - W @ H)[~mask] ** 2)
+  lowest = min(heldout_err.values())
+  best_rank = min(k for k in heldout_err if heldout_err[k] <= 1.15 * lowest)   # smallest rank within 15% of the best
+  print("held-out error by rank:", {k: round(float(v), 4) for k, v in heldout_err.items()}, "-> rank", best_rank)
+`}
+hint="W *= (MX @ H.T) / ((M * (W @ H)) @ H.T + 1e-12)."
+solution={String.raw`
+  gB = np.random.default_rng(6161)
+  W0 = gB.exponential(1.0, (200, 4)) * (gB.random((200, 4)) < 0.3)
+  H0 = gB.exponential(1.0, (4, 60))
+  Xnmf = W0 @ H0 + 0.3 * gB.exponential(1.0, (200, 60))
+  mask = gB.random(Xnmf.shape) > 0.1                     # True where visible
+
+  def masked_nmf(X, M, k, seed, iters=500):
+      g = np.random.default_rng(seed)
+      W = g.uniform(0.1, 1, (X.shape[0], k)); H = g.uniform(0.1, 1, (k, X.shape[1]))
+      MX = M * X
+      for _ in range(iters):
+          H *= (W.T @ MX) / (W.T @ (M * (W @ H)) + 1e-12)
+          W *= (MX @ H.T) / ((M * (W @ H)) @ H.T + 1e-12)
+      return W, H
+
+  heldout_err = {}
+  for k in range(1, 8):
+      W, H = masked_nmf(Xnmf, mask, k, seed=k)
+      heldout_err[k] = np.mean((Xnmf - W @ H)[~mask] ** 2)
+  lowest = min(heldout_err.values())
+  best_rank = min(k for k in heldout_err if heldout_err[k] <= 1.15 * lowest)   # smallest rank within 15% of the best
+  print("held-out error by rank:", {k: round(float(v), 4) for k, v in heldout_err.items()}, "-> rank", best_rank)
+`} />
+
+Held-out error falls steeply up to rank 4, from 1.60 to 0.12, and then flattens: ranks 5 to 7 lie within a few per cent of each other and of rank 4, with rank 5 nominally lowest by less than the run-to-run variation of NMF itself. The rule of taking the smallest rank close to the best chooses 4, the true number of parts. The same masked-entry trick, sometimes called bi-cross-validation or entry-wise cross-validation, works for PCA, factor analysis and any low-rank model, and it is the honest way to choose a rank when there is only one dataset.
+
+**Part C (written).** Answer in your journal. First, in Part A, the principal components and the factor-analysis latents span three-dimensional spaces. Explain why one predicts speed better, and when the two would give the same answer. Second, describe how you would hold out entries to choose the number of factors in factor analysis, and why holding out whole neurons would test something different.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The factor-analysis posterior" task="With $\mathbf z \sim \mathcal N(\mathbf 0, I)$ and $\mathbf x = L\mathbf z + \boldsymbol\epsilon$, $\boldsymbol\epsilon \sim \mathcal N(\mathbf 0, \Psi)$ (zero mean for simplicity), show that $E[\mathbf z \mid \mathbf x] = L^\top(LL^\top + \Psi)^{-1}\mathbf x$ and $\text{Cov}(\mathbf z \mid \mathbf x) = I - L^\top(LL^\top + \Psi)^{-1}L$.">
+
+$(\mathbf z, \mathbf x)$ is jointly Gaussian with $\text{Cov}(\mathbf z) = I$, $\text{Cov}(\mathbf x) = LL^\top + \Psi$ and $\text{Cov}(\mathbf z, \mathbf x) = E[\mathbf z(L\mathbf z + \boldsymbol\epsilon)^\top] = L^\top$.
+
+For jointly Gaussian vectors, $E[\mathbf z \mid \mathbf x] = \text{Cov}(\mathbf z, \mathbf x)\text{Cov}(\mathbf x)^{-1}\mathbf x$ and $\text{Cov}(\mathbf z \mid \mathbf x) = \text{Cov}(\mathbf z) - \text{Cov}(\mathbf z, \mathbf x)\text{Cov}(\mathbf x)^{-1}\text{Cov}(\mathbf x, \mathbf z)$ (Week 48).
+
+Substituting gives the result, with $\beta = L^\top(LL^\top + \Psi)^{-1}$. The posterior covariance does not depend on $\mathbf x$, and $E[\mathbf z\mathbf z^\top \mid \mathbf x] = \text{Cov} + \beta\mathbf x\mathbf x^\top\beta^\top$, whose average over the data is the $I - \beta L + \beta S\beta^\top$ of Day 1.
+
+</Prove>
+
+<Prove title="2. Gaussian sources cannot be unmixed" task="Let $\mathbf s \sim \mathcal N(\mathbf 0, I)$ and $\mathbf x = A\mathbf s$. Show that for any orthogonal $R$, the sources $\mathbf s' = R\mathbf s$ with mixing $A' = AR^\top$ produce exactly the same distribution of $\mathbf x$, so no method can tell $A$ from $A'$.">
+
+First, $A'\mathbf s' = AR^\top R\mathbf s = A\mathbf s = \mathbf x$, so the mixtures are identical sample by sample.
+
+Second, $\mathbf s' = R\mathbf s$ is Gaussian with covariance $RIR^\top = I$, so $\mathbf s'$ has exactly the same distribution as $\mathbf s$: its components are again independent standard Gaussians.
+
+So the pairs $(A, \mathbf s)$ and $(AR^\top, R\mathbf s)$ are equally valid explanations of any dataset, and ICA cannot choose between them. For non-Gaussian sources, $R\mathbf s$ has independent components only when $R$ is a permutation with signs (the Darmois-Skitovich theorem), which is why ICA works then.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 61 quiz (15 questions)" questions={[
+  { q: "Factor analysis differs from PCA by modelling...", options: ["Separate private noise for each neuron", "Nonlinear structure", "Non-negativity", "Independence"], answer: 0, explain: "Day 1." },
+  { q: "Factor loadings are identified only up to...", options: ["Rotation", "Sign", "Nothing", "Scale"], answer: 0, explain: "Day 1." },
+  { q: "Percent shared variance compares...", options: ["Shared variance with total variance per neuron", "Two neurons", "Training and test", "Factors with each other"], answer: 0, explain: "Day 1." },
+  { q: "After whitening, ICA must still find...", options: ["A rotation", "A scale", "A mean", "A rank"], answer: 0, explain: "Day 2." },
+  { q: "ICA cannot separate...", options: ["Two Gaussian sources", "Sparse sources", "Uniform sources", "A sine and a sawtooth"], answer: 0, explain: "Day 2." },
+  { q: "Blink artefacts are usually identified by...", options: ["High kurtosis and frontal distribution", "Low variance", "Gaussianity", "High frequency"], answer: 0, explain: "Day 2." },
+  { q: "NMF requires...", options: ["Non-negative factors", "Orthogonal factors", "Independent factors", "Gaussian noise"], answer: 0, explain: "Day 3." },
+  { q: "On a movie of cells, NMF components resemble...", options: ["Single cells", "Signed mixtures of cells", "Noise", "Frames"], answer: 0, explain: "Day 3." },
+  { q: "Neuropil in NMF should be handled with...", options: ["A background component", "More iterations", "PCA first", "Nothing"], answer: 0, explain: "Day 3." },
+  { q: "t-SNE's perplexity sets...", options: ["The effective number of neighbours", "The output dimension", "The number of clusters", "The learning rate"], answer: 0, explain: "Day 4." },
+  { q: "t-SNE uses heavy-tailed similarities in the embedding to...", options: ["Relieve crowding", "Speed it up", "Preserve distances", "Remove noise"], answer: 0, explain: "Day 4." },
+  { q: "Cluster sizes in t-SNE plots...", options: ["Are not reliable", "Equal the true spreads", "Are proportional to counts", "Are zero"], answer: 0, explain: "Day 4." },
+  { q: "UMAP builds its embedding from...", options: ["A k-nearest-neighbour graph", "A covariance matrix", "A tree", "A mixture"], answer: 0, explain: "Day 5." },
+  { q: "Embeddings of pure noise at small perplexity can show...", options: ["Apparent clusters", "Nothing", "A ring", "A grid"], answer: 0, explain: "Day 5." },
+  { q: "Rank for NMF can be chosen by...", options: ["Error on held-out entries", "Training error", "The number of pixels", "Kurtosis"], answer: 0, explain: "Part B." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give van der Maaten and Hinton (2008) its third pass and write your critique under the five headings. Focus on one question: **what did t-SNE solve, and what problems did it create?** Consider the crowding problem and the argument for a Student t distribution in the embedding; the choice of an asymmetric KL divergence and what it implies for local and global structure (Day 4); the role of perplexity and of optimisation tricks such as early exaggeration; the comparisons with Sammon mapping, Isomap and LLE on MNIST and other datasets, and how they were judged; and how the method has since been misused, from reading cluster sizes to inferring cell types from islands (Day 5). End with the claim about neural data that you would be willing to support with a t-SNE plot, and the claim you would not.
+
+<Callout kind="research">
+
+Gardner and colleagues (2022) showed that grid-cell population activity lies on a torus, using persistent homology rather than relying on an embedding. Simulate a population of grid cells with two phases (a torus) and of head-direction cells (a ring), embed both with t-SNE and with PCA, and then compute a simple topological summary, such as the number of holes in a nearest-neighbour graph at several scales. Which method reveals the topology, and which hides it?
+
+</Callout>
+
+<Key title="Week 61 review checklist">
+<ul>
+<li>I can fit factor analysis by EM and explain how it differs from PCA.</li>
+<li>I can unmix recordings with FastICA and state its ambiguities and limits.</li>
+<li>I can factorise non-negative data with NMF and choose its rank by held-out entries.</li>
+<li>I can implement t-SNE and explain what it preserves.</li>
+<li>I can recognise and test for the ways neighbour embeddings mislead.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then write the methods paragraph you would want to read in a paper that uses a nonlinear embedding of neural data: what must it state for a reader to judge the figure?" />

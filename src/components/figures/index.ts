@@ -276,3 +276,8 @@ export { GmmEm } from "./gmm-em";
 export { ChooseK } from "./choose-k";
 export { LinkageRings } from "./linkage-rings";
 export { WaveformClusters } from "./waveform-clusters";
+export { FaPca } from "./fa-pca";
+export { IcaMixing } from "./ica-mixing";
+export { NmfParts } from "./nmf-parts";
+export { TsnePerplexity } from "./tsne-perplexity";
+export { EmbeddingDistortion } from "./embedding-distortion";

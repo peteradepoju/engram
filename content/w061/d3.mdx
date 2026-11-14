@@ -1,0 +1,262 @@
+export const meta = {
+  title: "Non-negative matrix factorisation: parts that add up",
+  intro: "Firing rates, fluorescence, pixel intensities and spectral power are never negative, yet PCA and ICA describe them with components that are. Non-negative matrix factorisation insists that both the components and their weights be non-negative, so data can only be built by adding parts, never by cancelling them. Lee and Seung showed in 1999 that this one constraint makes the factors look like parts: facial features, topics, and, in calcium imaging, the footprints of individual cells. Today you implement NMF with multiplicative updates, use it to find cells in an imaging movie, and meet its limits.",
+  goals: [
+    "Write NMF as a constrained factorisation and derive the multiplicative updates",
+    "Implement NMF and recover cell footprints and activity from a calcium imaging movie",
+    "Compare NMF with PCA on non-negative data",
+    "Handle a background component and recognise that NMF solutions are not unique",
+  ],
+  plan: [
+    { label: "Parts and wholes", minutes: 20 },
+    { label: "Multiplicative updates", minutes: 30 },
+    { label: "Cells in a movie", minutes: 30 },
+    { label: "Background and uniqueness", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "lee-seung-1999",
+};
+
+<Predict question="A movie contains four cells that flash independently. PCA with four components and NMF with four components are both applied. Which one returns components that each look like a single cell?" />
+
+<Step n={1} title="Parts and wholes" minutes={20} />
+
+Arrange a calcium imaging movie as a matrix $X$ with one row per frame and one column per pixel. NMF approximates it as
+
+$$
+X \approx WH,\qquad W \ge 0,\ H \ge 0,
+$$
+
+with $W$ ($T \times k$) holding the activity of $k$ components over time and $H$ ($k \times P$) their spatial footprints. Because nothing can be subtracted, each frame is a sum of footprints scaled by non-negative activities, which is exactly how a movie of cells is made. Lee and Seung (1999), today's paper, contrasted NMF with PCA and vector quantisation on images of faces: PCA found holistic "eigenfaces" with positive and negative parts, while NMF found localised parts such as noses and eyebrows. The same constraint underlies the cell-finding methods used in calcium imaging today, such as CNMF (Pnevmatikakis and colleagues, 2016).
+
+<Video id="kgd40iDT8yY" title="Computational linear algebra 2: topic modelling with SVD and NMF" by="Rachel Thomas, fast.ai" note="Rachel Thomas factorises a matrix of word counts with the SVD and with NMF and compares the topics they find; the non-negative factors are easier to interpret as parts." />
+
+<Figure caption="A one-dimensional imaging movie built from three cells. PCA components are orthogonal and signed; NMF components are non-negative and, at the right rank, are the cells." credit="Interactive figure by Engram, after Lee and Seung (1999).">
+  <NmfParts />
+</Figure>
+
+<Step n={2} title="Multiplicative updates" minutes={30} />
+
+<Derivation title="Gradient descent with a clever step size">
+<div>
+
+Minimise $\lVert X - WH\rVert_F^2$ over $H \ge 0$ with $W$ fixed. The gradient with respect to $H$ is $2(W^\top WH - W^\top X)$, so gradient descent with a step $\eta_{kj}$ for each entry would be $H_{kj} \leftarrow H_{kj} + \eta_{kj}\left[(W^\top X)_{kj} - (W^\top WH)_{kj}\right]$.
+
+</div>
+<div>
+
+Lee and Seung (2001) chose the step size $\eta_{kj} = H_{kj}/(W^\top WH)_{kj}$, which turns the update into a multiplication:
+
+$$
+H \leftarrow H \odot \frac{W^\top X}{W^\top WH},\qquad W \leftarrow W \odot \frac{XH^\top}{WHH^\top},
+$$
+
+with $\odot$ and the fraction taken element by element.
+
+</div>
+<div>
+
+Every factor in the update is non-negative, so non-negativity is kept automatically, with no projection. They proved that the error never increases. The updates are simple but can be slow, and an entry that reaches zero stays at zero, so initialisation matters.
+
+</div>
+</Derivation>
+
+<Step n={3} title="Cells in a movie" minutes={30} />
+
+<PyCell id="nmf" title="NMF by multiplicative updates" tests={String.raw`
+  import numpy as np
+  def test_monotone():
+      "the reconstruction error never increases"
+      assert all(b <= a * (1 + 1e-9) for a, b in zip(nmf_err, nmf_err[1:]))
+  def test_nonneg():
+      "both factors are non-negative"
+      assert (W_nmf >= 0).all() and (H_nmf >= 0).all()
+  def test_cells():
+      "every true footprint is matched by an NMF component with correlation above 0.9"
+      assert match_nmf.min() > 0.9
+`} prompt="Complete nmf(X, k, g, iters), alternating the H and W multiplicative updates and recording the squared error. Factorise a 20 by 20 pixel movie of 300 frames containing four cells, and match each true footprint to its best component."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  gn = np.random.default_rng(613)
+  yy, xx = np.mgrid[0:20, 0:20]
+  centres = [(5, 6), (6, 12), (13, 7), (12, 13)]
+  foot = np.array([np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * 2.5 ** 2)).ravel() for cy, cx in centres])
+  spk = (gn.random((300, 4)) < 0.04) * gn.uniform(1, 3, (300, 4))
+  common = (gn.random(300) < 0.03) * gn.uniform(1, 3, 300)
+  spk[:, :3] += common[:, None]                      # three cells sometimes fire together
+  act = np.array([np.convolve(spk[:, i], np.exp(-np.arange(40) / 8))[:300] for i in range(4)]).T
+  movie = act @ foot + 0.05 * np.abs(gn.normal(size=(300, 400)))
+
+  def nmf(X, k, g, iters=400):
+      W = g.uniform(0.1, 1, (X.shape[0], k)); H = g.uniform(0.1, 1, (k, X.shape[1]))
+      err = []
+      for _ in range(iters):
+          H *= ...
+          W *= ...
+          err.append(np.sum((X - W @ H) ** 2))
+      return W, H, err
+
+  def best_match(true_rows, comps):
+      C = np.corrcoef(np.vstack([true_rows, comps]))[:len(true_rows), len(true_rows):]
+      return C.max(1)
+
+  W_nmf, H_nmf, nmf_err = nmf(movie, 4, gn)
+  match_nmf = best_match(foot, H_nmf)
+  print(f"relative error {nmf_err[-1] / np.sum(movie ** 2):.4f}; footprint matches {np.round(match_nmf, 3)}")
+  fig, ax = plt.subplots(2, 4, figsize=(8, 4))
+  for i in range(4):
+      ax[0, i].imshow(foot[i].reshape(20, 20)); ax[1, i].imshow(H_nmf[i].reshape(20, 20))
+      ax[0, i].axis("off"); ax[1, i].axis("off")
+  ax[0, 0].set_title("true", loc="left"); ax[1, 0].set_title("NMF", loc="left"); plt.show()
+`}
+hint="H *= (W.T @ X) / (W.T @ W @ H + 1e-12); W *= (X @ H.T) / (W @ H @ H.T + 1e-12)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  gn = np.random.default_rng(613)
+  yy, xx = np.mgrid[0:20, 0:20]
+  centres = [(5, 6), (6, 12), (13, 7), (12, 13)]
+  foot = np.array([np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * 2.5 ** 2)).ravel() for cy, cx in centres])
+  spk = (gn.random((300, 4)) < 0.04) * gn.uniform(1, 3, (300, 4))
+  common = (gn.random(300) < 0.03) * gn.uniform(1, 3, 300)
+  spk[:, :3] += common[:, None]                      # three cells sometimes fire together
+  act = np.array([np.convolve(spk[:, i], np.exp(-np.arange(40) / 8))[:300] for i in range(4)]).T
+  movie = act @ foot + 0.05 * np.abs(gn.normal(size=(300, 400)))
+
+  def nmf(X, k, g, iters=400):
+      W = g.uniform(0.1, 1, (X.shape[0], k)); H = g.uniform(0.1, 1, (k, X.shape[1]))
+      err = []
+      for _ in range(iters):
+          H *= (W.T @ X) / (W.T @ W @ H + 1e-12)
+          W *= (X @ H.T) / (W @ H @ H.T + 1e-12)
+          err.append(np.sum((X - W @ H) ** 2))
+      return W, H, err
+
+  def best_match(true_rows, comps):
+      C = np.corrcoef(np.vstack([true_rows, comps]))[:len(true_rows), len(true_rows):]
+      return C.max(1)
+
+  W_nmf, H_nmf, nmf_err = nmf(movie, 4, gn)
+  match_nmf = best_match(foot, H_nmf)
+  print(f"relative error {nmf_err[-1] / np.sum(movie ** 2):.4f}; footprint matches {np.round(match_nmf, 3)}")
+  fig, ax = plt.subplots(2, 4, figsize=(8, 4))
+  for i in range(4):
+      ax[0, i].imshow(foot[i].reshape(20, 20)); ax[1, i].imshow(H_nmf[i].reshape(20, 20))
+      ax[0, i].axis("off"); ax[1, i].axis("off")
+  ax[0, 0].set_title("true", loc="left"); ax[1, 0].set_title("NMF", loc="left"); plt.show()
+`} />
+
+With four components NMF reconstructs the movie to within 0.2% and each component's footprint matches one cell, with correlations from 0.974 to 0.999, although three of the cells sometimes fire together and their footprints overlap. The rows of $W$ are the cells' activity over time, recovered at the same time. Nothing told the algorithm where the cells were or how many pixels they covered; non-negativity alone made the components local.
+
+<PyCell id="pca_compare" title="The same movie with PCA" tests={String.raw`
+  import numpy as np
+  def test_pca():
+      "PCA components match single footprints less well than NMF components, and contain substantial negative weight"
+      assert match_pca.mean() < match_nmf.mean() - 0.05 and neg_frac > 0.2
+`} prompt="Take the top four principal components of the centred movie as spatial maps, match them to the true footprints (allowing either sign), and measure the fraction of the components' total absolute weight that is negative (after flipping each to make its largest entry positive)."
+code={String.raw`
+  Mc = movie - movie.mean(0)
+  _, _, Vt = np.linalg.svd(Mc, full_matrices=False)
+  pcs = Vt[:4]
+  pcs = pcs * np.sign(pcs[np.arange(4), np.abs(pcs).argmax(1)])[:, None]
+  match_pca = np.abs(np.corrcoef(np.vstack([foot, pcs]))[:4, 4:]).max(1)
+  neg_frac = ...
+  print(f"PCA footprint matches {np.round(match_pca, 3)} (NMF {np.round(match_nmf, 3)}); negative weight {100 * neg_frac:.0f}%")
+`}
+hint="neg_frac = np.abs(np.minimum(pcs, 0)).sum() / np.abs(pcs).sum()."
+solution={String.raw`
+  Mc = movie - movie.mean(0)
+  _, _, Vt = np.linalg.svd(Mc, full_matrices=False)
+  pcs = Vt[:4]
+  pcs = pcs * np.sign(pcs[np.arange(4), np.abs(pcs).argmax(1)])[:, None]
+  match_pca = np.abs(np.corrcoef(np.vstack([foot, pcs]))[:4, 4:]).max(1)
+  neg_frac = np.abs(np.minimum(pcs, 0)).sum() / np.abs(pcs).sum()
+  print(f"PCA footprint matches {np.round(match_pca, 3)} (NMF {np.round(match_nmf, 3)}); negative weight {100 * neg_frac:.0f}%")
+`} />
+
+The principal components match single cells far less well, with correlations from 0.67 to 0.82, and a quarter of their total weight is negative. Because three cells share some events, the direction of greatest variance is their sum, and the next components must be orthogonal to it, so they become differences between cells: one cell positive, its neighbour negative. These components are a perfectly good basis for the movie, but no single one of them is a cell. Non-negativity rules out the cancellation that PCA relies on.
+
+<Step n={4} title="Background and uniqueness" minutes={25} />
+
+Real movies contain **neuropil**: diffuse fluorescence from axons and dendrites that fluctuates on its own and covers the whole field. If NMF has no component for it, the background is shared out among the cells, contaminating their activity. Giving NMF one extra component lets the background take its own factor. NMF solutions are also not unique in general: if footprints overlap heavily, other non-negative factorisations fit as well, and the answer depends on the start. Methods for imaging add constraints, such as sparsity, spatial locality and models of calcium dynamics, to pin the answer down.
+
+<PyCell id="background" title="An extra component for the neuropil" tests={String.raw`
+  import numpy as np
+  def test_bg():
+      "with a fifth component, the cells' recovered activity matches the truth clearly better than with four"
+      assert np.mean(act_match[5]) > np.mean(act_match[4]) + 0.1
+`} prompt="Add a diffuse background (neuropil), brighter on one side, with its own slow fluctuation. Fit NMF with 4 and with 5 components, and for each true cell find the best correlation between its activity and a column of W (using the component whose footprint matches it best)."
+code={String.raw`
+  bg_fp = 0.5 + 0.5 * xx.ravel() / 19                # neuropil, brighter towards one side
+  bg_act = np.maximum(2 + np.convolve(np.random.default_rng(6131).normal(size=300), np.ones(30) / 30, mode="same") * 3, 0.1)
+  movie_bg = movie + np.outer(bg_act, bg_fp)
+  act_match = {}
+  for k in (4, 5):
+      Wk, Hk, _ = nmf(movie_bg, k, np.random.default_rng(1), iters=500)
+      which = np.corrcoef(np.vstack([foot, Hk]))[:4, 4:].argmax(1)
+      act_match[k] = ...
+      print(f"{k} components: activity correlations {np.round(act_match[k], 3)}")
+`}
+hint="act_match[k] = [np.corrcoef(act[:, i], Wk[:, which[i]])[0, 1] for i in range(4)]."
+solution={String.raw`
+  bg_fp = 0.5 + 0.5 * xx.ravel() / 19                # neuropil, brighter towards one side
+  bg_act = np.maximum(2 + np.convolve(np.random.default_rng(6131).normal(size=300), np.ones(30) / 30, mode="same") * 3, 0.1)
+  movie_bg = movie + np.outer(bg_act, bg_fp)
+  act_match = {}
+  for k in (4, 5):
+      Wk, Hk, _ = nmf(movie_bg, k, np.random.default_rng(1), iters=500)
+      which = np.corrcoef(np.vstack([foot, Hk]))[:4, 4:].argmax(1)
+      act_match[k] = [np.corrcoef(act[:, i], Wk[:, which[i]])[0, 1] for i in range(4)]
+      print(f"{k} components: activity correlations {np.round(act_match[k], 3)}")
+`} />
+
+With four components and a neuropil background, NMF still finds the two cells far from the bright side, but the other two are swamped: one component is spent on the background, and the activity recovered for the last two cells correlates with the truth at only 0.61 and 0.27. With a fifth component, the background takes its own factor and the weakest cell recovers to 0.80. The third stays at about 0.64, a reminder that plain NMF has no notion of what a cell should look like. Practical methods add exactly that knowledge: spatially compact footprints, a separate low-rank background model, and activity that follows calcium dynamics.
+
+<Bridge title="Parts in brains and machines"
+  neuro="Non-negativity is natural for neural data: firing rates, fluorescence and power spectra cannot go below zero. Beyond cell extraction, NMF has been used to find muscle synergies, sets of muscles activated together, from electromyography (Tresch, Saltiel and Bizzi, 1999), and the non-negative factors are often easier to relate to biology than signed components."
+  ai="NMF was an early example of a representation that is interpretable by construction, an idea that returns in sparse dictionary learning and in the sparse autoencoders now used to find interpretable features inside large language models, which also use non-negative, sparse activations.">
+
+When data are made by adding parts, a factorisation that can only add finds the parts.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "NMF constrains...", options: ["Both factors to be non-negative", "Only W", "Components to be orthogonal", "Components to be independent"], answer: 0, explain: "Step 1." },
+  { q: "Lee and Seung found that NMF of faces gives...", options: ["Localised parts", "Holistic eigenfaces", "Random noise", "Edges only"], answer: 0, explain: "Step 1." },
+  { q: "The multiplicative update keeps H non-negative because...", options: ["Every factor in it is non-negative", "It projects onto the positive orthant", "It uses a small step", "It whitens first"], answer: 0, explain: "Step 2." },
+  { q: "An entry of H that becomes zero under multiplicative updates...", options: ["Stays zero", "Becomes negative", "Is reset", "Grows"], answer: 0, explain: "Step 2." },
+  { q: "PCA components of a movie of cells are...", options: ["Signed mixtures of several cells", "Single cells", "Non-negative", "Temporal traces"], answer: 0, explain: "Step 3." },
+  { q: "Neuropil should be handled by...", options: ["An extra background component", "Ignoring it", "Using PCA", "More iterations"], answer: 0, explain: "Step 4." },
+  { q: "NMF solutions are...", options: ["Not unique in general", "Always unique", "Orthogonal", "Equal to PCA's"], answer: 0, explain: "Step 4." },
+  { q: "Muscle synergies have been found with...", options: ["NMF of muscle activity", "ICA of EEG", "t-SNE", "k-means"], answer: 0, explain: "The bridge." },
+]} />
+
+<Flashcards cards={[
+  { front: "NMF?", back: "$X \\approx WH$ with $W, H \\ge 0$; data built by adding parts." },
+  { front: "Multiplicative update for H?", back: "$H \\leftarrow H \\odot (W^\\top X)/(W^\\top WH)$" },
+  { front: "Why do NMF factors look like parts?", back: "Without subtraction, components cannot cancel, so each must be a piece that adds to others." },
+  { front: "NMF in calcium imaging?", back: "W: activity of each cell over time; H: spatial footprints; extra components for background." },
+  { front: "Limits of NMF?", back: "Non-unique solutions, local minima, choice of rank, slow convergence." },
+]} />
+
+<Predict revisit question="Which method's components each looked like a single cell?" />
+
+<Key title="Before you go">
+<ul>
+<li>NMF factorises non-negative data into non-negative activities and parts.</li>
+<li>Multiplicative updates keep factors non-negative and never increase the error.</li>
+<li>On movies of cells NMF finds footprints where PCA finds signed mixtures.</li>
+<li>Model the background explicitly, and be aware that NMF solutions need not be unique.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Lee and Seung (1999), <em>Learning the parts of objects by non-negative matrix factorization</em>.</li>
+<li>Lee and Seung (2001), <em>Algorithms for non-negative matrix factorization</em>, Advances in Neural Information Processing Systems 13.</li>
+<li>Pnevmatikakis and colleagues (2016), <em>Simultaneous denoising, deconvolution, and demixing of calcium imaging data</em>, Neuron 89(2), 285 to 299.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Two cells overlap heavily in an imaging field. Explain why NMF might fail to separate them, and suggest one extra assumption about the cells (spatial, temporal or about calcium dynamics) that would help." />

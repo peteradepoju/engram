@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { gauss, rng, Slider, Stat } from "./util";
 
-const COLS = ["var(--neuro)", "var(--ai)", "var(--accent)"];
+const COLS = ["var(--neuro)", "var(--ai)", "var(--warn)"];
 
 /** Lloyd's algorithm step by step: assign each point to its nearest centre, move each centre to its points' mean. */
 export function KmeansSteps() {

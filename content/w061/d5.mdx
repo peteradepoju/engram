@@ -1,0 +1,287 @@
+export const meta = {
+  title: "UMAP, and reading embeddings without being fooled",
+  intro: "UMAP has largely replaced t-SNE for embedding single-cell data, behaviour and neural populations, because it is fast and appears to keep more of the global structure. Both methods produce beautiful pictures, and both can show structure that is not in the data and hide structure that is. Today you learn how UMAP works and how it differs from t-SNE, and then test three ways embeddings mislead: breaking continua into clusters, finding clusters in noise, and arranging clusters according to the random start. You finish with practical rules, following Kobak and Berens, for making embeddings that can be trusted further.",
+  goals: [
+    "Explain UMAP's graph construction and objective, and how they differ from t-SNE",
+    "Show that neighbour embeddings can break a continuous manifold into apparent clusters",
+    "Show that they can produce clumps from structureless noise",
+    "Use informative initialisation and quantitative checks to make embeddings more reliable",
+  ],
+  plan: [
+    { label: "How UMAP works", minutes: 25 },
+    { label: "Continua broken into clusters", minutes: 25 },
+    { label: "Clusters from noise", minutes: 20 },
+    { label: "Initialisation and global structure", minutes: 25 },
+    { label: "Rules, quiz, flashcards, journal", minutes: 25 },
+  ],
+  paper: "kobak-berens-2019",
+};
+
+<Predict question="Head-direction cells encode a continuous angle, so their population activity lies on a ring. A neighbour embedding at small perplexity is applied. Will it show a ring, a line, or separate clusters?" />
+
+<Step n={1} title="How UMAP works" minutes={25} />
+
+UMAP (McInnes, Healy and Melville, 2018) builds a weighted **k-nearest-neighbour graph** of the data: each point connects to its $k$ nearest neighbours with weights that fall off with distance beyond the nearest one, scaled per point much as perplexity scales t-SNE's bandwidths, and the directed weights are combined by a fuzzy union, $w_{ij} = a + b - ab$. It then lays out the graph in two dimensions by minimising a **cross-entropy** between the graph weights and similarities in the embedding, $v_{ij} = (1 + a'd_{ij}^{2b'})^{-1}$:
+
+$$
+\sum_{ij}\left[w_{ij}\log\frac{w_{ij}}{v_{ij}} + (1 - w_{ij})\log\frac{1 - w_{ij}}{1 - v_{ij}}\right].
+$$
+
+The first term attracts neighbours, as in t-SNE; the second explicitly repels non-neighbours. Optimisation uses stochastic gradient descent with negative sampling, which is why UMAP scales to millions of points, and the layout starts from a **spectral embedding**, the Laplacian eigenvectors of Week 60. Böhm, Berens and Kobak (2022) showed that UMAP and t-SNE behave alike when given the same initialisation, and that UMAP's tighter clusters come mainly from weaker repulsion: the methods lie on one spectrum of attraction against repulsion.
+
+<Video id="eN0wFzBA4Sc" title="UMAP dimension reduction, main ideas" by="StatQuest with Josh Starmer" note="Josh Starmer on how UMAP builds a graph of similarity scores from the nearest neighbours, then moves points in a low-dimensional layout so that similar points are pulled together and dissimilar ones pushed apart, and how it compares with t-SNE." />
+
+The setup cell provides a compact t-SNE from Day 4, which stands in for both methods today: everything you will see happens with UMAP too.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def sqdist(A):
+      s = (A ** 2).sum(1)
+      return np.maximum(s[:, None] + s[None] - 2 * A @ A.T, 0)
+
+  def joint_p(X, perp):
+      D2 = sqdist(X); n = len(X); P = np.zeros((n, n)); target = np.log(perp)
+      for i in range(n):
+          d = np.delete(D2[i], i); lo, hi, beta = 0.0, np.inf, 1.0 / np.median(d)
+          for _ in range(60):
+              p = np.exp(-(d - d.min()) * beta); p /= p.sum()
+              H = -(p * np.log(np.maximum(p, 1e-300))).sum()
+              if abs(H - target) < 1e-4: break
+              if H > target: lo = beta; beta = beta * 2 if hi == np.inf else (beta + hi) / 2
+              else: hi = beta; beta = (beta + lo) / 2
+          P[i, np.arange(n) != i] = p
+      return (P + P.T) / (2 * n)
+
+  def tsne(X, perp=30, iters=500, seed=0, init=None, exaggeration=12.0):
+      P = joint_p(X, perp)
+      g = np.random.default_rng(seed)
+      Y = 1e-4 * g.normal(size=(len(X), 2)) if init is None else init.copy()
+      V = np.zeros_like(Y)
+      for it in range(iters):
+          exag, mom = (exaggeration, 0.5) if it < 100 else (1.0, 0.8)
+          W = 1 / (1 + sqdist(Y)); np.fill_diagonal(W, 0); Q = W / W.sum()
+          M = (exag * P - Q) * W
+          V = mom * V - 100 * 4 * (M.sum(1)[:, None] * Y - M @ Y)
+          Y = Y + V
+      return Y
+
+  def silhouette(Z, lab):
+      D = np.sqrt(sqdist(Z)); s = []
+      for i in range(len(Z)):
+          same = lab == lab[i]; same[i] = False
+          a = D[i, same].mean()
+          b = min(D[i, lab == c].mean() for c in np.unique(lab) if c != lab[i])
+          s.append((b - a) / max(a, b))
+      return np.mean(s)
+  print("ready: tsne(X, perp, iters, seed, init) and silhouette(Z, labels)")
+`} />
+
+<Step n={2} title="Continua broken into clusters" minutes={25} />
+
+<Figure caption="A continuous trajectory of population activity, coloured by time, embedded with a small perplexity. The embedding can break a continuous path into pieces and exaggerate real jumps." credit="Interactive figure by Engram.">
+  <EmbeddingDistortion />
+</Figure>
+
+<PyCell id="ring" title="A ring of head-direction activity" tests={String.raw`
+  import numpy as np
+  def test_breaks():
+      "at perplexity 5, the embedding has a jump between consecutive angles more than 3 times larger, relative to the median step, than the data or the PCA projection"
+      assert jump_tsne > 3 * max(jump_data, jump_pca)
+`} prompt="Simulate 200 population vectors of 40 head-direction cells for angles evenly spaced round the circle. Embed them with t-SNE at perplexity 5 and project them with PCA. For each, compute the largest step between consecutive angles divided by the median step."
+code={String.raw`
+  gr = np.random.default_rng(615)
+  ang = np.linspace(0, 2 * np.pi, 200, endpoint=False)
+  pref = np.linspace(0, 2 * np.pi, 40, endpoint=False)
+  R = np.exp(2 * (np.cos(ang[:, None] - pref[None]) - 1)) + 0.15 * gr.normal(size=(200, 40))
+
+  def max_jump(Z):
+      steps = np.linalg.norm(np.roll(Z, -1, axis=0) - Z, axis=1)
+      return steps.max() / np.median(steps)
+
+  Y_ring = tsne(R, perp=5, seed=1)
+  Rc = R - R.mean(0)
+  Y_ring_pca = Rc @ np.linalg.svd(Rc, full_matrices=False)[2][:2].T
+  jump_data, jump_pca = max_jump(R), max_jump(Y_ring_pca)
+  jump_tsne = ...
+  print(f"largest step / median step: data {jump_data:.1f}, PCA {jump_pca:.1f}, t-SNE (perplexity 5) {jump_tsne:.1f}")
+  fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+  ax[0].scatter(*Y_ring_pca.T, c=ang, cmap="hsv", s=8); ax[0].set_title("PCA")
+  ax[1].scatter(*Y_ring.T, c=ang, cmap="hsv", s=8); ax[1].set_title("t-SNE, perplexity 5"); plt.show()
+`}
+hint="jump_tsne = max_jump(Y_ring)."
+solution={String.raw`
+  gr = np.random.default_rng(615)
+  ang = np.linspace(0, 2 * np.pi, 200, endpoint=False)
+  pref = np.linspace(0, 2 * np.pi, 40, endpoint=False)
+  R = np.exp(2 * (np.cos(ang[:, None] - pref[None]) - 1)) + 0.15 * gr.normal(size=(200, 40))
+
+  def max_jump(Z):
+      steps = np.linalg.norm(np.roll(Z, -1, axis=0) - Z, axis=1)
+      return steps.max() / np.median(steps)
+
+  Y_ring = tsne(R, perp=5, seed=1)
+  Rc = R - R.mean(0)
+  Y_ring_pca = Rc @ np.linalg.svd(Rc, full_matrices=False)[2][:2].T
+  jump_data, jump_pca = max_jump(R), max_jump(Y_ring_pca)
+  jump_tsne = max_jump(Y_ring)
+  print(f"largest step / median step: data {jump_data:.1f}, PCA {jump_pca:.1f}, t-SNE (perplexity 5) {jump_tsne:.1f}")
+  fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+  ax[0].scatter(*Y_ring_pca.T, c=ang, cmap="hsv", s=8); ax[0].set_title("PCA")
+  ax[1].scatter(*Y_ring.T, c=ang, cmap="hsv", s=8); ax[1].set_title("t-SNE, perplexity 5"); plt.show()
+`} />
+
+The population vectors trace a smooth ring: in the data the largest step between neighbouring angles is only 1.3 times the median, and in the PCA plane 2.4 times, where the ring is slightly squashed. The t-SNE embedding at perplexity 5 has a step 9.4 times the median: the ring has been torn open, and with other seeds or smaller perplexity it can split into several arcs. Each point's five effective neighbours are its nearest angles, so t-SNE only has to keep short arcs intact; where the arcs join matters little to the objective. A reader shown only the embedding might conclude that head direction is coded by a few discrete groups.
+
+<Step n={3} title="Clusters from noise" minutes={20} />
+
+<PyCell id="noise" title="Clumps in a Gaussian cloud" tests={String.raw`
+  import numpy as np
+  def test_clumps():
+      "k-means clusters look much better separated in the embedding of pure noise than in the noise itself"
+      assert sil_emb > sil_data + 0.15
+`} prompt="Embed 250 points of 30-dimensional Gaussian noise with t-SNE at perplexity 5. Cluster both the embedding and the original data into 6 groups with k-means, and compare their silhouette scores (higher means better separated)."
+code={String.raw`
+  from scipy.cluster.vq import kmeans2
+  gz = np.random.default_rng(6151)
+  Xn = gz.normal(size=(250, 30))
+  Y_noise = tsne(Xn, perp=5, seed=2)
+  _, lab_emb = kmeans2(Y_noise, 6, minit="++", seed=3)
+  _, lab_dat = kmeans2(Xn, 6, minit="++", seed=3)
+  sil_emb = silhouette(Y_noise, lab_emb)
+  sil_data = ...
+  print(f"silhouette of 6 k-means clusters: in the embedding {sil_emb:.3f}, in the data {sil_data:.3f}")
+  plt.scatter(*Y_noise.T, c=lab_emb, cmap="tab10", s=8); plt.title("t-SNE of pure noise, perplexity 5"); plt.show()
+`}
+hint="sil_data = silhouette(Xn, lab_dat)."
+solution={String.raw`
+  from scipy.cluster.vq import kmeans2
+  gz = np.random.default_rng(6151)
+  Xn = gz.normal(size=(250, 30))
+  Y_noise = tsne(Xn, perp=5, seed=2)
+  _, lab_emb = kmeans2(Y_noise, 6, minit="++", seed=3)
+  _, lab_dat = kmeans2(Xn, 6, minit="++", seed=3)
+  sil_emb = silhouette(Y_noise, lab_emb)
+  sil_data = silhouette(Xn, lab_dat)
+  print(f"silhouette of 6 k-means clusters: in the embedding {sil_emb:.3f}, in the data {sil_data:.3f}")
+  plt.scatter(*Y_noise.T, c=lab_emb, cmap="tab10", s=8); plt.title("t-SNE of pure noise, perplexity 5"); plt.show()
+`} />
+
+In the 30-dimensional noise, six k-means clusters have a silhouette of 0.02, which means no structure at all: points are as close to other clusters as to their own. In the embedding the same procedure gives 0.34, the value of moderately well-separated clusters. Small perplexity makes t-SNE gather each point's few nearest neighbours tightly, and random fluctuations in density become visible clumps. Cluster the original data, or test the embedding's clusters against embeddings of shuffled data, before treating such clumps as groups.
+
+<Step n={4} title="Initialisation and global structure" minutes={25} />
+
+Kobak and Berens (2019), today's paper, showed that much of what makes UMAP seem better at global structure than t-SNE is its spectral initialisation, and that t-SNE started from the first two principal components (scaled small) keeps global structure about as well. Random initialisation leaves the arrangement of clusters to chance, and only tricks such as early exaggeration rescue it some of the time. To see the effect of the start alone, today's cell switches exaggeration off.
+
+<PyCell id="init" title="Random against PCA initialisation" tests={String.raw`
+  import numpy as np
+  def test_init():
+      "with PCA initialisation, distances between cluster centres in the embedding track those in the data better than the average random start"
+      assert corr_pca > np.mean(corr_rand) + 0.1
+`} prompt="Simulate 8 clusters whose centres lie along a curve (so there is a global order), embed them with t-SNE without early exaggeration from 4 random starts and from a PCA start (the first two PC scores scaled to standard deviation 1e-4), and for each embedding compute the correlation between the 28 pairwise distances of cluster centres in the embedding and in the data."
+code={String.raw`
+  gi = np.random.default_rng(6152)
+  s_ = np.linspace(0, 1, 8)
+  cent = np.column_stack([np.cos(3 * s_), np.sin(3 * s_), s_] + [0 * s_] * 17) * 12
+  lab8 = np.repeat(np.arange(8), 30)
+  X8 = cent[lab8] + gi.normal(size=(240, 20))
+
+  def centre_corr(Z):
+      C = np.array([Z[lab8 == c].mean(0) for c in range(8)])
+      Cx = np.array([X8[lab8 == c].mean(0) for c in range(8)])
+      iu = np.triu_indices(8, 1)
+      return np.corrcoef(np.sqrt(sqdist(C))[iu], np.sqrt(sqdist(Cx))[iu])[0, 1]
+
+  corr_rand = [centre_corr(tsne(X8, 30, seed=s, exaggeration=1.0)) for s in range(4)]
+  Xc8 = X8 - X8.mean(0)
+  pcs = Xc8 @ np.linalg.svd(Xc8, full_matrices=False)[2][:2].T
+  init_pca = ...
+  corr_pca = centre_corr(tsne(X8, 30, init=init_pca, exaggeration=1.0))
+  print("random starts:", np.round(corr_rand, 3), f"PCA start: {corr_pca:.3f}")
+`}
+hint="init_pca = 1e-4 * pcs / pcs[:, 0].std()."
+solution={String.raw`
+  gi = np.random.default_rng(6152)
+  s_ = np.linspace(0, 1, 8)
+  cent = np.column_stack([np.cos(3 * s_), np.sin(3 * s_), s_] + [0 * s_] * 17) * 12
+  lab8 = np.repeat(np.arange(8), 30)
+  X8 = cent[lab8] + gi.normal(size=(240, 20))
+
+  def centre_corr(Z):
+      C = np.array([Z[lab8 == c].mean(0) for c in range(8)])
+      Cx = np.array([X8[lab8 == c].mean(0) for c in range(8)])
+      iu = np.triu_indices(8, 1)
+      return np.corrcoef(np.sqrt(sqdist(C))[iu], np.sqrt(sqdist(Cx))[iu])[0, 1]
+
+  corr_rand = [centre_corr(tsne(X8, 30, seed=s, exaggeration=1.0)) for s in range(4)]
+  Xc8 = X8 - X8.mean(0)
+  pcs = Xc8 @ np.linalg.svd(Xc8, full_matrices=False)[2][:2].T
+  init_pca = 1e-4 * pcs / pcs[:, 0].std()
+  corr_pca = centre_corr(tsne(X8, 30, init=init_pca, exaggeration=1.0))
+  print("random starts:", np.round(corr_rand, 3), f"PCA start: {corr_pca:.3f}")
+`} />
+
+Without early exaggeration, the four random starts give correlations between centre distances of 0.34, 0.98, 0.88 and 0.99: one run scrambled the order of the clusters badly and another partly. The PCA start gives 0.98, and gives it every time, because the clusters begin in the right global arrangement and the optimisation only has to refine the local structure. Early exaggeration rescues most random starts in small datasets like this one, but becomes less effective as datasets grow, which is why Kobak and Berens recommend PCA initialisation, together with larger perplexities for large datasets, as defaults.
+
+<Step n={5} title="Rules, quiz, flashcards, journal" minutes={25} />
+
+<Callout kind="note" title="Rules for embeddings">
+
+<ul>
+<li>Use an embedding to look, not to measure. Compute cluster counts, sizes, distances and separability in the original space or with a model.</li>
+<li>Initialise informatively (PCA or spectral), set perplexity or the number of neighbours deliberately, and show more than one setting.</li>
+<li>Check that islands are not artefacts: rerun with different seeds and subsamples, and look for continua by colouring points by a continuous variable.</li>
+<li>Run the same pipeline on shuffled or simulated null data. If it makes islands from noise, its islands in real data need other evidence.</li>
+<li>Report the method, its parameters and the preprocessing, since all of them change the picture (Chari and Pachter, 2023).</li>
+</ul>
+
+</Callout>
+
+<Bridge title="Embeddings in brains and machines"
+  neuro="Low-dimensional embeddings have shaped claims in neuroscience: the ring of head-direction activity, the torus of grid cells found with topological methods (Gardner and colleagues, 2022), and the behavioural maps of freely moving animals. The strongest of these combine an embedding with a quantitative test, such as persistent homology for the torus, rather than resting on the picture."
+  ai="The same tools are used to inspect learned representations in machine learning, from word embeddings to the activations of large models, and the same cautions apply: a clear picture of clusters is a hypothesis about the representation, to be tested with probes and interventions.">
+
+An embedding is a hypothesis generator; the evidence must come from somewhere else.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "UMAP starts by building...", options: ["A weighted k-nearest-neighbour graph", "A covariance matrix", "A dendrogram", "A mixture model"], answer: 0, explain: "Step 1." },
+  { q: "UMAP's objective adds to t-SNE-like attraction...", options: ["An explicit repulsion term for non-neighbours", "A variance term", "A sparsity penalty", "Nothing"], answer: 0, explain: "Step 1." },
+  { q: "Much of UMAP's apparent global structure comes from...", options: ["Its spectral initialisation", "Its use of Euclidean distance", "Larger perplexity", "Its speed"], answer: 0, explain: "Kobak and Berens." },
+  { q: "At small perplexity, a continuous ring may appear as...", options: ["Separate pieces", "A perfect ring always", "A single point", "A line of equal spacing"], answer: 0, explain: "Step 2." },
+  { q: "Neighbour embeddings of pure noise can show...", options: ["Apparent clusters", "Nothing at all", "A perfect grid", "A ring"], answer: 0, explain: "Step 3." },
+  { q: "To keep global structure in t-SNE, initialise with...", options: ["Scaled principal components", "Random noise", "Zeros", "k-means labels"], answer: 0, explain: "Step 4." },
+  { q: "The safest use of an embedding is...", options: ["To look and generate hypotheses", "To count cell types", "To measure distances", "To estimate cluster sizes"], answer: 0, explain: "Step 5." },
+  { q: "A null check for an embedding pipeline is to...", options: ["Run it on shuffled or simulated data", "Increase iterations", "Use a larger figure", "Change colours"], answer: 0, explain: "Step 5." },
+]} />
+
+<Flashcards cards={[
+  { front: "UMAP graph?", back: "k-nearest-neighbour graph with per-point scaled weights, symmetrised by fuzzy union $a + b - ab$." },
+  { front: "UMAP objective?", back: "Cross-entropy between graph weights and embedding similarities: attraction for edges, repulsion for non-edges." },
+  { front: "t-SNE against UMAP?", back: "One spectrum of attraction against repulsion; with the same initialisation they behave alike (Böhm and colleagues, 2022)." },
+  { front: "Three ways embeddings mislead?", back: "Breaking continua into clusters, clumps from noise, arbitrary arrangement of clusters." },
+  { front: "Kobak and Berens's main advice?", back: "PCA initialisation, sensible perplexity (including large ones for global structure), and checks across settings." },
+]} />
+
+<Predict revisit question="Did the head-direction ring survive the neighbour embedding at small perplexity?" />
+
+<Key title="Before you go">
+<ul>
+<li>UMAP lays out a nearest-neighbour graph with attraction and repulsion; it and t-SNE are close relatives.</li>
+<li>Neighbour embeddings can break continua, invent clumps and place clusters arbitrarily.</li>
+<li>Informative initialisation keeps much more global structure.</li>
+<li>Measure in the data, check against nulls, and show several settings.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Kobak and Berens (2019), <em>The art of using t-SNE for single-cell transcriptomics</em>.</li>
+<li>McInnes, Healy and Melville (2018), <em>UMAP: uniform manifold approximation and projection for dimension reduction</em>, arXiv:1802.03426.</li>
+<li>Chari and Pachter (2023), <em>The specious art of single-cell genomics</em>, PLoS Computational Biology 19(8), e1011288.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Describe the figure you would make, and the numbers you would report alongside it, to argue that a population of neurons encodes a continuous variable rather than a set of discrete categories." />

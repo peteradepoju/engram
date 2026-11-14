@@ -1,0 +1,319 @@
+export const meta = {
+  title: "Independent component analysis: unmixing recordings",
+  intro: "Every electrode hears a mixture: an EEG sensor picks up several cortical sources and the blinks of the eyes; a pixel in a calcium movie mixes neighbouring cells and neuropil. Week 39 used independent component analysis to find the filters of natural images. Today the same method is used for what it was first designed for, blind source separation: recovering the sources from their mixtures with no knowledge of how they were mixed, using only the assumption that they are independent and not Gaussian. You implement FastICA, find out exactly when it must fail, and use it to remove an artefact from a recording.",
+  goals: [
+    "Explain why whitening leaves a rotation undetermined, and why independence fixes it",
+    "Implement FastICA with deflation and unmix a set of recorded channels",
+    "Show that Gaussian sources cannot be separated, and state ICA's other ambiguities",
+    "Remove an artefact from multichannel data by identifying and zeroing its component",
+  ],
+  plan: [
+    { label: "The cocktail party", minutes: 20 },
+    { label: "FastICA", minutes: 35 },
+    { label: "What ICA cannot do", minutes: 20 },
+    { label: "Removing an artefact", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "hyvarinen-oja-2000",
+};
+
+<Predict question="Two independent sources, both Gaussian, are mixed into two channels. Can ICA recover them, can it recover them only up to sign and order, or can it not recover them at all?" />
+
+<Step n={1} title="The cocktail party" minutes={20} />
+
+The model is $\mathbf x = A\mathbf s$: $d$ recorded channels are a fixed linear mixture of $d$ sources. Neither $A$ nor $\mathbf s$ is known. Whitening the data (Week 39) makes the channels uncorrelated with unit variance, $\mathbf z = V\mathbf x$, but leaves a problem: if $\mathbf z$ is white, so is $R\mathbf z$ for any rotation $R$. Second-order statistics, and therefore PCA, cannot choose among rotations. **Independent component analysis** chooses the rotation that makes the outputs statistically independent, which needs higher-order statistics. By the central limit theorem, a mixture of independent sources is more Gaussian than the sources themselves, so the rotation that makes each output as non-Gaussian as possible undoes the mixing. Hyvärinen and Oja (2000), today's paper, review this idea and the fast fixed-point algorithm, FastICA, that made ICA practical.
+
+<Video id="dyb_cFywuik" title="Lecture 15: PCA and ICA" by="Andrew Ng, Stanford CS229 (2018)" note="Andrew Ng on principal component analysis and then independent component analysis for the cocktail party problem, including why Gaussian sources cannot be unmixed." />
+
+<Figure caption="A spiky source and a uniform source, mixed. The principal axes (dashed) are orthogonal and follow the variance; the independent components align with the true mixing directions (solid)." credit="Interactive figure by Engram, after Hyvärinen and Oja (2000).">
+  <IcaMixing />
+</Figure>
+
+<Step n={2} title="FastICA" minutes={35} />
+
+FastICA finds one unmixing direction $\mathbf w$ at a time in whitened data, maximising the non-Gaussianity of $\mathbf w^\top\mathbf z$ measured by a contrast function such as $G(u) = \log\cosh u$. Its fixed-point update, derived as a Newton step, is
+
+$$
+\mathbf w \leftarrow E\left[\mathbf z\,g(\mathbf w^\top\mathbf z)\right] - E\left[g'(\mathbf w^\top\mathbf z)\right]\mathbf w,\qquad g = \tanh,
+$$
+
+followed by normalising $\mathbf w$. To find several components, **deflation** removes from each new $\mathbf w$ its projections on the directions already found, so that the components are orthogonal in the whitened space.
+
+<PyCell id="fastica" title="FastICA by deflation" tests={String.raw`
+  import numpy as np
+  def test_white():
+      "the whitened data have identity covariance"
+      assert np.allclose(np.cov(Zw), np.eye(3), atol=1e-6)
+  def test_unmix():
+      "each true source is recovered with absolute correlation above 0.95"
+      C = np.abs(np.corrcoef(np.vstack([S_true, S_hat]))[:3, 3:])
+      assert np.all(C.max(1) > 0.95)
+`} prompt="Whiten the three mixed channels, then complete fastica(Z, k): for each component, start from a random unit vector and iterate the fixed-point update with deflation and normalisation until it converges."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  gi = np.random.default_rng(612)
+  T = 3000
+  t = np.arange(T) / 1000
+  spikes = (gi.random(T) < 0.01) * gi.uniform(2, 4, T)
+  spikes = np.convolve(spikes, np.exp(-np.arange(30) / 6), mode="same")      # a sparse train of events
+  theta = np.sin(2 * np.pi * 7 * t)                                         # a 7 Hz oscillation
+  drift = ((t * 0.9) % 1) * 2 - 1                                           # a slow sawtooth artefact
+  S_true = np.vstack([spikes, theta, drift])
+  S_true = (S_true - S_true.mean(1, keepdims=True)) / S_true.std(1, keepdims=True)
+  A_mix = gi.normal(size=(3, 3))
+  Xm = A_mix @ S_true
+
+  def whiten(X):
+      Xc = X - X.mean(1, keepdims=True)
+      ev, E = np.linalg.eigh(np.cov(Xc))
+      V = E @ np.diag(ev ** -0.5) @ E.T
+      return V @ Xc, V
+
+  def fastica(Z, k, g, iters=200):
+      W = np.zeros((k, Z.shape[0]))
+      for c in range(k):
+          w = g.normal(size=Z.shape[0]); w /= np.linalg.norm(w)
+          for _ in range(iters):
+              u = w @ Z
+              w_new = ...
+              w_new -= W[:c].T @ (W[:c] @ w_new)          # deflation
+              w_new /= np.linalg.norm(w_new)
+              converged = abs(abs(w_new @ w) - 1) < 1e-10
+              w = w_new
+              if converged:
+                  break
+          W[c] = w
+      return W
+
+  Zw, Vw = whiten(Xm)
+  W_ica = fastica(Zw, 3, gi)
+  S_hat = W_ica @ Zw
+  C = np.abs(np.corrcoef(np.vstack([S_true, S_hat]))[:3, 3:])
+  print("absolute correlation, true sources (rows) against components (columns):"); print(np.round(C, 3))
+  fig, ax = plt.subplots(3, 2, figsize=(9, 4), sharex=True)
+  for i in range(3):
+      ax[i, 0].plot(t[:1000], Xm[i, :1000], lw=0.7); ax[i, 1].plot(t[:1000], S_hat[i, :1000], lw=0.7, color="C1")
+  ax[0, 0].set_title("recorded channels"); ax[0, 1].set_title("independent components"); plt.tight_layout(); plt.show()
+`}
+hint="w_new = (Z * np.tanh(u)).mean(1) - (1 - np.tanh(u) ** 2).mean() * w."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  gi = np.random.default_rng(612)
+  T = 3000
+  t = np.arange(T) / 1000
+  spikes = (gi.random(T) < 0.01) * gi.uniform(2, 4, T)
+  spikes = np.convolve(spikes, np.exp(-np.arange(30) / 6), mode="same")      # a sparse train of events
+  theta = np.sin(2 * np.pi * 7 * t)                                         # a 7 Hz oscillation
+  drift = ((t * 0.9) % 1) * 2 - 1                                           # a slow sawtooth artefact
+  S_true = np.vstack([spikes, theta, drift])
+  S_true = (S_true - S_true.mean(1, keepdims=True)) / S_true.std(1, keepdims=True)
+  A_mix = gi.normal(size=(3, 3))
+  Xm = A_mix @ S_true
+
+  def whiten(X):
+      Xc = X - X.mean(1, keepdims=True)
+      ev, E = np.linalg.eigh(np.cov(Xc))
+      V = E @ np.diag(ev ** -0.5) @ E.T
+      return V @ Xc, V
+
+  def fastica(Z, k, g, iters=200):
+      W = np.zeros((k, Z.shape[0]))
+      for c in range(k):
+          w = g.normal(size=Z.shape[0]); w /= np.linalg.norm(w)
+          for _ in range(iters):
+              u = w @ Z
+              w_new = (Z * np.tanh(u)).mean(1) - (1 - np.tanh(u) ** 2).mean() * w
+              w_new -= W[:c].T @ (W[:c] @ w_new)          # deflation
+              w_new /= np.linalg.norm(w_new)
+              converged = abs(abs(w_new @ w) - 1) < 1e-10
+              w = w_new
+              if converged:
+                  break
+          W[c] = w
+      return W
+
+  Zw, Vw = whiten(Xm)
+  W_ica = fastica(Zw, 3, gi)
+  S_hat = W_ica @ Zw
+  C = np.abs(np.corrcoef(np.vstack([S_true, S_hat]))[:3, 3:])
+  print("absolute correlation, true sources (rows) against components (columns):"); print(np.round(C, 3))
+  fig, ax = plt.subplots(3, 2, figsize=(9, 4), sharex=True)
+  for i in range(3):
+      ax[i, 0].plot(t[:1000], Xm[i, :1000], lw=0.7); ax[i, 1].plot(t[:1000], S_hat[i, :1000], lw=0.7, color="C1")
+  ax[0, 0].set_title("recorded channels"); ax[0, 1].set_title("independent components"); plt.tight_layout(); plt.show()
+`} />
+
+Each true source is matched by one component with an absolute correlation of 0.998 or more, though not in the original order: the event train came out second and the oscillation first. Nothing about the mixing matrix was used. The recorded channels each look like a messy blend, while the components are clean: the events, the 7 Hz rhythm, the sawtooth. The event train is the most non-Gaussian (heavy-tailed), the sawtooth and the sine are less so but in the other direction (light-tailed), and the $\log\cosh$ contrast handles both.
+
+<Step n={3} title="What ICA cannot do" minutes={20} />
+
+ICA recovers the sources only up to permutation and scale, including sign: $A\mathbf s = (AP^{-1}D^{-1})(DP\mathbf s)$ for any permutation $P$ and diagonal $D$. And at most one source may be Gaussian. A Gaussian vector with identity covariance looks the same in every rotated frame, so if two sources are Gaussian, any rotation of them is an equally good answer, and the data contain no information about which is right.
+
+<PyCell id="gaussian" title="Gaussian sources cannot be unmixed" tests={String.raw`
+  import numpy as np
+  def test_gauss():
+      "with two Gaussian sources, the recovered match varies widely across starts (some below 0.9)"
+      assert min(match_gauss) < 0.9
+  def test_nongauss():
+      "with the non-Gaussian sources, every start matches above 0.95"
+      assert min(match_ng) > 0.95
+`} prompt="Mix two Gaussian sources with a fixed random matrix and run FastICA from 10 random starts, recording each time the best absolute correlation of the first source with a component. Do the same for two non-Gaussian sources (the event train and the oscillation)."
+code={String.raw`
+  gg = np.random.default_rng(6121)
+  A2 = gg.normal(size=(2, 2))
+  S_g = gg.normal(size=(2, T))
+  S_ng = S_true[:2]
+  match_gauss, match_ng = [], []
+  for start in range(10):
+      for S_src, store in [(S_g, match_gauss), (S_ng, match_ng)]:
+          Z2, _ = whiten(A2 @ S_src)
+          Y = fastica(Z2, 2, np.random.default_rng(start)) @ Z2
+          store.append(...)
+  print("Gaussian sources, best |r| per start:    ", np.round(match_gauss, 2))
+  print("non-Gaussian sources, best |r| per start:", np.round(match_ng, 2))
+`}
+hint="store.append(np.abs(np.corrcoef(np.vstack([S_src[:1], Y]))[0, 1:]).max())."
+solution={String.raw`
+  gg = np.random.default_rng(6121)
+  A2 = gg.normal(size=(2, 2))
+  S_g = gg.normal(size=(2, T))
+  S_ng = S_true[:2]
+  match_gauss, match_ng = [], []
+  for start in range(10):
+      for S_src, store in [(S_g, match_gauss), (S_ng, match_ng)]:
+          Z2, _ = whiten(A2 @ S_src)
+          Y = fastica(Z2, 2, np.random.default_rng(start)) @ Z2
+          store.append(np.abs(np.corrcoef(np.vstack([S_src[:1], Y]))[0, 1:]).max())
+  print("Gaussian sources, best |r| per start:    ", np.round(match_gauss, 2))
+  print("non-Gaussian sources, best |r| per start:", np.round(match_ng, 2))
+`} />
+
+With the non-Gaussian sources every start recovers the first source perfectly. With Gaussian sources the answer depends on the start, with correlations from 0.77 to 0.95: FastICA converges to whatever rotation the noise in this finite sample happens to favour, and a different sample would favour a different one. In practice the warning sign is instability: components that change from run to run, or from one half of the data to the other, are not identified. Tools such as ICASSO rerun ICA many times and keep only components that recur.
+
+<Step n={4} title="Removing an artefact" minutes={30} />
+
+The most common use of ICA in neuroscience is cleaning EEG and MEG: eye blinks, eye movements and heartbeats spread across many sensors, but each comes from one source, so it appears as one independent component (Jung and colleagues, 2000). Identify that component, set it to zero, and project back to the sensors with the mixing matrix $\hat A = W^{-1}$.
+
+<PyCell id="artefact" title="Cleaning blinks from six channels" tests={String.raw`
+  import numpy as np
+  def test_blink():
+      "the component with the largest kurtosis is the blink"
+      assert abs(np.corrcoef(Y6[blink_comp], blink)[0, 1]) > 0.9
+  def test_clean():
+      "after removal, the blink's share of channel power falls by more than 90%, and the alpha rhythm survives"
+      assert residual_blink < 0.1 and alpha_kept > 0.95
+`} prompt="Six EEG channels mix an alpha rhythm, a slower rhythm, three noise sources and a blink artefact. Unmix with FastICA, find the component with the largest kurtosis, zero it, and reconstruct the channels. Measure how much blink remains (regression of the cleaned channels on the true blink, relative to before) and how well the alpha rhythm's contribution is preserved."
+code={String.raw`
+  ge = np.random.default_rng(6122)
+  t6 = np.arange(5000) / 250
+  alpha = np.sin(2 * np.pi * 10 * t6 + 0.3 * np.cumsum(ge.normal(size=5000)) / 30)
+  slow = np.sin(2 * np.pi * 3 * t6) * (1 + 0.5 * np.sin(2 * np.pi * 0.2 * t6))
+  blink = np.zeros(5000)
+  for onset in ge.choice(4800, 12, replace=False):
+      blink[onset:onset + 100] += 8 * np.hanning(100)
+  noise = ge.laplace(size=(3, 5000))
+  S6 = np.vstack([alpha, slow, noise, blink])
+  A6 = ge.normal(size=(6, 6)); A6[:, 5] = np.abs(A6[:, 5]) * [3, 2.5, 1, 0.5, 0.3, 0.2]   # blinks are strongest at frontal channels
+  X6 = A6 @ S6
+
+  Z6, V6 = whiten(X6)
+  W6 = fastica(Z6, 6, ge)
+  Y6 = W6 @ Z6
+  kurt = (Y6 ** 4).mean(1) - 3
+  blink_comp = int(np.argmax(kurt))
+  Y_clean = Y6.copy(); Y_clean[blink_comp] = 0
+  A_hat = np.linalg.inv(W6 @ V6)
+  X_clean = ... + X6.mean(1, keepdims=True)
+
+  def share(Xs, src):
+      """fraction of each channel's variance explained by regression on one source, averaged over channels"""
+      return np.mean([np.corrcoef(x, src)[0, 1] ** 2 for x in Xs])
+  residual_blink = share(X_clean, blink) / share(X6, blink)
+  alpha_kept = abs(np.corrcoef(X_clean[0], X6[0] - A6[0, 5] * blink)[0, 1])   # against the frontal channel without blinks
+  print(f"component {blink_comp} has kurtosis {kurt[blink_comp]:.1f} (others {np.round(np.delete(kurt, blink_comp), 1)})")
+  print(f"blink share of channel variance after cleaning: {100 * residual_blink:.1f}% of before")
+  print(f"frontal channel after cleaning against the same channel without blinks: r = {alpha_kept:.3f}")
+`}
+hint="X_clean = A_hat @ Y_clean + X6.mean(1, keepdims=True)."
+solution={String.raw`
+  ge = np.random.default_rng(6122)
+  t6 = np.arange(5000) / 250
+  alpha = np.sin(2 * np.pi * 10 * t6 + 0.3 * np.cumsum(ge.normal(size=5000)) / 30)
+  slow = np.sin(2 * np.pi * 3 * t6) * (1 + 0.5 * np.sin(2 * np.pi * 0.2 * t6))
+  blink = np.zeros(5000)
+  for onset in ge.choice(4800, 12, replace=False):
+      blink[onset:onset + 100] += 8 * np.hanning(100)
+  noise = ge.laplace(size=(3, 5000))
+  S6 = np.vstack([alpha, slow, noise, blink])
+  A6 = ge.normal(size=(6, 6)); A6[:, 5] = np.abs(A6[:, 5]) * [3, 2.5, 1, 0.5, 0.3, 0.2]   # blinks are strongest at frontal channels
+  X6 = A6 @ S6
+
+  Z6, V6 = whiten(X6)
+  W6 = fastica(Z6, 6, ge)
+  Y6 = W6 @ Z6
+  kurt = (Y6 ** 4).mean(1) - 3
+  blink_comp = int(np.argmax(kurt))
+  Y_clean = Y6.copy(); Y_clean[blink_comp] = 0
+  A_hat = np.linalg.inv(W6 @ V6)
+  X_clean = A_hat @ Y_clean + X6.mean(1, keepdims=True)
+
+  def share(Xs, src):
+      """fraction of each channel's variance explained by regression on one source, averaged over channels"""
+      return np.mean([np.corrcoef(x, src)[0, 1] ** 2 for x in Xs])
+  residual_blink = share(X_clean, blink) / share(X6, blink)
+  alpha_kept = abs(np.corrcoef(X_clean[0], X6[0] - A6[0, 5] * blink)[0, 1])   # against the frontal channel without blinks
+  print(f"component {blink_comp} has kurtosis {kurt[blink_comp]:.1f} (others {np.round(np.delete(kurt, blink_comp), 1)})")
+  print(f"blink share of channel variance after cleaning: {100 * residual_blink:.1f}% of before")
+  print(f"frontal channel after cleaning against the same channel without blinks: r = {alpha_kept:.3f}")
+`} />
+
+The blink component stands out at once, with a kurtosis of 23.5 against at most 5.5 for the others: blinks are rare, large and brief, the very picture of a heavy-tailed source. Zeroing it removes 99.8% of the blink's share of channel variance, and the cleaned frontal channel correlates at 0.988 with what that channel would have recorded without blinks. In real EEG the blink is rarely this clean a single component, since more sources than channels and slight nonstationarity smear it, and components are usually chosen by inspecting their scalp maps and time courses rather than by kurtosis alone.
+
+<Bridge title="Independence in brains and machines"
+  neuro="ICA has two lives in neuroscience. As a tool, it cleans EEG and MEG, separates cells in calcium imaging and finds resting-state networks in fMRI. As a theory, it is one of the efficient-coding accounts of sensory neurons (Week 39): Bell and Sejnowski found that ICA of natural images gives localised, oriented filters like V1 simple cells."
+  ai="The identifiability problem of ICA, that Gaussian latents can be rotated freely, reappears in modern representation learning: disentangled representations cannot be learned without assumptions or supervision, because many latent bases explain the data equally well (Locatello and colleagues, 2019). Nonlinear ICA is an active line of work on when they can.">
+
+Uncorrelated is not independent; ICA uses the difference to undo a mixture.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "After whitening, the unmixing matrix is determined up to...", options: ["A rotation", "Nothing", "A scale", "A translation"], answer: 0, explain: "Step 1." },
+  { q: "ICA finds the rotation that makes the outputs...", options: ["As non-Gaussian, hence independent, as possible", "As Gaussian as possible", "Of maximum variance", "Sparse in time"], answer: 0, explain: "Step 1." },
+  { q: "Mixtures are more Gaussian than their sources because of...", options: ["The central limit theorem", "Whitening", "Noise", "Deflation"], answer: 0, explain: "Step 1." },
+  { q: "Deflation in FastICA...", options: ["Removes projections on components already found", "Shrinks the data", "Adds noise", "Whitens the data"], answer: 0, explain: "Step 2." },
+  { q: "ICA cannot recover...", options: ["Two or more Gaussian sources", "Sparse sources", "Uniform sources", "Oscillations"], answer: 0, explain: "Step 3." },
+  { q: "ICA components are determined only up to...", options: ["Order and scale, including sign", "Nothing", "Rotation", "Time shift"], answer: 0, explain: "Step 3." },
+  { q: "Blink artefacts are found as components with...", options: ["High kurtosis", "Low variance", "Gaussian distributions", "High frequency"], answer: 0, explain: "Step 4." },
+  { q: "To remove an artefact, you...", options: ["Zero its component and project back with the mixing matrix", "Delete a channel", "Low-pass filter", "Average trials"], answer: 0, explain: "Step 4." },
+]} />
+
+<Flashcards cards={[
+  { front: "ICA model?", back: "$\\mathbf x = A\\mathbf s$ with independent, non-Gaussian sources; find $W \\approx A^{-1}$." },
+  { front: "FastICA update?", back: "$\\mathbf w \\leftarrow E[\\mathbf z g(\\mathbf w^\\top\\mathbf z)] - E[g'(\\mathbf w^\\top\\mathbf z)]\\mathbf w$, then normalise." },
+  { front: "ICA ambiguities?", back: "Order, scale and sign; at most one Gaussian source." },
+  { front: "Why whiten first?", back: "It removes second-order structure, leaving only a rotation to find." },
+  { front: "Artefact removal with ICA?", back: "Unmix, zero the artefact component(s), remix with $\\hat A = W^{-1}$." },
+]} />
+
+<Predict revisit question="Could ICA unmix two Gaussian sources?" />
+
+<Key title="Before you go">
+<ul>
+<li>Whitening fixes everything but a rotation; independence fixes the rotation.</li>
+<li>FastICA maximises non-Gaussianity one component at a time.</li>
+<li>Sources are recovered up to order, scale and sign, and only if at most one is Gaussian.</li>
+<li>ICA removes artefacts that come from one source spread over many channels.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Hyvärinen and Oja (2000), <em>Independent component analysis: algorithms and applications</em>.</li>
+<li>Jung, Makeig, Humphries, Lee, McKeown, Iragui and Sejnowski (2000), <em>Removing electroencephalographic artifacts by blind source separation</em>, Psychophysiology 37(2), 163 to 178.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="ICA assumes the mixing is instantaneous and fixed. For which recordings in neuroscience is that reasonable, and for which would it fail (think of delays, moving sources, or more sources than channels)?" />

@@ -1,0 +1,281 @@
+export const meta = {
+  title: "Factor analysis: shared variability against private noise",
+  intro: "Week 7 introduced PCA, which finds the directions of greatest variance in population activity. But a neuron's variance has two sources: activity it shares with others, driven by common inputs, and private noise from its own spiking and from the recording. PCA cannot tell them apart, so a single noisy neuron can capture a principal component. Factor analysis models the two separately, which is why it is the starting point for most latent variable models of neural populations. Today you derive and implement factor analysis by EM, compare it with PCA, and choose the number of factors by cross-validation.",
+  goals: [
+    "Write factor analysis as a generative model with shared factors and private noise",
+    "Derive and implement EM for factor analysis",
+    "Show when PCA and factor analysis disagree, and why",
+    "Choose the number of factors by held-out likelihood and compute shared variance per neuron",
+  ],
+  plan: [
+    { label: "Shared and private variability", minutes: 20 },
+    { label: "EM for factor analysis", minutes: 35 },
+    { label: "How many factors?", minutes: 25 },
+    { label: "Shared variance per neuron", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "santhanam-2009",
+};
+
+<Predict question="Twenty neurons share two latent factors. One neuron has private noise ten times larger than the others. Will the first principal component mostly follow the shared factors, or mostly that one neuron?" />
+
+<Step n={1} title="Shared and private variability" minutes={20} />
+
+**Factor analysis** (FA) says that each population vector $\mathbf x \in \mathbb R^d$ is generated from $q \ll d$ latent factors:
+
+$$
+\mathbf z \sim \mathcal N(\mathbf 0, I_q),\qquad \mathbf x = \boldsymbol\mu + L\mathbf z + \boldsymbol\epsilon,\qquad \boldsymbol\epsilon \sim \mathcal N(\mathbf 0, \Psi),
+$$
+
+with a **loading matrix** $L$ ($d \times q$) and a diagonal $\Psi$ of private variances. The model's covariance is $LL^\top + \Psi$: shared covariance of low rank, plus independent noise on each neuron. If $\Psi = \sigma^2I$, all neurons equally noisy, the model is probabilistic PCA (Week 63), and its maximum-likelihood loadings span the top principal components. With unequal private noise, the two differ. Santhanam and colleagues (2009), today's paper, showed that modelling the shared and private parts separately in this way improved the decoding of reach targets from motor cortex for neural prostheses.
+
+<Video id="tw6cmL5STuY" title="Lecture 14: expectation maximisation and factor analysis" by="Andrew Ng, Stanford CS229 (2018)" note="Andrew Ng derives EM in general and then factor analysis, a model for data with few samples in many dimensions, using the same E and M steps as today's code." />
+
+<Figure caption="One shared factor drives six neurons. Raise the private noise of the sixth: the first principal component swings towards it, while factor analysis keeps the true loading." credit="Interactive figure by Engram.">
+  <FaPca />
+</Figure>
+
+<Step n={2} title="EM for factor analysis" minutes={35} />
+
+<Derivation title="The E and M steps">
+<div>
+
+Given $\mathbf x$, the factors have a Gaussian posterior (Week 48). With $\beta = L^\top(LL^\top + \Psi)^{-1}$, its mean is $E[\mathbf z \mid \mathbf x] = \beta(\mathbf x - \boldsymbol\mu)$ and its second moment, averaged over the data with covariance $S$, is $E[\mathbf z\mathbf z^\top] = I - \beta L + \beta S\beta^\top$.
+
+</div>
+<div>
+
+If the factors were known, $L$ would be found by regressing $\mathbf x$ on $\mathbf z$. Replacing the unknown sufficient statistics by their expectations gives the M step:
+
+$$
+L \leftarrow S\beta^\top\left(E[\mathbf z\mathbf z^\top]\right)^{-1},\qquad \Psi \leftarrow \text{diag}\left(S - L\beta S\right).
+$$
+
+</div>
+<div>
+
+The model is unchanged if $L$ is replaced by $LR$ for any rotation $R$, so only the subspace spanned by the loadings is identifiable, not the individual factors. Compare subspaces, for example by principal angles, not individual columns.
+
+</div>
+</Derivation>
+
+<PyCell id="fa" title="Factor analysis by EM" tests={String.raw`
+  import numpy as np
+  def test_ll():
+      "the log-likelihood never decreases during EM"
+      assert all(b >= a - 1e-6 for a, b in zip(fa_ll, fa_ll[1:]))
+  def test_subspace():
+      "factor analysis recovers the shared subspace better than PCA (smaller largest principal angle)"
+      assert angle_fa < 15 and angle_fa < angle_pca - 10
+`} prompt="Complete the E step (beta and E[zz]) and the M step (L and Psi) of fa_em, fit two factors to 400 trials of 20 neurons, and compare the largest principal angle between the true loading subspace and the subspaces from factor analysis and from the top two principal components."
+code={String.raw`
+  import numpy as np
+  from scipy.linalg import subspace_angles
+
+  def gauss_ll(S, C, n):
+      sign, logdet = np.linalg.slogdet(C)
+      return -0.5 * n * (len(S) * np.log(2 * np.pi) + logdet + np.trace(np.linalg.solve(C, S)))
+
+  def fa_em(X, q, iters=500, seed=0):
+      n, d = X.shape
+      Xc = X - X.mean(0); S = Xc.T @ Xc / n
+      g = np.random.default_rng(seed)
+      L = g.normal(size=(d, q)) * np.sqrt(np.diag(S).mean() / q); Psi = np.diag(S).copy()
+      hist = []
+      for _ in range(iters):
+          C = L @ L.T + np.diag(Psi)
+          hist.append(gauss_ll(S, C, n))
+          beta = ...                                    # q x d
+          Ezz = ...
+          L = S @ beta.T @ np.linalg.inv(Ezz)
+          Psi = np.maximum(np.diag(S - L @ beta @ S), 1e-6)
+          if len(hist) > 1 and hist[-1] - hist[-2] < 1e-7:
+              break
+      return L, Psi, hist
+
+  g1 = np.random.default_rng(611)
+  L_true = g1.normal(size=(20, 2))
+  psi_true = g1.uniform(0.3, 1.0, 20); psi_true[[3, 11]] = 12.0      # two very noisy neurons
+  Z = g1.normal(size=(400, 2))
+  X = Z @ L_true.T + g1.normal(size=(400, 20)) * np.sqrt(psi_true)
+  L_fa, Psi_fa, fa_ll = fa_em(X, 2)
+  Xc = X - X.mean(0)
+  _, _, Vt = np.linalg.svd(Xc, full_matrices=False)
+  angle_fa = np.degrees(subspace_angles(L_true, L_fa).max())
+  angle_pca = np.degrees(subspace_angles(L_true, Vt[:2].T).max())
+  print(f"EM: {len(fa_ll)} iterations, log-likelihood {fa_ll[0]:.0f} -> {fa_ll[-1]:.0f}")
+  print(f"largest angle to the true subspace: factor analysis {angle_fa:.1f} degrees, PCA {angle_pca:.1f} degrees")
+`}
+hint="beta = L.T @ np.linalg.inv(C); Ezz = np.eye(q) - beta @ L + beta @ S @ beta.T."
+solution={String.raw`
+  import numpy as np
+  from scipy.linalg import subspace_angles
+
+  def gauss_ll(S, C, n):
+      sign, logdet = np.linalg.slogdet(C)
+      return -0.5 * n * (len(S) * np.log(2 * np.pi) + logdet + np.trace(np.linalg.solve(C, S)))
+
+  def fa_em(X, q, iters=500, seed=0):
+      n, d = X.shape
+      Xc = X - X.mean(0); S = Xc.T @ Xc / n
+      g = np.random.default_rng(seed)
+      L = g.normal(size=(d, q)) * np.sqrt(np.diag(S).mean() / q); Psi = np.diag(S).copy()
+      hist = []
+      for _ in range(iters):
+          C = L @ L.T + np.diag(Psi)
+          hist.append(gauss_ll(S, C, n))
+          beta = L.T @ np.linalg.inv(C)                 # q x d
+          Ezz = np.eye(q) - beta @ L + beta @ S @ beta.T
+          L = S @ beta.T @ np.linalg.inv(Ezz)
+          Psi = np.maximum(np.diag(S - L @ beta @ S), 1e-6)
+          if len(hist) > 1 and hist[-1] - hist[-2] < 1e-7:
+              break
+      return L, Psi, hist
+
+  g1 = np.random.default_rng(611)
+  L_true = g1.normal(size=(20, 2))
+  psi_true = g1.uniform(0.3, 1.0, 20); psi_true[[3, 11]] = 12.0      # two very noisy neurons
+  Z = g1.normal(size=(400, 2))
+  X = Z @ L_true.T + g1.normal(size=(400, 20)) * np.sqrt(psi_true)
+  L_fa, Psi_fa, fa_ll = fa_em(X, 2)
+  Xc = X - X.mean(0)
+  _, _, Vt = np.linalg.svd(Xc, full_matrices=False)
+  angle_fa = np.degrees(subspace_angles(L_true, L_fa).max())
+  angle_pca = np.degrees(subspace_angles(L_true, Vt[:2].T).max())
+  print(f"EM: {len(fa_ll)} iterations, log-likelihood {fa_ll[0]:.0f} -> {fa_ll[-1]:.0f}")
+  print(f"largest angle to the true subspace: factor analysis {angle_fa:.1f} degrees, PCA {angle_pca:.1f} degrees")
+`} />
+
+EM climbs steadily for 235 iterations, and factor analysis finds a subspace within 5 degrees of the truth. The top two principal components are 35 degrees away: the two neurons with private variance of 12 have the largest total variance in the population, so PCA spends part of its two components on them. Nothing about those neurons is shared with the rest; their variance is just large. Factor analysis assigns it to $\Psi$ and fits the loadings to the covariance between neurons, which is what the shared factors produce.
+
+<Step n={3} title="How many factors?" minutes={25} />
+
+Factor analysis is a probability model, so the number of factors can be chosen as in Week 59, by held-out likelihood: fit on training trials, then evaluate $\log\mathcal N(\mathbf x;\boldsymbol\mu, LL^\top + \Psi)$ on test trials. Unlike the variance explained by PCA, which always grows with more components, held-out likelihood falls once extra factors start fitting noise.
+
+<PyCell id="choose_q" title="Cross-validated number of factors" tests={String.raw`
+  import numpy as np
+  def test_q():
+      "held-out likelihood chooses 2 factors"
+      assert q_best == 2
+  def test_fa_vs_ppca():
+      "at two factors, factor analysis has higher held-out likelihood than isotropic-noise PCA"
+      assert heldout[2] > heldout_ppca
+`} prompt="Split the trials into 300 for training and 100 for testing. For q from 1 to 5 fit factor analysis on the training trials and compute the test log-likelihood; take the smallest q within 2 units of the best. Also compute it for probabilistic PCA with q = 2, whose maximum-likelihood fit uses the top two principal components with noise variance equal to the mean of the remaining eigenvalues."
+code={String.raw`
+  tr, te = np.arange(300), np.arange(300, 400)
+  mu_tr = X[tr].mean(0)
+  Xte = X[te] - mu_tr
+  S_te = Xte.T @ Xte / len(te)
+  heldout = {}
+  for q in range(1, 6):
+      Lq, Pq, _ = fa_em(X[tr], q)
+      heldout[q] = ...
+  best_ll = max(heldout.values())
+  q_best = min(q for q in heldout if heldout[q] >= best_ll - 2)   # smallest q within 2 units of the best
+
+  S_tr = np.cov(X[tr].T, bias=True)
+  ev, U = np.linalg.eigh(S_tr); ev, U = ev[::-1], U[:, ::-1]
+  sigma2 = ev[2:].mean()
+  L_ppca = U[:, :2] * np.sqrt(ev[:2] - sigma2)
+  heldout_ppca = gauss_ll(S_te, L_ppca @ L_ppca.T + sigma2 * np.eye(20), len(te))
+  print("held-out log-likelihood by number of factors:", {q: round(float(v), 1) for q, v in heldout.items()}, "-> q =", q_best)
+  print(f"probabilistic PCA with 2 components: {heldout_ppca:.1f}")
+`}
+hint="heldout[q] = gauss_ll(S_te, Lq @ Lq.T + np.diag(Pq), len(te))."
+solution={String.raw`
+  tr, te = np.arange(300), np.arange(300, 400)
+  mu_tr = X[tr].mean(0)
+  Xte = X[te] - mu_tr
+  S_te = Xte.T @ Xte / len(te)
+  heldout = {}
+  for q in range(1, 6):
+      Lq, Pq, _ = fa_em(X[tr], q)
+      heldout[q] = gauss_ll(S_te, Lq @ Lq.T + np.diag(Pq), len(te))
+  best_ll = max(heldout.values())
+  q_best = min(q for q in heldout if heldout[q] >= best_ll - 2)   # smallest q within 2 units of the best
+
+  S_tr = np.cov(X[tr].T, bias=True)
+  ev, U = np.linalg.eigh(S_tr); ev, U = ev[::-1], U[:, ::-1]
+  sigma2 = ev[2:].mean()
+  L_ppca = U[:, :2] * np.sqrt(ev[:2] - sigma2)
+  heldout_ppca = gauss_ll(S_te, L_ppca @ L_ppca.T + sigma2 * np.eye(20), len(te))
+  print("held-out log-likelihood by number of factors:", {q: round(float(v), 1) for q, v in heldout.items()}, "-> q =", q_best)
+  print(f"probabilistic PCA with 2 components: {heldout_ppca:.1f}")
+`} />
+
+Held-out likelihood rises steeply from one factor to two, by about 480 units, and then is flat: three factors score 0.6 units higher than two, and four and five slightly lower. Differences of a unit or two on 100 test trials are noise, so the rule takes the smallest number of factors within 2 units of the best, the same logic as the one-standard-error rule. Probabilistic PCA with two components scores far lower, −3,714 against −3,024, because forcing equal noise on every neuron fits the two noisy neurons badly. When neurons differ in reliability, as recorded neurons always do, factor analysis is the better model of the population.
+
+<Step n={4} title="Shared variance per neuron" minutes={25} />
+
+Factor analysis splits each neuron's variance into a shared part, the diagonal of $LL^\top$, and a private part, $\psi_i$. The fraction $\text{diag}(LL^\top)_i/(\text{diag}(LL^\top)_i + \psi_i)$, sometimes called the neuron's **communality** or percent shared variance, has become a standard summary in population studies: it changes with attention, learning and brain state, and these changes can be measured without knowing what the shared factors represent (Williamson and colleagues, 2016).
+
+<PyCell id="shared" title="Percent shared variance" tests={String.raw`
+  import numpy as np
+  def test_shared():
+      "estimated shared fractions correlate with the truth above 0.9, and the two noisy neurons have the lowest"
+      assert np.corrcoef(shared_hat, shared_true)[0, 1] > 0.9 and set(np.argsort(shared_hat)[:2]) == {3, 11}
+`} prompt="Compute the true and estimated fraction of shared variance for each neuron, using the factor analysis fit to all 400 trials."
+code={String.raw`
+  shared_true = (L_true ** 2).sum(1) / ((L_true ** 2).sum(1) + psi_true)
+  shared_hat = ...
+  print("true:     ", np.round(shared_true, 2))
+  print("estimated:", np.round(shared_hat, 2))
+  print(f"mean percent shared variance: true {100 * shared_true.mean():.1f}%, estimated {100 * shared_hat.mean():.1f}%")
+`}
+hint="shared_hat = (L_fa ** 2).sum(1) / ((L_fa ** 2).sum(1) + Psi_fa). The diagonal of L L^T is unchanged by rotating the factors."
+solution={String.raw`
+  shared_true = (L_true ** 2).sum(1) / ((L_true ** 2).sum(1) + psi_true)
+  shared_hat = (L_fa ** 2).sum(1) / ((L_fa ** 2).sum(1) + Psi_fa)
+  print("true:     ", np.round(shared_true, 2))
+  print("estimated:", np.round(shared_hat, 2))
+  print(f"mean percent shared variance: true {100 * shared_true.mean():.1f}%, estimated {100 * shared_hat.mean():.1f}%")
+`} />
+
+The estimated shared fractions match the truth closely, neuron by neuron, from 7% shared variance for one of the noisy neurons to 94% for the most coupled one, and the population mean is 63.5% against a true 63.4%. Because $\text{diag}(LL^\top)$ does not change when the factors are rotated, this summary avoids the identifiability problem of the loadings themselves. It still depends on the number of factors: with too few, some shared variance is counted as private; with too many, some private variance as shared.
+
+<Bridge title="Shared variability in brains and machines"
+  neuro="Factor analysis and its descendants are central to population neuroscience: shared variability falls with attention and with stimulus onset, the dimensionality of shared activity can be compared across areas and conditions, and Gaussian-process factor analysis (Week 63) extends the model to smooth trajectories over time. The split between shared and private variance asks how much of a neuron's variability reflects the network rather than the neuron."
+  ai="Factor analysis is the linear Gaussian ancestor of the variational autoencoder: a decoder maps a low-dimensional Gaussian latent to the data, with independent noise per output. Replace the linear map with a neural network and fit by variational inference, and you have the models of Week 63.">
+
+PCA explains variance; factor analysis explains covariance.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Factor analysis models the covariance as...", options: ["LLᵀ + Ψ with Ψ diagonal", "σ²I", "A full matrix", "LLᵀ only"], answer: 0, explain: "Step 1." },
+  { q: "Probabilistic PCA is factor analysis with...", options: ["Equal private noise on every neuron", "No noise", "Diagonal L", "One factor"], answer: 0, explain: "Step 1." },
+  { q: "A single very noisy neuron tends to...", options: ["Pull a principal component towards itself", "Be ignored by PCA", "Break factor analysis", "Reduce shared variance of others"], answer: 0, explain: "The figure." },
+  { q: "The loadings of factor analysis are identifiable only up to...", options: ["A rotation", "A sign", "Nothing", "A scale"], answer: 0, explain: "The derivation." },
+  { q: "The E step of factor analysis computes...", options: ["The posterior mean and second moment of the factors", "The loadings", "The private variances", "The eigenvalues"], answer: 0, explain: "The derivation." },
+  { q: "The number of factors is best chosen by...", options: ["Held-out likelihood", "Variance explained on training data", "Always 2", "The number of neurons"], answer: 0, explain: "Step 3." },
+  { q: "Percent shared variance of a neuron is...", options: ["diag(LLᵀ)ᵢ over its total variance", "ψᵢ over total", "Its firing rate", "Its loading on factor 1"], answer: 0, explain: "Step 4." },
+  { q: "Percent shared variance is unchanged by rotating the factors because...", options: ["diag(LLᵀ) is rotation invariant", "Rotations are not allowed", "Ψ changes too", "It is a coincidence"], answer: 0, explain: "Step 4." },
+]} />
+
+<Flashcards cards={[
+  { front: "Factor analysis model?", back: "$\\mathbf x = \\boldsymbol\\mu + L\\mathbf z + \\boldsymbol\\epsilon$, $\\mathbf z \\sim \\mathcal N(0, I)$, $\\boldsymbol\\epsilon \\sim \\mathcal N(0, \\Psi)$ with $\\Psi$ diagonal." },
+  { front: "FA E step?", back: "$\\beta = L^\\top(LL^\\top + \\Psi)^{-1}$; $E[\\mathbf z\\mathbf z^\\top] = I - \\beta L + \\beta S\\beta^\\top$." },
+  { front: "FA M step?", back: "$L = S\\beta^\\top E[\\mathbf z\\mathbf z^\\top]^{-1}$; $\\Psi = \\text{diag}(S - L\\beta S)$." },
+  { front: "PCA against FA?", back: "PCA explains total variance with isotropic noise; FA separates shared covariance from per-neuron private noise." },
+  { front: "Percent shared variance?", back: "$\\text{diag}(LL^\\top)_i/(\\text{diag}(LL^\\top)_i + \\psi_i)$" },
+]} />
+
+<Predict revisit question="Did the first principal components follow the shared factors or the noisy neurons?" />
+
+<Key title="Before you go">
+<ul>
+<li>Factor analysis separates shared covariance (LLᵀ) from private noise (diagonal Ψ).</li>
+<li>EM fits it with the same logic as mixtures: infer the latent, refit as if it were known.</li>
+<li>PCA is pulled by noisy neurons; factor analysis is not.</li>
+<li>Choose the number of factors by held-out likelihood; summarise neurons by percent shared variance.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Santhanam, Yu, Gilja, Ryu, Afshar, Sahani and Shenoy (2009), <em>Factor-analysis methods for higher-performance neural prostheses</em>.</li>
+<li>Williamson, Cowley, Litwin-Kumar, Doiron, Kohn, Smith and Yu (2016), <em>Scaling properties of dimensionality reduction for neural populations and network models</em>, PLoS Computational Biology 12(12), e1005141.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Percent shared variance falls when an animal attends to a stimulus. Propose two different mechanisms that would produce that change, and say what further analysis of the factor analysis fit would tell them apart." />

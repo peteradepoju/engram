@@ -6,7 +6,7 @@ import { gauss, rng, Slider, Stat } from "./util";
 const TYPES = [
   { name: "narrow", width: 0.25, ratio: 0.7, col: "var(--neuro)" },
   { name: "broad", width: 0.55, ratio: 0.35, col: "var(--ai)" },
-  { name: "intermediate", width: 0.4, ratio: 0.55, col: "var(--accent)" },
+  { name: "intermediate", width: 0.4, ratio: 0.55, col: "var(--warn)" },
 ];
 
 /** Spike waveforms of three putative types, and how spread within types blurs the clusters. */
