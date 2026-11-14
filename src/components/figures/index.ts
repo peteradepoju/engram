@@ -296,3 +296,8 @@ export { KernelPrior } from "./kernel-prior";
 export { GpPosterior } from "./gp-posterior";
 export { MarginalLikelihood } from "./marginal-likelihood";
 export { BayesOpt } from "./bayes-opt";
+export { ViterbiPath } from "./viterbi-path";
+export { KalmanGain } from "./kalman-gain";
+export { SmootherLag } from "./smoother-lag";
+export { LdsRotation } from "./lds-rotation";
+export { SwitchingLds } from "./switching-lds";

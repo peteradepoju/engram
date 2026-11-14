@@ -1,0 +1,369 @@
+export const meta = {
+  title: "State-space models of populations and behaviour",
+  intro: "The linear Gaussian model of Day 4 assumes two things that neural data violate: Gaussian observations, when spikes are counts, and a single regime, when brains and animals switch between them. Today you relax both. Poisson observations are handled by a Laplace approximation inside the smoother, giving the PLDS used for population recordings. Switching dynamics are handled by a discrete state that chooses which linear system is running, which is how behaviour is segmented into motifs. You finish with the checks that decide whether such a model has found anything real.",
+  goals: [
+    "Fit a Poisson linear dynamical system by Laplace-approximate smoothing",
+    "Compare it with a Gaussian LDS on square-root counts at low firing rates",
+    "Implement inference in a switching linear dynamical system by the forward-backward algorithm over regimes",
+    "Validate a state-space model by co-smoothing and simulation",
+  ],
+  plan: [
+    { label: "Poisson observations", minutes: 35 },
+    { label: "When Gaussian is good enough", minutes: 20 },
+    { label: "Switching dynamics", minutes: 35 },
+    { label: "Checks", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "macke-2011",
+};
+
+<Predict question="A population fires at about 0.3 spikes per bin. Will a Gaussian model fitted to square-root counts recover the latent trajectory about as well as a Poisson model, or clearly worse?" />
+
+<Step n={1} title="Poisson observations" minutes={35} />
+
+The **Poisson linear dynamical system** (PLDS; Macke and colleagues, 2011, today's paper) keeps the linear Gaussian dynamics, $\mathbf z_t = A\mathbf z_{t-1} + \mathbf w_t$, but emits spike counts with rates $\lambda_{tn} = \exp(\mathbf c_n^\top\mathbf z_t + d_n)$. The posterior over the latent path is no longer Gaussian, so inference uses a **Laplace approximation**: find the mode of the log posterior over the whole trajectory by Newton's method, then take the Hessian there as the posterior precision. Because the log prior's precision is block-tridiagonal and the likelihood contributes only block-diagonal terms, each Newton step costs time linear in the length of the recording.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.linalg import block_diag
+  g0 = np.random.default_rng(655)
+  T, d, N = 250, 2, 30
+  th = 0.07
+  A = 0.99 * np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
+  Q = 0.02 * np.eye(d)
+  C = 0.8 * g0.normal(size=(N, d)); dbase = np.log(0.3) * np.ones(N)
+  z = np.zeros((T, d)); z[0] = [1.5, 0]
+  for t in range(1, T):
+      z[t] = A @ z[t - 1] + g0.multivariate_normal(np.zeros(d), Q)
+  rates = np.exp(z @ C.T + dbase)
+  X = g0.poisson(rates)
+  print(f"{X.sum()} spikes, mean {X.mean():.2f} per neuron per bin, {np.mean(X == 0):.0%} empty bins")
+`} />
+
+<PyCell id="plds" title="Laplace smoothing for a PLDS" tests={String.raw`
+  import numpy as np
+  def test_converge():
+      "Newton's method converges: the log posterior rises and then stops changing"
+      assert obj_hist[-1] > obj_hist[0] and abs(obj_hist[-1] - obj_hist[-2]) < 1e-6
+  def test_recover():
+      "the inferred latent path matches the truth (subspace correlation above 0.9)"
+      assert sub_corr > 0.9
+`} prompt="Complete the gradient and Hessian of the log posterior over the whole latent path for the PLDS, and run Newton's method. The prior precision Lam is supplied; the likelihood contributes C^T (x - lambda) to the gradient and block-diagonal C^T diag(lambda) C to the Hessian."
+code={String.raw`
+  # block-tridiagonal prior precision of the latent path under the LDS prior
+  Qi = np.linalg.inv(Q); Ai = A.T @ Qi
+  Lam = np.zeros((T * d, T * d))
+  for t in range(T):
+      blk = Qi + (A.T @ Qi @ A if t < T - 1 else np.zeros((d, d)))
+      if t == 0: blk = np.linalg.inv(np.eye(d)) + A.T @ Qi @ A
+      Lam[t * d:(t + 1) * d, t * d:(t + 1) * d] = blk
+      if t:
+          Lam[t * d:(t + 1) * d, (t - 1) * d:t * d] = -Qi @ A
+          Lam[(t - 1) * d:t * d, t * d:(t + 1) * d] = -(Qi @ A).T
+
+  zc = np.zeros(T * d)
+  obj_hist = []
+  for it in range(30):
+      Z = zc.reshape(T, d)
+      lam = np.exp(Z @ C.T + dbase)
+      ll = np.sum(X * (Z @ C.T + dbase) - lam)
+      obj_hist.append(ll - 0.5 * zc @ Lam @ zc)
+      grad = ...                                          # (T d,) : likelihood term minus Lam z
+      H = Lam + block_diag(*[C.T @ np.diag(lam[t]) @ C for t in range(T)])
+      zc = zc + np.linalg.solve(H, grad)
+  Zhat = zc.reshape(T, d)
+  U_true = np.linalg.qr(z)[0]; U_hat = np.linalg.qr(Zhat)[0]
+  sub_corr = np.mean(np.abs(np.linalg.svd(U_true.T @ U_hat, compute_uv=False)))
+  print(f"{len(obj_hist)} Newton steps; log posterior {obj_hist[0]:.1f} -> {obj_hist[-1]:.1f}")
+  print(f"subspace agreement with the true latent path: {sub_corr:.3f}")
+`}
+hint="grad = ((X - lam) @ C).reshape(-1) - Lam @ zc."
+solution={String.raw`
+  # block-tridiagonal prior precision of the latent path under the LDS prior
+  Qi = np.linalg.inv(Q); Ai = A.T @ Qi
+  Lam = np.zeros((T * d, T * d))
+  for t in range(T):
+      blk = Qi + (A.T @ Qi @ A if t < T - 1 else np.zeros((d, d)))
+      if t == 0: blk = np.linalg.inv(np.eye(d)) + A.T @ Qi @ A
+      Lam[t * d:(t + 1) * d, t * d:(t + 1) * d] = blk
+      if t:
+          Lam[t * d:(t + 1) * d, (t - 1) * d:t * d] = -Qi @ A
+          Lam[(t - 1) * d:t * d, t * d:(t + 1) * d] = -(Qi @ A).T
+
+  zc = np.zeros(T * d)
+  obj_hist = []
+  for it in range(30):
+      Z = zc.reshape(T, d)
+      lam = np.exp(Z @ C.T + dbase)
+      ll = np.sum(X * (Z @ C.T + dbase) - lam)
+      obj_hist.append(ll - 0.5 * zc @ Lam @ zc)
+      grad = ((X - lam) @ C).reshape(-1) - Lam @ zc        # (T d,) : likelihood term minus Lam z
+      H = Lam + block_diag(*[C.T @ np.diag(lam[t]) @ C for t in range(T)])
+      zc = zc + np.linalg.solve(H, grad)
+  Zhat = zc.reshape(T, d)
+  U_true = np.linalg.qr(z)[0]; U_hat = np.linalg.qr(Zhat)[0]
+  sub_corr = np.mean(np.abs(np.linalg.svd(U_true.T @ U_hat, compute_uv=False)))
+  print(f"{len(obj_hist)} Newton steps; log posterior {obj_hist[0]:.1f} -> {obj_hist[-1]:.1f}")
+  print(f"subspace agreement with the true latent path: {sub_corr:.3f}")
+`} />
+
+Newton's method raises the log posterior from $-6782$ to $-4493$ and converges in a handful of steps, and the inferred path spans almost exactly the same subspace as the true one (agreement 0.986) from a population firing at 0.3 spikes per bin, where 60% of bins are empty. The Hessian is the sum of a block-tridiagonal prior precision and a block-diagonal likelihood term, so it is itself block-tridiagonal: solving with it costs time linear in the recording, which is what makes the method practical for long sessions. Its inverse also gives the posterior covariance, needed for the M step when the model is learned rather than given.
+
+<Step n={2} title="When Gaussian is good enough" minutes={20} />
+
+The Gaussian model with square-root counts is far simpler and is often used. The question is when it costs accuracy.
+
+<PyCell id="compare" title="Poisson against Gaussian at low rates" tests={String.raw`
+  import numpy as np
+  def test_low():
+      "at low firing rates the Poisson model recovers the latent better"
+      assert res[0.3]["poisson"] > res[0.3]["gauss"] + 0.02
+  def test_high():
+      "at high rates the two are close"
+      assert abs(res[5.0]["poisson"] - res[5.0]["gauss"]) < 0.03
+`} prompt="For baseline rates of 0.3 and 5 spikes per bin, simulate counts from the same latent path, infer with the Laplace PLDS and with a Kalman smoother on square-root counts (true C and noise from the data), and compare subspace agreement with the truth."
+code={String.raw`
+  def laplace_latents(Xc, base):
+      zc_ = np.zeros(T * d)
+      for it in range(30):
+          Z_ = zc_.reshape(T, d)
+          lam_ = np.exp(Z_ @ C.T + base)
+          g_ = ((Xc - lam_) @ C).reshape(-1) - Lam @ zc_
+          H_ = Lam + block_diag(*[C.T @ np.diag(lam_[t]) @ C for t in range(T)])
+          zc_ = zc_ + np.linalg.solve(H_, g_)
+      return zc_.reshape(T, d)
+
+  def kalman_latents(Y, Cg, Rg):
+      m, P = np.zeros(d), np.eye(d)
+      ms, Ps, mp, Pp = [], [], [], []
+      for t in range(T):
+          if t: m, P = A @ m, A @ P @ A.T + Q
+          mp.append(m.copy()); Pp.append(P.copy())
+          S = Cg @ P @ Cg.T + Rg
+          K = P @ Cg.T @ np.linalg.inv(S)
+          m = m + K @ (Y[t] - Cg @ m); P = (np.eye(d) - K @ Cg) @ P
+          ms.append(m.copy()); Ps.append(P.copy())
+      ms, Ps, mp, Pp = map(np.array, (ms, Ps, mp, Pp))
+      mh = ms.copy()
+      for t in range(T - 2, -1, -1):
+          J = Ps[t] @ A.T @ np.linalg.inv(Pp[t + 1])
+          mh[t] = ms[t] + J @ (mh[t + 1] - mp[t + 1])
+      return mh
+
+  agree = lambda Zh: np.mean(np.abs(np.linalg.svd(np.linalg.qr(z)[0].T @ np.linalg.qr(Zh)[0], compute_uv=False)))
+  gc = np.random.default_rng(6551)
+  res = {}
+  for base_rate in (0.3, 5.0):
+      base = np.log(base_rate) * np.ones(N)
+      Xr = gc.poisson(np.exp(z @ C.T + base))
+      Zp = laplace_latents(Xr, base)
+      Y = np.sqrt(Xr); Y = Y - Y.mean(0)
+      Cg = np.linalg.lstsq(z, Y, rcond=None)[0].T                      # loadings for the square-root counts
+      Rg = np.diag(np.var(Y - z @ Cg.T, axis=0))
+      Zg = kalman_latents(Y, Cg, Rg)
+      res[base_rate] = {"poisson": agree(Zp), "gauss": ...}
+      print(f"baseline {base_rate} spikes per bin: Poisson {res[base_rate]['poisson']:.3f}, Gaussian on sqrt counts {res[base_rate]['gauss']:.3f}")
+`}
+hint='res[base_rate] = {"poisson": agree(Zp), "gauss": agree(Zg)}.'
+solution={String.raw`
+  def laplace_latents(Xc, base):
+      zc_ = np.zeros(T * d)
+      for it in range(30):
+          Z_ = zc_.reshape(T, d)
+          lam_ = np.exp(Z_ @ C.T + base)
+          g_ = ((Xc - lam_) @ C).reshape(-1) - Lam @ zc_
+          H_ = Lam + block_diag(*[C.T @ np.diag(lam_[t]) @ C for t in range(T)])
+          zc_ = zc_ + np.linalg.solve(H_, g_)
+      return zc_.reshape(T, d)
+
+  def kalman_latents(Y, Cg, Rg):
+      m, P = np.zeros(d), np.eye(d)
+      ms, Ps, mp, Pp = [], [], [], []
+      for t in range(T):
+          if t: m, P = A @ m, A @ P @ A.T + Q
+          mp.append(m.copy()); Pp.append(P.copy())
+          S = Cg @ P @ Cg.T + Rg
+          K = P @ Cg.T @ np.linalg.inv(S)
+          m = m + K @ (Y[t] - Cg @ m); P = (np.eye(d) - K @ Cg) @ P
+          ms.append(m.copy()); Ps.append(P.copy())
+      ms, Ps, mp, Pp = map(np.array, (ms, Ps, mp, Pp))
+      mh = ms.copy()
+      for t in range(T - 2, -1, -1):
+          J = Ps[t] @ A.T @ np.linalg.inv(Pp[t + 1])
+          mh[t] = ms[t] + J @ (mh[t + 1] - mp[t + 1])
+      return mh
+
+  agree = lambda Zh: np.mean(np.abs(np.linalg.svd(np.linalg.qr(z)[0].T @ np.linalg.qr(Zh)[0], compute_uv=False)))
+  gc = np.random.default_rng(6551)
+  res = {}
+  for base_rate in (0.3, 5.0):
+      base = np.log(base_rate) * np.ones(N)
+      Xr = gc.poisson(np.exp(z @ C.T + base))
+      Zp = laplace_latents(Xr, base)
+      Y = np.sqrt(Xr); Y = Y - Y.mean(0)
+      Cg = np.linalg.lstsq(z, Y, rcond=None)[0].T                      # loadings for the square-root counts
+      Rg = np.diag(np.var(Y - z @ Cg.T, axis=0))
+      Zg = kalman_latents(Y, Cg, Rg)
+      res[base_rate] = {"poisson": agree(Zp), "gauss": agree(Zg)}
+      print(f"baseline {base_rate} spikes per bin: Poisson {res[base_rate]['poisson']:.3f}, Gaussian on sqrt counts {res[base_rate]['gauss']:.3f}")
+`} />
+
+At 0.3 spikes per bin the Poisson model agrees with the true latent subspace at 0.987 against 0.965 for the Gaussian model on square-root counts; at 5 spikes per bin the gap narrows to 0.997 against 0.984. The square-root transform is doing its job, stabilising the variance, but at low rates the counts are mostly zeros and ones, for which no transform makes a Gaussian a good description. The practical rule: with a few spikes per bin or more, the Gaussian shortcut costs little and is much simpler; below that, use Poisson, which is also where most single-trial analyses live.
+
+<Step n={3} title="Switching dynamics" minutes={35} />
+
+A **switching linear dynamical system** has a discrete state $s_t$, evolving as a Markov chain, that selects which linear dynamics govern the continuous state. Exact inference is intractable, because the posterior over the continuous state becomes a mixture with a number of components growing exponentially in time, so practical methods approximate (assumed density filtering, variational inference, or sampling). When the continuous state is directly observed, as in a behavioural time series, the regimes can be inferred exactly with the forward-backward algorithm of Day 1, with the emission likelihood of each regime given by its one-step prediction.
+
+<Figure caption="A continuous state whose dynamics switch between regimes. Each regime has its own decay, drift and noise, and the discrete state persists." credit="Interactive figure by Engram, after Linderman and colleagues (2017)." >
+  <SwitchingLds />
+</Figure>
+
+<PyCell id="slds" title="Segmenting behaviour into regimes" tests={String.raw`
+  import numpy as np
+  def test_segment():
+      "the inferred regimes match the true ones on more than 85% of time steps"
+      assert acc_seg > 0.85
+  def test_params():
+      "the learned regime dynamics separate the three motifs"
+      assert len(set(np.round(np.array(a_hat), 1))) == 3
+`} prompt="Simulate 1,500 steps of a one-dimensional behavioural variable whose dynamics switch between three regimes. Complete the emission likelihoods (the one-step prediction density of each regime), run forward-backward to infer the regimes, and update each regime's parameters by weighted least squares. Repeat for 25 EM iterations."
+code={String.raw`
+  gs = np.random.default_rng(6552)
+  Tb = 1500
+  truth = [(0.5, 0.0, 0.05), (0.95, 0.3, 0.05), (0.7, -0.4, 0.25)]      # (decay, drift, noise variance)
+  P_sw = np.full((3, 3), 0.01); np.fill_diagonal(P_sw, 0.98)
+  s_true = np.zeros(Tb, int); v = np.zeros(Tb)
+  for t in range(1, Tb):
+      s_true[t] = gs.choice(3, p=P_sw[s_true[t - 1]])
+      a_, b_, q_ = truth[s_true[t]]
+      v[t] = a_ * v[t - 1] + b_ + np.sqrt(q_) * gs.normal()
+
+  a_hat, b_hat, q_hat = [0.8, 0.8, 0.8], [0.0, 0.1, -0.1], [0.2, 0.2, 0.2]
+  Phat = np.full((3, 3), 0.05); np.fill_diagonal(Phat, 0.9)
+  for it in range(25):
+      B = np.zeros((Tb - 1, 3))
+      for k in range(3):
+          pred = a_hat[k] * v[:-1] + b_hat[k]
+          B[:, k] = ...                                   # density of v[1:] under regime k
+      B += 1e-300
+      al = np.zeros((Tb - 1, 3)); c = np.zeros(Tb - 1); be = np.ones((Tb - 1, 3))
+      a0 = np.full(3, 1 / 3) * B[0]; c[0] = a0.sum(); al[0] = a0 / c[0]
+      for t in range(1, Tb - 1):
+          a0 = B[t] * (al[t - 1] @ Phat); c[t] = a0.sum(); al[t] = a0 / c[t]
+      for t in range(Tb - 3, -1, -1):
+          be[t] = (Phat @ (B[t + 1] * be[t + 1])) / c[t + 1]
+      gam = al * be; gam /= gam.sum(1, keepdims=True)
+      xi = al[:-1, :, None] * Phat[None] * (B[1:] * be[1:])[:, None, :]
+      xi /= xi.sum((1, 2), keepdims=True)
+      Phat = xi.sum(0) / xi.sum(0).sum(1, keepdims=True)
+      for k in range(3):
+          w = gam[:, k]
+          Xd = np.column_stack([v[:-1], np.ones(Tb - 1)])
+          sol = np.linalg.solve(Xd.T @ (Xd * w[:, None]), Xd.T @ (w * v[1:]))
+          a_hat[k], b_hat[k] = sol
+          q_hat[k] = max(np.sum(w * (v[1:] - Xd @ sol) ** 2) / w.sum(), 1e-4)
+  seg = gam.argmax(1)
+  order = np.argsort(a_hat)
+  acc_seg = max(np.mean(np.array(perm)[seg] == s_true[1:]) for perm in __import__("itertools").permutations(range(3)))
+  print(f"segmentation accuracy {acc_seg:.3f}")
+  print("learned (decay, drift, noise):", [(round(float(a_hat[k]), 2), round(float(b_hat[k]), 2), round(float(q_hat[k]), 3)) for k in order])
+  print("true:                        ", [tuple(round(x, 2) for x in truth[k]) for k in np.argsort([t[0] for t in truth])])
+`}
+hint="B[:, k] = np.exp(-0.5 * (v[1:] - pred) ** 2 / q_hat[k]) / np.sqrt(2 * np.pi * q_hat[k])."
+solution={String.raw`
+  gs = np.random.default_rng(6552)
+  Tb = 1500
+  truth = [(0.5, 0.0, 0.05), (0.95, 0.3, 0.05), (0.7, -0.4, 0.25)]      # (decay, drift, noise variance)
+  P_sw = np.full((3, 3), 0.01); np.fill_diagonal(P_sw, 0.98)
+  s_true = np.zeros(Tb, int); v = np.zeros(Tb)
+  for t in range(1, Tb):
+      s_true[t] = gs.choice(3, p=P_sw[s_true[t - 1]])
+      a_, b_, q_ = truth[s_true[t]]
+      v[t] = a_ * v[t - 1] + b_ + np.sqrt(q_) * gs.normal()
+
+  a_hat, b_hat, q_hat = [0.8, 0.8, 0.8], [0.0, 0.1, -0.1], [0.2, 0.2, 0.2]
+  Phat = np.full((3, 3), 0.05); np.fill_diagonal(Phat, 0.9)
+  for it in range(25):
+      B = np.zeros((Tb - 1, 3))
+      for k in range(3):
+          pred = a_hat[k] * v[:-1] + b_hat[k]
+          B[:, k] = np.exp(-0.5 * (v[1:] - pred) ** 2 / q_hat[k]) / np.sqrt(2 * np.pi * q_hat[k])   # density of v[1:] under regime k
+      B += 1e-300
+      al = np.zeros((Tb - 1, 3)); c = np.zeros(Tb - 1); be = np.ones((Tb - 1, 3))
+      a0 = np.full(3, 1 / 3) * B[0]; c[0] = a0.sum(); al[0] = a0 / c[0]
+      for t in range(1, Tb - 1):
+          a0 = B[t] * (al[t - 1] @ Phat); c[t] = a0.sum(); al[t] = a0 / c[t]
+      for t in range(Tb - 3, -1, -1):
+          be[t] = (Phat @ (B[t + 1] * be[t + 1])) / c[t + 1]
+      gam = al * be; gam /= gam.sum(1, keepdims=True)
+      xi = al[:-1, :, None] * Phat[None] * (B[1:] * be[1:])[:, None, :]
+      xi /= xi.sum((1, 2), keepdims=True)
+      Phat = xi.sum(0) / xi.sum(0).sum(1, keepdims=True)
+      for k in range(3):
+          w = gam[:, k]
+          Xd = np.column_stack([v[:-1], np.ones(Tb - 1)])
+          sol = np.linalg.solve(Xd.T @ (Xd * w[:, None]), Xd.T @ (w * v[1:]))
+          a_hat[k], b_hat[k] = sol
+          q_hat[k] = max(np.sum(w * (v[1:] - Xd @ sol) ** 2) / w.sum(), 1e-4)
+  seg = gam.argmax(1)
+  order = np.argsort(a_hat)
+  acc_seg = max(np.mean(np.array(perm)[seg] == s_true[1:]) for perm in __import__("itertools").permutations(range(3)))
+  print(f"segmentation accuracy {acc_seg:.3f}")
+  print("learned (decay, drift, noise):", [(round(float(a_hat[k]), 2), round(float(b_hat[k]), 2), round(float(q_hat[k]), 3)) for k in order])
+  print("true:                        ", [tuple(round(x, 2) for x in truth[k]) for k in np.argsort([t[0] for t in truth])])
+`} />
+
+EM recovers the three regimes almost perfectly: 98.5% of time steps are assigned to the right regime, and the learned dynamics, $(0.50, 0.00, 0.05)$, $(0.72, -0.39, 0.23)$ and $(0.96, 0.26, 0.05)$, match the generating ones. Here the continuous state was observed, so the regimes could be inferred exactly by forward-backward, with each regime's emission likelihood being how well it predicts the next value. In neural data the continuous state is itself latent, and the two layers of inference interact, which is why recurrent switching models (Linderman and colleagues, 2017) use variational methods or sampling.
+
+<Step n={4} title="Checks" minutes={15} />
+
+A state-space model of a population should pass three checks before its states or dynamics are interpreted. **Co-smoothing** (Day 4): can it predict neurons it never saw, from latents inferred from the rest? **Simulation**: do data generated by the fitted model look like the real data in statistics it was not fitted to, such as interspike intervals, pairwise correlations or dwell times? **Stability**: do the latent dimensionality, the eigenvalues and the segmentation survive refitting on halves of the data or on other sessions? Models with many parameters and flexible dynamics can fit anything, and these checks are what separate a description from an artefact.
+
+<Bridge title="State-space models in brains and machines"
+  neuro="PLDS and its descendants are standard for population recordings, and switching models have segmented freely moving behaviour into motifs, fly and mouse movements into syllables, and task strategies into states. The neuroscientific claim is usually about the dynamics, rotations, attractors, switch times, so identifiability (Day 4) and the checks above decide how much of the claim is supported."
+  ai="The same models are the classical core of time-series analysis, and modern deep state-space models for long sequences trace back to them. Switching models are the probabilistic counterpart of segmenting a sequence into modes, as in piecewise system identification and in hierarchical reinforcement learning.">
+
+Observations that are counts need Poisson; behaviour made of motifs needs switches; both need checks.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A PLDS emits...", options: ["Poisson counts with log rates linear in the latent", "Gaussian observations", "Binary states", "Square-root counts"], answer: 0, explain: "Step 1." },
+  { q: "Its posterior over the latent path is approximated by...", options: ["A Laplace approximation at the mode", "Exact conditioning", "A mixture of Gaussians", "Sampling only"], answer: 0, explain: "Step 1." },
+  { q: "Newton steps for the PLDS cost linear time because...", options: ["The Hessian is block-tridiagonal", "The data are sparse", "The latent is one-dimensional", "There are few neurons"], answer: 0, explain: "Step 1." },
+  { q: "At low firing rates, the Gaussian square-root model...", options: ["Recovers the latent less well than Poisson", "Is better", "Is identical", "Cannot be fitted"], answer: 0, explain: "Step 2." },
+  { q: "In a switching LDS, the discrete state...", options: ["Chooses which linear dynamics apply", "Is the observation", "Is fixed", "Replaces the latent"], answer: 0, explain: "Step 3." },
+  { q: "Exact inference in a switching LDS is intractable because...", options: ["The posterior is a mixture whose components multiply with time", "The data are noisy", "There are too many neurons", "The dynamics are nonlinear"], answer: 0, explain: "Step 3." },
+  { q: "When the continuous state is observed, regimes can be inferred by...", options: ["Forward-backward with one-step prediction likelihoods", "PCA", "k-means on the raw values", "Nothing"], answer: 0, explain: "Step 3." },
+  { q: "A good check of a fitted state-space model is...", options: ["Predicting held-out neurons and simulating statistics it was not fitted to", "Refitting on the same data", "Using more latents", "Reporting the likelihood only"], answer: 0, explain: "Step 4." },
+]} />
+
+<Flashcards cards={[
+  { front: "PLDS?", back: "Linear Gaussian latent dynamics with Poisson observations, $\\lambda_{tn} = \\exp(\\mathbf c_n^\\top\\mathbf z_t + d_n)$." },
+  { front: "Laplace smoothing?", back: "Newton's method to the mode of the log posterior over the whole path; Hessian gives the posterior precision." },
+  { front: "Switching LDS?", back: "A Markov discrete state selects which linear dynamics govern the continuous state." },
+  { front: "Why is SLDS inference hard?", back: "The exact posterior is a mixture with a component per discrete path, growing exponentially." },
+  { front: "Three checks?", back: "Co-smoothing, simulation of unfitted statistics, and stability across splits or sessions." },
+]} />
+
+<Predict revisit question="How did the Gaussian square-root model compare with Poisson at 0.3 spikes per bin?" />
+
+<Key title="Before you go">
+<ul>
+<li>PLDS keeps linear dynamics with Poisson spiking; Laplace smoothing is its E step.</li>
+<li>The Gaussian square-root shortcut costs accuracy at low rates and is fine at high ones.</li>
+<li>Switching models describe sequences of regimes; exact inference is intractable but good approximations exist.</li>
+<li>Co-smoothing, simulation and stability decide whether the fitted dynamics mean anything.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Macke, Buesing, Cunningham, Yu, Shenoy and Sahani (2011), <em>Empirical models of spiking in neural populations</em>, Advances in Neural Information Processing Systems 24.</li>
+<li>Linderman, Johnson, Miller, Adams, Blei and Paninski (2017), <em>Bayesian learning and inference in recurrent switching linear dynamical systems</em>, AISTATS, PMLR 54, 914 to 922.</li>
+<li>Wiltschko and colleagues (2015), <em>Mapping sub-second structure in mouse behavior</em>, Neuron 88(6), 1121 to 1135.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Choose a dataset you know: population spikes, pose tracking or a behavioural time series. Which of today's models fits it, what would its states or dynamics mean, and which of the three checks would be hardest to pass?" />

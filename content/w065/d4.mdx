@@ -1,0 +1,397 @@
+export const meta = {
+  title: "Smoothing and learning linear dynamical systems",
+  intro: "The Kalman filter estimates the state from the past. For analysing a recording, the whole session is available, and the backward pass of Rauch, Tung and Striebel uses it: the smoother. With the smoother in hand, EM can learn the model itself, dynamics, observation matrix and noise covariances, from the observations alone, which is how a linear dynamical system is fitted to a population recording. Today you implement the smoother, derive and run EM, and then ask the hard question: what do the learned dynamics mean, given that a change of coordinates leaves the model unchanged?",
+  goals: [
+    "Implement the Rauch-Tung-Striebel smoother and compare it with filtering",
+    "Derive the EM updates for a linear dynamical system",
+    "Fit an LDS to simulated population activity and recover its dynamics up to a transformation",
+    "Explain the identifiability of LDS parameters and what can be compared across fits",
+  ],
+  plan: [
+    { label: "The backward pass", minutes: 25 },
+    { label: "EM for an LDS", minutes: 35 },
+    { label: "Fitting a population", minutes: 25 },
+    { label: "What is identifiable?", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "ghahramani-hinton-1996",
+};
+
+<Predict question="Two laboratories fit a linear dynamical system to the same recording, with the same number of latent dimensions, and both converge to the same likelihood. Will their dynamics matrices A be the same?" />
+
+<Step n={1} title="The backward pass" minutes={25} />
+
+The **Rauch-Tung-Striebel smoother** runs backwards over the filtered estimates. With filtered $(\mathbf m_t, P_t)$ and predicted $(\mathbf m_{t+1}^-, P_{t+1}^-)$,
+
+$$
+J_t = P_tA^\top(P_{t+1}^-)^{-1},\qquad \hat{\mathbf m}_t = \mathbf m_t + J_t(\hat{\mathbf m}_{t+1} - \mathbf m_{t+1}^-),\qquad \hat P_t = P_t + J_t(\hat P_{t+1} - P_{t+1}^-)J_t^\top.
+$$
+
+The gain $J_t$ says how much of the future's correction to pass back. EM will also need the lagged covariance $\hat P_{t,t-1} = \hat P_tJ_{t-1}^\top$.
+
+<Video id="aTy1ScpTGHU" title="Implementing a Kalman filter" by="Neuromatch Academy" note="Neuromatch works through a Kalman filter in code and then the smoothing pass that uses the whole recording, the two halves of today's algorithm." />
+
+<Figure caption="A state that jumps in the middle of a recording. The filter lags behind the jump; the smoother, which uses the future, places it correctly." credit="Interactive figure by Engram, after Rauch, Tung and Striebel (1965).">
+  <SmootherLag />
+</Figure>
+
+<PyCell id="rts" title="The RTS smoother" tests={String.raw`
+  import numpy as np
+  def test_better():
+      "smoothing is more accurate than filtering, and its covariances are smaller"
+      assert err_s < err_f and np.all(np.trace(Ps_s, axis1=1, axis2=2) <= np.trace(Ps_f, axis1=1, axis2=2) + 1e-9)
+  def test_ends():
+      "at the last time step, smoothed and filtered estimates agree"
+      assert np.allclose(ms_s[-1], ms_f[-1])
+`} prompt="Complete the backward recursion of rts_smoother, returning smoothed means, covariances and lagged covariances. Compare filtered and smoothed accuracy on a two-dimensional rotating state."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  g0 = np.random.default_rng(654)
+  T, d, p = 200, 2, 6
+  th = 0.08
+  A = 0.99 * np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
+  C = g0.normal(size=(p, d))
+  Q = 0.02 * np.eye(d); R = np.diag(g0.uniform(0.3, 1.0, p))
+  z = np.zeros((T, d)); z[0] = [1.5, 0]
+  y = np.zeros((T, p))
+  for t in range(T):
+      if t: z[t] = A @ z[t - 1] + g0.multivariate_normal(np.zeros(d), Q)
+      y[t] = C @ z[t] + g0.multivariate_normal(np.zeros(p), R)
+
+  def kalman_filter(y, A, C, Q, R, m0, P0):
+      T_, d_ = len(y), len(m0)
+      ms, Ps, mp, Pp = [], [], [], []
+      m, P = m0.copy(), P0.copy()
+      for t in range(T_):
+          if t:
+              m, P = A @ m, A @ P @ A.T + Q
+          mp.append(m.copy()); Pp.append(P.copy())
+          S = C @ P @ C.T + R
+          K = P @ C.T @ np.linalg.inv(S)
+          m = m + K @ (y[t] - C @ m); P = (np.eye(d_) - K @ C) @ P
+          ms.append(m.copy()); Ps.append(P.copy())
+      return map(np.array, (ms, Ps, mp, Pp))
+
+  def rts_smoother(y, A, C, Q, R, m0, P0):
+      ms, Ps, mp, Pp = kalman_filter(y, A, C, Q, R, m0, P0)
+      T_ = len(y)
+      mhat, Phat = ms.copy(), Ps.copy()
+      Plag = np.zeros_like(Ps)
+      for t in range(T_ - 2, -1, -1):
+          J = Ps[t] @ A.T @ np.linalg.inv(Pp[t + 1])
+          mhat[t] = ...
+          Phat[t] = ...
+          Plag[t + 1] = Phat[t + 1] @ J.T
+      return mhat, Phat, Plag, ms, Ps
+
+  ms_s, Ps_s, Plag, ms_f, Ps_f = rts_smoother(y, A, C, Q, R, np.zeros(d), np.eye(d))
+  err_f = np.sqrt(np.mean((ms_f - z) ** 2)); err_s = np.sqrt(np.mean((ms_s - z) ** 2))
+  print(f"error: filtered {err_f:.4f}, smoothed {err_s:.4f}")
+  print(f"mean posterior variance: filtered {np.mean(np.trace(Ps_f, axis1=1, axis2=2)):.4f}, smoothed {np.mean(np.trace(Ps_s, axis1=1, axis2=2)):.4f}")
+`}
+hint="mhat[t] = ms[t] + J @ (mhat[t + 1] - mp[t + 1]); Phat[t] = Ps[t] + J @ (Phat[t + 1] - Pp[t + 1]) @ J.T."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  g0 = np.random.default_rng(654)
+  T, d, p = 200, 2, 6
+  th = 0.08
+  A = 0.99 * np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
+  C = g0.normal(size=(p, d))
+  Q = 0.02 * np.eye(d); R = np.diag(g0.uniform(0.3, 1.0, p))
+  z = np.zeros((T, d)); z[0] = [1.5, 0]
+  y = np.zeros((T, p))
+  for t in range(T):
+      if t: z[t] = A @ z[t - 1] + g0.multivariate_normal(np.zeros(d), Q)
+      y[t] = C @ z[t] + g0.multivariate_normal(np.zeros(p), R)
+
+  def kalman_filter(y, A, C, Q, R, m0, P0):
+      T_, d_ = len(y), len(m0)
+      ms, Ps, mp, Pp = [], [], [], []
+      m, P = m0.copy(), P0.copy()
+      for t in range(T_):
+          if t:
+              m, P = A @ m, A @ P @ A.T + Q
+          mp.append(m.copy()); Pp.append(P.copy())
+          S = C @ P @ C.T + R
+          K = P @ C.T @ np.linalg.inv(S)
+          m = m + K @ (y[t] - C @ m); P = (np.eye(d_) - K @ C) @ P
+          ms.append(m.copy()); Ps.append(P.copy())
+      return map(np.array, (ms, Ps, mp, Pp))
+
+  def rts_smoother(y, A, C, Q, R, m0, P0):
+      ms, Ps, mp, Pp = kalman_filter(y, A, C, Q, R, m0, P0)
+      T_ = len(y)
+      mhat, Phat = ms.copy(), Ps.copy()
+      Plag = np.zeros_like(Ps)
+      for t in range(T_ - 2, -1, -1):
+          J = Ps[t] @ A.T @ np.linalg.inv(Pp[t + 1])
+          mhat[t] = ms[t] + J @ (mhat[t + 1] - mp[t + 1])
+          Phat[t] = Ps[t] + J @ (Phat[t + 1] - Pp[t + 1]) @ J.T
+          Plag[t + 1] = Phat[t + 1] @ J.T
+      return mhat, Phat, Plag, ms, Ps
+
+  ms_s, Ps_s, Plag, ms_f, Ps_f = rts_smoother(y, A, C, Q, R, np.zeros(d), np.eye(d))
+  err_f = np.sqrt(np.mean((ms_f - z) ** 2)); err_s = np.sqrt(np.mean((ms_s - z) ** 2))
+  print(f"error: filtered {err_f:.4f}, smoothed {err_s:.4f}")
+  print(f"mean posterior variance: filtered {np.mean(np.trace(Ps_f, axis1=1, axis2=2)):.4f}, smoothed {np.mean(np.trace(Ps_s, axis1=1, axis2=2)):.4f}")
+`} />
+
+The smoother's error is smaller than the filter's and its posterior covariances are smaller at every step, as they must be, since it conditions on strictly more data. The two agree exactly at the last time step, where there is no future left to add. The backward gain $J_t$ is largest where the filtered estimate was uncertain and the dynamics are informative, which is where the future has most to say about the past.
+
+<Step n={2} title="EM for an LDS" minutes={35} />
+
+<Derivation title="The M step from smoothed moments">
+<div>
+
+The complete-data log-likelihood of an LDS involves $\mathbf z_t\mathbf z_t^\top$, $\mathbf z_t\mathbf z_{t-1}^\top$ and $\mathbf y_t\mathbf z_t^\top$. The E step, the smoother, provides their expectations:
+
+$$
+E[\mathbf z_t\mathbf z_t^\top] = \hat P_t + \hat{\mathbf m}_t\hat{\mathbf m}_t^\top,\qquad E[\mathbf z_t\mathbf z_{t-1}^\top] = \hat P_{t,t-1} + \hat{\mathbf m}_t\hat{\mathbf m}_{t-1}^\top.
+$$
+
+</div>
+<div>
+
+**M step.** Each parameter is a weighted least-squares solution. Writing $S_{11} = \sum_{t\ge2}E[\mathbf z_t\mathbf z_t^\top]$, $S_{10} = \sum_{t\ge2}E[\mathbf z_t\mathbf z_{t-1}^\top]$, $S_{00} = \sum_{t\ge2}E[\mathbf z_{t-1}\mathbf z_{t-1}^\top]$:
+
+$$
+A = S_{10}S_{00}^{-1},\qquad Q = \frac{1}{T-1}\left(S_{11} - AS_{10}^\top\right),
+$$
+
+$$
+C = \left(\sum_t\mathbf y_t\hat{\mathbf m}_t^\top\right)\left(\sum_tE[\mathbf z_t\mathbf z_t^\top]\right)^{-1},\qquad R = \frac1T\sum_t\left(\mathbf y_t\mathbf y_t^\top - C\hat{\mathbf m}_t\mathbf y_t^\top\right).
+$$
+
+</div>
+<div>
+
+Ghahramani and Hinton (1996), today's paper, set out exactly this algorithm, noting that it unifies factor analysis (no dynamics), mixtures and HMMs (discrete states) and Kalman smoothing (continuous states) under one roof.
+
+</div>
+</Derivation>
+
+<PyCell id="em" title="EM for a linear dynamical system" tests={String.raw`
+  import numpy as np
+  def test_up():
+      "the log-likelihood never decreases"
+      assert all(b >= a - 1e-6 for a, b in zip(ll_lds, ll_lds[1:]))
+  def test_eigs():
+      "the learned dynamics have the right eigenvalues (rotation and decay) to within 10%"
+      ev = np.sort_complex(np.linalg.eigvals(A_hat))
+      tru = np.sort_complex(np.linalg.eigvals(A))
+      assert np.allclose(np.abs(ev), np.abs(tru), rtol=0.1) and np.allclose(np.sort(np.abs(np.angle(ev))), np.sort(np.abs(np.angle(tru))), atol=0.03)
+`} prompt="Complete the M step for A and Q from the smoothed moments, and run 100 iterations of EM from a random start to recover the dynamics of the simulated population."
+code={String.raw`
+  def log_lik(y, A, C, Q, R, m0, P0):
+      from scipy.stats import multivariate_normal as mvn
+      m, P, ll = m0.copy(), P0.copy(), 0.0
+      for t in range(len(y)):
+          if t: m, P = A @ m, A @ P @ A.T + Q
+          S = C @ P @ C.T + R
+          ll += mvn.logpdf(y[t] - C @ m, np.zeros(len(S)), S)
+          K = P @ C.T @ np.linalg.inv(S)
+          m = m + K @ (y[t] - C @ m); P = (np.eye(len(m)) - K @ C) @ P
+      return ll
+
+  ge = np.random.default_rng(6541)
+  A_hat = 0.9 * np.eye(d) + 0.1 * ge.normal(size=(d, d))
+  C_hat = ge.normal(size=(p, d)); Q_hat = 0.1 * np.eye(d); R_hat = np.eye(p)
+  m0, P0 = np.zeros(d), np.eye(d)
+  ll_lds = []
+  for it in range(100):
+      mh, Ph, Plg, _, _ = rts_smoother(y, A_hat, C_hat, Q_hat, R_hat, m0, P0)
+      ll_lds.append(log_lik(y, A_hat, C_hat, Q_hat, R_hat, m0, P0))
+      Ezz = Ph + np.einsum("ti,tj->tij", mh, mh)
+      Ezz1 = Plg[1:] + np.einsum("ti,tj->tij", mh[1:], mh[:-1])
+      S11, S10, S00 = Ezz[1:].sum(0), Ezz1.sum(0), Ezz[:-1].sum(0)
+      A_hat = ...
+      Q_hat = ...
+      C_hat = (y.T @ mh) @ np.linalg.inv(Ezz.sum(0))
+      R_hat = np.diag(np.diag((y.T @ y - C_hat @ (y.T @ mh).T) / len(y)))
+      m0, P0 = mh[0], Ph[0]
+  print(f"log-likelihood {ll_lds[0]:.1f} -> {ll_lds[-1]:.1f}")
+  print("eigenvalues of A: learned", np.round(np.linalg.eigvals(A_hat), 3), " true", np.round(np.linalg.eigvals(A), 3))
+`}
+hint="A_hat = S10 @ np.linalg.inv(S00); Q_hat = (S11 - A_hat @ S10.T) / (len(y) - 1)."
+solution={String.raw`
+  def log_lik(y, A, C, Q, R, m0, P0):
+      from scipy.stats import multivariate_normal as mvn
+      m, P, ll = m0.copy(), P0.copy(), 0.0
+      for t in range(len(y)):
+          if t: m, P = A @ m, A @ P @ A.T + Q
+          S = C @ P @ C.T + R
+          ll += mvn.logpdf(y[t] - C @ m, np.zeros(len(S)), S)
+          K = P @ C.T @ np.linalg.inv(S)
+          m = m + K @ (y[t] - C @ m); P = (np.eye(len(m)) - K @ C) @ P
+      return ll
+
+  ge = np.random.default_rng(6541)
+  A_hat = 0.9 * np.eye(d) + 0.1 * ge.normal(size=(d, d))
+  C_hat = ge.normal(size=(p, d)); Q_hat = 0.1 * np.eye(d); R_hat = np.eye(p)
+  m0, P0 = np.zeros(d), np.eye(d)
+  ll_lds = []
+  for it in range(100):
+      mh, Ph, Plg, _, _ = rts_smoother(y, A_hat, C_hat, Q_hat, R_hat, m0, P0)
+      ll_lds.append(log_lik(y, A_hat, C_hat, Q_hat, R_hat, m0, P0))
+      Ezz = Ph + np.einsum("ti,tj->tij", mh, mh)
+      Ezz1 = Plg[1:] + np.einsum("ti,tj->tij", mh[1:], mh[:-1])
+      S11, S10, S00 = Ezz[1:].sum(0), Ezz1.sum(0), Ezz[:-1].sum(0)
+      A_hat = S10 @ np.linalg.inv(S00)
+      Q_hat = (S11 - A_hat @ S10.T) / (len(y) - 1)
+      C_hat = (y.T @ mh) @ np.linalg.inv(Ezz.sum(0))
+      R_hat = np.diag(np.diag((y.T @ y - C_hat @ (y.T @ mh).T) / len(y)))
+      m0, P0 = mh[0], Ph[0]
+  print(f"log-likelihood {ll_lds[0]:.1f} -> {ll_lds[-1]:.1f}")
+  print("eigenvalues of A: learned", np.round(np.linalg.eigvals(A_hat), 3), " true", np.round(np.linalg.eigvals(A), 3))
+`} />
+
+From a random start, 100 iterations of EM raise the log-likelihood from $-2181$ to $-1468$, never stepping down, and recover eigenvalues of $0.984 \pm 0.088i$ against the true $0.987 \pm 0.079i$: a decay of about 1.5% per step and a rotation of about 5 degrees per step, against 1.3% and 4.6%. Nothing about the rotation was built in; it was read off a population of six noisy observed signals. The M step is just least squares with the smoothed moments in place of unknown states, which is the same pattern as Week 60's mixtures and Week 63's variational EM.
+
+<Step n={3} title="Fitting a population" minutes={25} />
+
+<Figure caption="A two-dimensional linear dynamical system. The eigenvalues of A set the rotation per step and the decay; rotations like these were reported in motor cortex." credit="Interactive figure by Engram, after Churchland and colleagues (2012).">
+  <LdsRotation />
+</Figure>
+
+<PyCell id="predict" title="Predicting held-out neurons" tests={String.raw`
+  import numpy as np
+  def test_cosmooth():
+      "the fitted LDS predicts held-out neurons better than their mean"
+      assert r2_held > 0.3
+`} prompt="Hold out two of the six neurons. Fit the LDS on the other four, infer the latent trajectory from them, then fit the held-out neurons' loadings by regression on the inferred latents and report their R squared. This is the co-smoothing test."
+code={String.raw`
+  held = [4, 5]
+  keep = [0, 1, 2, 3]
+  y_keep, y_held = y[:, keep], y[:, held]
+  A_k = 0.9 * np.eye(d) + 0.1 * ge.normal(size=(d, d))
+  C_k = ge.normal(size=(len(keep), d)); Q_k = 0.1 * np.eye(d); R_k = np.eye(len(keep))
+  m0k, P0k = np.zeros(d), np.eye(d)
+  for it in range(100):
+      mh, Ph, Plg, _, _ = rts_smoother(y_keep, A_k, C_k, Q_k, R_k, m0k, P0k)
+      Ezz = Ph + np.einsum("ti,tj->tij", mh, mh)
+      Ezz1 = Plg[1:] + np.einsum("ti,tj->tij", mh[1:], mh[:-1])
+      S11, S10, S00 = Ezz[1:].sum(0), Ezz1.sum(0), Ezz[:-1].sum(0)
+      A_k = S10 @ np.linalg.inv(S00); Q_k = (S11 - A_k @ S10.T) / (len(y) - 1)
+      C_k = (y_keep.T @ mh) @ np.linalg.inv(Ezz.sum(0))
+      R_k = np.diag(np.diag((y_keep.T @ y_keep - C_k @ (y_keep.T @ mh).T) / len(y)))
+      m0k, P0k = mh[0], Ph[0]
+  tr, te = np.arange(140), np.arange(140, 200)
+  W_held = np.linalg.lstsq(mh[tr], y_held[tr], rcond=None)[0]
+  pred = mh[te] @ W_held
+  r2_held = ...
+  print(f"held-out neurons, test R squared from the inferred latents: {r2_held:.3f}")
+`}
+hint="r2_held = 1 - np.sum((y_held[te] - pred) ** 2) / np.sum((y_held[te] - y_held[tr].mean(0)) ** 2)."
+solution={String.raw`
+  held = [4, 5]
+  keep = [0, 1, 2, 3]
+  y_keep, y_held = y[:, keep], y[:, held]
+  A_k = 0.9 * np.eye(d) + 0.1 * ge.normal(size=(d, d))
+  C_k = ge.normal(size=(len(keep), d)); Q_k = 0.1 * np.eye(d); R_k = np.eye(len(keep))
+  m0k, P0k = np.zeros(d), np.eye(d)
+  for it in range(100):
+      mh, Ph, Plg, _, _ = rts_smoother(y_keep, A_k, C_k, Q_k, R_k, m0k, P0k)
+      Ezz = Ph + np.einsum("ti,tj->tij", mh, mh)
+      Ezz1 = Plg[1:] + np.einsum("ti,tj->tij", mh[1:], mh[:-1])
+      S11, S10, S00 = Ezz[1:].sum(0), Ezz1.sum(0), Ezz[:-1].sum(0)
+      A_k = S10 @ np.linalg.inv(S00); Q_k = (S11 - A_k @ S10.T) / (len(y) - 1)
+      C_k = (y_keep.T @ mh) @ np.linalg.inv(Ezz.sum(0))
+      R_k = np.diag(np.diag((y_keep.T @ y_keep - C_k @ (y_keep.T @ mh).T) / len(y)))
+      m0k, P0k = mh[0], Ph[0]
+  tr, te = np.arange(140), np.arange(140, 200)
+  W_held = np.linalg.lstsq(mh[tr], y_held[tr], rcond=None)[0]
+  pred = mh[te] @ W_held
+  r2_held = 1 - np.sum((y_held[te] - pred) ** 2) / np.sum((y_held[te] - y_held[tr].mean(0)) ** 2)
+  print(f"held-out neurons, test R squared from the inferred latents: {r2_held:.3f}")
+`} />
+
+Trained on four neurons and tested on two it never saw, the model predicts 53% of the held-out variance on the last 60 bins. The latents were inferred without any information from those neurons, so the only way to predict them is to have captured the shared dynamics. This co-smoothing test is the standard way to compare latent variable models of populations, since it needs no ground truth about the latent space and is not fooled by a model that simply reproduces the neurons it was fitted to.
+
+<Step n={4} title="What is identifiable?" minutes={20} />
+
+For any invertible $M$, replacing $\mathbf z_t$ by $M\mathbf z_t$, $A$ by $MAM^{-1}$, $C$ by $CM^{-1}$ and $Q$ by $MQM^\top$ gives exactly the same distribution over observations. The latent coordinates are therefore arbitrary, and so are the individual entries of $A$ and $C$. What survives the transformation is what can be reported: the **eigenvalues** of $A$ (rotation frequencies and decay rates), the subspace spanned by $C$, the predictions, and quantities computed from them.
+
+<PyCell id="ident" title="A change of coordinates" tests={String.raw`
+  import numpy as np
+  def test_same_ll():
+      "the transformed model has the same log-likelihood"
+      assert abs(ll_M - ll_plain) < 1e-6
+  def test_eigs_same():
+      "its dynamics matrix differs entrywise but has the same eigenvalues"
+      assert not np.allclose(A_M, A_hat, atol=1e-3) and np.allclose(np.sort_complex(np.linalg.eigvals(A_M)), np.sort_complex(np.linalg.eigvals(A_hat)))
+`} prompt="Apply a random invertible transformation M to the fitted model and check that the log-likelihood and the eigenvalues of A are unchanged while the matrices themselves are not."
+code={String.raw`
+  M = np.array([[1.4, 0.7], [-0.3, 0.9]])
+  A_M = ...
+  C_M = C_hat @ np.linalg.inv(M)
+  Q_M = M @ Q_hat @ M.T
+  ll_plain = log_lik(y, A_hat, C_hat, Q_hat, R_hat, m0, P0)
+  ll_M = log_lik(y, A_M, C_M, Q_M, R_hat, M @ m0, M @ P0 @ M.T)
+  print(f"log-likelihood: original {ll_plain:.6f}, transformed {ll_M:.6f}")
+  print("A original:\n", np.round(A_hat, 3), "\nA transformed:\n", np.round(A_M, 3))
+  print("eigenvalues:", np.round(np.linalg.eigvals(A_hat), 4), np.round(np.linalg.eigvals(A_M), 4))
+`}
+hint="A_M = M @ A_hat @ np.linalg.inv(M)."
+solution={String.raw`
+  M = np.array([[1.4, 0.7], [-0.3, 0.9]])
+  A_M = M @ A_hat @ np.linalg.inv(M)
+  C_M = C_hat @ np.linalg.inv(M)
+  Q_M = M @ Q_hat @ M.T
+  ll_plain = log_lik(y, A_hat, C_hat, Q_hat, R_hat, m0, P0)
+  ll_M = log_lik(y, A_M, C_M, Q_M, R_hat, M @ m0, M @ P0 @ M.T)
+  print(f"log-likelihood: original {ll_plain:.6f}, transformed {ll_M:.6f}")
+  print("A original:\n", np.round(A_hat, 3), "\nA transformed:\n", np.round(A_M, 3))
+  print("eigenvalues:", np.round(np.linalg.eigvals(A_hat), 4), np.round(np.linalg.eigvals(A_M), 4))
+`} />
+
+The transformed model has exactly the same log-likelihood, to six decimals, while its dynamics matrix looks quite different: $[[0.967, 0.049], [-0.165, 1.002]]$ becomes $[[0.915, 0.143], [-0.087, 1.054]]$. The eigenvalues, $0.9844 \pm 0.0877i$, are identical, because a similarity transformation preserves them. So a statement such as "latent 1 drives latent 2" is a statement about the chosen coordinates, not about the brain, while "the population has a rotation of 5 degrees per bin that decays with a time constant of 60 bins" is about the data.
+
+<Bridge title="Latent dynamics in brains and machines"
+  neuro="Linear dynamical systems fitted to motor cortex revealed rotational population dynamics during reaching (Churchland and colleagues, 2012), and LDS models with Poisson observations (Macke and colleagues, 2011) made the approach usable for spike counts. The identifiability limits of Step 4 are why such papers report eigenvalues, subspaces and predictions rather than the raw matrices."
+  ai="Linear state-space models are a classic of control and signal processing, and they have returned to machine learning as the backbone of deep state-space sequence models, where long convolutions equivalent to a linear recursion give efficient long-range memory.">
+
+Fit the system, but report only what a change of coordinates cannot alter.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The RTS smoother runs...", options: ["Backwards over the filtered estimates", "Forwards only", "On the raw data", "In parallel"], answer: 0, explain: "Step 1." },
+  { q: "Smoothed covariances are...", options: ["No larger than filtered ones", "Larger", "Equal everywhere", "Diagonal"], answer: 0, explain: "Step 1." },
+  { q: "At the final time step, smoothing and filtering...", options: ["Agree", "Differ most", "Both fail", "Are undefined"], answer: 0, explain: "Step 1." },
+  { q: "EM for an LDS needs, from the E step...", options: ["Smoothed means, covariances and lagged covariances", "The Viterbi path", "The filtered means only", "Nothing"], answer: 0, explain: "The derivation." },
+  { q: "The M step for A is...", options: ["S₁₀S₀₀⁻¹ from smoothed moments", "The identity", "The data covariance", "A random matrix"], answer: 0, explain: "The derivation." },
+  { q: "Co-smoothing tests a latent model by...", options: ["Predicting held-out neurons from latents inferred from the others", "Refitting on the same data", "Counting parameters", "Comparing eigenvalues"], answer: 0, explain: "Step 3." },
+  { q: "Replacing z by Mz, A by MAM⁻¹ and C by CM⁻¹...", options: ["Leaves the observation distribution unchanged", "Changes the likelihood", "Is forbidden", "Changes the eigenvalues"], answer: 0, explain: "Step 4." },
+  { q: "Which is identifiable in an LDS?", options: ["The eigenvalues of A", "The entries of A", "The latent coordinates", "The sign of C"], answer: 0, explain: "Step 4." },
+]} />
+
+<Flashcards cards={[
+  { front: "RTS smoother?", back: "$J_t = P_tA^\\top(P_{t+1}^-)^{-1}$; $\\hat{\\mathbf m}_t = \\mathbf m_t + J_t(\\hat{\\mathbf m}_{t+1} - \\mathbf m_{t+1}^-)$." },
+  { front: "Lagged covariance?", back: "$\\hat P_{t,t-1} = \\hat P_tJ_{t-1}^\\top$, needed for the EM M step." },
+  { front: "LDS M step for A and Q?", back: "$A = S_{10}S_{00}^{-1}$; $Q = (S_{11} - AS_{10}^\\top)/(T-1)$." },
+  { front: "LDS identifiability?", back: "Only quantities invariant to $\\mathbf z \\to M\\mathbf z$: eigenvalues of A, the span of C, predictions." },
+  { front: "Co-smoothing?", back: "Predict held-out neurons from latents inferred from the rest; a model-free test of a latent model." },
+]} />
+
+<Predict revisit question="Would two laboratories' dynamics matrices agree?" />
+
+<Key title="Before you go">
+<ul>
+<li>The RTS smoother adds the future to the filtered estimates and never increases uncertainty.</li>
+<li>EM for an LDS turns smoothed moments into least-squares updates for A, C, Q and R.</li>
+<li>Co-smoothing tests a fitted latent model on held-out neurons.</li>
+<li>Latent coordinates are arbitrary; report eigenvalues, subspaces and predictions.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Ghahramani and Hinton (1996), <em>Parameter estimation for linear dynamical systems</em>, Technical Report CRG-TR-96-2, University of Toronto.</li>
+<li>Rauch, Tung and Striebel (1965), <em>Maximum likelihood estimates of linear dynamic systems</em>, AIAA Journal 3(8), 1445 to 1450.</li>
+<li>Macke, Buesing, Cunningham, Yu, Shenoy and Sahani (2011), <em>Empirical models of spiking in neural populations</em>, Advances in Neural Information Processing Systems 24.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A paper reports that the dynamics matrix fitted to a population has a particular structure, for example a strong connection from one latent to another. Explain why that claim needs care, and what the authors could report instead." />

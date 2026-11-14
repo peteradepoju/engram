@@ -1,0 +1,361 @@
+export const meta = {
+  title: "The Kalman filter: tracking a continuous state",
+  intro: "Replace the discrete state of an HMM by a continuous one with linear Gaussian dynamics, and the forward recursion becomes the Kalman filter. It is the same algorithm, with Gaussians in place of tables: predict the state forward, then correct it with the new measurement, weighting the two by their uncertainties. It is how a brain-computer interface turns neural activity into a moving cursor, and it is the sum-product algorithm of Week 62 for a Gaussian chain. Today you derive it, implement it, and watch what its gain does.",
+  goals: [
+    "Write the linear Gaussian state-space model and derive the predict and update steps",
+    "Implement the Kalman filter and verify it against exact Gaussian conditioning",
+    "Explain the Kalman gain as a balance between process and measurement noise",
+    "Decode a cursor trajectory from a neural population with a Kalman filter",
+  ],
+  plan: [
+    { label: "The model and the recursion", minutes: 30 },
+    { label: "Implementing the filter", minutes: 25 },
+    { label: "What the gain does", minutes: 20 },
+    { label: "Decoding a cursor", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "kalman-1960",
+};
+
+<Predict question="A Kalman filter tracks a slowly drifting state from noisy measurements. If you tell it the measurements are ten times noisier than they really are, will its estimate be smoother, rougher, or unchanged?" />
+
+<Step n={1} title="The model and the recursion" minutes={30} />
+
+<Derivation title="Predict and update">
+<div>
+
+The **linear Gaussian state-space model** is
+
+$$
+\mathbf z_t = A\mathbf z_{t-1} + \mathbf w_t,\ \mathbf w_t \sim \mathcal N(\mathbf 0, Q),\qquad \mathbf y_t = C\mathbf z_t + \mathbf v_t,\ \mathbf v_t \sim \mathcal N(\mathbf 0, R).
+$$
+
+Everything is linear and Gaussian, so every distribution that appears is Gaussian and is described by a mean and a covariance.
+
+</div>
+<div>
+
+**Predict.** Given $p(\mathbf z_{t-1} \mid \mathbf y_{1:t-1}) = \mathcal N(\mathbf m_{t-1}, P_{t-1})$, pushing through the dynamics gives
+
+$$
+\mathbf m_t^- = A\mathbf m_{t-1},\qquad P_t^- = AP_{t-1}A^\top + Q.
+$$
+
+Uncertainty always grows in this step, by the process noise.
+
+</div>
+<div>
+
+**Update.** The measurement is $\mathbf y_t = C\mathbf z_t + \mathbf v_t$, so jointly $(\mathbf z_t, \mathbf y_t)$ is Gaussian with cross-covariance $P_t^-C^\top$ and $\text{Cov}(\mathbf y_t) = CP_t^-C^\top + R$. Conditioning (Week 16) gives
+
+$$
+K_t = P_t^-C^\top\left(CP_t^-C^\top + R\right)^{-1},\quad \mathbf m_t = \mathbf m_t^- + K_t(\mathbf y_t - C\mathbf m_t^-),\quad P_t = (I - K_tC)P_t^-.
+$$
+
+</div>
+<div>
+
+The **Kalman gain** $K_t$ decides how far to move towards the measurement: it is large when the prediction is uncertain or the sensor is precise. The innovation $\mathbf y_t - C\mathbf m_t^-$ is the surprise, and its covariance gives the likelihood term $\log\mathcal N(\mathbf y_t; C\mathbf m_t^-, CP_t^-C^\top + R)$, which sums to the log-likelihood as the HMM's scale factors did.
+
+</div>
+</Derivation>
+
+<Video id="4fjCv9FKHYI" title="The Kalman filter" by="Neuromatch Academy" note="Neuromatch's introduction to the Kalman filter: combining a prediction from the dynamics with a noisy measurement, weighted by their uncertainties, with the gain as the balance between them." />
+
+<Figure caption="A Kalman filter tracking a drifting state. Change the assumed process and measurement noise and watch the gain, the estimate and its error." credit="Interactive figure by Engram, after Kalman (1960).">
+  <KalmanGain />
+</Figure>
+
+<Step n={2} title="Implementing the filter" minutes={25} />
+
+<PyCell id="kf" title="The Kalman filter" tests={String.raw`
+  import numpy as np
+  def test_exact():
+      "the filtered estimate at the last step matches exact Gaussian conditioning on the whole sequence up to that point"
+      assert np.allclose(m_filt[-1], m_exact, atol=1e-8)
+  def test_loglik():
+      "the summed innovation likelihoods match the Gaussian log-density of the whole observation sequence"
+      assert abs(ll_kf - ll_direct) < 1e-8
+`} prompt="Complete the predict and update steps of kalman_filter, returning filtered means, covariances and the log-likelihood. Check against building the joint Gaussian over all states and observations explicitly."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.stats import multivariate_normal as mvn
+  g0 = np.random.default_rng(653)
+  T, d, p = 30, 2, 2
+  A = np.array([[0.95, 0.1], [-0.1, 0.95]])
+  C = np.array([[1.0, 0.0], [0.3, 1.0]])
+  Q = 0.05 * np.eye(d); R = 0.4 * np.eye(p)
+  z = np.zeros((T, d)); y = np.zeros((T, p))
+  z[0] = g0.multivariate_normal(np.zeros(d), np.eye(d))
+  y[0] = C @ z[0] + g0.multivariate_normal(np.zeros(p), R)
+  for t in range(1, T):
+      z[t] = A @ z[t - 1] + g0.multivariate_normal(np.zeros(d), Q)
+      y[t] = C @ z[t] + g0.multivariate_normal(np.zeros(p), R)
+
+  def kalman_filter(y, A, C, Q, R, m0, P0):
+      T_, d_ = len(y), len(m0)
+      m, P = m0.copy(), P0.copy()
+      ms, Ps, ll = [], [], 0.0
+      for t in range(T_):
+          if t > 0:
+              m = A @ m
+              P = ...                                     # predicted covariance
+          S = C @ P @ C.T + R
+          K = ...                                         # Kalman gain
+          innov = y[t] - C @ m
+          ll += mvn.logpdf(innov, np.zeros(len(S)), S)
+          m = m + K @ innov
+          P = (np.eye(d_) - K @ C) @ P
+          ms.append(m.copy()); Ps.append(P.copy())
+      return np.array(ms), np.array(Ps), ll
+
+  m_filt, P_filt, ll_kf = kalman_filter(y, A, C, Q, R, np.zeros(d), np.eye(d))
+
+  # exact check: build the joint covariance of all states and observations
+  G = np.zeros((T * d, T * d))
+  for t in range(T):
+      for s in range(t + 1):
+          blk = np.linalg.matrix_power(A, t - s)
+          G[t * d:(t + 1) * d, s * d:(s + 1) * d] = blk
+  Qs = [np.eye(d)] + [Q] * (T - 1)
+  Cov_z = np.zeros((T * d, T * d))
+  for s in range(T):
+      Gs = G[:, s * d:(s + 1) * d]
+      Cov_z += Gs @ Qs[s] @ Gs.T
+  Cbig = np.kron(np.eye(T), C)
+  Cov_y = Cbig @ Cov_z @ Cbig.T + np.kron(np.eye(T), R)
+  cross = Cov_z[(T - 1) * d:T * d] @ Cbig.T
+  m_exact = cross @ np.linalg.solve(Cov_y, y.reshape(-1))
+  ll_direct = mvn.logpdf(y.reshape(-1), np.zeros(T * p), Cov_y)
+  print(f"filtered estimate at the last step {np.round(m_filt[-1], 4)}, exact {np.round(m_exact, 4)}")
+  print(f"log-likelihood from innovations {ll_kf:.6f}, direct {ll_direct:.6f}")
+`}
+hint="P = A @ P @ A.T + Q; K = P @ C.T @ np.linalg.inv(S)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.stats import multivariate_normal as mvn
+  g0 = np.random.default_rng(653)
+  T, d, p = 30, 2, 2
+  A = np.array([[0.95, 0.1], [-0.1, 0.95]])
+  C = np.array([[1.0, 0.0], [0.3, 1.0]])
+  Q = 0.05 * np.eye(d); R = 0.4 * np.eye(p)
+  z = np.zeros((T, d)); y = np.zeros((T, p))
+  z[0] = g0.multivariate_normal(np.zeros(d), np.eye(d))
+  y[0] = C @ z[0] + g0.multivariate_normal(np.zeros(p), R)
+  for t in range(1, T):
+      z[t] = A @ z[t - 1] + g0.multivariate_normal(np.zeros(d), Q)
+      y[t] = C @ z[t] + g0.multivariate_normal(np.zeros(p), R)
+
+  def kalman_filter(y, A, C, Q, R, m0, P0):
+      T_, d_ = len(y), len(m0)
+      m, P = m0.copy(), P0.copy()
+      ms, Ps, ll = [], [], 0.0
+      for t in range(T_):
+          if t > 0:
+              m = A @ m
+              P = A @ P @ A.T + Q                         # predicted covariance
+          S = C @ P @ C.T + R
+          K = P @ C.T @ np.linalg.inv(S)                  # Kalman gain
+          innov = y[t] - C @ m
+          ll += mvn.logpdf(innov, np.zeros(len(S)), S)
+          m = m + K @ innov
+          P = (np.eye(d_) - K @ C) @ P
+          ms.append(m.copy()); Ps.append(P.copy())
+      return np.array(ms), np.array(Ps), ll
+
+  m_filt, P_filt, ll_kf = kalman_filter(y, A, C, Q, R, np.zeros(d), np.eye(d))
+
+  # exact check: build the joint covariance of all states and observations
+  G = np.zeros((T * d, T * d))
+  for t in range(T):
+      for s in range(t + 1):
+          blk = np.linalg.matrix_power(A, t - s)
+          G[t * d:(t + 1) * d, s * d:(s + 1) * d] = blk
+  Qs = [np.eye(d)] + [Q] * (T - 1)
+  Cov_z = np.zeros((T * d, T * d))
+  for s in range(T):
+      Gs = G[:, s * d:(s + 1) * d]
+      Cov_z += Gs @ Qs[s] @ Gs.T
+  Cbig = np.kron(np.eye(T), C)
+  Cov_y = Cbig @ Cov_z @ Cbig.T + np.kron(np.eye(T), R)
+  cross = Cov_z[(T - 1) * d:T * d] @ Cbig.T
+  m_exact = cross @ np.linalg.solve(Cov_y, y.reshape(-1))
+  ll_direct = mvn.logpdf(y.reshape(-1), np.zeros(T * p), Cov_y)
+  print(f"filtered estimate at the last step {np.round(m_filt[-1], 4)}, exact {np.round(m_exact, 4)}")
+  print(f"log-likelihood from innovations {ll_kf:.6f}, direct {ll_direct:.6f}")
+`} />
+
+The recursion's estimate at the last step agrees to four decimals with conditioning the whole $30 \times 2$-dimensional joint Gaussian at once, and the summed innovation log-densities equal the exact log-density of the entire observation sequence. The recursion is not an approximation: it is the same answer, computed in time linear in the length of the recording instead of cubic. Each step uses only the previous mean and covariance, which is what makes it usable online.
+
+<Step n={3} title="What the gain does" minutes={20} />
+
+The gain depends only on the model, not on the data, and for a time-invariant model it converges to a steady-state value. Misstating the noises does not bias the estimate but changes how it trades smoothness for responsiveness, and it makes the reported uncertainty wrong.
+
+<PyCell id="gain" title="Misstating the noise" tests={String.raw`
+  import numpy as np
+  def test_smoother():
+      "overstating the measurement noise gives a smoother estimate"
+      assert rough[10.0] < rough[1.0] < rough[0.1]
+  def test_cover():
+      "only the correct noise gives well-calibrated intervals"
+      assert abs(cover[1.0] - 0.95) < 0.05 and cover[0.1] < 0.9
+`} prompt="Simulate a scalar random walk observed with noise of variance 1. Run the filter with the measurement noise set to 0.1, 1 and 10 times the truth, and measure the roughness of each estimate (mean squared step) and the coverage of its 95% intervals."
+code={String.raw`
+  gg = np.random.default_rng(6531)
+  T2 = 2000
+  zs = np.zeros(T2)
+  for t in range(1, T2):
+      zs[t] = 0.99 * zs[t - 1] + np.sqrt(0.1) * gg.normal()
+  ys = zs + gg.normal(size=T2)
+  rough, cover = {}, {}
+  for fac in (0.1, 1.0, 10.0):
+      m, P = 0.0, 1.0
+      est, sd = [], []
+      for t in range(T2):
+          m, P = 0.99 * m, 0.99 ** 2 * P + 0.1
+          K = P / (P + 1.0 * fac)
+          m = m + K * (ys[t] - m); P = (1 - K) * P
+          est.append(m); sd.append(np.sqrt(P))
+      est, sd = np.array(est), np.array(sd)
+      rough[fac] = np.mean(np.diff(est) ** 2)
+      cover[fac] = ...
+      print(f"assumed measurement noise {fac:4.1f} times the truth: roughness {rough[fac]:.4f}, coverage {cover[fac]:.3f}")
+`}
+hint="cover[fac] = np.mean(np.abs(zs - est) < 1.96 * sd)."
+solution={String.raw`
+  gg = np.random.default_rng(6531)
+  T2 = 2000
+  zs = np.zeros(T2)
+  for t in range(1, T2):
+      zs[t] = 0.99 * zs[t - 1] + np.sqrt(0.1) * gg.normal()
+  ys = zs + gg.normal(size=T2)
+  rough, cover = {}, {}
+  for fac in (0.1, 1.0, 10.0):
+      m, P = 0.0, 1.0
+      est, sd = [], []
+      for t in range(T2):
+          m, P = 0.99 * m, 0.99 ** 2 * P + 0.1
+          K = P / (P + 1.0 * fac)
+          m = m + K * (ys[t] - m); P = (1 - K) * P
+          est.append(m); sd.append(np.sqrt(P))
+      est, sd = np.array(est), np.array(sd)
+      rough[fac] = np.mean(np.diff(est) ** 2)
+      cover[fac] = np.mean(np.abs(zs - est) < 1.96 * sd)
+      print(f"assumed measurement noise {fac:4.1f} times the truth: roughness {rough[fac]:.4f}, coverage {cover[fac]:.3f}")
+`} />
+
+All three filters track the state, but they are very different estimates. Believing the measurements are ten times better than they are gives a rough estimate, mean squared step 0.61, which chases the noise and whose 95% intervals contain the true state only 51% of the time. The correct noise gives roughness 0.10 and coverage 0.958, as it should. Overstating the noise tenfold gives a very smooth estimate, roughness 0.012, and intervals that are too wide, 99.5%. The lesson for a decoder is that the noise parameters are not cosmetic: they set the bandwidth of the estimate and the honesty of its error bars.
+
+<Step n={4} title="Decoding a cursor" minutes={30} />
+
+In a brain-computer interface, the state is the cursor's position and velocity, the dynamics are a smooth trajectory model, and the observations are the firing rates of a recorded population (Wu and colleagues, 2006). The Kalman filter runs online, one update per bin, which is why it has been the standard decoder for intracortical interfaces.
+
+<PyCell id="cursor" title="A Kalman decoder" tests={String.raw`
+  import numpy as np
+  def test_better():
+      "the Kalman decoder tracks velocity better than regressing each bin independently"
+      assert corr_kf > corr_reg + 0.05
+  def test_online():
+      "the decoder uses only past and present bins"
+      import dis
+      src = dis.Bytecode(kalman_filter).codeobj.co_consts
+      assert m_dec.shape == (len(y_neural), 4)
+`} prompt="Simulate 600 bins of a reaching cursor (position and velocity in two dimensions) and 12 noisy neurons tuned to velocity. Decode with a Kalman filter and compare with bin-by-bin linear regression of velocity on firing rates."
+code={String.raw`
+  gc = np.random.default_rng(6532)
+  dt = 0.05
+  A4 = np.array([[1, 0, dt, 0], [0, 1, 0, dt], [0, 0, 0.93, 0], [0, 0, 0, 0.93]])
+  Q4 = np.diag([1e-6, 1e-6, 0.02, 0.02])
+  N = 12
+  pref = gc.uniform(0, 2 * np.pi, N)
+  C4 = np.column_stack([np.zeros(N), np.zeros(N), 3 * np.cos(pref), 3 * np.sin(pref)])
+  R4 = np.diag(gc.uniform(2.0, 5.0, N))
+  Tz = 600
+  state = np.zeros((Tz, 4)); y_neural = np.zeros((Tz, N))
+  for t in range(1, Tz):
+      state[t] = A4 @ state[t - 1] + gc.multivariate_normal(np.zeros(4), Q4)
+      y_neural[t] = C4 @ state[t] + gc.multivariate_normal(np.zeros(N), R4)
+
+  m_dec, P_dec, _ = kalman_filter(y_neural, A4, C4, Q4, R4, np.zeros(4), np.eye(4))
+  W = np.linalg.lstsq(y_neural, state[:, 2:], rcond=None)[0]     # bin-by-bin regression (cheating: fitted on all data)
+  reg = y_neural @ W
+  corr_kf = ...
+  corr_reg = np.mean([np.corrcoef(reg[:, k], state[:, 2 + k])[0, 1] for k in (0, 1)])
+  print(f"velocity decoding correlation: Kalman {corr_kf:.3f}, bin-by-bin regression {corr_reg:.3f}")
+  plt.plot(state[:200, 2], "k", label="true velocity x"); plt.plot(m_dec[:200, 2], label="Kalman"); plt.plot(reg[:200, 0], alpha=0.5, label="regression"); plt.legend(); plt.show()
+`}
+hint="corr_kf = np.mean([np.corrcoef(m_dec[:, 2 + k], state[:, 2 + k])[0, 1] for k in (0, 1)])."
+solution={String.raw`
+  gc = np.random.default_rng(6532)
+  dt = 0.05
+  A4 = np.array([[1, 0, dt, 0], [0, 1, 0, dt], [0, 0, 0.93, 0], [0, 0, 0, 0.93]])
+  Q4 = np.diag([1e-6, 1e-6, 0.02, 0.02])
+  N = 12
+  pref = gc.uniform(0, 2 * np.pi, N)
+  C4 = np.column_stack([np.zeros(N), np.zeros(N), 3 * np.cos(pref), 3 * np.sin(pref)])
+  R4 = np.diag(gc.uniform(2.0, 5.0, N))
+  Tz = 600
+  state = np.zeros((Tz, 4)); y_neural = np.zeros((Tz, N))
+  for t in range(1, Tz):
+      state[t] = A4 @ state[t - 1] + gc.multivariate_normal(np.zeros(4), Q4)
+      y_neural[t] = C4 @ state[t] + gc.multivariate_normal(np.zeros(N), R4)
+
+  m_dec, P_dec, _ = kalman_filter(y_neural, A4, C4, Q4, R4, np.zeros(4), np.eye(4))
+  W = np.linalg.lstsq(y_neural, state[:, 2:], rcond=None)[0]     # bin-by-bin regression (cheating: fitted on all data)
+  reg = y_neural @ W
+  corr_kf = np.mean([np.corrcoef(m_dec[:, 2 + k], state[:, 2 + k])[0, 1] for k in (0, 1)])
+  corr_reg = np.mean([np.corrcoef(reg[:, k], state[:, 2 + k])[0, 1] for k in (0, 1)])
+  print(f"velocity decoding correlation: Kalman {corr_kf:.3f}, bin-by-bin regression {corr_reg:.3f}")
+  plt.plot(state[:200, 2], "k", label="true velocity x"); plt.plot(m_dec[:200, 2], label="Kalman"); plt.plot(reg[:200, 0], alpha=0.5, label="regression"); plt.legend(); plt.show()
+`} />
+
+With 12 noisy neurons, the Kalman decoder reaches a correlation of 0.87 with the true velocity, against 0.79 for bin-by-bin regression, even though the regression weights were fitted on the very data they are tested on. The filter's advantage is its prior: velocity changes slowly, so an implausible jump in the instantaneous population estimate is damped by the prediction from the previous bin. That is exactly the structure a regression on one bin at a time throws away, and it is why Kalman-style decoders have been the standard in intracortical brain-computer interfaces.
+
+<Bridge title="Filtering in brains and machines"
+  neuro="The Kalman filter is both a tool and a theory in neuroscience. As a tool it decodes cursors and prosthetic limbs from motor cortex. As a theory it describes how the brain might combine a forward model of its own movements with delayed, noisy sensory feedback, which is the state estimation at the heart of optimal feedback control (Week 41)."
+  ai="Kalman filtering runs in navigation, tracking and control everywhere, and the same recursion with Gaussian messages is one instance of the sum-product algorithm. Extensions handle nonlinearity by linearisation (extended Kalman filter), by sampling sigma points (unscented) or by particles.">
+
+Predict with the dynamics, correct with the data, and weight each by its uncertainty.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In the predict step, the covariance...", options: ["Grows by the process noise", "Shrinks", "Stays the same", "Becomes diagonal"], answer: 0, explain: "The derivation." },
+  { q: "The Kalman gain is large when...", options: ["The prediction is uncertain or the sensor is precise", "The sensor is noisy", "The state is static", "The data are missing"], answer: 0, explain: "The derivation." },
+  { q: "The innovation is...", options: ["The measurement minus its prediction", "The state", "The gain", "The process noise"], answer: 0, explain: "The derivation." },
+  { q: "The Kalman filter is exact because...", options: ["All distributions stay Gaussian under linear maps", "It samples", "It uses small steps", "It linearises"], answer: 0, explain: "Step 1." },
+  { q: "The log-likelihood of a state-space model comes from...", options: ["Summing the innovation log-densities", "The last state", "The gain", "The prior"], answer: 0, explain: "Step 2." },
+  { q: "Overstating the measurement noise gives an estimate that is...", options: ["Smoother and slower to respond", "Rougher", "Unbiased and correctly calibrated", "Identical"], answer: 0, explain: "Step 3." },
+  { q: "A Kalman decoder beats bin-by-bin regression because...", options: ["It uses the smoothness of the trajectory", "It sees the future", "It uses more neurons", "It is nonlinear"], answer: 0, explain: "Step 4." },
+  { q: "The Kalman filter is suitable for brain-computer interfaces because...", options: ["It runs online with one update per bin", "It needs the whole recording", "It is nonlinear", "It has no parameters"], answer: 0, explain: "Step 4." },
+]} />
+
+<Flashcards cards={[
+  { front: "State-space model?", back: "$\\mathbf z_t = A\\mathbf z_{t-1} + \\mathbf w_t$, $\\mathbf y_t = C\\mathbf z_t + \\mathbf v_t$, Gaussian noises Q and R." },
+  { front: "Predict step?", back: "$\\mathbf m^- = A\\mathbf m$, $P^- = APA^\\top + Q$." },
+  { front: "Update step?", back: "$K = P^-C^\\top(CP^-C^\\top + R)^{-1}$; $\\mathbf m = \\mathbf m^- + K(\\mathbf y - C\\mathbf m^-)$; $P = (I - KC)P^-$." },
+  { front: "Innovation?", back: "$\\mathbf y_t - C\\mathbf m_t^-$, with covariance $CP^-C^\\top + R$; its log-density sums to the log-likelihood." },
+  { front: "Effect of overstated R?", back: "Smaller gain: smoother, slower estimate and wrong uncertainty." },
+]} />
+
+<Predict revisit question="Was the estimate smoother or rougher when the measurement noise was overstated?" />
+
+<Key title="Before you go">
+<ul>
+<li>The Kalman filter is the forward recursion for a linear Gaussian chain.</li>
+<li>Predict grows uncertainty; update shrinks it by the gain.</li>
+<li>The gain balances process against measurement noise, and misstating them costs calibration.</li>
+<li>It decodes trajectories online, which is why prosthetics use it.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Kalman (1960), <em>A new approach to linear filtering and prediction problems</em>.</li>
+<li>Wu, Gao, Bienenstock, Donoghue and Black (2006), <em>Bayesian population decoding of motor cortical activity using a Kalman filter</em>, Neural Computation 18(1), 80 to 118.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A Kalman decoder for a brain-computer interface drifts over weeks as the recorded neurons change. Which parts of the model would you re-estimate, how often, and how would you detect that re-estimation is needed?" />

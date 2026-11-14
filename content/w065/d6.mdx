@@ -1,0 +1,319 @@
+export const meta = {
+  title: "Forge: Week 65 challenge, quiz and deep read",
+  intro: "This week completed the sequential toolkit: filtering, smoothing and Viterbi decoding for discrete states, Baum-Welch for learning them, the Kalman filter and RTS smoother for continuous states, EM for linear dynamical systems, and Poisson and switching extensions. Today's challenge decodes a moving stimulus from a spiking population with a particle filter, which works when nothing is linear or Gaussian, and then asks whether an HMM or an LDS describes a recording better. Then the quiz and a critique of Kalman's paper, and with it the end of this block of weeks.",
+  goals: [
+    "Implement a particle filter for a nonlinear, non-Gaussian state-space model",
+    "Compare models with different state spaces by held-out likelihood",
+    "Prove the Kalman update by Gaussian conditioning and the sum of innovation likelihoods",
+    "Critique Kalman's original paper",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "kalman-1960",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. An HMM has 5 states and a chain of 100 steps. How many state sequences are there, and how many operations does Viterbi need?
+2. A Kalman filter has predicted variance 2 and measurement variance 0.5. What is the gain?
+3. A particle filter has 1,000 particles and effective sample size 40. Should it resample?
+
+<PyCell code={String.raw`
+  print("1.", f"{5 ** 100:.3g} sequences; Viterbi needs about {100 * 5 * 5} operations")
+  print("2.", 2 / (2 + 0.5))
+  print("3. yes: 40 is far below the usual threshold of half the particles")
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: a particle filter for a circular variable.** A population of head-direction cells reports an angle that drifts as a random walk on the circle, and each cell fires Poisson spikes with a von Mises tuning curve. The state is circular and the observations are counts, so neither the Kalman filter nor a discrete HMM is natural. A **particle filter** represents the posterior by weighted samples: propagate each particle through the dynamics, weight it by the likelihood of the new observation, and resample when the weights become uneven.
+
+<PyCell id="partA" title="Part A: decoding head direction with particles" tests={String.raw`
+  import numpy as np
+  def test_accurate():
+      "the circular error of the particle filter is below 0.25 radians"
+      assert err_pf < 0.25
+  def test_beats_pop():
+      "it beats the population vector computed bin by bin"
+      assert err_pf < err_pv - 0.02
+  def test_resample():
+      "resampling happened on at least a tenth of the bins"
+      assert resamples > T // 10
+`} prompt="Complete the particle filter: propagate the angles by the random walk, weight by the Poisson log-likelihood of the observed counts, normalise in logs, and resample systematically when the effective sample size falls below half the particles."
+code={String.raw`
+  import numpy as np
+  from scipy.special import logsumexp
+  gA = np.random.default_rng(656)
+  T, N, P = 400, 20, 2000
+  pref = np.linspace(0, 2 * np.pi, N, endpoint=False)
+  kappa, peak, base = 3.0, 8.0, 0.2
+  sigma_walk = 0.12
+
+  ang = np.zeros(T)
+  for t in range(1, T):
+      ang[t] = (ang[t - 1] + sigma_walk * gA.normal()) % (2 * np.pi)
+  rate = lambda a: base + peak * np.exp(kappa * (np.cos(a[..., None] - pref) - 1))
+  X = gA.poisson(rate(ang))
+
+  particles = gA.uniform(0, 2 * np.pi, P)
+  logw = np.full(P, -np.log(P))
+  est = np.zeros(T); resamples = 0
+  for t in range(T):
+      particles = (particles + sigma_walk * gA.normal(size=P)) % (2 * np.pi)
+      lam = rate(particles)                                            # P x N
+      logw = logw + ...                                                # Poisson log-likelihood of X[t]
+      logw -= logsumexp(logw)
+      w = np.exp(logw)
+      est[t] = np.angle(np.sum(w * np.exp(1j * particles)))
+      ess = 1 / np.sum(w ** 2)
+      if ess < P / 2:
+          idx = gA.choice(P, P, p=w)
+          particles = particles[idx]; logw = np.full(P, -np.log(P)); resamples += 1
+
+  circ_err = lambda a, b: np.mean(np.abs(np.angle(np.exp(1j * (a - b)))))
+  pv = np.angle(X @ np.exp(1j * pref))
+  err_pf, err_pv = circ_err(est, ang), circ_err(pv, ang)
+  print(f"circular error: particle filter {err_pf:.3f} rad, population vector {err_pv:.3f} rad; resampled on {resamples} of {T} bins")
+`}
+hint="logw = logw + np.sum(X[t] * np.log(lam) - lam, axis=1)."
+solution={String.raw`
+  import numpy as np
+  from scipy.special import logsumexp
+  gA = np.random.default_rng(656)
+  T, N, P = 400, 20, 2000
+  pref = np.linspace(0, 2 * np.pi, N, endpoint=False)
+  kappa, peak, base = 3.0, 8.0, 0.2
+  sigma_walk = 0.12
+
+  ang = np.zeros(T)
+  for t in range(1, T):
+      ang[t] = (ang[t - 1] + sigma_walk * gA.normal()) % (2 * np.pi)
+  rate = lambda a: base + peak * np.exp(kappa * (np.cos(a[..., None] - pref) - 1))
+  X = gA.poisson(rate(ang))
+
+  particles = gA.uniform(0, 2 * np.pi, P)
+  logw = np.full(P, -np.log(P))
+  est = np.zeros(T); resamples = 0
+  for t in range(T):
+      particles = (particles + sigma_walk * gA.normal(size=P)) % (2 * np.pi)
+      lam = rate(particles)                                            # P x N
+      logw = logw + np.sum(X[t] * np.log(lam) - lam, axis=1)           # Poisson log-likelihood of X[t]
+      logw -= logsumexp(logw)
+      w = np.exp(logw)
+      est[t] = np.angle(np.sum(w * np.exp(1j * particles)))
+      ess = 1 / np.sum(w ** 2)
+      if ess < P / 2:
+          idx = gA.choice(P, P, p=w)
+          particles = particles[idx]; logw = np.full(P, -np.log(P)); resamples += 1
+
+  circ_err = lambda a, b: np.mean(np.abs(np.angle(np.exp(1j * (a - b)))))
+  pv = np.angle(X @ np.exp(1j * pref))
+  err_pf, err_pv = circ_err(est, ang), circ_err(pv, ang)
+  print(f"circular error: particle filter {err_pf:.3f} rad, population vector {err_pv:.3f} rad; resampled on {resamples} of {T} bins")
+`} />
+
+The particle filter tracks head direction with a mean circular error of 0.068 radians, about 4 degrees, against 0.088 for the population vector computed bin by bin. The gain comes from the dynamics: an angle cannot jump far in one bin, so an implausible population vector is overruled by the particles' prior. The filter resampled on 227 of 400 bins, whenever the weights became concentrated on a few particles. Nothing here is linear or Gaussian, and the same code would work for a bimodal posterior, which a Kalman filter cannot represent at all.
+
+**Part B: discrete or continuous?** Given a recording, is the latent state a few discrete levels or a continuous variable? One fair comparison keeps the observation model fixed and varies only the state space: fit Poisson HMMs with 2 to 8 states and look at the held-out likelihood. Truly discrete data are explained by as many states as there are levels and gain nothing from more; a continuous latent needs several, because each state is one quantisation level of the continuum.
+
+<PyCell id="partB" title="Part B: how many states does the data want?" tests={String.raw`
+  import numpy as np
+  def test_discrete():
+      "for two-level data, held-out likelihood stops improving after 2 states"
+      assert best_K["discrete"] <= 3
+  def test_continuous():
+      "a smoothly drifting latent needs more states than a two-level one"
+      assert best_K["continuous"] >= best_K["discrete"] + 2
+`} prompt="Generate one recording with two discrete rate levels and one with a smoothly drifting rate. Fit Poisson HMMs with 2 to 8 states on the first 700 bins and evaluate held-out log-likelihood per bin on the last 300, taking the smallest K within 0.02 of the best."
+code={String.raw`
+  import numpy as np
+  gB = np.random.default_rng(6561)
+  Tb, Nb = 1000, 12
+  load = gB.uniform(0.5, 1.5, Nb)
+
+  def make_discrete():
+      A_ = np.array([[0.97, 0.03], [0.04, 0.96]]); s = np.zeros(Tb, int)
+      for t in range(1, Tb): s[t] = gB.choice(2, p=A_[s[t - 1]])
+      return gB.poisson(np.outer(np.where(s == 1, 4.0, 1.0), load))
+
+  def make_continuous():
+      u = np.zeros(Tb)
+      for t in range(1, Tb): u[t] = 0.98 * u[t - 1] + 0.2 * gB.normal()
+      return gB.poisson(np.exp(np.outer(u, load) + np.log(2.0)))
+
+  def pois_emis(Xs, rates_):
+      lg = Xs[:, None, :] * np.log(rates_)[None] - rates_[None]
+      lg = lg.sum(2); lg -= lg.max(1, keepdims=True)
+      return np.exp(lg) + 1e-300
+
+  def hmm_heldout(Xtr, Xte, K, iters=40):
+      rates = np.outer(np.linspace(0.4, 2.5, K), Xtr.mean(0)) + 0.1
+      A_ = np.full((K, K), 0.05 / max(K - 1, 1)); np.fill_diagonal(A_, 0.95); pi_ = np.full(K, 1 / K)
+      for it in range(iters):
+          B = pois_emis(Xtr, rates)
+          al = np.zeros_like(B); c = np.zeros(len(B)); be = np.ones_like(B)
+          a0 = pi_ * B[0]; c[0] = a0.sum(); al[0] = a0 / c[0]
+          for t in range(1, len(B)):
+              a0 = B[t] * (al[t - 1] @ A_); c[t] = a0.sum(); al[t] = a0 / c[t]
+          for t in range(len(B) - 2, -1, -1):
+              be[t] = (A_ @ (B[t + 1] * be[t + 1])) / c[t + 1]
+          g = al * be; g /= g.sum(1, keepdims=True)
+          xi = al[:-1, :, None] * A_[None] * (B[1:] * be[1:])[:, None, :]; xi /= xi.sum((1, 2), keepdims=True)
+          A_ = xi.sum(0) / xi.sum(0).sum(1, keepdims=True); pi_ = g[0]
+          rates = (g.T @ Xtr) / g.sum(0)[:, None] + 1e-6
+      from scipy.stats import poisson as pois
+      B = pois_emis(Xte, rates)
+      scale = (pois.logpmf(Xte[:, None, :], rates[None]).sum(2) - np.log(B))[:, 0]   # restore the dropped constants
+      al = np.zeros_like(B); c = np.zeros(len(B))
+      a0 = pi_ * B[0]; c[0] = a0.sum(); al[0] = a0 / c[0]
+      for t in range(1, len(B)):
+          a0 = B[t] * (al[t - 1] @ A_); c[t] = a0.sum(); al[t] = a0 / c[t]
+      return (np.sum(np.log(c)) + scale.sum()) / len(Xte)
+
+  Ks = [2, 3, 4, 5, 6, 8]
+  best_K = {}
+  for kind, Xall in [("discrete", make_discrete()), ("continuous", make_continuous())]:
+      Xtr, Xte = Xall[:700], Xall[700:]
+      ho = {K: hmm_heldout(Xtr, Xte, K) for K in Ks}
+      top = max(ho.values())
+      best_K[kind] = ...
+      print(f"{kind:11s}", {K: round(float(v), 3) for K, v in ho.items()}, "-> K =", best_K[kind])
+`}
+hint='best_K[kind] = min(K for K in Ks if ho[K] >= top - 0.02).'
+solution={String.raw`
+  import numpy as np
+  gB = np.random.default_rng(6561)
+  Tb, Nb = 1000, 12
+  load = gB.uniform(0.5, 1.5, Nb)
+
+  def make_discrete():
+      A_ = np.array([[0.97, 0.03], [0.04, 0.96]]); s = np.zeros(Tb, int)
+      for t in range(1, Tb): s[t] = gB.choice(2, p=A_[s[t - 1]])
+      return gB.poisson(np.outer(np.where(s == 1, 4.0, 1.0), load))
+
+  def make_continuous():
+      u = np.zeros(Tb)
+      for t in range(1, Tb): u[t] = 0.98 * u[t - 1] + 0.2 * gB.normal()
+      return gB.poisson(np.exp(np.outer(u, load) + np.log(2.0)))
+
+  def pois_emis(Xs, rates_):
+      lg = Xs[:, None, :] * np.log(rates_)[None] - rates_[None]
+      lg = lg.sum(2); lg -= lg.max(1, keepdims=True)
+      return np.exp(lg) + 1e-300
+
+  def hmm_heldout(Xtr, Xte, K, iters=40):
+      rates = np.outer(np.linspace(0.4, 2.5, K), Xtr.mean(0)) + 0.1
+      A_ = np.full((K, K), 0.05 / max(K - 1, 1)); np.fill_diagonal(A_, 0.95); pi_ = np.full(K, 1 / K)
+      for it in range(iters):
+          B = pois_emis(Xtr, rates)
+          al = np.zeros_like(B); c = np.zeros(len(B)); be = np.ones_like(B)
+          a0 = pi_ * B[0]; c[0] = a0.sum(); al[0] = a0 / c[0]
+          for t in range(1, len(B)):
+              a0 = B[t] * (al[t - 1] @ A_); c[t] = a0.sum(); al[t] = a0 / c[t]
+          for t in range(len(B) - 2, -1, -1):
+              be[t] = (A_ @ (B[t + 1] * be[t + 1])) / c[t + 1]
+          g = al * be; g /= g.sum(1, keepdims=True)
+          xi = al[:-1, :, None] * A_[None] * (B[1:] * be[1:])[:, None, :]; xi /= xi.sum((1, 2), keepdims=True)
+          A_ = xi.sum(0) / xi.sum(0).sum(1, keepdims=True); pi_ = g[0]
+          rates = (g.T @ Xtr) / g.sum(0)[:, None] + 1e-6
+      from scipy.stats import poisson as pois
+      B = pois_emis(Xte, rates)
+      scale = (pois.logpmf(Xte[:, None, :], rates[None]).sum(2) - np.log(B))[:, 0]   # restore the dropped constants
+      al = np.zeros_like(B); c = np.zeros(len(B))
+      a0 = pi_ * B[0]; c[0] = a0.sum(); al[0] = a0 / c[0]
+      for t in range(1, len(B)):
+          a0 = B[t] * (al[t - 1] @ A_); c[t] = a0.sum(); al[t] = a0 / c[t]
+      return (np.sum(np.log(c)) + scale.sum()) / len(Xte)
+
+  Ks = [2, 3, 4, 5, 6, 8]
+  best_K = {}
+  for kind, Xall in [("discrete", make_discrete()), ("continuous", make_continuous())]:
+      Xtr, Xte = Xall[:700], Xall[700:]
+      ho = {K: hmm_heldout(Xtr, Xte, K) for K in Ks}
+      top = max(ho.values())
+      best_K[kind] = min(K for K in Ks if ho[K] >= top - 0.02)
+      print(f"{kind:11s}", {K: round(float(v), 3) for K, v in ho.items()}, "-> K =", best_K[kind])
+`} />
+
+For the two-level data, held-out likelihood is flat from two states onwards: $-16.191$ at $K = 2$ and no better at 8, so the parsimonious choice is 2, the truth. For the drifting latent, it improves steeply from $-30.5$ at $K = 2$ to $-24.7$ at $K = 4$ and then levels off: a continuum is approximated by quantising it, and four levels capture most of what twelve noisy neurons can resolve. The shape of the curve is the diagnostic. A sharp plateau after a few states suggests genuine discrete states; a slow climb suggests a continuous variable being chopped up, and a continuous-state model will describe it better and more compactly.
+
+**Part C (written).** Answer in your journal. First, in Part A, the particle filter's error is limited by two things: the number of particles and the information in the spikes. Describe an experiment on the simulation that would tell you which is limiting, and what you would expect. Second, Part B compared state spaces by varying the number of discrete states with the observation model held fixed. Explain why comparing a Poisson HMM directly with a Gaussian linear dynamical system fitted to square-root counts would not be a fair comparison, and what would be needed to make it one.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The Kalman update by Gaussian conditioning" task="With prior $\mathbf z \sim \mathcal N(\mathbf m^-, P^-)$ and observation $\mathbf y = C\mathbf z + \mathbf v$, $\mathbf v \sim \mathcal N(\mathbf 0, R)$ independent of $\mathbf z$, derive the posterior mean and covariance of $\mathbf z$ given $\mathbf y$.">
+
+$(\mathbf z, \mathbf y)$ is jointly Gaussian, since $\mathbf y$ is a linear function of $\mathbf z$ and $\mathbf v$. Its blocks are $\text{Cov}(\mathbf z) = P^-$, $\text{Cov}(\mathbf z, \mathbf y) = P^-C^\top$ and $\text{Cov}(\mathbf y) = CP^-C^\top + R$.
+
+Gaussian conditioning gives
+
+$$
+E[\mathbf z \mid \mathbf y] = \mathbf m^- + P^-C^\top(CP^-C^\top + R)^{-1}(\mathbf y - C\mathbf m^-),
+$$
+
+$$
+\text{Cov}[\mathbf z \mid \mathbf y] = P^- - P^-C^\top(CP^-C^\top + R)^{-1}CP^-.
+$$
+
+Writing $K = P^-C^\top(CP^-C^\top + R)^{-1}$ gives the familiar $\mathbf m = \mathbf m^- + K(\mathbf y - C\mathbf m^-)$ and $P = (I - KC)P^-$. Nothing is approximated: the Kalman filter is exact Gaussian conditioning, applied one observation at a time.
+
+</Prove>
+
+<Prove title="2. The likelihood from the innovations" task="Show that $\log p(\mathbf y_{1:T}) = \sum_{t=1}^T\log\mathcal N\left(\mathbf y_t; C\mathbf m_t^-, CP_t^-C^\top + R\right)$.">
+
+By the chain rule, $p(\mathbf y_{1:T}) = \prod_tp(\mathbf y_t \mid \mathbf y_{1:t-1})$.
+
+Each factor is the predictive distribution of the next observation given the past. Given $\mathbf y_{1:t-1}$, the state is $\mathcal N(\mathbf m_t^-, P_t^-)$ by the predict step, and $\mathbf y_t = C\mathbf z_t + \mathbf v_t$ is a linear function of it plus independent noise, so it is Gaussian with mean $C\mathbf m_t^-$ and covariance $CP_t^-C^\top + R$.
+
+Taking logarithms and summing gives the result: the filter produces the likelihood as a by-product, which is what EM and model comparison need. The innovations $\mathbf y_t - C\mathbf m_t^-$ are also independent of each other, which gives a useful diagnostic: if a fitted model is right, its innovations should be white.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 65 quiz (15 questions)" questions={[
+  { q: "The forward recursion gives...", options: ["Filtered posteriors and the likelihood", "Smoothed posteriors", "The Viterbi path", "The parameters"], answer: 0, explain: "Day 1." },
+  { q: "Viterbi maximises...", options: ["The probability of the whole path", "The expected number of correct states", "The likelihood", "The entropy"], answer: 0, explain: "Day 1." },
+  { q: "A pointwise decoded sequence can be...", options: ["Impossible under the model", "Always optimal", "The same as Viterbi always", "Free of errors"], answer: 0, explain: "Day 1." },
+  { q: "Baum-Welch's E step is...", options: ["Forward-backward", "Viterbi", "Gradient descent", "Sampling"], answer: 0, explain: "Day 2." },
+  { q: "Label switching means...", options: ["State labels are arbitrary", "States change over time", "The chain is not Markov", "EM fails"], answer: 0, explain: "Day 2." },
+  { q: "The number of HMM states is chosen by...", options: ["Held-out likelihood or a criterion", "Training likelihood", "The number of neurons", "Visual inspection only"], answer: 0, explain: "Day 2." },
+  { q: "The Kalman predict step...", options: ["Grows the covariance by Q", "Shrinks it", "Uses the data", "Resets the mean"], answer: 0, explain: "Day 3." },
+  { q: "The Kalman gain is...", options: ["P⁻Cᵀ(CP⁻Cᵀ + R)⁻¹", "CP⁻", "R⁻¹", "A"], answer: 0, explain: "Day 3." },
+  { q: "Overstating the measurement noise makes the estimate...", options: ["Smoother and overconfident intervals too wide", "Rougher", "Unbiased and calibrated", "Unchanged"], answer: 0, explain: "Day 3." },
+  { q: "The RTS smoother...", options: ["Adds the future to filtered estimates", "Only uses the past", "Is an approximation", "Needs sampling"], answer: 0, explain: "Day 4." },
+  { q: "EM for an LDS updates A as...", options: ["S₁₀S₀₀⁻¹ from smoothed moments", "The data covariance", "The identity", "A random matrix"], answer: 0, explain: "Day 4." },
+  { q: "In an LDS, which is identifiable?", options: ["The eigenvalues of A", "The entries of C", "The latent coordinates", "The sign of Q"], answer: 0, explain: "Day 4." },
+  { q: "PLDS inference uses...", options: ["A Laplace approximation at the posterior mode", "Exact conditioning", "k-means", "Thresholding"], answer: 0, explain: "Day 5." },
+  { q: "Exact inference in a switching LDS is intractable because...", options: ["The posterior mixture grows with the number of discrete paths", "The data are noisy", "The dynamics are nonlinear", "There are too many neurons"], answer: 0, explain: "Day 5." },
+  { q: "A particle filter resamples when...", options: ["The effective sample size falls too low", "Every step", "Never", "The state is Gaussian"], answer: 0, explain: "Part A." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Kalman (1960) its third pass and write your critique under the five headings. Focus on one question: **what made this formulation so durable?** Consider its break with the frequency-domain filtering of Wiener, the recursive form that needs only the previous estimate, the explicit model of dynamics and noise, and the fact that the gain can be computed in advance; the assumptions of linearity and Gaussianity and what breaks without them (Day 5 and Part A); the role of the innovations and what their whiteness tests; and the paper's style, which is mathematical rather than empirical. End with one neuroscience setting where you would use a Kalman filter and one where you would reach for particles instead.
+
+<Callout kind="research">
+
+The innovations of a correctly specified filter are white. Take the Kalman decoder of Day 3, fit it to data generated with a slow nonlinearity in the dynamics, and test the innovations for autocorrelation. How large must the nonlinearity be before the test detects it, and does an extended Kalman filter or a particle filter remove the autocorrelation? This is a practical model check for any state-space fit.
+
+</Callout>
+
+<Key title="Week 65 review checklist">
+<ul>
+<li>I can filter, smooth and Viterbi-decode a hidden Markov model and say which to report.</li>
+<li>I can learn HMM parameters with Baum-Welch and choose the number of states honestly.</li>
+<li>I can implement the Kalman filter and RTS smoother and explain the gain.</li>
+<li>I can fit a linear dynamical system by EM and state what is identifiable.</li>
+<li>I can extend to Poisson observations, switching dynamics and particle filtering, and check the result.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then look back over Weeks 60 to 65: list the three methods you are most likely to use in your own work, and for each write one sentence on what it assumes." />

@@ -1,0 +1,308 @@
+export const meta = {
+  title: "Hidden Markov models: filtering, smoothing and the best path",
+  intro: "Week 50 used a hidden Markov model to find an animal's strategy states, computing posterior state probabilities with the forward-backward algorithm. This week treats sequential models in their own right, and today completes the inference toolkit. Three questions can be asked of an HMM: how likely are the observations, what is the posterior over the state at each time, and what is the single most likely sequence of states. The third has its own algorithm, Viterbi's, and the three answers differ in ways that matter when the states are reported as a result.",
+  goals: [
+    "State the HMM and compute the likelihood of a sequence by the forward recursion",
+    "Compute smoothed state posteriors, and explain filtering against smoothing",
+    "Implement the Viterbi algorithm and compare its path with pointwise decoding",
+    "Explain when the most likely path and the most likely states at each time disagree",
+  ],
+  plan: [
+    { label: "The model and the three questions", minutes: 20 },
+    { label: "Forward and backward", minutes: 30 },
+    { label: "Viterbi", minutes: 30 },
+    { label: "When paths and marginals disagree", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "rabiner-1989",
+};
+
+<Predict question="At each time step you take the state with the highest posterior probability. Could the resulting sequence be a sequence that the model says is impossible?" />
+
+<Step n={1} title="The model and the three questions" minutes={20} />
+
+A **hidden Markov model** has a discrete state $z_t$ that evolves by a transition matrix $A_{jk} = p(z_t = k \mid z_{t-1} = j)$ from an initial distribution $\boldsymbol\pi$, and observations drawn from an emission distribution $p(x_t \mid z_t)$. Rabiner (1989), today's paper, organised the subject around three problems: **evaluation**, the probability of an observation sequence; **decoding**, the states behind it; and **learning**, the parameters (Day 2). In neuroscience the states might be up and down states, behavioural syllables, sleep stages or task strategies.
+
+<Video id="z6KbKILMIPU" title="Binary HMM with Gaussian measurements" by="Neuromatch Academy" note="Neuromatch's introduction to a two-state hidden Markov model with Gaussian observations: the switching dynamics, what the observations say about the state, and why the posterior depends on the whole sequence." />
+
+The setup cell simulates cortical up and down states: in the down state a population fires at 2 spikes per bin, in the up state at 3.6, and states persist for tens of bins.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.stats import poisson
+  g0 = np.random.default_rng(651)
+  T = 300
+  A = np.array([[0.96, 0.04], [0.03, 0.97]])
+  rates = np.array([2.0, 3.6])
+  z = np.zeros(T, int)
+  for t in range(1, T):
+      z[t] = g0.choice(2, p=A[z[t - 1]])
+  x = g0.poisson(rates[z])
+  B = poisson.pmf(x[:, None], rates)                      # T x 2 emission likelihoods
+  print(f"{np.mean(z == 1):.0%} of bins in the up state; mean count {x[z == 0].mean():.1f} (down) and {x[z == 1].mean():.1f} (up)")
+`} />
+
+<Step n={2} title="Forward and backward" minutes={30} />
+
+The **forward** recursion propagates $\alpha_t(k) \propto p(z_t = k, x_{1:t})$ and gives both the filtered posterior $p(z_t \mid x_{1:t})$ and the likelihood of the data; the **backward** recursion adds the evidence from the future, and their product gives the **smoothed** posterior $p(z_t \mid x_{1:T})$. Normalising each forward step keeps the numbers from underflowing and the normalisers multiply to the likelihood, so their logs sum to the log-likelihood.
+
+<PyCell id="fb" title="Forward-backward with scaling" tests={String.raw`
+  import numpy as np
+  def test_norm():
+      "filtered and smoothed posteriors are normalised at each time"
+      assert np.allclose(filt.sum(1), 1) and np.allclose(smooth.sum(1), 1)
+  def test_loglik():
+      "the log-likelihood from the scaling factors matches a brute-force sum over the first 10 steps"
+      import itertools
+      tot = 0.0
+      for path in itertools.product((0, 1), repeat=10):
+          p = 0.5 * B[0, path[0]]
+          for t in range(1, 10):
+              p *= A[path[t - 1], path[t]] * B[t, path[t]]
+          tot += p
+      alpha10, c10 = forward(B[:10], A, np.array([0.5, 0.5]))
+      assert abs(np.sum(np.log(c10)) - np.log(tot)) < 1e-10
+  def test_smooth_better():
+      "smoothing recovers the state better than filtering"
+      assert acc_smooth > acc_filt
+`} prompt="Write forward(B, A, pi) returning the normalised forward messages and the scaling factors, and backward(B, A, c) returning the scaled backward messages. Compare the accuracy of filtered and smoothed state estimates."
+code={String.raw`
+  def forward(B, A, pi):
+      T_, K = B.shape
+      alpha = np.zeros((T_, K)); c = np.zeros(T_)
+      a = pi * B[0]; c[0] = a.sum(); alpha[0] = a / c[0]
+      for t in range(1, T_):
+          a = ...
+          c[t] = a.sum(); alpha[t] = a / c[t]
+      return alpha, c
+
+  def backward(B, A, c):
+      T_, K = B.shape
+      beta = np.ones((T_, K))
+      for t in range(T_ - 2, -1, -1):
+          beta[t] = ...
+      return beta
+
+  pi0 = np.array([0.5, 0.5])
+  alpha, c = forward(B, A, pi0)
+  beta = backward(B, A, c)
+  filt = alpha
+  smooth = alpha * beta
+  smooth /= smooth.sum(1, keepdims=True)
+  acc_filt = np.mean((filt[:, 1] > 0.5) == (z == 1))
+  acc_smooth = np.mean((smooth[:, 1] > 0.5) == (z == 1))
+  print(f"log-likelihood {np.sum(np.log(c)):.2f}; accuracy filtered {acc_filt:.3f}, smoothed {acc_smooth:.3f}")
+`}
+hint="a = B[t] * (alpha[t - 1] @ A); beta[t] = (A @ (B[t + 1] * beta[t + 1])) / c[t + 1]."
+solution={String.raw`
+  def forward(B, A, pi):
+      T_, K = B.shape
+      alpha = np.zeros((T_, K)); c = np.zeros(T_)
+      a = pi * B[0]; c[0] = a.sum(); alpha[0] = a / c[0]
+      for t in range(1, T_):
+          a = B[t] * (alpha[t - 1] @ A)
+          c[t] = a.sum(); alpha[t] = a / c[t]
+      return alpha, c
+
+  def backward(B, A, c):
+      T_, K = B.shape
+      beta = np.ones((T_, K))
+      for t in range(T_ - 2, -1, -1):
+          beta[t] = (A @ (B[t + 1] * beta[t + 1])) / c[t + 1]
+      return beta
+
+  pi0 = np.array([0.5, 0.5])
+  alpha, c = forward(B, A, pi0)
+  beta = backward(B, A, c)
+  filt = alpha
+  smooth = alpha * beta
+  smooth /= smooth.sum(1, keepdims=True)
+  acc_filt = np.mean((filt[:, 1] > 0.5) == (z == 1))
+  acc_smooth = np.mean((smooth[:, 1] > 0.5) == (z == 1))
+  print(f"log-likelihood {np.sum(np.log(c)):.2f}; accuracy filtered {acc_filt:.3f}, smoothed {acc_smooth:.3f}")
+`} />
+
+Filtering, which sees only the past, labels 81% of bins correctly; smoothing, which also uses the future, 84%. The gain comes at the state boundaries: when a run of high counts begins, the filter needs several bins to become confident, while the smoother knows how the run continued and places the transition where it belongs. For an online application, a prosthesis or a closed-loop experiment, only the filtered estimate is available; for analysis of a recording, there is no reason not to smooth.
+
+<Step n={3} title="Viterbi" minutes={30} />
+
+The **Viterbi algorithm** finds $\arg\max_{z_{1:T}}p(z_{1:T} \mid x_{1:T})$, the single most likely sequence. It is the forward recursion with sums replaced by maxima, run in logarithms, with a record of which predecessor achieved each maximum so that the path can be traced back:
+
+$$
+\delta_t(k) = \log p(x_t \mid z_t = k) + \max_j\left[\delta_{t-1}(j) + \log A_{jk}\right].
+$$
+
+<Figure caption="A persistent two-state chain seen through noisy observations. Thresholding each observation flickers; the Viterbi path recovers runs." credit="Interactive figure by Engram, after Viterbi (1967) and Rabiner (1989).">
+  <ViterbiPath />
+</Figure>
+
+<PyCell id="viterbi" title="The most likely path" tests={String.raw`
+  import numpy as np
+  def test_path():
+      "the Viterbi path is at least as likely as the smoothed pointwise path"
+      assert logp(path_vit) >= logp(path_point) - 1e-9
+  def test_switches():
+      "it switches far less often than thresholding the counts"
+      assert switches(path_vit) < switches(path_thresh)
+`} prompt="Write viterbi(B, A, pi) using log-probabilities and backpointers, and logp(path), the log joint probability of a state path with the observations. Compare the Viterbi path with pointwise smoothed decoding and with thresholding the counts at 2.8."
+code={String.raw`
+  def viterbi(B, A, pi):
+      T_, K = B.shape
+      lB, lA = np.log(B + 1e-300), np.log(A)
+      d = np.zeros((T_, K)); bp = np.zeros((T_, K), int)
+      d[0] = np.log(pi) + lB[0]
+      for t in range(1, T_):
+          cand = d[t - 1][:, None] + lA                   # K x K: from j to k
+          bp[t] = np.argmax(cand, axis=0)
+          d[t] = ...
+      path = np.zeros(T_, int); path[-1] = int(np.argmax(d[-1]))
+      for t in range(T_ - 2, -1, -1):
+          path[t] = bp[t + 1, path[t + 1]]
+      return path
+
+  def logp(path):
+      out = np.log(pi0[path[0]]) + np.log(B[0, path[0]] + 1e-300)
+      for t in range(1, len(path)):
+          out += np.log(A[path[t - 1], path[t]]) + np.log(B[t, path[t]] + 1e-300)
+      return out
+
+  switches = lambda p: int(np.sum(p[1:] != p[:-1]))
+  path_vit = viterbi(B, A, pi0)
+  path_point = (smooth[:, 1] > 0.5).astype(int)
+  path_thresh = (x > 2.8).astype(int)
+  for name, p in [("Viterbi", path_vit), ("pointwise", path_point), ("threshold", path_thresh), ("truth", z)]:
+      print(f"{name:10s} accuracy {np.mean(p == z):.3f}, switches {switches(p):3d}, log joint {logp(p):9.2f}")
+`}
+hint="d[t] = lB[t] + cand.max(axis=0)."
+solution={String.raw`
+  def viterbi(B, A, pi):
+      T_, K = B.shape
+      lB, lA = np.log(B + 1e-300), np.log(A)
+      d = np.zeros((T_, K)); bp = np.zeros((T_, K), int)
+      d[0] = np.log(pi) + lB[0]
+      for t in range(1, T_):
+          cand = d[t - 1][:, None] + lA                   # K x K: from j to k
+          bp[t] = np.argmax(cand, axis=0)
+          d[t] = lB[t] + cand.max(axis=0)
+      path = np.zeros(T_, int); path[-1] = int(np.argmax(d[-1]))
+      for t in range(T_ - 2, -1, -1):
+          path[t] = bp[t + 1, path[t + 1]]
+      return path
+
+  def logp(path):
+      out = np.log(pi0[path[0]]) + np.log(B[0, path[0]] + 1e-300)
+      for t in range(1, len(path)):
+          out += np.log(A[path[t - 1], path[t]]) + np.log(B[t, path[t]] + 1e-300)
+      return out
+
+  switches = lambda p: int(np.sum(p[1:] != p[:-1]))
+  path_vit = viterbi(B, A, pi0)
+  path_point = (smooth[:, 1] > 0.5).astype(int)
+  path_thresh = (x > 2.8).astype(int)
+  for name, p in [("Viterbi", path_vit), ("pointwise", path_point), ("threshold", path_thresh), ("truth", z)]:
+      print(f"{name:10s} accuracy {np.mean(p == z):.3f}, switches {switches(p):3d}, log joint {logp(p):9.2f}")
+`} />
+
+The Viterbi path is right on 86% of bins with 7 switches, exactly the number the true sequence made; pointwise smoothed decoding gets 84% with 9 switches; thresholding counts at 2.8 gets 68% with 134 switches, because a single quiet bin inside an up state is read as a transition. Note also the log joint probabilities: Viterbi's path scores $-614.9$, higher than the pointwise path's $-623.3$ and higher even than the true sequence's $-627.4$. That is not a bug. The most likely path is usually smoother than the truth, since the truth includes transitions the data do not support.
+
+<Step n={4} title="When paths and marginals disagree" minutes={25} />
+
+Pointwise decoding maximises the expected number of correct states; Viterbi maximises the probability of the whole sequence. They answer different questions, and with transitions that are forbidden or very unlikely, the pointwise sequence can even be impossible under the model.
+
+<PyCell id="disagree" title="An impossible pointwise path" tests={String.raw`
+  import numpy as np
+  def test_impossible():
+      "the pointwise path has probability zero under the model, while the Viterbi path does not"
+      assert np.isneginf(logp3(p_point3)) and np.isfinite(logp3(p_vit3))
+`} prompt="Build a three-state chain in which state 0 cannot be followed by state 2, with observations that nevertheless favour 0 then 2. Compare the pointwise and Viterbi decodings."
+code={String.raw`
+  A3 = np.array([[0.5, 0.5, 0.0], [0.3, 0.4, 0.3], [0.0, 0.5, 0.5]])
+  pi3 = np.array([1 / 3, 1 / 3, 1 / 3])
+  B3 = np.array([[0.7, 0.2, 0.1], [0.3, 0.1, 0.6], [0.25, 0.1, 0.65]])      # 3 time steps, 3 states
+  a3, c3 = forward(B3, A3, pi3)
+  b3 = backward(B3, A3, c3)
+  sm3 = a3 * b3; sm3 /= sm3.sum(1, keepdims=True)
+  p_point3 = ...
+  p_vit3 = viterbi(B3, A3, pi3)
+
+  def logp3(path):
+      out = np.log(pi3[path[0]]) + np.log(B3[0, path[0]])
+      for t in range(1, len(path)):
+          out += np.log(A3[path[t - 1], path[t]] + 0) + np.log(B3[t, path[t]])
+      return out
+
+  print("smoothed posteriors:\n", np.round(sm3, 3))
+  print(f"pointwise path {p_point3}, log probability {logp3(p_point3)}")
+  print(f"Viterbi path   {p_vit3}, log probability {logp3(p_vit3):.3f}")
+`}
+hint="p_point3 = sm3.argmax(1)."
+solution={String.raw`
+  A3 = np.array([[0.5, 0.5, 0.0], [0.3, 0.4, 0.3], [0.0, 0.5, 0.5]])
+  pi3 = np.array([1 / 3, 1 / 3, 1 / 3])
+  B3 = np.array([[0.7, 0.2, 0.1], [0.3, 0.1, 0.6], [0.25, 0.1, 0.65]])      # 3 time steps, 3 states
+  a3, c3 = forward(B3, A3, pi3)
+  b3 = backward(B3, A3, c3)
+  sm3 = a3 * b3; sm3 /= sm3.sum(1, keepdims=True)
+  p_point3 = sm3.argmax(1)
+  p_vit3 = viterbi(B3, A3, pi3)
+
+  def logp3(path):
+      out = np.log(pi3[path[0]]) + np.log(B3[0, path[0]])
+      for t in range(1, len(path)):
+          out += np.log(A3[path[t - 1], path[t]] + 0) + np.log(B3[t, path[t]])
+      return out
+
+  print("smoothed posteriors:\n", np.round(sm3, 3))
+  print(f"pointwise path {p_point3}, log probability {logp3(p_point3)}")
+  print(f"Viterbi path   {p_vit3}, log probability {logp3(p_vit3):.3f}")
+`} />
+
+The smoothed posteriors favour state 0 at the first step and state 2 at the third, so pointwise decoding returns 0, 2, 2, a sequence whose probability is zero: the transition from 0 to 2 is forbidden. Viterbi returns 0, 0, 0, with log probability $-5.43$. The pointwise answer is still useful, since each of its states separately is the most probable at that time, but it is not a sequence the model could have produced, and presenting it as a segmentation of behaviour would be a mistake. Report posteriors when asking about individual times, Viterbi when asking for a single trajectory.
+
+<Bridge title="Sequences in brains and machines"
+  neuro="HMMs are used to segment cortical up and down states, sleep stages, behavioural syllables in freely moving animals, and task strategies (Week 50). What is reported depends on the algorithm: a Viterbi segmentation gives clean state boundaries, while posterior probabilities show which boundaries are uncertain, and a paper that reports only the path hides that uncertainty."
+  ai="Viterbi decoding was devised for error-correcting codes and became the backbone of speech recognition, where it finds the most likely word sequence; the same max-product recursion is the sum-product algorithm of Week 62 with maximisation in place of summation.">
+
+Asking for the best path and asking for the best state at each time are different questions.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The forward recursion gives...", options: ["Filtered posteriors and the likelihood", "The most likely path", "The transition matrix", "The emission parameters"], answer: 0, explain: "Step 2." },
+  { q: "Smoothed posteriors use...", options: ["The whole sequence, past and future", "Only the past", "Only the present", "Only the future"], answer: 0, explain: "Step 2." },
+  { q: "Scaling the forward messages...", options: ["Prevents underflow and gives the log-likelihood from the scale factors", "Changes the posterior", "Is optional and pointless", "Removes the emissions"], answer: 0, explain: "Step 2." },
+  { q: "Viterbi replaces sums by...", options: ["Maxima, with backpointers", "Products", "Integrals", "Derivatives"], answer: 0, explain: "Step 3." },
+  { q: "Viterbi maximises...", options: ["The probability of the whole state sequence", "The number of correct states", "The likelihood of the data", "The entropy"], answer: 0, explain: "Step 3." },
+  { q: "Pointwise decoding maximises...", options: ["The expected number of correct states", "The path probability", "The transition counts", "The emission likelihood"], answer: 0, explain: "Step 4." },
+  { q: "A pointwise path can be...", options: ["Impossible under the model", "Always the Viterbi path", "More likely than Viterbi's", "Free of switches"], answer: 0, explain: "Step 4." },
+  { q: "Thresholding each observation ignores...", options: ["That states persist", "The emission model", "The data", "The number of states"], answer: 0, explain: "The figure." },
+]} />
+
+<Flashcards cards={[
+  { front: "HMM?", back: "Discrete state with transition matrix A and emissions $p(x_t \\mid z_t)$." },
+  { front: "Forward recursion?", back: "$\\alpha_t \\propto p(x_t \\mid z_t)\\sum_j\\alpha_{t-1}(j)A_{jk}$; scale factors multiply to the likelihood." },
+  { front: "Smoothed posterior?", back: "$p(z_t \\mid x_{1:T}) \\propto \\alpha_t(k)\\beta_t(k)$" },
+  { front: "Viterbi recursion?", back: "$\\delta_t(k) = \\log p(x_t \\mid k) + \\max_j[\\delta_{t-1}(j) + \\log A_{jk}]$, with backpointers." },
+  { front: "Viterbi against pointwise?", back: "Best whole path against best state at each time; the latter can be an impossible sequence." },
+]} />
+
+<Predict revisit question="Could pointwise decoding produce an impossible sequence?" />
+
+<Key title="Before you go">
+<ul>
+<li>HMMs pose three problems: likelihood, decoding and learning.</li>
+<li>Forward gives filtering and the likelihood; forward-backward gives smoothing.</li>
+<li>Viterbi gives the most likely path by max-product with backpointers.</li>
+<li>Paths and pointwise marginals answer different questions and can disagree.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Rabiner (1989), <em>A tutorial on hidden Markov models and selected applications in speech recognition</em>, sections 1 to 3.</li>
+<li>Viterbi (1967), <em>Error bounds for convolutional codes and an asymptotically optimum decoding algorithm</em>, IEEE Transactions on Information Theory 13(2), 260 to 269.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A paper reports the fraction of time an animal spent in each of three behavioural states, from a Viterbi segmentation. What would you want to see about the uncertainty of that segmentation, and how would you compute it?" />
