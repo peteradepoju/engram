@@ -1,0 +1,241 @@
+export const meta = {
+  title: "Latent variable models and the evidence lower bound",
+  intro: "Mixtures, factor analysis and hidden Markov chains share one shape: each observation is generated from an unobserved cause, and learning means fitting a model whose likelihood sums or integrates over that cause. Week 19 met the evidence lower bound as a tool for approximating one posterior. This week it becomes the organising idea of latent variable modelling: a single objective whose maximisation over the posterior approximation does inference and over the parameters does learning. Today you work with a model where everything can be computed exactly, probabilistic PCA, and use it to see each term of the bound, the gap, and the idea of an encoder.",
+  goals: [
+    "Write a latent variable model and its marginal likelihood, and explain why the marginal is hard in general",
+    "Decompose the ELBO into reconstruction and KL terms, and the log evidence into ELBO plus a KL gap",
+    "Verify these identities exactly for probabilistic PCA",
+    "Explain amortised inference: an encoder that maps each observation to its approximate posterior",
+  ],
+  plan: [
+    { label: "Latent variable models", minutes: 20 },
+    { label: "The bound, two ways", minutes: 30 },
+    { label: "Checking it on probabilistic PCA", minutes: 30 },
+    { label: "Encoders", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "tipping-bishop-1999",
+};
+
+<Predict question="For a single observation, you compute the ELBO using the exact posterior over the latent variables as q. Is the ELBO then a little below the log evidence, exactly equal to it, or above it?" />
+
+<Step n={1} title="Latent variable models" minutes={20} />
+
+A **latent variable model** has parameters $\theta$, a prior $p(\mathbf z)$ over unobserved variables and a likelihood $p_\theta(\mathbf x \mid \mathbf z)$. Learning maximises the **marginal likelihood**, or evidence,
+
+$$
+p_\theta(\mathbf x) = \int p_\theta(\mathbf x \mid \mathbf z)p(\mathbf z)\,d\mathbf z,
+$$
+
+summed over observations in logarithms. For mixtures the integral is a sum over components and is easy; for factor analysis it is a Gaussian integral and is easy. For almost anything else, a neural network decoder, Poisson observations of a continuous latent, a nonlinear dynamical system, it has no closed form. The same integral sits in the denominator of the posterior $p_\theta(\mathbf z \mid \mathbf x)$, so learning and inference are hard for the same reason.
+
+<Video id="FMuvUZXMzKM" title="Latent variable models and variational autoencoders (CS294-158, lecture 4)" by="Pieter Abbeel, UC Berkeley" note="Pieter Abbeel on why latent variable models are useful, why their likelihood is hard to maximise, and how a variational lower bound with an inference network makes training possible." />
+
+**Probabilistic PCA** (Tipping and Bishop, 1999, today's paper) is the factor analysis model of Week 61 with equal noise on every dimension, $\mathbf x = W\mathbf z + \boldsymbol\mu + \boldsymbol\epsilon$, $\mathbf z \sim \mathcal N(\mathbf 0, I)$, $\boldsymbol\epsilon \sim \mathcal N(\mathbf 0, \sigma^2I)$. Everything is Gaussian: the evidence is $\mathcal N(\mathbf x; \boldsymbol\mu, WW^\top + \sigma^2I)$ and the posterior is $\mathcal N(M^{-1}W^\top(\mathbf x - \boldsymbol\mu), \sigma^2M^{-1})$ with $M = W^\top W + \sigma^2I$. Tipping and Bishop showed that the maximum-likelihood $W$ spans the principal subspace, giving PCA a probability model.
+
+<Step n={2} title="The bound, two ways" minutes={30} />
+
+<Derivation title="Two decompositions of the ELBO">
+<div>
+
+For any distribution $q(\mathbf z)$, define the evidence lower bound
+
+$$
+\mathcal L(q, \theta) = E_q\left[\log p_\theta(\mathbf x, \mathbf z) - \log q(\mathbf z)\right].
+$$
+
+</div>
+<div>
+
+**Gap form.** Write $p_\theta(\mathbf x, \mathbf z) = p_\theta(\mathbf z \mid \mathbf x)p_\theta(\mathbf x)$. Then $\mathcal L = \log p_\theta(\mathbf x) - \text{KL}(q(\mathbf z)\,\Vert\,p_\theta(\mathbf z \mid \mathbf x))$. Since KL is non-negative, the ELBO is a lower bound, equal to the log evidence exactly when $q$ is the true posterior.
+
+</div>
+<div>
+
+**Reconstruction form.** Write $p_\theta(\mathbf x, \mathbf z) = p_\theta(\mathbf x \mid \mathbf z)p(\mathbf z)$. Then $\mathcal L = E_q[\log p_\theta(\mathbf x \mid \mathbf z)] - \text{KL}(q(\mathbf z)\,\Vert\,p(\mathbf z))$: how well latents drawn from $q$ reconstruct the data, minus how far $q$ strays from the prior. This form contains only quantities that can be computed or sampled.
+
+</div>
+<div>
+
+The two forms together explain variational learning. Raising $\mathcal L$ over $q$ shrinks the gap, which is inference; raising it over $\theta$ raises a lower bound on the evidence, which is learning.
+
+</div>
+</Derivation>
+
+<Figure caption="A model in which x = z² plus noise, so the posterior over z given x has two peaks. Move a Gaussian q and watch the ELBO, the log evidence and the gap between them." credit="Interactive figure by Engram.">
+  <ElboGap />
+</Figure>
+
+<Step n={3} title="Checking it on probabilistic PCA" minutes={30} />
+
+<PyCell code={String.raw`
+  import numpy as np
+  from scipy.stats import multivariate_normal as mvn
+  g0 = np.random.default_rng(631)
+  d, k = 12, 2
+  W = g0.normal(size=(d, k)); mu = g0.normal(size=d); s2 = 0.5
+  Z = g0.normal(size=(500, k))
+  X = Z @ W.T + mu + np.sqrt(s2) * g0.normal(size=(500, d))
+  M = W.T @ W + s2 * np.eye(k)
+
+  def log_evidence(x):
+      return mvn.logpdf(x, mu, W @ W.T + s2 * np.eye(d))
+
+  def posterior(x):
+      return np.linalg.solve(M, W.T @ (x - mu)), s2 * np.linalg.inv(M)
+  print("ready: a 12-dimensional probabilistic PCA model with 2 latents, and 500 observations")
+`} />
+
+<PyCell id="elbo" title="The ELBO in closed form" tests={String.raw`
+  import numpy as np
+  def test_exact():
+      "with q equal to the exact posterior, the ELBO equals the log evidence"
+      m, S = posterior(X[0])
+      assert abs(elbo(X[0], m, S) - log_evidence(X[0])) < 1e-8
+  def test_gap():
+      "with a worse q, the gap equals the KL divergence from q to the posterior"
+      m, S = posterior(X[0]); m2, S2 = m + 0.5, 2 * S
+      assert abs((log_evidence(X[0]) - elbo(X[0], m2, S2)) - kl_gauss(m2, S2, m, S)) < 1e-8
+`} prompt="Write elbo(x, m, S) for a Gaussian q = N(m, S) in the reconstruction form: the expected log-likelihood under q, E_q[log N(x; W z + mu, s2 I)], minus KL(q || N(0, I)). Use the closed forms: the expected squared error is |x - mu - W m|^2 + trace(W S W^T)."
+code={String.raw`
+  def kl_gauss(m1, S1, m2, S2):
+      """KL( N(m1, S1) || N(m2, S2) )"""
+      k_ = len(m1); S2i = np.linalg.inv(S2)
+      return 0.5 * (np.trace(S2i @ S1) + (m2 - m1) @ S2i @ (m2 - m1) - k_ + np.linalg.slogdet(S2)[1] - np.linalg.slogdet(S1)[1])
+
+  def elbo(x, m, S):
+      sq = np.sum((x - mu - W @ m) ** 2) + np.trace(W @ S @ W.T)
+      recon = ...
+      return recon - kl_gauss(m, S, np.zeros(k), np.eye(k))
+
+  m0, S0 = posterior(X[0])
+  print(f"log evidence {log_evidence(X[0]):.4f}")
+  print(f"ELBO at the exact posterior {elbo(X[0], m0, S0):.4f}")
+  print(f"ELBO with the mean shifted by 0.5 and the covariance doubled {elbo(X[0], m0 + 0.5, 2 * S0):.4f}")
+`}
+hint="recon = -0.5 * d * np.log(2 * np.pi * s2) - sq / (2 * s2)."
+solution={String.raw`
+  def kl_gauss(m1, S1, m2, S2):
+      """KL( N(m1, S1) || N(m2, S2) )"""
+      k_ = len(m1); S2i = np.linalg.inv(S2)
+      return 0.5 * (np.trace(S2i @ S1) + (m2 - m1) @ S2i @ (m2 - m1) - k_ + np.linalg.slogdet(S2)[1] - np.linalg.slogdet(S1)[1])
+
+  def elbo(x, m, S):
+      sq = np.sum((x - mu - W @ m) ** 2) + np.trace(W @ S @ W.T)
+      recon = -0.5 * d * np.log(2 * np.pi * s2) - sq / (2 * s2)
+      return recon - kl_gauss(m, S, np.zeros(k), np.eye(k))
+
+  m0, S0 = posterior(X[0])
+  print(f"log evidence {log_evidence(X[0]):.4f}")
+  print(f"ELBO at the exact posterior {elbo(X[0], m0, S0):.4f}")
+  print(f"ELBO with the mean shifted by 0.5 and the covariance doubled {elbo(X[0], m0 + 0.5, 2 * S0):.4f}")
+`} />
+
+With $q$ set to the exact posterior the ELBO equals the log evidence, $-16.8695$, to every printed digit. Shift the mean by 0.5 in each latent dimension and double the covariance, and the ELBO drops by more than 9 nats: the latent dimensions are well determined here, because twelve observed dimensions constrain two latents, so the posterior is narrow and a modest error in $q$ is a large KL divergence. The test checks the gap identity exactly: log evidence minus ELBO equals KL from $q$ to the posterior.
+
+<PyCell id="mc" title="A Monte Carlo ELBO" tests={String.raw`
+  import numpy as np
+  def test_mc():
+      "the Monte Carlo ELBO with 20,000 samples is within 0.05 of the closed form"
+      assert abs(elbo_mc - elbo(X[0], m0 + 0.5, 2 * S0)) < 0.05
+`} prompt="Estimate the same ELBO by sampling: draw z from q, average log p(x | z) + log p(z) - log q(z). This is how the ELBO is computed when no closed form exists."
+code={String.raw`
+  gm = np.random.default_rng(6311)
+  mq, Sq = m0 + 0.5, 2 * S0
+  zs = gm.multivariate_normal(mq, Sq, size=20000)
+  log_lik = mvn.logpdf(X[0] - zs @ W.T - mu, np.zeros(d), s2 * np.eye(d))
+  log_prior = mvn.logpdf(zs, np.zeros(k), np.eye(k))
+  log_q = mvn.logpdf(zs, mq, Sq)
+  elbo_mc = ...
+  print(f"Monte Carlo ELBO {elbo_mc:.4f} (closed form {elbo(X[0], mq, Sq):.4f}); standard error {np.std(log_lik + log_prior - log_q) / np.sqrt(20000):.4f}")
+`}
+hint="elbo_mc = np.mean(log_lik + log_prior - log_q)."
+solution={String.raw`
+  gm = np.random.default_rng(6311)
+  mq, Sq = m0 + 0.5, 2 * S0
+  zs = gm.multivariate_normal(mq, Sq, size=20000)
+  log_lik = mvn.logpdf(X[0] - zs @ W.T - mu, np.zeros(d), s2 * np.eye(d))
+  log_prior = mvn.logpdf(zs, np.zeros(k), np.eye(k))
+  log_q = mvn.logpdf(zs, mq, Sq)
+  elbo_mc = np.mean(log_lik + log_prior - log_q)
+  print(f"Monte Carlo ELBO {elbo_mc:.4f} (closed form {elbo(X[0], mq, Sq):.4f}); standard error {np.std(log_lik + log_prior - log_q) / np.sqrt(20000):.4f}")
+`} />
+
+Sampling 20,000 latents from $q$ gives an ELBO of $-26.230$ against the exact $-26.219$, well within the standard error of 0.043. This estimator needs only the ability to sample $q$ and to evaluate $\log p(\mathbf x \mid \mathbf z)$, $\log p(\mathbf z)$ and $\log q(\mathbf z)$, which is why it works for any model. Its variance is the practical problem: a few samples per observation, as in stochastic training, give noisy estimates, and Day 4 is about computing their gradients well.
+
+<Step n={4} title="Encoders" minutes={25} />
+
+Every observation has its own posterior, so a dataset of a million trials has a million $q$s to optimise. **Amortised inference** learns instead a single function, an **encoder** or recognition model, that maps each $\mathbf x$ to the parameters of its $q$. In probabilistic PCA the exact posterior mean is a linear function of $\mathbf x$, $M^{-1}W^\top(\mathbf x - \boldsymbol\mu)$, so a linear encoder can be exact. The variational autoencoder of Day 4 uses a neural network encoder for models where no such formula exists.
+
+<PyCell id="encoder" title="Learning an encoder from samples" tests={String.raw`
+  import numpy as np
+  def test_encoder():
+      "a linear map fitted by regressing sampled latents on observations matches the exact posterior-mean matrix"
+      assert np.allclose(E_fit, np.linalg.solve(M, W.T), atol=0.05)
+`} prompt="Simulate 50,000 (z, x) pairs from the model, regress z on x - mu by least squares to get a linear encoder, and compare it with the exact posterior-mean matrix M^-1 W^T."
+code={String.raw`
+  ge = np.random.default_rng(6312)
+  Zs = ge.normal(size=(50000, k))
+  Xs = Zs @ W.T + mu + np.sqrt(s2) * ge.normal(size=(50000, d))
+  E_fit = ...                                            # k x d: z is approximately E_fit @ (x - mu)
+  E_exact = np.linalg.solve(M, W.T)
+  print("largest difference between fitted and exact encoder:", np.abs(E_fit - E_exact).max().round(4))
+`}
+hint="E_fit = np.linalg.lstsq(Xs - mu, Zs, rcond=None)[0].T. Regression of z on x estimates E[z | x], which is the posterior mean."
+solution={String.raw`
+  ge = np.random.default_rng(6312)
+  Zs = ge.normal(size=(50000, k))
+  Xs = Zs @ W.T + mu + np.sqrt(s2) * ge.normal(size=(50000, d))
+  E_fit = np.linalg.lstsq(Xs - mu, Zs, rcond=None)[0].T   # k x d: z is approximately E_fit @ (x - mu)
+  E_exact = np.linalg.solve(M, W.T)
+  print("largest difference between fitted and exact encoder:", np.abs(E_fit - E_exact).max().round(4))
+`} />
+
+Regressing sampled latents on observations recovers the exact posterior-mean matrix to within 0.003. Regression estimates $E[\mathbf z \mid \mathbf x]$, which is the posterior mean, so an encoder can be learned from simulations of the generative model alone. This is also how amortised inference trades accuracy for speed: a single encoder must work for every observation, and if its form is too restricted, its $q$ for some observations will be worse than a separately optimised one, an extra loss known as the amortisation gap.
+
+<Bridge title="Latent variables in brains and machines"
+  neuro="The idea that perception is inference about latent causes, Helmholtz's unconscious inference, has a modern form in which sensory cortex runs a recognition model (the encoder) learned together with a generative model of the world, as in the Helmholtz machine of Dayan, Hinton, Neal and Zemel (1995). In data analysis, latent variable models of populations treat single-trial neural activity as noisy observations of a few latent factors."
+  ai="The ELBO is the training objective of variational autoencoders and, in a modified form, of diffusion models; amortised inference is what makes them practical for millions of images or sentences. The reconstruction and KL terms of Step 2 appear in every VAE implementation.">
+
+Inference shrinks the gap; learning raises the bound.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The marginal likelihood of a latent variable model is hard because...", options: ["It integrates over the latent variables", "It has no parameters", "It is always zero", "It ignores the prior"], answer: 0, explain: "Step 1." },
+  { q: "The ELBO equals the log evidence when q is...", options: ["The exact posterior", "The prior", "Uniform", "A point mass"], answer: 0, explain: "The derivation." },
+  { q: "The gap between log evidence and ELBO is...", options: ["KL(q ‖ posterior)", "KL(prior ‖ q)", "The entropy of q", "Zero always"], answer: 0, explain: "The derivation." },
+  { q: "The reconstruction form of the ELBO subtracts...", options: ["KL(q ‖ prior)", "KL(q ‖ posterior)", "The log evidence", "The entropy of the data"], answer: 0, explain: "The derivation." },
+  { q: "Maximising the ELBO over q does...", options: ["Inference", "Learning of θ", "Model selection", "Nothing"], answer: 0, explain: "The derivation." },
+  { q: "Probabilistic PCA's maximum-likelihood W spans...", options: ["The principal subspace", "A random subspace", "The noise", "The mean"], answer: 0, explain: "Tipping and Bishop." },
+  { q: "An encoder in amortised inference maps...", options: ["Each observation to its approximate posterior", "Latents to observations", "Parameters to data", "Data to labels"], answer: 0, explain: "Step 4." },
+  { q: "For a bimodal posterior, the Gaussian q that maximises the ELBO tends to...", options: ["Sit on one mode", "Cover both modes widely", "Sit between the modes", "Equal the prior"], answer: 0, explain: "The figure." },
+]} />
+
+<Flashcards cards={[
+  { front: "ELBO?", back: "$\\mathcal L(q, \\theta) = E_q[\\log p_\\theta(\\mathbf x, \\mathbf z) - \\log q(\\mathbf z)]$" },
+  { front: "Gap form?", back: "$\\log p_\\theta(\\mathbf x) = \\mathcal L + \\text{KL}(q\\,\\Vert\\,p_\\theta(\\mathbf z \\mid \\mathbf x))$" },
+  { front: "Reconstruction form?", back: "$\\mathcal L = E_q[\\log p_\\theta(\\mathbf x \\mid \\mathbf z)] - \\text{KL}(q\\,\\Vert\\,p(\\mathbf z))$" },
+  { front: "PPCA posterior?", back: "$\\mathcal N(M^{-1}W^\\top(\\mathbf x - \\boldsymbol\\mu), \\sigma^2M^{-1})$ with $M = W^\\top W + \\sigma^2I$." },
+  { front: "Amortised inference?", back: "One encoder maps every observation to its posterior parameters, instead of optimising a separate q for each." },
+]} />
+
+<Predict revisit question="With q equal to the exact posterior, how did the ELBO compare with the log evidence?" />
+
+<Key title="Before you go">
+<ul>
+<li>Latent variable models are fitted by maximising the marginal likelihood, usually intractable.</li>
+<li>The ELBO is a lower bound whose gap is the KL divergence from q to the posterior.</li>
+<li>In reconstruction form, the ELBO can always be estimated by sampling from q.</li>
+<li>Encoders amortise inference across observations.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Tipping and Bishop (1999), <em>Probabilistic principal component analysis</em>.</li>
+<li>Dayan, Hinton, Neal and Zemel (1995), <em>The Helmholtz machine</em>, Neural Computation 7(5), 889 to 904.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Describe a neural recording as a latent variable model: what are the latents, what is the likelihood, and what would an encoder compute? Which part of your model makes the evidence intractable?" />

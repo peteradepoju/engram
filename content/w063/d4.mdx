@@ -1,0 +1,273 @@
+export const meta = {
+  title: "Stochastic variational inference and the reparameterisation trick",
+  intro: "Coordinate ascent needs closed-form updates, which most models do not have. The alternative is to treat the ELBO as an ordinary objective and climb it by stochastic gradients, estimated from samples of q. Everything then depends on how noisy those gradient estimates are. Today you compare the two main estimators, use the low-variance one to fit a Bayesian decoder whose posterior has no closed form, and then train an encoder that does inference for every observation at once: the core of the variational autoencoder, built by hand.",
+  goals: [
+    "Derive the score-function and reparameterisation estimators of the ELBO gradient and compare their variance",
+    "Fit a Gaussian posterior for Bayesian logistic regression by stochastic gradient ascent on the ELBO",
+    "Train an amortised encoder by reparameterised gradients and compare it with the exact posterior",
+    "Explain why reparameterised gradients made variational autoencoders practical",
+  ],
+  plan: [
+    { label: "Two gradient estimators", minutes: 25 },
+    { label: "A Bayesian decoder by stochastic VI", minutes: 30 },
+    { label: "Training an encoder", minutes: 35 },
+    { label: "From here to the VAE", minutes: 10 },
+    { label: "Quiz, flashcards, journal", minutes: 20 },
+  ],
+  paper: "rezende-2014",
+};
+
+<Predict question="You estimate the gradient of an expectation under q from 10 samples, once by multiplying function values by the gradient of log q, and once by writing each sample as mean plus noise and differentiating through the function. Which estimate do you expect to be less noisy, and by roughly how much?" />
+
+<Step n={1} title="Two gradient estimators" minutes={25} />
+
+We need $\nabla_\phi E_{q_\phi(\mathbf z)}[f(\mathbf z)]$, where $f$ is the integrand of the ELBO. The **score-function** (or REINFORCE) estimator uses $\nabla_\phi q = q\nabla_\phi\log q$:
+
+$$
+\nabla_\phi E_q[f] = E_q\left[f(\mathbf z)\nabla_\phi\log q_\phi(\mathbf z)\right],
+$$
+
+which works for any $q$ and any $f$, even non-differentiable ones, but multiplies by the value of $f$ and is often very noisy. The **reparameterisation** estimator writes $\mathbf z = g_\phi(\boldsymbol\epsilon)$ with $\boldsymbol\epsilon$ from a fixed distribution, for a Gaussian $\mathbf z = \mathbf m + \mathbf s \odot \boldsymbol\epsilon$, so that
+
+$$
+\nabla_\phi E_q[f] = E_{\boldsymbol\epsilon}\left[\nabla_\phi f(g_\phi(\boldsymbol\epsilon))\right],
+$$
+
+using the slope of $f$. Kingma and Welling (2014) and, independently, Rezende, Mohamed and Wierstra (2014), today's paper, built variational learning of deep generative models on this estimator. Week 19 used it once; today it does the heavy lifting.
+
+<Video id="rjZL7aguLAs" title="Auto-encoding variational Bayes (ICLR 2014)" by="Diederik Kingma" note="Diederik Kingma presents the reparameterisation of the variational lower bound and the auto-encoding variational Bayes algorithm, in which an encoder and decoder are trained together by stochastic gradients." />
+
+<Figure caption="Four hundred estimates of the gradient of E[(z − 2)²] with respect to the mean of q = N(1, 1), from each estimator. Change the number of samples per estimate." credit="Interactive figure by Engram, after Rezende, Mohamed and Wierstra (2014).">
+  <ReparamGradient />
+</Figure>
+
+<PyCell id="estimators" title="Variance of the two estimators" tests={String.raw`
+  import numpy as np
+  def test_unbiased():
+      "both estimators average to the true gradient within 0.05"
+      assert abs(np.mean(g_score) - true_grad) < 0.05 and abs(np.mean(g_rep) - true_grad) < 0.05
+  def test_variance():
+      "the reparameterised estimator is at least twice as precise (smaller standard deviation)"
+      assert np.std(g_score) > 2 * np.std(g_rep)
+`} prompt="For q = N(m, 1) with m = 1 and f(z) = (z - 2) squared, compute 50,000 single-sample estimates of the gradient with respect to m by each method, and compare their means and standard deviations with the true gradient 2(m - 2)."
+code={String.raw`
+  import numpy as np
+  ge = np.random.default_rng(634)
+  m = 1.0
+  f = lambda z: (z - 2) ** 2
+  df = lambda z: 2 * (z - 2)
+  eps = ge.normal(size=50000)
+  z = m + eps
+  g_score = ...                                          # f(z) times d/dm log N(z; m, 1)
+  g_rep = ...                                            # df/dz times dz/dm
+  true_grad = 2 * (m - 2)
+  print(f"true gradient {true_grad}; score function mean {g_score.mean():.3f} (sd {g_score.std():.2f}); reparameterised mean {g_rep.mean():.3f} (sd {g_rep.std():.2f})")
+`}
+hint="d/dm log N(z; m, 1) = z - m, so g_score = f(z) * (z - m); g_rep = df(z) (since dz/dm = 1)."
+solution={String.raw`
+  import numpy as np
+  ge = np.random.default_rng(634)
+  m = 1.0
+  f = lambda z: (z - 2) ** 2
+  df = lambda z: 2 * (z - 2)
+  eps = ge.normal(size=50000)
+  z = m + eps
+  g_score = f(z) * (z - m)                               # f(z) times d/dm log N(z; m, 1)
+  g_rep = df(z)                                          # df/dz times dz/dm
+  true_grad = 2 * (m - 2)
+  print(f"true gradient {true_grad}; score function mean {g_score.mean():.3f} (sd {g_score.std():.2f}); reparameterised mean {g_rep.mean():.3f} (sd {g_rep.std():.2f})")
+`} />
+
+Both estimators average to the true gradient of $-2$, as they must, but a single score-function estimate has a standard deviation of 5.5, against exactly 2.0 for the reparameterised one: more than seven times the variance, so seven times as many samples for the same precision. The gap widens as the function's values move further from zero, since the score function multiplies by them, and as the dimension grows, since every latent's noise contributes to every component of the estimate. That is why, for continuous latents, reparameterised gradients are the default.
+
+<Step n={2} title="A Bayesian decoder by stochastic VI" minutes={30} />
+
+A logistic-regression decoder predicts a choice from 6 neurons. With a Gaussian prior on the weights the posterior has no closed form. Approximate it by $q(\mathbf w) = \mathcal N(\mathbf m, \text{diag}(\mathbf s^2))$ and climb the ELBO, $E_q[\log p(\mathbf y \mid X, \mathbf w) + \log p(\mathbf w)] + \sum_j\log s_j + \text{const}$, with reparameterised gradients: draw $\mathbf w = \mathbf m + \mathbf s \odot \boldsymbol\epsilon$, compute $\mathbf g = \nabla_{\mathbf w}\log p(\mathbf y, \mathbf w)$, and step $\mathbf m$ along $\mathbf g$ and $\log\mathbf s$ along $\mathbf g \odot \mathbf s \odot \boldsymbol\epsilon + 1$.
+
+<PyCell id="svi" title="Stochastic VI for logistic regression" tests={String.raw`
+  import numpy as np
+  def test_mean():
+      "the variational mean is close to the MAP weights (within 0.15)"
+      assert np.abs(m_q - w_map).max() < 0.15
+  def test_sd():
+      "the variational standard deviations are positive and smaller than the prior's"
+      assert np.all(s_q > 0) and np.all(s_q < 1)
+`} prompt="Complete the update: draw 8 samples of w by reparameterisation, compute the gradient of the log joint for each, and take Adam-free gradient steps (learning rate 0.01) on m and log s. Compare the final mean with the MAP estimate found by Newton's method."
+code={String.raw`
+  gs = np.random.default_rng(6341)
+  n, p = 300, 6
+  X = gs.normal(size=(n, p))
+  w_true = np.array([1.5, -1.0, 0.5, 0.0, 0.0, 0.8])
+  y = (gs.random(n) < 1 / (1 + np.exp(-X @ w_true))).astype(float)
+  alpha = 1.0                                            # prior variance of each weight
+  sig = lambda u: 1 / (1 + np.exp(-u))
+  grad_logjoint = lambda w: X.T @ (y - sig(X @ w)) - w / alpha
+
+  w_map = np.zeros(p)                                     # Newton's method for the MAP
+  for _ in range(30):
+      pr = sig(X @ w_map)
+      H = X.T @ (X * (pr * (1 - pr))[:, None]) + np.eye(p) / alpha
+      w_map += np.linalg.solve(H, grad_logjoint(w_map))
+
+  m_q, log_s = np.zeros(p), np.full(p, -1.0)
+  for it in range(3000):
+      s = np.exp(log_s)
+      eps = gs.normal(size=(8, p))
+      G = np.array([grad_logjoint(m_q + s * e) for e in eps])
+      m_q += 0.01 * G.mean(0)
+      log_s += ...
+  s_q = np.exp(log_s)
+  print("MAP weights:        ", np.round(w_map, 3))
+  print("variational mean:   ", np.round(m_q, 3))
+  print("variational sd:     ", np.round(s_q, 3))
+  print("Laplace sd (for comparison):", np.round(np.sqrt(np.diag(np.linalg.inv(H))), 3))
+`}
+hint="log_s += 0.01 * ((G * eps).mean(0) * s + 1). The + 1 is the gradient of the entropy term, sum of log s, with respect to log s."
+solution={String.raw`
+  gs = np.random.default_rng(6341)
+  n, p = 300, 6
+  X = gs.normal(size=(n, p))
+  w_true = np.array([1.5, -1.0, 0.5, 0.0, 0.0, 0.8])
+  y = (gs.random(n) < 1 / (1 + np.exp(-X @ w_true))).astype(float)
+  alpha = 1.0                                            # prior variance of each weight
+  sig = lambda u: 1 / (1 + np.exp(-u))
+  grad_logjoint = lambda w: X.T @ (y - sig(X @ w)) - w / alpha
+
+  w_map = np.zeros(p)                                     # Newton's method for the MAP
+  for _ in range(30):
+      pr = sig(X @ w_map)
+      H = X.T @ (X * (pr * (1 - pr))[:, None]) + np.eye(p) / alpha
+      w_map += np.linalg.solve(H, grad_logjoint(w_map))
+
+  m_q, log_s = np.zeros(p), np.full(p, -1.0)
+  for it in range(3000):
+      s = np.exp(log_s)
+      eps = gs.normal(size=(8, p))
+      G = np.array([grad_logjoint(m_q + s * e) for e in eps])
+      m_q += 0.01 * G.mean(0)
+      log_s += 0.01 * ((G * eps).mean(0) * s + 1)
+  s_q = np.exp(log_s)
+  print("MAP weights:        ", np.round(w_map, 3))
+  print("variational mean:   ", np.round(m_q, 3))
+  print("variational sd:     ", np.round(s_q, 3))
+  print("Laplace sd (for comparison):", np.round(np.sqrt(np.diag(np.linalg.inv(H))), 3))
+`} />
+
+After 3,000 noisy steps the variational mean is within 0.08 of the MAP weights, and the posterior standard deviations are about 0.16 to 0.18, a little narrower than the Laplace approximation's 0.16 to 0.20, as mean field (Day 3) predicts: it ignores the correlations between weights that the full Laplace covariance keeps. Nothing about the model was conjugate; all the algorithm needed was the gradient of the log joint, which is why stochastic VI applies to almost any differentiable model.
+
+<Step n={3} title="Training an encoder" minutes={35} />
+
+Now amortise. In the probabilistic PCA model of Day 1, with the decoder $W$ known, train an encoder that maps each observation to $q(\mathbf z \mid \mathbf x) = \mathcal N(A\mathbf x, \text{diag}(\mathbf s^2))$, a linear mean and a shared diagonal variance, by stochastic gradient ascent on the average ELBO over minibatches. Day 1 showed that the exact posterior mean is $M^{-1}W^\top\mathbf x$ (data centred), and its variances, for a diagonal $q$, should be $\sigma^2/M_{jj}$ (Day 3).
+
+<PyCell id="encoder" title="An amortised encoder by reparameterised gradients" tests={String.raw`
+  import numpy as np
+  def test_mean_map():
+      "the learned encoder matrix is close to the exact posterior-mean matrix"
+      assert np.abs(A - np.linalg.solve(M, W.T)).max() < 0.05
+  def test_var():
+      "the learned standard deviations match the mean-field optimum to within 10%"
+      assert np.allclose(np.exp(log_s), np.sqrt(s2 / np.diag(M)), rtol=0.1)
+`} prompt="Complete the gradient of the minibatch ELBO with respect to the encoder matrix A: the reconstruction term gives (W^T (x - W z)) / s2 times x^T, and the KL term gives minus the mean (A x) times x^T, both averaged over the minibatch. The gradient for log s is given."
+code={String.raw`
+  gv = np.random.default_rng(6342)
+  d, k, s2 = 12, 2, 0.5
+  W = gv.normal(size=(d, k))
+  M = W.T @ W + s2 * np.eye(k)
+  Xd = gv.normal(size=(20000, k)) @ W.T + np.sqrt(s2) * gv.normal(size=(20000, d))   # centred data
+
+  A = np.zeros((k, d)); log_s = np.zeros(k)
+  lr = 0.002
+  for it in range(8000):
+      xb = Xd[gv.integers(0, len(Xd), 64)]                  # minibatch, 64 x d
+      s = np.exp(log_s)
+      eps = gv.normal(size=(64, k))
+      mean = xb @ A.T
+      zb = mean + s * eps                                   # reparameterised samples
+      resid = xb - zb @ W.T                                  # 64 x d
+      gz = resid @ W / s2                                    # d(reconstruction)/dz, 64 x k
+      grad_A = ...                                          # reconstruction term plus KL term, averaged
+      grad_log_s = (gz * eps).mean(0) * s - (s ** 2 - 1)     # reconstruction through z, and KL(q || N(0, I))
+      A += lr * grad_A
+      log_s += lr * grad_log_s
+  print("largest difference from the exact encoder:", np.abs(A - np.linalg.solve(M, W.T)).max().round(4))
+  print("learned sd:", np.round(np.exp(log_s), 4), " mean-field optimum:", np.round(np.sqrt(s2 / np.diag(M)), 4))
+`}
+hint="grad_A = (gz - mean).T @ xb / len(xb): the reconstruction gradient flows into the mean through z, and the KL gradient with respect to the mean is minus the mean."
+solution={String.raw`
+  gv = np.random.default_rng(6342)
+  d, k, s2 = 12, 2, 0.5
+  W = gv.normal(size=(d, k))
+  M = W.T @ W + s2 * np.eye(k)
+  Xd = gv.normal(size=(20000, k)) @ W.T + np.sqrt(s2) * gv.normal(size=(20000, d))   # centred data
+
+  A = np.zeros((k, d)); log_s = np.zeros(k)
+  lr = 0.002
+  for it in range(8000):
+      xb = Xd[gv.integers(0, len(Xd), 64)]                  # minibatch, 64 x d
+      s = np.exp(log_s)
+      eps = gv.normal(size=(64, k))
+      mean = xb @ A.T
+      zb = mean + s * eps                                   # reparameterised samples
+      resid = xb - zb @ W.T                                  # 64 x d
+      gz = resid @ W / s2                                    # d(reconstruction)/dz, 64 x k
+      grad_A = (gz - mean).T @ xb / len(xb)                 # reconstruction term plus KL term, averaged
+      grad_log_s = (gz * eps).mean(0) * s - (s ** 2 - 1)     # reconstruction through z, and KL(q || N(0, I))
+      A += lr * grad_A
+      log_s += lr * grad_log_s
+  print("largest difference from the exact encoder:", np.abs(A - np.linalg.solve(M, W.T)).max().round(4))
+  print("learned sd:", np.round(np.exp(log_s), 4), " mean-field optimum:", np.round(np.sqrt(s2 / np.diag(M)), 4))
+`} />
+
+The learned encoder matrix is within 0.017 of the exact posterior-mean matrix, and the learned standard deviations, 0.241 and 0.177, match the mean-field optimum, 0.242 and 0.178, to three decimals. Every quantity came from minibatches of 64 observations and one reparameterised sample each, with no posterior ever computed. The learning rate had to be small, because the reconstruction gradient is divided by the noise variance and is large; with a rate ten times larger the updates overshoot and diverge, which is why practical VAEs use adaptive optimisers such as Adam (Week 13).
+
+<Step n={4} title="From here to the VAE" minutes={10} />
+
+A **variational autoencoder** takes three steps beyond today's encoder. The encoder becomes a neural network whose outputs are the mean and log-variance of $q(\mathbf z \mid \mathbf x)$; the decoder becomes a neural network whose output parameterises $p_\theta(\mathbf x \mid \mathbf z)$, Gaussian, Bernoulli or Poisson; and the decoder's parameters are trained on the same objective at the same time, so inference and learning happen in one stochastic gradient loop. Automatic differentiation computes what you derived by hand today. Week 16 introduced the reparameterisation trick for exactly this use; Day 5 applies the idea to spike trains.
+
+<Bridge title="Stochastic gradients in brains and machines"
+  neuro="Synaptic plasticity driven by noise has been proposed as a biological version of these estimators: node perturbation, where neurons inject noise and correlate it with reward, is a score-function method, and its high variance is one argument that the brain must use something closer to gradients through its circuits."
+  ai="The reparameterisation trick underlies variational autoencoders, Bayesian neural networks trained by variational inference, and reparameterised policy gradients in reinforcement learning. When latent variables are discrete and cannot be reparameterised, practitioners fall back on score-function estimators with variance-reduction tricks, or on continuous relaxations.">
+
+Differentiate through the sample, not around it.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The score-function estimator uses...", options: ["f(z) times the gradient of log q(z)", "The gradient of f", "Exact integration", "A Laplace approximation"], answer: 0, explain: "Step 1." },
+  { q: "The reparameterisation trick writes z as...", options: ["A deterministic function of parameters and fixed-distribution noise", "A sample from the prior", "The posterior mean", "A discrete variable"], answer: 0, explain: "Step 1." },
+  { q: "Reparameterised gradients are usually less noisy because...", options: ["They use the slope of f", "They use more samples", "They are biased", "They ignore q"], answer: 0, explain: "Step 1." },
+  { q: "The score-function estimator is needed when...", options: ["f is not differentiable or z is discrete", "z is Gaussian", "f is quadratic", "There is no prior"], answer: 0, explain: "Step 1." },
+  { q: "For a Gaussian q, the entropy term contributes to the gradient for log s...", options: ["+1 per dimension", "Zero", "−1", "s²"], answer: 0, explain: "Step 2." },
+  { q: "An amortised encoder outputs...", options: ["The parameters of q for each observation", "The data", "The decoder weights", "The prior"], answer: 0, explain: "Step 3." },
+  { q: "The KL(q ‖ N(0, I)) gradient with respect to the mean is...", options: ["Minus the mean", "The mean", "Zero", "The variance"], answer: 0, explain: "Step 3." },
+  { q: "A VAE trains...", options: ["Encoder and decoder together on the ELBO", "Only the encoder", "Only the decoder", "With EM"], answer: 0, explain: "Step 4." },
+]} />
+
+<Flashcards cards={[
+  { front: "Score-function estimator?", back: "$\\nabla_\\phi E_q[f] = E_q[f(\\mathbf z)\\nabla_\\phi\\log q_\\phi(\\mathbf z)]$" },
+  { front: "Reparameterisation?", back: "$\\mathbf z = \\mathbf m + \\mathbf s \\odot \\boldsymbol\\epsilon$, $\\nabla_\\phi E_q[f] = E_\\epsilon[\\nabla_\\phi f(\\mathbf m + \\mathbf s \\odot \\boldsymbol\\epsilon)]$" },
+  { front: "Gradient for log s in Gaussian VI?", back: "$E[\\mathbf g \\odot \\boldsymbol\\epsilon] \\odot \\mathbf s + 1$, with $\\mathbf g$ the gradient of the log joint at the sample." },
+  { front: "Amortisation gap?", back: "Loss from using one encoder for all observations instead of optimising each q separately." },
+  { front: "VAE?", back: "Neural encoder and decoder trained jointly on the ELBO with reparameterised gradients." },
+]} />
+
+<Predict revisit question="How much less noisy was the reparameterised gradient estimate?" />
+
+<Key title="Before you go">
+<ul>
+<li>ELBO gradients can be estimated by the score function or by reparameterisation.</li>
+<li>Reparameterised estimates use the slope of the integrand and are usually far less noisy.</li>
+<li>Stochastic VI fits posteriors without closed-form updates, such as for logistic regression.</li>
+<li>An encoder trained by reparameterised gradients amortises inference: the heart of the VAE.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Rezende, Mohamed and Wierstra (2014), <em>Stochastic backpropagation and approximate inference in deep generative models</em>.</li>
+<li>Kingma and Welling (2014), <em>Auto-encoding variational Bayes</em>, from Week 16.</li>
+<li>Hoffman, Blei, Wang and Paisley (2013), <em>Stochastic variational inference</em>, Journal of Machine Learning Research 14, 1303 to 1347.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="In Step 3 the encoder was linear and the posterior Gaussian, so it could be exact. Describe a neural dataset for which a linear encoder would leave a large amortisation gap, and what you would change." />

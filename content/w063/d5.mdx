@@ -1,0 +1,220 @@
+export const meta = {
+  title: "Latent variable models of spiking populations",
+  intro: "Single-trial population activity is noisy, sparse and non-negative: a few spikes per neuron per bin, from many neurons driven by a few shared signals. Factor analysis treats it as Gaussian, which is wrong at low counts; trial averaging throws away the single-trial variability that often matters most. Today you build the pieces of the modern answer. You infer a latent signal from Poisson spike counts, with a variational posterior whose bound has a closed form, then add the knowledge that latent states change smoothly in time. That combination, scaled up with neural networks, is LFADS, today's paper.",
+  goals: [
+    "Write a Poisson latent variable model of spike counts",
+    "Infer latents by maximising a closed-form Poisson-Gaussian ELBO, and compare with Gaussian methods",
+    "Add a smoothness prior over time and show that it improves single-trial inference",
+    "Explain how sequential autoencoders such as LFADS extend these ideas",
+  ],
+  plan: [
+    { label: "Poisson observations of a latent state", minutes: 20 },
+    { label: "A variational posterior for each bin", minutes: 35 },
+    { label: "Smoothness in time", minutes: 30 },
+    { label: "Sequential autoencoders", minutes: 20 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "pandarinath-2018",
+};
+
+<Predict question="Forty neurons are driven by one latent signal, with about half a spike per neuron per bin. Inferring the latent separately in each bin gives a correlation of about 0.93 with the truth, so about 14% of its variance is missed. If you also assume the latent changes smoothly from bin to bin, will the missed variance barely change, fall by a third, or fall by three quarters?" />
+
+<Step n={1} title="Poisson observations of a latent state" minutes={20} />
+
+A natural model of spike counts $x_{tn}$ (bin $t$, neuron $n$) is
+
+$$
+\mathbf z_t \sim p(\mathbf z_t \mid \mathbf z_{t-1}),\qquad x_{tn} \sim \text{Poisson}\left(\exp(\mathbf c_n^\top\mathbf z_t + d_n)\right),
+$$
+
+a few latent variables $\mathbf z_t$, a loading vector $\mathbf c_n$ and baseline $d_n$ for each neuron, and an exponential link that keeps rates positive, the Poisson GLM of Week 35 with a latent input. Factor analysis is the special case with Gaussian noise and no time structure. Smith and Brown (2003) and Yu and colleagues (2009) developed versions with linear and Gaussian-process dynamics; Pandarinath and colleagues (2018), today's paper, replaced the dynamics with a recurrent neural network and inference with an encoder, training everything as a variational autoencoder.
+
+<Video id="7Rb4s9wNOmc" title="Variational autoencoders: breaking apart the VAE loss" by="Alfredo Canziani, NYU Deep Learning (2020)" note="Alfredo Canziani on how a variational autoencoder's loss splits into a reconstruction term and a KL term, and what each one does to the latent space, the same split as the Poisson model's bound today." />
+
+<Figure caption="Thirty neurons driven by a rotating two-dimensional latent state. Lower the firing rate and the single-trial latent is buried in noise; smoothing helps, at the cost of blur." credit="Interactive figure by Engram, after Pandarinath and colleagues (2018).">
+  <LatentTrajectory />
+</Figure>
+
+The setup cell simulates 40 neurons over 300 bins, driven by a single smooth latent signal, with known loadings and baselines so that we can focus on inference.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  g0 = np.random.default_rng(635)
+  T, N = 300, 40
+  t = np.arange(T)
+  z_true = np.sin(2 * np.pi * t / 120) + 0.6 * np.sin(2 * np.pi * t / 47 + 1.0)
+  z_true = (z_true - z_true.mean()) / z_true.std()
+  c = g0.normal(0, 0.6, N)
+  d = np.log(0.5) * np.ones(N)                           # about half a spike per bin at z = 0
+  rates = np.exp(np.outer(z_true, c) + d)
+  X = g0.poisson(rates)
+  print(f"{X.sum()} spikes; mean {X.mean():.2f} per neuron per bin; {np.mean(X == 0):.0%} of bins empty")
+`} />
+
+<Step n={2} title="A variational posterior for each bin" minutes={35} />
+
+With a Gaussian prior $z_t \sim \mathcal N(0, 1)$ in each bin and a Gaussian $q(z_t) = \mathcal N(m_t, v_t)$, the expected Poisson log-likelihood has a closed form, because $E_q[e^{c z}] = e^{cm + c^2v/2}$:
+
+$$
+\mathcal L_t = \sum_n\left[x_{tn}(c_nm_t + d_n) - e^{c_nm_t + d_n + c_n^2v_t/2}\right] - \frac12\left(m_t^2 + v_t - \log v_t - 1\right) + \text{const}.
+$$
+
+Its derivatives are simple, so each $m_t$ and $v_t$ can be found by Newton's method. Compare the result with two Gaussian shortcuts: projecting square-root-transformed counts on the loadings, and PCA.
+
+<PyCell id="bin_vi" title="Per-bin variational inference" tests={String.raw`
+  import numpy as np
+  def test_beats():
+      "the Poisson variational posterior mean tracks the latent better than the square-root projection"
+      assert r_vi > r_sqrt
+  def test_var():
+      "posterior variances are smaller where the latent drives high rates (more spikes, more information)"
+      assert np.corrcoef(v, rates.sum(1))[0, 1] < -0.3
+`} prompt="Complete the Newton updates for m (all bins at once): the gradient of L_t with respect to m_t is sum_n c_n (x_tn - lam_tn) - m_t, and the second derivative is -sum_n c_n^2 lam_tn - 1, where lam_tn is exp(c_n m_t + d_n + c_n^2 v_t / 2). Then update v from its fixed point 1 / (sum_n c_n^2 lam_tn + 1)."
+code={String.raw`
+  m = np.zeros(T); v = np.ones(T)
+  for it in range(50):
+      lam = np.exp(np.outer(m, c) + d + np.outer(v, c ** 2) / 2)
+      grad = ...
+      hess = -(lam * c ** 2).sum(1) - 1
+      m = m - grad / hess
+      lam = np.exp(np.outer(m, c) + d + np.outer(v, c ** 2) / 2)
+      v = ...
+
+  r_vi = np.corrcoef(m, z_true)[0, 1]
+  proj = np.sqrt(X) @ c                                  # project square-root counts on the loadings
+  r_sqrt = abs(np.corrcoef(proj, z_true)[0, 1])
+  Xc = np.sqrt(X) - np.sqrt(X).mean(0)
+  pc1 = Xc @ np.linalg.svd(Xc, full_matrices=False)[2][0]
+  r_pca = abs(np.corrcoef(pc1, z_true)[0, 1])
+  print(f"correlation with the true latent: Poisson VI {r_vi:.3f}, square-root projection {r_sqrt:.3f}, first PC {r_pca:.3f}")
+  print(f"posterior sd ranges from {np.sqrt(v).min():.2f} to {np.sqrt(v).max():.2f}")
+`}
+hint="grad = ((X - lam) * c).sum(1) - m; v = 1 / ((lam * c ** 2).sum(1) + 1)."
+solution={String.raw`
+  m = np.zeros(T); v = np.ones(T)
+  for it in range(50):
+      lam = np.exp(np.outer(m, c) + d + np.outer(v, c ** 2) / 2)
+      grad = ((X - lam) * c).sum(1) - m
+      hess = -(lam * c ** 2).sum(1) - 1
+      m = m - grad / hess
+      lam = np.exp(np.outer(m, c) + d + np.outer(v, c ** 2) / 2)
+      v = 1 / ((lam * c ** 2).sum(1) + 1)
+
+  r_vi = np.corrcoef(m, z_true)[0, 1]
+  proj = np.sqrt(X) @ c                                  # project square-root counts on the loadings
+  r_sqrt = abs(np.corrcoef(proj, z_true)[0, 1])
+  Xc = np.sqrt(X) - np.sqrt(X).mean(0)
+  pc1 = Xc @ np.linalg.svd(Xc, full_matrices=False)[2][0]
+  r_pca = abs(np.corrcoef(pc1, z_true)[0, 1])
+  print(f"correlation with the true latent: Poisson VI {r_vi:.3f}, square-root projection {r_sqrt:.3f}, first PC {r_pca:.3f}")
+  print(f"posterior sd ranges from {np.sqrt(v).min():.2f} to {np.sqrt(v).max():.2f}")
+`} />
+
+The Poisson variational posterior correlates with the true latent at 0.927, a little better than projecting square-root counts on the known loadings (0.921) or taking the first principal component (0.918). With forty neurons and known loadings, the Gaussian shortcuts are nearly as good; the Poisson model's advantage grows when rates are lower, loadings must be learned, or neurons differ greatly in rate. Its posterior variances are informative in a way the shortcuts are not: they range from 0.18 to 0.45 in standard deviation, smallest where the latent drives many neurons to fire and largest where most bins are empty.
+
+<Step n={3} title="Smoothness in time" minutes={30} />
+
+Latent states in the brain change smoothly: neighbouring bins share most of their state. Replace the independent prior by a first-order autoregressive one, $z_t = a z_{t-1} + \sqrt{1 - a^2}\,\eta_t$, whose prior precision matrix $Q$ is tridiagonal. The MAP latent trajectory now solves one Newton problem over all bins at once, with a Hessian that is tridiagonal plus diagonal, so each step costs time linear in $T$. The Gaussian-process factor analysis of Yu and colleagues (2009) uses a smoother Gaussian-process prior in the same way (Week 64).
+
+<PyCell id="smooth" title="An autoregressive prior" tests={String.raw`
+  import numpy as np
+  def test_better():
+      "the smoothness prior raises the correlation with the true latent by at least 0.05 and above 0.9"
+      assert r_smooth > r_vi + 0.05 and r_smooth > 0.9
+`} prompt="Build the AR(1) prior precision Q for a = 0.97 (tridiagonal: 1 / (1 - a^2) times [1, 1 + a^2, ..., 1 + a^2, 1] on the diagonal and -a / (1 - a^2) beside it). Then run Newton's method on the log posterior of the whole trajectory: gradient c-weighted residuals minus Q z, Hessian minus (diag(sum_n c_n^2 lam_tn) + Q)."
+code={String.raw`
+  a = 0.97
+  main = np.r_[1.0, np.full(T - 2, 1 + a ** 2), 1.0] / (1 - a ** 2)
+  off = np.full(T - 1, -a / (1 - a ** 2))
+  Q = np.diag(main) + np.diag(off, 1) + np.diag(off, -1)
+
+  zs = np.zeros(T)
+  for it in range(30):
+      lam = np.exp(np.outer(zs, c) + d)
+      grad = ...
+      H = np.diag((lam * c ** 2).sum(1)) + Q
+      zs = zs + np.linalg.solve(H, grad)
+  r_smooth = np.corrcoef(zs, z_true)[0, 1]
+  sd_post = np.sqrt(np.diag(np.linalg.inv(H)))
+  print(f"correlation with the true latent: independent bins {r_vi:.3f}, with the smoothness prior {r_smooth:.3f}")
+  plt.figure(figsize=(9, 3)); plt.plot(z_true, "k", lw=2, label="true")
+  plt.plot(m, color="C1", alpha=0.6, lw=1, label="independent bins")
+  plt.plot(zs, color="C0", lw=1.5, label="smoothness prior")
+  plt.fill_between(t, zs - 2 * sd_post, zs + 2 * sd_post, color="C0", alpha=0.2); plt.legend(); plt.xlabel("bin"); plt.show()
+`}
+hint="grad = ((X - lam) * c).sum(1) - Q @ zs."
+solution={String.raw`
+  a = 0.97
+  main = np.r_[1.0, np.full(T - 2, 1 + a ** 2), 1.0] / (1 - a ** 2)
+  off = np.full(T - 1, -a / (1 - a ** 2))
+  Q = np.diag(main) + np.diag(off, 1) + np.diag(off, -1)
+
+  zs = np.zeros(T)
+  for it in range(30):
+      lam = np.exp(np.outer(zs, c) + d)
+      grad = ((X - lam) * c).sum(1) - Q @ zs
+      H = np.diag((lam * c ** 2).sum(1)) + Q
+      zs = zs + np.linalg.solve(H, grad)
+  r_smooth = np.corrcoef(zs, z_true)[0, 1]
+  sd_post = np.sqrt(np.diag(np.linalg.inv(H)))
+  print(f"correlation with the true latent: independent bins {r_vi:.3f}, with the smoothness prior {r_smooth:.3f}")
+  plt.figure(figsize=(9, 3)); plt.plot(z_true, "k", lw=2, label="true")
+  plt.plot(m, color="C1", alpha=0.6, lw=1, label="independent bins")
+  plt.plot(zs, color="C0", lw=1.5, label="smoothness prior")
+  plt.fill_between(t, zs - 2 * sd_post, zs + 2 * sd_post, color="C0", alpha=0.2); plt.legend(); plt.xlabel("bin"); plt.show()
+`} />
+
+The autoregressive prior raises the correlation from 0.927 to 0.982, cutting the missed variance from 14% to under 4%. Each bin now borrows evidence from its neighbours, roughly thirty bins wide for $a = 0.97$, and the posterior band shows the remaining uncertainty. The prior's timescale is a choice: set $a$ too close to 1 and fast changes in the latent are smoothed away; set it too low and the benefit disappears. In GPFA and LFADS such timescales are learned from the data by maximising the ELBO or marginal likelihood, which Week 64 does for Gaussian processes.
+
+<Step n={4} title="Sequential autoencoders" minutes={20} />
+
+**LFADS** (latent factor analysis via dynamical systems; Pandarinath and colleagues, 2018) makes three changes to today's model. The latent dynamics become a recurrent neural network, the generator, which can produce rotations, attractors and other nonlinear trajectories (Week 22). Each trial's initial condition, and optionally its inputs, are inferred by an encoder network that reads the whole trial's spikes. The whole system, encoder, generator and Poisson readout, is trained on the ELBO with reparameterised gradients, exactly the recipe of Day 4. On motor cortex recordings LFADS inferred single-trial trajectories that predicted reach kinematics better than smoothing or GPFA, and found perturbations such as unexpected inputs during a trial. The cost is the usual one for flexible models: it needs many trials, careful regularisation and validation on held-out neurons, the "co-smoothing" test of Week 73.
+
+<Bridge title="Latent dynamics in brains and machines"
+  neuro="The computation-through-dynamics view holds that cortical populations implement computations as trajectories of a low-dimensional latent state (Vyas and colleagues, 2020). Latent variable models with dynamics are how such trajectories are estimated from single trials, and they have shown rotational dynamics in motor cortex, line attractors in decision-making and context-dependent dynamics in prefrontal cortex."
+  ai="Sequential variational autoencoders and state-space models are general tools for time series, from speech to video; recent deep state-space models for sequences, such as S4 and Mamba, revisit the linear latent dynamics of Week 65 as building blocks of large networks.">
+
+Many noisy neurons and a smooth latent state: let the model share information across both.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In a Poisson latent variable model, each neuron's rate is...", options: ["exp(cₙᵀzₜ + dₙ)", "cₙᵀzₜ", "A constant", "Gaussian noise"], answer: 0, explain: "Step 1." },
+  { q: "The Poisson-Gaussian ELBO has a closed form because...", options: ["E_q[e^{cz}] = e^{cm + c²v/2} for Gaussian q", "Poisson is conjugate to everything", "The latent is discrete", "It is approximated by sampling"], answer: 0, explain: "Step 2." },
+  { q: "Posterior variance of the latent is smaller where...", options: ["Rates are high and spikes informative", "Rates are low", "Bins are empty", "Never"], answer: 0, explain: "Step 2." },
+  { q: "An AR(1) prior over latents has a precision matrix that is...", options: ["Tridiagonal", "Diagonal", "Dense", "Zero"], answer: 0, explain: "Step 3." },
+  { q: "A smoothness prior helps because...", options: ["Neighbouring bins share information about the latent", "It adds spikes", "It removes neurons", "It speeds up firing"], answer: 0, explain: "Step 3." },
+  { q: "LFADS models latent dynamics with...", options: ["A recurrent neural network generator", "A linear map only", "k-means", "No dynamics"], answer: 0, explain: "Step 4." },
+  { q: "LFADS infers each trial's initial condition with...", options: ["An encoder network", "Grid search", "The trial average", "PCA"], answer: 0, explain: "Step 4." },
+  { q: "LFADS is trained by...", options: ["Maximising the ELBO with reparameterised gradients", "EM with closed forms", "k-means", "Supervised regression on kinematics"], answer: 0, explain: "Step 4." },
+]} />
+
+<Flashcards cards={[
+  { front: "Poisson latent model?", back: "$x_{tn} \\sim \\text{Poisson}(\\exp(\\mathbf c_n^\\top\\mathbf z_t + d_n))$ with a prior over $\\mathbf z_t$." },
+  { front: "Gaussian expectation of an exponential?", back: "$E[e^{cz}] = e^{cm + c^2v/2}$ for $z \\sim \\mathcal N(m, v)$." },
+  { front: "AR(1) latent prior?", back: "$z_t = az_{t-1} + \\sqrt{1 - a^2}\\eta_t$; tridiagonal precision, linear-time inference." },
+  { front: "GPFA?", back: "Factor analysis with Gaussian-process priors over each latent's time course (Yu and colleagues, 2009)." },
+  { front: "LFADS?", back: "A sequential VAE: encoder infers initial conditions, RNN generator produces latent dynamics, Poisson readout." },
+]} />
+
+<Predict revisit question="How much did the smoothness prior improve the single-trial latent?" />
+
+<Key title="Before you go">
+<ul>
+<li>Spike counts are best modelled as Poisson observations of a latent state, not Gaussian ones.</li>
+<li>With Gaussian q, the Poisson ELBO has a closed form and each bin's posterior can be found by Newton's method.</li>
+<li>Priors that make latents smooth in time share evidence across bins and sharpen single-trial estimates.</li>
+<li>LFADS scales these ideas up with recurrent generators and encoders trained as a VAE.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Pandarinath and colleagues (2018), <em>Inferring single-trial neural population dynamics using sequential auto-encoders</em>.</li>
+<li>Yu, Cunningham, Santhanam, Ryu, Shenoy and Sahani (2009), <em>Gaussian-process factor analysis for low-dimensional single-trial analysis of neural population activity</em>, Journal of Neurophysiology 102(1), 614 to 635.</li>
+<li>Vyas, Golub, Sussillo and Shenoy (2020), <em>Computation through neural population dynamics</em>, Annual Review of Neuroscience 43, 249 to 275.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A latent variable model infers smooth single-trial trajectories from your recording. How would you check that a feature of those trajectories, such as a rotation, comes from the data rather than from the smoothness prior?" />

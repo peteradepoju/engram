@@ -1,0 +1,289 @@
+export const meta = {
+  title: "EM as coordinate ascent on the ELBO",
+  intro: "Week 60 presented EM as a recipe: compute responsibilities, refit as if they were labels, repeat. Neal and Hinton showed in 1998 that the recipe is coordinate ascent on the evidence lower bound: the E step maximises the bound over q, which makes it touch the log-likelihood, and the M step maximises it over the parameters. This view explains why EM never decreases the likelihood, and it licenses variants that do part of an E or M step at a time. Today you watch the bound at work, then build incremental and generalised versions of EM.",
+  goals: [
+    "Show that the E step makes the ELBO equal the log-likelihood and the M step raises it",
+    "Track the ELBO and log-likelihood through EM and verify monotonicity",
+    "Implement incremental EM, updating responsibilities for part of the data at a time",
+    "Implement a generalised M step that only improves, rather than maximises, the bound",
+  ],
+  plan: [
+    { label: "EM in one picture", minutes: 25 },
+    { label: "Watching the bound", minutes: 30 },
+    { label: "Incremental EM", minutes: 25 },
+    { label: "Generalised EM", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "neal-hinton-1998",
+};
+
+<Predict question="EM is run with an M step that takes only one small gradient step on the parameters instead of fully maximising. Can the log-likelihood go down at some iteration?" />
+
+<Step n={1} title="EM in one picture" minutes={25} />
+
+For a model with latent variables, write the ELBO for all observations as $\mathcal L(q, \theta) = \sum_i\left(\log p_\theta(\mathbf x_i) - \text{KL}(q_i\,\Vert\,p_\theta(\mathbf z_i \mid \mathbf x_i))\right)$. EM alternates:
+
+- **E step:** maximise $\mathcal L$ over $q$ with $\theta$ fixed. The KL terms are minimised, to zero, by $q_i = p_{\theta}(\mathbf z_i \mid \mathbf x_i)$. The bound now touches the log-likelihood at the current $\theta$.
+- **M step:** maximise $\mathcal L$ over $\theta$ with $q$ fixed. In the reconstruction form this is maximising $\sum_iE_{q_i}[\log p_\theta(\mathbf x_i, \mathbf z_i)]$, the expected complete-data log-likelihood, which for mixtures gives the weighted means of Week 60.
+
+After the M step, $\log p_{\theta_{\text{new}}}(\mathbf x) \ge \mathcal L(q, \theta_{\text{new}}) \ge \mathcal L(q, \theta_{\text{old}}) = \log p_{\theta_{\text{old}}}(\mathbf x)$. That chain of inequalities is the whole proof that EM never decreases the likelihood, and Neal and Hinton (1998), today's paper, pointed out that it needs neither step to be complete: any increase in $\mathcal L$ will do.
+
+<Video id="rVfZHWTwXSA" title="Lecture 13: expectation-maximisation algorithms" by="Andrew Ng, Stanford CS229 (2018)" note="Andrew Ng derives EM from Jensen's inequality: a lower bound on the log-likelihood that is tight at the current parameters, maximised in turn, with mixtures of Gaussians as the running example." />
+
+<Figure caption="EM for one parameter of a two-component mixture. At each iteration the E step builds a lower bound (dashed) that touches the log-likelihood (solid) at the current value; the M step moves to the bound's maximum." credit="Interactive figure by Engram, after Neal and Hinton (1998).">
+  <EmBound />
+</Figure>
+
+<Step n={2} title="Watching the bound" minutes={30} />
+
+<PyCell id="bound" title="ELBO and log-likelihood through EM" tests={String.raw`
+  import numpy as np
+  def test_touch():
+      "after every E step the ELBO equals the log-likelihood"
+      assert all(abs(e - l) < 1e-8 for e, l in zip(elbo_after_E, ll_trace))
+  def test_up():
+      "every M step raises the ELBO, and the log-likelihood never decreases"
+      assert all(m >= e - 1e-10 for e, m in zip(elbo_after_E, elbo_after_M))
+      assert all(b >= a - 1e-10 for a, b in zip(ll_trace, ll_trace[1:]))
+`} prompt="Write elbo(x, R, pi, mu, sd), the ELBO of a one-dimensional Gaussian mixture for responsibilities R: the sum over points and components of R times (log pi + log normal density - log R). Run 30 EM iterations, recording the ELBO after each E step and after each M step, and the log-likelihood."
+code={String.raw`
+  import numpy as np
+  from scipy.stats import norm
+  g0 = np.random.default_rng(632)
+  x = np.r_[g0.normal(-2.5, 0.7, 150), g0.normal(1.5, 1.0, 250)]
+
+  def loglik(x, pi, mu, sd):
+      return np.log((pi * norm.pdf(x[:, None], mu, sd)).sum(1)).sum()
+
+  def e_step(x, pi, mu, sd):
+      a = pi * norm.pdf(x[:, None], mu, sd)
+      return a / a.sum(1, keepdims=True)
+
+  def m_step(x, R):
+      Nk = R.sum(0)
+      mu = (R * x[:, None]).sum(0) / Nk
+      sd = np.sqrt((R * (x[:, None] - mu) ** 2).sum(0) / Nk)
+      return Nk / len(x), mu, sd
+
+  def elbo(x, R, pi, mu, sd):
+      logjoint = np.log(pi) + norm.logpdf(x[:, None], mu, sd)
+      return ...
+
+  pi, mu, sd = np.array([0.5, 0.5]), np.array([-0.5, 2.5]), np.array([1.5, 1.5])
+  elbo_after_E, elbo_after_M, ll_trace = [], [], []
+  for it in range(30):
+      R = e_step(x, pi, mu, sd)
+      elbo_after_E.append(elbo(x, R, pi, mu, sd)); ll_trace.append(loglik(x, pi, mu, sd))
+      pi, mu, sd = m_step(x, R)
+      elbo_after_M.append(elbo(x, R, pi, mu, sd))
+  for it in (0, 1, 2, 5, 29):
+      print(f"iteration {it:2d}: log-likelihood {ll_trace[it]:9.3f}  ELBO after E {elbo_after_E[it]:9.3f}  after M {elbo_after_M[it]:9.3f}")
+  print("fitted:", np.round(pi, 3), np.round(mu, 3), np.round(sd, 3))
+`}
+hint="return np.sum(R * (logjoint - np.log(np.maximum(R, 1e-300)))). Terms with R = 0 contribute zero."
+solution={String.raw`
+  import numpy as np
+  from scipy.stats import norm
+  g0 = np.random.default_rng(632)
+  x = np.r_[g0.normal(-2.5, 0.7, 150), g0.normal(1.5, 1.0, 250)]
+
+  def loglik(x, pi, mu, sd):
+      return np.log((pi * norm.pdf(x[:, None], mu, sd)).sum(1)).sum()
+
+  def e_step(x, pi, mu, sd):
+      a = pi * norm.pdf(x[:, None], mu, sd)
+      return a / a.sum(1, keepdims=True)
+
+  def m_step(x, R):
+      Nk = R.sum(0)
+      mu = (R * x[:, None]).sum(0) / Nk
+      sd = np.sqrt((R * (x[:, None] - mu) ** 2).sum(0) / Nk)
+      return Nk / len(x), mu, sd
+
+  def elbo(x, R, pi, mu, sd):
+      logjoint = np.log(pi) + norm.logpdf(x[:, None], mu, sd)
+      return np.sum(R * (logjoint - np.log(np.maximum(R, 1e-300))))
+
+  pi, mu, sd = np.array([0.5, 0.5]), np.array([-0.5, 2.5]), np.array([1.5, 1.5])
+  elbo_after_E, elbo_after_M, ll_trace = [], [], []
+  for it in range(30):
+      R = e_step(x, pi, mu, sd)
+      elbo_after_E.append(elbo(x, R, pi, mu, sd)); ll_trace.append(loglik(x, pi, mu, sd))
+      pi, mu, sd = m_step(x, R)
+      elbo_after_M.append(elbo(x, R, pi, mu, sd))
+  for it in (0, 1, 2, 5, 29):
+      print(f"iteration {it:2d}: log-likelihood {ll_trace[it]:9.3f}  ELBO after E {elbo_after_E[it]:9.3f}  after M {elbo_after_M[it]:9.3f}")
+  print("fitted:", np.round(pi, 3), np.round(mu, 3), np.round(sd, 3))
+`} />
+
+Every row shows the pattern of the derivation. After each E step the ELBO equals the log-likelihood exactly; the M step then raises the ELBO, and the next E step lifts it further, to the new log-likelihood. The first iteration gains 90 nats, later ones a fraction of a nat, and by iteration 29 the after-E and after-M values agree to three decimals: the bound and the likelihood share a stationary point. The fitted mixture, weights 0.37 and 0.63, means $-2.59$ and 1.49, recovers the generating one closely.
+
+<Step n={3} title="Incremental EM" minutes={25} />
+
+The E step for one observation changes only that observation's $q_i$. Neal and Hinton's **incremental EM** updates the responsibilities of one block of data, adjusts the sufficient statistics (weighted counts, sums and sums of squares) by the change, and immediately takes an M step. Each block step increases $\mathcal L$, so the algorithm still converges, and because parameters improve after every block rather than every full pass, it often needs fewer passes through the data. This is the ancestor of the stochastic variational methods of Day 4.
+
+<PyCell id="incremental" title="Updating a block at a time" tests={String.raw`
+  import numpy as np
+  def test_incremental():
+      "after two passes, incremental EM has a higher log-likelihood than two iterations of standard EM"
+      assert ll_inc[1] > ll_std[1]
+  def test_converge():
+      "after 20 passes both reach the same log-likelihood to within 0.01"
+      assert abs(ll_inc[-1] - ll_std[-1]) < 0.01
+`} prompt="Implement incremental EM with 10 blocks: keep the sufficient statistics (sum of R, sum of R x, sum of R x squared), and for each block subtract its old contribution, recompute its responsibilities, add the new contribution, and do an M step from the statistics. Compare the log-likelihood after each full pass with standard EM."
+code={String.raw`
+  def params_from_stats(s0, s1, s2):
+      mu_ = s1 / s0
+      return s0 / s0.sum(), mu_, np.sqrt(np.maximum(s2 / s0 - mu_ ** 2, 1e-6))
+
+  def stats(xb, Rb):
+      return Rb.sum(0), (Rb * xb[:, None]).sum(0), (Rb * xb[:, None] ** 2).sum(0)
+
+  start = (np.array([0.5, 0.5]), np.array([-0.5, 2.5]), np.array([1.5, 1.5]))
+  perm = np.random.default_rng(6321).permutation(len(x))
+  blocks = np.array_split(perm, 10)
+
+  p_, m_, s_ = start; ll_std = []
+  for it in range(20):
+      p_, m_, s_ = m_step(x, e_step(x, p_, m_, s_)); ll_std.append(loglik(x, p_, m_, s_))
+
+  p_, m_, s_ = start
+  R_all = e_step(x, p_, m_, s_)
+  S0, S1, S2 = stats(x, R_all)
+  ll_inc = []
+  for sweep in range(20):
+      for b in blocks:
+          o0, o1, o2 = stats(x[b], R_all[b])
+          R_all[b] = e_step(x[b], p_, m_, s_)
+          n0, n1, n2 = stats(x[b], R_all[b])
+          S0, S1, S2 = ...
+          p_, m_, s_ = params_from_stats(S0, S1, S2)
+      ll_inc.append(loglik(x, p_, m_, s_))
+  print("log-likelihood after passes 1, 2, 3, 20")
+  print("  standard EM:   ", np.round([ll_std[i] for i in (0, 1, 2, 19)], 3))
+  print("  incremental EM:", np.round([ll_inc[i] for i in (0, 1, 2, 19)], 3))
+`}
+hint="S0, S1, S2 = S0 - o0 + n0, S1 - o1 + n1, S2 - o2 + n2."
+solution={String.raw`
+  def params_from_stats(s0, s1, s2):
+      mu_ = s1 / s0
+      return s0 / s0.sum(), mu_, np.sqrt(np.maximum(s2 / s0 - mu_ ** 2, 1e-6))
+
+  def stats(xb, Rb):
+      return Rb.sum(0), (Rb * xb[:, None]).sum(0), (Rb * xb[:, None] ** 2).sum(0)
+
+  start = (np.array([0.5, 0.5]), np.array([-0.5, 2.5]), np.array([1.5, 1.5]))
+  perm = np.random.default_rng(6321).permutation(len(x))
+  blocks = np.array_split(perm, 10)
+
+  p_, m_, s_ = start; ll_std = []
+  for it in range(20):
+      p_, m_, s_ = m_step(x, e_step(x, p_, m_, s_)); ll_std.append(loglik(x, p_, m_, s_))
+
+  p_, m_, s_ = start
+  R_all = e_step(x, p_, m_, s_)
+  S0, S1, S2 = stats(x, R_all)
+  ll_inc = []
+  for sweep in range(20):
+      for b in blocks:
+          o0, o1, o2 = stats(x[b], R_all[b])
+          R_all[b] = e_step(x[b], p_, m_, s_)
+          n0, n1, n2 = stats(x[b], R_all[b])
+          S0, S1, S2 = S0 - o0 + n0, S1 - o1 + n1, S2 - o2 + n2
+          p_, m_, s_ = params_from_stats(S0, S1, S2)
+      ll_inc.append(loglik(x, p_, m_, s_))
+  print("log-likelihood after passes 1, 2, 3, 20")
+  print("  standard EM:   ", np.round([ll_std[i] for i in (0, 1, 2, 19)], 3))
+  print("  incremental EM:", np.round([ll_inc[i] for i in (0, 1, 2, 19)], 3))
+`} />
+
+After one pass, incremental EM is 5 nats ahead of standard EM, and after three passes 7 nats, because each block's improved responsibilities feed into the parameters straight away and the next block is processed with better parameters. Both reach the same maximum after 20 passes. The gain matters most when the dataset is large and each pass is expensive, which is the setting of stochastic variational inference (Hoffman and colleagues, 2013), where the "block" is a random minibatch.
+
+<Step n={4} title="Generalised EM" minutes={25} />
+
+When the M step has no closed form, as for a Poisson GLM with a latent input or a mixture of experts, it can be replaced by any step that increases the expected complete-data log-likelihood, such as one or a few gradient steps. This **generalised EM** keeps the guarantee that the likelihood never falls, as long as each step really improves $\mathcal L$.
+
+<PyCell id="gem" title="One gradient step in place of the M step" tests={String.raw`
+  import numpy as np
+  def test_gem():
+      "with a small gradient step for the means, the log-likelihood never decreases and ends within 1 of full EM"
+      assert all(b >= a - 1e-8 for a, b in zip(ll_gem, ll_gem[1:])) and ll_gem[-1] > ll_std[-1] - 1
+`} prompt="Replace the M step for the means by one gradient-ascent step on the expected complete-data log-likelihood, with step size 0.1 times sd squared divided by N_k (the weights and standard deviations keep their exact updates). Run 200 iterations and record the log-likelihood."
+code={String.raw`
+  p_, m_, s_ = start
+  ll_gem = []
+  for it in range(200):
+      R = e_step(x, p_, m_, s_)
+      Nk = R.sum(0)
+      grad_mu = (R * (x[:, None] - m_)).sum(0) / s_ ** 2          # derivative of E_q[log p] with respect to each mean
+      m_ = ...
+      p_ = Nk / len(x)
+      s_ = np.sqrt((R * (x[:, None] - m_) ** 2).sum(0) / Nk)
+      ll_gem.append(loglik(x, p_, m_, s_))
+  print("generalised EM, log-likelihood at iterations 1, 10, 50, 200:", np.round([ll_gem[i] for i in (0, 9, 49, 199)], 3))
+  print(f"full EM after 20 iterations: {ll_std[-1]:.3f}")
+`}
+hint="m_ = m_ + 0.1 * s_ ** 2 / Nk * grad_mu. (A step of exactly s_**2 / Nk would land on the full M-step answer.)"
+solution={String.raw`
+  p_, m_, s_ = start
+  ll_gem = []
+  for it in range(200):
+      R = e_step(x, p_, m_, s_)
+      Nk = R.sum(0)
+      grad_mu = (R * (x[:, None] - m_)).sum(0) / s_ ** 2          # derivative of E_q[log p] with respect to each mean
+      m_ = m_ + 0.1 * s_ ** 2 / Nk * grad_mu
+      p_ = Nk / len(x)
+      s_ = np.sqrt((R * (x[:, None] - m_) ** 2).sum(0) / Nk)
+      ll_gem.append(loglik(x, p_, m_, s_))
+  print("generalised EM, log-likelihood at iterations 1, 10, 50, 200:", np.round([ll_gem[i] for i in (0, 9, 49, 199)], 3))
+  print(f"full EM after 20 iterations: {ll_std[-1]:.3f}")
+`} />
+
+With a step one tenth of the exact M step for the means, generalised EM climbs more slowly, $-857$ after 10 iterations against $-843$ for full EM after two, but it never steps down, and after 200 iterations it reaches the same maximum. Any improvement of the bound is enough for monotonicity; a full maximisation only makes each iteration count for more. In models whose M step needs an inner optimisation, a few gradient steps per iteration are usually the better use of computation.
+
+<Bridge title="Bound ascent in brains and machines"
+  neuro="The free-energy principle proposes that the brain minimises variational free energy, the negative ELBO, by adjusting its internal states (perception, the E step) and its synapses (learning, the M step) (Friston, 2010). Whatever one makes of the broader claims, the two timescales of the coordinate ascent map naturally onto fast neural dynamics and slow plasticity."
+  ai="Incremental and stochastic versions of EM are how latent variable models are trained on large datasets, and the coordinate-ascent view generalises to variational EM, wake-sleep training and the joint encoder-decoder optimisation of variational autoencoders, where both steps become gradient steps on one objective.">
+
+EM is two coordinates of one ascent; doing either partly still climbs.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The E step maximises the ELBO over...", options: ["q, with θ fixed", "θ, with q fixed", "Both at once", "Neither"], answer: 0, explain: "Step 1." },
+  { q: "After the E step, the ELBO...", options: ["Equals the log-likelihood", "Is below it by a lot", "Exceeds it", "Is zero"], answer: 0, explain: "Step 1." },
+  { q: "The M step maximises...", options: ["The expected complete-data log-likelihood", "The entropy of q", "The KL divergence", "The prior"], answer: 0, explain: "Step 1." },
+  { q: "EM cannot decrease the likelihood because...", options: ["log p(θ_new) ≥ L(q, θ_new) ≥ L(q, θ_old) = log p(θ_old)", "It uses gradients", "It is convex", "The data are Gaussian"], answer: 0, explain: "Step 1." },
+  { q: "Incremental EM updates...", options: ["Responsibilities for one block, then the parameters", "All responsibilities, then nothing", "Only the parameters", "The data"], answer: 0, explain: "Step 3." },
+  { q: "Incremental EM needs the sufficient statistics so that...", options: ["A block's old contribution can be swapped for its new one", "Data can be discarded", "The likelihood is exact", "q is Gaussian"], answer: 0, explain: "Step 3." },
+  { q: "Generalised EM replaces the M step by...", options: ["Any step that increases the bound", "A random step", "An E step", "Nothing"], answer: 0, explain: "Step 4." },
+  { q: "Variational free energy is...", options: ["The negative ELBO", "The log evidence", "The KL to the prior", "The entropy"], answer: 0, explain: "The bridge." },
+]} />
+
+<Flashcards cards={[
+  { front: "EM as coordinate ascent?", back: "E: $q \\leftarrow \\arg\\max_q\\mathcal L(q, \\theta)$ (the posterior). M: $\\theta \\leftarrow \\arg\\max_\\theta\\mathcal L(q, \\theta)$." },
+  { front: "Why EM is monotone?", back: "$\\log p_{\\theta'}(\\mathbf x) \\ge \\mathcal L(q, \\theta') \\ge \\mathcal L(q, \\theta) = \\log p_\\theta(\\mathbf x)$." },
+  { front: "Incremental EM?", back: "Update q for one block, adjust sufficient statistics, take an M step; repeat over blocks." },
+  { front: "Generalised EM?", back: "Any M step that increases the bound keeps the monotonicity guarantee." },
+  { front: "Expected complete-data log-likelihood?", back: "$\\sum_iE_{q_i}[\\log p_\\theta(\\mathbf x_i, \\mathbf z_i)]$, the part of the ELBO that depends on θ." },
+]} />
+
+<Predict revisit question="With a partial M step, did the log-likelihood ever go down?" />
+
+<Key title="Before you go">
+<ul>
+<li>EM is coordinate ascent on the ELBO: the E step closes the gap, the M step raises the bound.</li>
+<li>Monotonicity follows from a chain of three inequalities.</li>
+<li>Partial E steps (incremental EM) and partial M steps (generalised EM) keep the guarantee.</li>
+<li>The view connects EM to variational inference and stochastic training.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Neal and Hinton (1998), <em>A view of the EM algorithm that justifies incremental, sparse, and other variants</em>.</li>
+<li>Friston (2010), <em>The free-energy principle: a unified brain theory?</em>, Nature Reviews Neuroscience 11(2), 127 to 138.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Map the two steps of EM onto processes in the brain on different timescales. Where does the analogy help, and where does it break down?" />

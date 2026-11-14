@@ -286,3 +286,8 @@ export { DSeparation } from "./d-separation";
 export { IsingSample } from "./ising-sample";
 export { ChainMessages } from "./chain-messages";
 export { PairwiseSpikes } from "./pairwise-spikes";
+export { ElboGap } from "./elbo-gap";
+export { EmBound } from "./em-bound";
+export { MeanFieldIsing } from "./mean-field-ising";
+export { ReparamGradient } from "./reparam-gradient";
+export { LatentTrajectory } from "./latent-trajectory";

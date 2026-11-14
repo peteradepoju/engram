@@ -1,0 +1,270 @@
+export const meta = {
+  title: "Forge: Week 63 challenge, quiz and deep read",
+  intro: "This week turned the evidence lower bound into a working method: its two decompositions, EM as coordinate ascent on it, mean-field inference and its overconfidence, stochastic and amortised inference by reparameterised gradients, and Poisson latent models of spiking populations. Today's challenge closes the loop by learning the Poisson model's loadings as well as its latents, by variational EM. Then you tighten the bound itself with importance weighting, before the quiz and a critique of LFADS.",
+  goals: [
+    "Learn a Poisson latent variable model of spike counts by variational EM",
+    "Compute importance-weighted bounds and show that they tighten towards the log evidence",
+    "Prove the ELBO gap identity and the Gaussian expectation behind the Poisson bound",
+    "Critique the LFADS paper",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "pandarinath-2018",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. The log evidence is −20.0 and the ELBO is −23.5. What is KL(q ‖ posterior)?
+2. Two variables have correlation 0.8 and unit variance. What variance does mean field give each?
+3. For z ~ N(0.5, 0.2), what is E[exp(2z)]?
+
+<PyCell code={String.raw`
+  import numpy as np
+  print("1.", -20.0 - (-23.5))
+  print("2.", round(1 - 0.8 ** 2, 3))
+  print("3.", round(float(np.exp(2 * 0.5 + 4 * 0.2 / 2)), 4))
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: learning the loadings.** On Day 5 the loadings and baselines were known. Now learn them. Variational EM alternates: an E step that finds, for the current parameters, the Gaussian posterior over the latent trajectory with the smoothness prior (its mean by Newton's method and its variances from the Hessian); and an M step that updates each neuron's loading and baseline by a Newton step on the expected Poisson log-likelihood, using $E_q[e^{c_nz_t}] = e^{c_nm_t + c_n^2v_t/2}$.
+
+<PyCell id="partA" title="Part A: variational EM for a Poisson latent model" tests={String.raw`
+  import numpy as np
+  def test_loadings():
+      "the learned loadings match the truth up to sign and scale (absolute correlation above 0.9)"
+      assert abs(np.corrcoef(c_hat, c_true)[0, 1]) > 0.9
+  def test_latent():
+      "the inferred latent matches the true latent (absolute correlation above 0.9)"
+      assert abs(np.corrcoef(m_hat, z_true)[0, 1]) > 0.9
+  def test_elbo():
+      "the expected log-likelihood term rises over the EM iterations"
+      assert ell[-1] > ell[0]
+`} prompt="Complete the M step: for each neuron, the gradient of its expected log-likelihood with respect to (c_n, d_n) and the Hessian, using the expected rate mu_tn = exp(c_n m_t + d_n + c_n^2 v_t / 2). Run 25 iterations of variational EM."
+code={String.raw`
+  import numpy as np
+  gA = np.random.default_rng(636)
+  T, N = 300, 40
+  t = np.arange(T)
+  z_true = np.sin(2 * np.pi * t / 120) + 0.6 * np.sin(2 * np.pi * t / 47 + 1.0)
+  z_true = (z_true - z_true.mean()) / z_true.std()
+  c_true = gA.normal(0, 0.6, N); d_true = np.log(gA.uniform(0.3, 1.0, N))
+  X = gA.poisson(np.exp(np.outer(z_true, c_true) + d_true))
+
+  a = 0.97
+  main = np.r_[1.0, np.full(T - 2, 1 + a ** 2), 1.0] / (1 - a ** 2); off = np.full(T - 1, -a / (1 - a ** 2))
+  Q = np.diag(main) + np.diag(off, 1) + np.diag(off, -1)
+
+  def e_step(c, d, m0):
+      m = m0.copy()
+      for _ in range(20):
+          lam = np.exp(np.outer(m, c) + d)
+          H = np.diag((lam * c ** 2).sum(1)) + Q
+          m = m + np.linalg.solve(H, ((X - lam) * c).sum(1) - Q @ m)
+      lam = np.exp(np.outer(m, c) + d)
+      v = np.diag(np.linalg.inv(np.diag((lam * c ** 2).sum(1)) + Q))
+      return m, v
+
+  c_hat = gA.normal(0, 0.1, N); d_hat = np.log(X.mean(0) + 1e-3); m_hat = np.zeros(T)
+  ell = []
+  for it in range(25):
+      m_hat, v_hat = e_step(c_hat, d_hat, m_hat)
+      for n in range(N):
+          mu_n = np.exp(c_hat[n] * m_hat + d_hat[n] + c_hat[n] ** 2 * v_hat / 2)
+          dmu_dc = mu_n * (m_hat + c_hat[n] * v_hat)
+          g_c = np.sum(X[:, n] * m_hat - dmu_dc)
+          g_d = ...
+          H_cc = -np.sum(mu_n * (m_hat + c_hat[n] * v_hat) ** 2 + mu_n * v_hat)
+          H_cd = -np.sum(dmu_dc)
+          H_dd = -np.sum(mu_n)
+          step = np.linalg.solve(np.array([[H_cc, H_cd], [H_cd, H_dd]]), np.array([g_c, g_d]))
+          c_hat[n] -= step[0]; d_hat[n] -= step[1]
+      mu = np.exp(np.outer(m_hat, c_hat) + d_hat + np.outer(v_hat, c_hat ** 2) / 2)
+      ell.append(np.sum(X * (np.outer(m_hat, c_hat) + d_hat) - mu))
+  print(f"expected log-likelihood term: {ell[0]:.1f} -> {ell[-1]:.1f}")
+  print(f"|corr| of loadings with truth {abs(np.corrcoef(c_hat, c_true)[0, 1]):.3f}; of latent with truth {abs(np.corrcoef(m_hat, z_true)[0, 1]):.3f}")
+`}
+hint="g_d = np.sum(X[:, n] - mu_n)."
+solution={String.raw`
+  import numpy as np
+  gA = np.random.default_rng(636)
+  T, N = 300, 40
+  t = np.arange(T)
+  z_true = np.sin(2 * np.pi * t / 120) + 0.6 * np.sin(2 * np.pi * t / 47 + 1.0)
+  z_true = (z_true - z_true.mean()) / z_true.std()
+  c_true = gA.normal(0, 0.6, N); d_true = np.log(gA.uniform(0.3, 1.0, N))
+  X = gA.poisson(np.exp(np.outer(z_true, c_true) + d_true))
+
+  a = 0.97
+  main = np.r_[1.0, np.full(T - 2, 1 + a ** 2), 1.0] / (1 - a ** 2); off = np.full(T - 1, -a / (1 - a ** 2))
+  Q = np.diag(main) + np.diag(off, 1) + np.diag(off, -1)
+
+  def e_step(c, d, m0):
+      m = m0.copy()
+      for _ in range(20):
+          lam = np.exp(np.outer(m, c) + d)
+          H = np.diag((lam * c ** 2).sum(1)) + Q
+          m = m + np.linalg.solve(H, ((X - lam) * c).sum(1) - Q @ m)
+      lam = np.exp(np.outer(m, c) + d)
+      v = np.diag(np.linalg.inv(np.diag((lam * c ** 2).sum(1)) + Q))
+      return m, v
+
+  c_hat = gA.normal(0, 0.1, N); d_hat = np.log(X.mean(0) + 1e-3); m_hat = np.zeros(T)
+  ell = []
+  for it in range(25):
+      m_hat, v_hat = e_step(c_hat, d_hat, m_hat)
+      for n in range(N):
+          mu_n = np.exp(c_hat[n] * m_hat + d_hat[n] + c_hat[n] ** 2 * v_hat / 2)
+          dmu_dc = mu_n * (m_hat + c_hat[n] * v_hat)
+          g_c = np.sum(X[:, n] * m_hat - dmu_dc)
+          g_d = np.sum(X[:, n] - mu_n)
+          H_cc = -np.sum(mu_n * (m_hat + c_hat[n] * v_hat) ** 2 + mu_n * v_hat)
+          H_cd = -np.sum(dmu_dc)
+          H_dd = -np.sum(mu_n)
+          step = np.linalg.solve(np.array([[H_cc, H_cd], [H_cd, H_dd]]), np.array([g_c, g_d]))
+          c_hat[n] -= step[0]; d_hat[n] -= step[1]
+      mu = np.exp(np.outer(m_hat, c_hat) + d_hat + np.outer(v_hat, c_hat ** 2) / 2)
+      ell.append(np.sum(X * (np.outer(m_hat, c_hat) + d_hat) - mu))
+  print(f"expected log-likelihood term: {ell[0]:.1f} -> {ell[-1]:.1f}")
+  print(f"|corr| of loadings with truth {abs(np.corrcoef(c_hat, c_true)[0, 1]):.3f}; of latent with truth {abs(np.corrcoef(m_hat, z_true)[0, 1]):.3f}")
+`} />
+
+From random small loadings, 25 iterations of variational EM recover loadings that correlate at 0.993 with the truth, and a latent trajectory that correlates at 0.993 with the true one, while the expected log-likelihood rises by about 1,200. Both were learned together from nothing but spike counts: the E step uses the current loadings to infer the latent, and the M step uses the inferred latent, with its uncertainty, to refit each neuron as a Poisson GLM. The $c_n^2v_t/2$ terms are where the uncertainty enters: they stop the M step from treating the inferred latent as if it were observed exactly.
+
+**Part B: a tighter bound.** The ELBO is $E_q[\log w]$ with importance weight $w = p(\mathbf x, \mathbf z)/q(\mathbf z)$. Burda, Grosse and Salakhutdinov (2016) proposed the **importance-weighted bound** $\mathcal L_K = E\left[\log\frac1K\sum_{k=1}^Kw_k\right]$ with $K$ samples from $q$. It equals the ELBO at $K = 1$, never decreases as $K$ grows, and converges to the log evidence. Check this on Day 1's probabilistic PCA, where the log evidence is known.
+
+<PyCell id="partB" title="Part B: importance-weighted bounds" tests={String.raw`
+  import numpy as np
+  def test_monotone():
+      "the bound rises with K and stays below the log evidence"
+      assert all(b >= a - 0.05 for a, b in zip(bounds, bounds[1:])) and bounds[-1] < logev + 0.05
+  def test_closer():
+      "K = 1000 closes more than half of the gap left by the ELBO"
+      assert (logev - bounds[-1]) < 0.5 * (logev - bounds[0])
+`} prompt="For one observation of a 12-dimensional PPCA model, use a deliberately poor Gaussian q (the posterior mean shifted by 0.3 and the covariance doubled). For K in 1, 10, 100 and 1000, estimate L_K by averaging log-mean-exp of K log-weights over 200 repetitions."
+code={String.raw`
+  from scipy.stats import multivariate_normal as mvn
+  from scipy.special import logsumexp
+  gB = np.random.default_rng(6361)
+  d, k, s2 = 12, 2, 0.5
+  W = gB.normal(size=(d, k)); M = W.T @ W + s2 * np.eye(k)
+  x0 = W @ gB.normal(size=k) + np.sqrt(s2) * gB.normal(size=d)
+  logev = mvn.logpdf(x0, np.zeros(d), W @ W.T + s2 * np.eye(d))
+  m_post = np.linalg.solve(M, W.T @ x0); S_post = s2 * np.linalg.inv(M)
+  mq, Sq = m_post + 0.3, 2 * S_post
+
+  def log_w(zs):
+      return (mvn.logpdf(x0 - zs @ W.T, np.zeros(d), s2 * np.eye(d)) + mvn.logpdf(zs, np.zeros(k), np.eye(k))
+              - mvn.logpdf(zs, mq, Sq))
+
+  bounds = []
+  for K in (1, 10, 100, 1000):
+      vals = []
+      for rep in range(200):
+          lw = log_w(gB.multivariate_normal(mq, Sq, size=K))
+          vals.append(...)
+      bounds.append(np.mean(vals))
+  print(f"log evidence {logev:.3f}")
+  print("bound for K = 1, 10, 100, 1000:", np.round(bounds, 3))
+`}
+hint="vals.append(logsumexp(lw) - np.log(K))."
+solution={String.raw`
+  from scipy.stats import multivariate_normal as mvn
+  from scipy.special import logsumexp
+  gB = np.random.default_rng(6361)
+  d, k, s2 = 12, 2, 0.5
+  W = gB.normal(size=(d, k)); M = W.T @ W + s2 * np.eye(k)
+  x0 = W @ gB.normal(size=k) + np.sqrt(s2) * gB.normal(size=d)
+  logev = mvn.logpdf(x0, np.zeros(d), W @ W.T + s2 * np.eye(d))
+  m_post = np.linalg.solve(M, W.T @ x0); S_post = s2 * np.linalg.inv(M)
+  mq, Sq = m_post + 0.3, 2 * S_post
+
+  def log_w(zs):
+      return (mvn.logpdf(x0 - zs @ W.T, np.zeros(d), s2 * np.eye(d)) + mvn.logpdf(zs, np.zeros(k), np.eye(k))
+              - mvn.logpdf(zs, mq, Sq))
+
+  bounds = []
+  for K in (1, 10, 100, 1000):
+      vals = []
+      for rep in range(200):
+          lw = log_w(gB.multivariate_normal(mq, Sq, size=K))
+          vals.append(logsumexp(lw) - np.log(K))
+      bounds.append(np.mean(vals))
+  print(f"log evidence {logev:.3f}")
+  print("bound for K = 1, 10, 100, 1000:", np.round(bounds, 3))
+`} />
+
+With one sample per estimate the bound is the ELBO, 3.5 nats below the log evidence of $-22.29$, because $q$ was deliberately poor. Ten samples close most of that gap, to 0.4 nats; a hundred to 0.03; a thousand to 0.003. Importance weighting corrects a poor $q$ by weighting its samples, so the bound becomes tight even when $q$ is not. Used as a training objective (IWAE), it gives better generative models, but its gradient signal for the encoder weakens as $K$ grows, since a good bound no longer depends much on how good $q$ is (Rainforth and colleagues, 2018).
+
+**Part C (written).** Answer in your journal. First, in Part A, the loadings and the latent are recovered only up to sign and scale. Explain why, and what that means for interpreting a learned latent variable. Second, LFADS is trained on the ELBO; explain what the importance-weighted bound of Part B would change in training, and why a tighter bound is not automatically a better encoder.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The ELBO gap" task="For any $q(\mathbf z)$ with the same support as the posterior, show that $\log p(\mathbf x) = \mathcal L(q) + \text{KL}(q(\mathbf z)\,\Vert\,p(\mathbf z \mid \mathbf x))$, where $\mathcal L(q) = E_q[\log p(\mathbf x, \mathbf z) - \log q(\mathbf z)]$.">
+
+Since $\log p(\mathbf x)$ does not depend on $\mathbf z$, $\log p(\mathbf x) = E_q[\log p(\mathbf x)] = E_q[\log p(\mathbf x, \mathbf z) - \log p(\mathbf z \mid \mathbf x)]$.
+
+Add and subtract $\log q(\mathbf z)$ inside the expectation: $E_q[\log p(\mathbf x, \mathbf z) - \log q(\mathbf z)] + E_q[\log q(\mathbf z) - \log p(\mathbf z \mid \mathbf x)]$.
+
+The first term is $\mathcal L(q)$ and the second is $\text{KL}(q\,\Vert\,p(\mathbf z \mid \mathbf x)) \ge 0$. So the ELBO is a lower bound, tight exactly when $q$ equals the posterior almost everywhere.
+
+</Prove>
+
+<Prove title="2. The Gaussian expectation of an exponential" task="Show that if $z \sim \mathcal N(m, v)$ then $E[e^{cz}] = \exp(cm + c^2v/2)$.">
+
+Write $E[e^{cz}] = \int\frac{1}{\sqrt{2\pi v}}\exp\left(cz - \frac{(z - m)^2}{2v}\right)dz$.
+
+Complete the square in the exponent: $cz - \frac{(z - m)^2}{2v} = -\frac{(z - m - cv)^2}{2v} + cm + \frac{c^2v}{2}$.
+
+The remaining integral is that of a Gaussian density with mean $m + cv$, which is 1, leaving $\exp(cm + c^2v/2)$. This is the moment-generating function of the Gaussian, and it is what makes the Poisson-Gaussian ELBO of Day 5 and Part A available in closed form.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 63 quiz (15 questions)" questions={[
+  { q: "The marginal likelihood of a latent variable model requires...", options: ["Integrating over the latents", "Only the prior", "Only the decoder", "No computation"], answer: 0, explain: "Day 1." },
+  { q: "log p(x) − ELBO equals...", options: ["KL(q ‖ posterior)", "KL(q ‖ prior)", "The entropy of q", "Zero"], answer: 0, explain: "Day 1." },
+  { q: "The reconstruction form of the ELBO is...", options: ["E_q[log p(x | z)] − KL(q ‖ p(z))", "log p(x) + KL", "E_q[log q]", "The log prior"], answer: 0, explain: "Day 1." },
+  { q: "An encoder maps...", options: ["Observations to posterior parameters", "Latents to data", "Parameters to data", "Data to labels"], answer: 0, explain: "Day 1." },
+  { q: "In EM, the E step...", options: ["Makes the ELBO equal the log-likelihood", "Lowers the bound", "Updates θ", "Ignores q"], answer: 0, explain: "Day 2." },
+  { q: "Incremental EM updates...", options: ["One block's responsibilities at a time", "All parameters randomly", "Only priors", "Nothing"], answer: 0, explain: "Day 2." },
+  { q: "Generalised EM requires the M step only to...", options: ["Increase the bound", "Maximise it exactly", "Decrease it", "Leave it unchanged"], answer: 0, explain: "Day 2." },
+  { q: "The mean-field optimal factor is...", options: ["exp of the expected log joint over the other factors", "The prior", "The likelihood", "Uniform"], answer: 0, explain: "Day 3." },
+  { q: "Mean-field variances for correlated Gaussian latents are...", options: ["Too small", "Too large", "Exact", "Infinite"], answer: 0, explain: "Day 3." },
+  { q: "Naive mean field for the Ising model gives...", options: ["mᵢ = tanh(hᵢ + Σⱼ Jᵢⱼ mⱼ)", "mᵢ = hᵢ", "Exact marginals", "mᵢ = 0"], answer: 0, explain: "Day 3." },
+  { q: "The reparameterisation trick reduces variance by...", options: ["Using the slope of the integrand", "Using more samples", "Ignoring the entropy", "Using discrete latents"], answer: 0, explain: "Day 4." },
+  { q: "Score-function gradients are needed for...", options: ["Discrete or non-differentiable cases", "Gaussian latents", "Linear models", "Closed-form ELBOs"], answer: 0, explain: "Day 4." },
+  { q: "The Poisson-Gaussian ELBO is closed form because...", options: ["E[e^{cz}] = e^{cm + c²v/2}", "Poisson is Gaussian", "Counts are continuous", "The prior is flat"], answer: 0, explain: "Day 5." },
+  { q: "A smoothness prior over time improves single-trial latents because...", options: ["Neighbouring bins share evidence", "It adds data", "It removes noise from spikes", "It changes the loadings"], answer: 0, explain: "Day 5." },
+  { q: "The importance-weighted bound with K samples...", options: ["Never decreases as K grows and approaches log p(x)", "Equals the ELBO for all K", "Exceeds log p(x)", "Decreases with K"], answer: 0, explain: "Part B." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Pandarinath and colleagues (2018) its third pass and write your critique under the five headings. Focus on one question: **what does LFADS infer, and how do we know it is real?** Consider the model, encoder, recurrent generator, inferred inputs and Poisson readout, and which parts are needed for which results; the training objective and its regularisation; the evidence that single-trial trajectories are better than smoothing or GPFA, especially the prediction of behaviour and of held-out neurons; the inferred inputs and how they might be confounded with dynamics the generator cannot express; and the "stitching" of recordings across days. End with one analysis you would add to rule out that a reported feature of the trajectories comes from the model rather than the brain.
+
+<Callout kind="research">
+
+Keshtkaran and colleagues (2022) introduced AutoLFADS, which tunes LFADS's many hyperparameters automatically, and the Neural Latents Benchmark (Pei and colleagues, 2021) compares latent variable models on held-out neurons and timepoints. Using Part A as a starting point, implement the benchmark's co-smoothing test on your simulated data: hold out ten neurons, infer the latent from the others, fit only the held-out neurons' loadings, and score their predicted rates in bits per spike (Week 59). How does the AR prior's timescale affect the score?
+
+</Callout>
+
+<Key title="Week 63 review checklist">
+<ul>
+<li>I can decompose the ELBO two ways and compute it exactly and by sampling.</li>
+<li>I can derive EM as coordinate ascent on the ELBO and implement incremental and generalised variants.</li>
+<li>I can derive and run mean-field updates and explain their overconfidence.</li>
+<li>I can estimate ELBO gradients by reparameterisation and train an amortised encoder.</li>
+<li>I can fit Poisson latent variable models of spikes with smoothness priors by variational EM.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then write a paragraph comparing factor analysis, GPFA and LFADS as tools for a dataset you know: which would you try first, and what would make you move to the next?" />

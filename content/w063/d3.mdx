@@ -1,0 +1,291 @@
+export const meta = {
+  title: "Mean-field variational inference",
+  intro: "When the exact posterior cannot be computed, the E step of EM is replaced by the best approximation in a tractable family. The most common family assumes that the latent variables are independent under q, the mean-field approximation, named after the physicist's trick of replacing a unit's fluctuating neighbours by their average. Today you derive the general coordinate-ascent update, apply it to a Bayesian model of a neuron's response and to the Ising model of last week, and measure the price of the independence assumption: posteriors that are too confident.",
+  goals: [
+    "Derive the mean-field coordinate update: each factor is the exponentiated expected log joint",
+    "Implement coordinate-ascent variational inference for a Gaussian with unknown mean and precision",
+    "Derive naive mean-field equations for the Ising model and compare them with exact marginals",
+    "Show that mean-field approximations underestimate posterior variance when variables are correlated",
+  ],
+  plan: [
+    { label: "The mean-field update", minutes: 25 },
+    { label: "A neuron's mean and noise", minutes: 30 },
+    { label: "Mean-field theory of the Ising model", minutes: 25 },
+    { label: "Overconfidence", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "jordan-1999",
+};
+
+<Predict question="Two latent variables have a joint Gaussian posterior with correlation 0.9 and unit variances. A mean-field approximation treats them as independent. Will its variances be about 1, about 0.19, or about 2?" />
+
+<Step n={1} title="The mean-field update" minutes={25} />
+
+<Derivation title="Optimal factors under independence">
+<div>
+
+Restrict $q(\mathbf z) = \prod_jq_j(z_j)$. Fix all factors except $q_j$, and write the ELBO as a function of $q_j$ alone:
+
+$$
+\mathcal L = \int q_j(z_j)E_{-j}[\log p(\mathbf x, \mathbf z)]\,dz_j - \int q_j\log q_j\,dz_j + \text{const},
+$$
+
+where $E_{-j}$ is the expectation over all the other factors.
+
+</div>
+<div>
+
+This is $-\text{KL}(q_j\,\Vert\,\tilde p_j) + \text{const}$, with $\tilde p_j(z_j) \propto \exp(E_{-j}[\log p(\mathbf x, \mathbf z)])$. It is maximised by setting
+
+$$
+\log q_j^*(z_j) = E_{-j}\left[\log p(\mathbf x, \mathbf z)\right] + \text{const}.
+$$
+
+</div>
+<div>
+
+Each factor is updated in turn; each update cannot decrease the ELBO, so **coordinate-ascent variational inference** (CAVI) converges to a local optimum. When the model is built from conjugate exponential-family pieces, each $q_j^*$ has the same form as the prior for $z_j$, and the updates are closed-form. Jordan, Ghahramani, Jaakkola and Saul (1999), today's paper, set out this approach for graphical models.
+
+</div>
+</Derivation>
+
+<Video id="8wGL3RT12iY" title="Probabilistic ML, lecture 24: variational inference" by="Philipp Hennig, University of Tübingen" note="Philipp Hennig on the evidence lower bound, the mean-field factorisation and the optimal factor as an expected log joint, worked through for a Gaussian mixture." />
+
+<Step n={2} title="A neuron's mean and noise" minutes={30} />
+
+A neuron's response to a stimulus is measured on $n$ trials, $x_i \sim \mathcal N(\mu, \tau^{-1})$, with unknown mean $\mu$ and noise precision $\tau$. With priors $\mu \mid \tau \sim \mathcal N(\mu_0, (\lambda_0\tau)^{-1})$ and $\tau \sim \text{Gamma}(a_0, b_0)$ the exact posterior is known (normal-gamma), which makes this a good test case. The mean-field approximation $q(\mu)q(\tau)$ gives, from the general rule,
+
+$$
+q(\mu) = \mathcal N\left(\frac{\lambda_0\mu_0 + n\bar x}{\lambda_0 + n}, \frac{1}{(\lambda_0 + n)E[\tau]}\right),\qquad q(\tau) = \text{Gamma}\left(a_0 + \frac{n + 1}{2},\ b_0 + \frac12E_\mu\left[\textstyle\sum_i(x_i - \mu)^2 + \lambda_0(\mu - \mu_0)^2\right]\right).
+$$
+
+Each update needs only moments of the other factor.
+
+<PyCell id="cavi" title="CAVI for a mean and a precision" tests={String.raw`
+  import numpy as np
+  def test_mean():
+      "the variational mean of mu matches the exact posterior mean"
+      assert abs(m_q - m_exact) < 1e-6
+  def test_tau():
+      "the variational mean of tau is within 5% of the exact posterior mean"
+      assert abs(E_tau / Etau_exact - 1) < 0.05
+`} prompt="Complete the CAVI loop: update q(mu) from E[tau], then q(tau) from the mean and variance of q(mu). Compare the results with the exact normal-gamma posterior."
+code={String.raw`
+  import numpy as np
+  g0 = np.random.default_rng(633)
+  xs = g0.normal(12.0, 3.0, 10)                          # 10 trials of a neuron's response (spikes per second)
+  n, xbar = len(xs), xs.mean()
+  mu0, lam0, a0, b0 = 10.0, 0.1, 1.0, 1.0
+
+  E_tau = 1.0
+  for it in range(100):
+      m_q = (lam0 * mu0 + n * xbar) / (lam0 + n)
+      v_q = ...                                          # variance of q(mu)
+      a_q = a0 + (n + 1) / 2
+      E_sq = np.sum((xs - m_q) ** 2) + n * v_q + lam0 * ((m_q - mu0) ** 2 + v_q)
+      b_q = b0 + 0.5 * E_sq
+      E_tau = ...
+
+  # exact normal-gamma posterior
+  lam_n = lam0 + n; m_exact = (lam0 * mu0 + n * xbar) / lam_n
+  a_n = a0 + n / 2; b_n = b0 + 0.5 * np.sum((xs - xbar) ** 2) + lam0 * n * (xbar - mu0) ** 2 / (2 * lam_n)
+  Etau_exact = a_n / b_n
+  var_mu_exact = b_n / (a_n - 1) / lam_n                # marginal of mu is a Student t
+  print(f"mean of mu: variational {m_q:.3f}, exact {m_exact:.3f}")
+  print(f"mean of tau: variational {E_tau:.4f}, exact {Etau_exact:.4f}  (noise sd about {1 / np.sqrt(E_tau):.2f})")
+  print(f"variance of mu: variational {v_q:.4f}, exact {var_mu_exact:.4f}")
+`}
+hint="v_q = 1 / ((lam0 + n) * E_tau); E_tau = a_q / b_q."
+solution={String.raw`
+  import numpy as np
+  g0 = np.random.default_rng(633)
+  xs = g0.normal(12.0, 3.0, 10)                          # 10 trials of a neuron's response (spikes per second)
+  n, xbar = len(xs), xs.mean()
+  mu0, lam0, a0, b0 = 10.0, 0.1, 1.0, 1.0
+
+  E_tau = 1.0
+  for it in range(100):
+      m_q = (lam0 * mu0 + n * xbar) / (lam0 + n)
+      v_q = 1 / ((lam0 + n) * E_tau)                     # variance of q(mu)
+      a_q = a0 + (n + 1) / 2
+      E_sq = np.sum((xs - m_q) ** 2) + n * v_q + lam0 * ((m_q - mu0) ** 2 + v_q)
+      b_q = b0 + 0.5 * E_sq
+      E_tau = a_q / b_q
+
+  # exact normal-gamma posterior
+  lam_n = lam0 + n; m_exact = (lam0 * mu0 + n * xbar) / lam_n
+  a_n = a0 + n / 2; b_n = b0 + 0.5 * np.sum((xs - xbar) ** 2) + lam0 * n * (xbar - mu0) ** 2 / (2 * lam_n)
+  Etau_exact = a_n / b_n
+  var_mu_exact = b_n / (a_n - 1) / lam_n                # marginal of mu is a Student t
+  print(f"mean of mu: variational {m_q:.3f}, exact {m_exact:.3f}")
+  print(f"mean of tau: variational {E_tau:.4f}, exact {Etau_exact:.4f}  (noise sd about {1 / np.sqrt(E_tau):.2f})")
+  print(f"variance of mu: variational {v_q:.4f}, exact {var_mu_exact:.4f}")
+`} />
+
+The variational posterior mean of $\mu$ is exact, 10.131 spikes per second, and the mean of the precision matches the exact 0.169 to four decimals, a noise standard deviation of about 2.4. The variance of $\mu$ is where the approximation shows: 0.586 against the exact 0.703, a sixth too small. In the exact posterior, $\mu$ and $\tau$ are dependent (if the noise is large, the mean is less certain), and the exact marginal of $\mu$ is a Student t with heavier tails; the factorised $q$ cannot represent either, so it uses the average precision and reports a Gaussian that is too narrow.
+
+<Step n={3} title="Mean-field theory of the Ising model" minutes={25} />
+
+For an Ising model, $\log p(\mathbf s) = \sum_ih_is_i + \sum_{i \lt j}J_{ij}s_is_j - \log Z$. Under $q = \prod_iq_i(s_i)$ with means $m_i = E_q[s_i]$, the expected log joint as a function of $s_i$ is $s_i(h_i + \sum_jJ_{ij}m_j) + \text{const}$, so the optimal $q_i$ gives
+
+$$
+m_i = \tanh\left(h_i + \sum_jJ_{ij}m_j\right),
+$$
+
+the **naive mean-field equations** of statistical physics, here derived as variational inference. Each unit feels its neighbours only through their average.
+
+<Figure caption="Exact and mean-field mean state of eight fully coupled units, as the total coupling grows. Mean field is accurate for weak coupling and overconfident for strong coupling." credit="Interactive figure by Engram, after Jordan, Ghahramani, Jaakkola and Saul (1999).">
+  <MeanFieldIsing />
+</Figure>
+
+<PyCell id="mf_ising" title="Mean field against enumeration" tests={String.raw`
+  import numpy as np
+  def test_weak():
+      "with weak couplings, mean-field means are within 0.05 of exact"
+      assert err_weak < 0.05
+  def test_strong():
+      "with couplings four times stronger, the error is several times larger"
+      assert err_strong > 3 * err_weak
+`} prompt="For 8 units with random couplings, iterate the mean-field equations (damped: average the new and old values) to convergence, and compare with exact means from enumerating all 256 states. Do this for couplings of scale 0.1 and 0.4."
+code={String.raw`
+  import itertools
+  S8 = np.array(list(itertools.product((-1, 1), repeat=8)))
+  gi = np.random.default_rng(6331)
+  h8 = gi.normal(0, 0.3, 8)
+  Jbase = np.triu(gi.normal(0, 1, (8, 8)), 1); Jbase = Jbase + Jbase.T
+
+  def exact_means(J):
+      E = S8 @ h8 + 0.5 * np.einsum("ki,ij,kj->k", S8, J, S8)
+      p = np.exp(E - E.max()); p /= p.sum()
+      return S8.T @ p
+
+  def mean_field(J, iters=500):
+      m = np.zeros(8)
+      for _ in range(iters):
+          m = 0.5 * m + 0.5 * ...
+      return m
+
+  err = {}
+  for scale in (0.1, 0.4):
+      J = scale * Jbase
+      err[scale] = np.abs(mean_field(J) - exact_means(J)).max()
+      print(f"coupling scale {scale}: exact {np.round(exact_means(J), 3)}")
+      print(f"                   mean field {np.round(mean_field(J), 3)}  largest error {err[scale]:.4f}")
+  err_weak, err_strong = err[0.1], err[0.4]
+`}
+hint="m = 0.5 * m + 0.5 * np.tanh(h8 + J @ m)."
+solution={String.raw`
+  import itertools
+  S8 = np.array(list(itertools.product((-1, 1), repeat=8)))
+  gi = np.random.default_rng(6331)
+  h8 = gi.normal(0, 0.3, 8)
+  Jbase = np.triu(gi.normal(0, 1, (8, 8)), 1); Jbase = Jbase + Jbase.T
+
+  def exact_means(J):
+      E = S8 @ h8 + 0.5 * np.einsum("ki,ij,kj->k", S8, J, S8)
+      p = np.exp(E - E.max()); p /= p.sum()
+      return S8.T @ p
+
+  def mean_field(J, iters=500):
+      m = np.zeros(8)
+      for _ in range(iters):
+          m = 0.5 * m + 0.5 * np.tanh(h8 + J @ m)
+      return m
+
+  err = {}
+  for scale in (0.1, 0.4):
+      J = scale * Jbase
+      err[scale] = np.abs(mean_field(J) - exact_means(J)).max()
+      print(f"coupling scale {scale}: exact {np.round(exact_means(J), 3)}")
+      print(f"                   mean field {np.round(mean_field(J), 3)}  largest error {err[scale]:.4f}")
+  err_weak, err_strong = err[0.1], err[0.4]
+`} />
+
+With weak couplings, mean field is within about 0.03 of the exact means for all eight units. With couplings four times stronger, it errs by up to 0.44: a unit whose exact mean is 0.43 is given 0.77, and another with $-0.52$ gets $-0.96$. Mean field pushes units towards the state their neighbours favour on average, ignoring that the neighbours themselves fluctuate, so with strong couplings it commits too firmly. Corrections exist: the TAP equations add a reaction term (Thouless, Anderson and Palmer, 1977), and belief propagation (Week 62) keeps pairwise information that mean field throws away.
+
+<Step n={4} title="Overconfidence" minutes={25} />
+
+For a Gaussian target $\mathcal N(\boldsymbol\mu, \Lambda^{-1})$, the mean-field factors can be found exactly: $q_j$ is Gaussian with variance $1/\Lambda_{jj}$, one over the diagonal of the precision matrix. The true marginal variance is $(\Lambda^{-1})_{jj}$, which is never smaller and is much larger when variables are correlated. Mean field matches the conditional variance, how uncertain $z_j$ is if the others were known, not the marginal one. Because it minimises $\text{KL}(q\Vert p)$, which heavily punishes $q$ for putting mass where $p$ has little, it fits inside the posterior rather than around it.
+
+<PyCell id="overconf" title="Variance of a mean-field Gaussian" tests={String.raw`
+  import numpy as np
+  def test_ratio():
+      "for correlation 0.9 the mean-field variance is about 0.19 of the true variance; for zero correlation it is exact"
+      assert abs(ratio[0.9] - 0.19) < 0.01 and abs(ratio[0.0] - 1) < 1e-9
+`} prompt="For a two-dimensional Gaussian posterior with unit variances and correlation rho, run CAVI (each factor's mean and variance from the conditional given the other's mean) and compare the mean-field variance with the true one, for rho = 0, 0.5 and 0.9."
+code={String.raw`
+  ratio = {}
+  for rho in (0.0, 0.5, 0.9):
+      Sigma = np.array([[1, rho], [rho, 1]]); Lam = np.linalg.inv(Sigma); mu_t = np.array([1.0, -1.0])
+      m = np.zeros(2)
+      for _ in range(200):
+          for j in (0, 1):
+              o = 1 - j
+              m[j] = mu_t[j] - Lam[j, o] / Lam[j, j] * (m[o] - mu_t[o])
+      v_mf = ...
+      ratio[rho] = v_mf[0] / Sigma[0, 0]
+      print(f"rho {rho}: mean-field means {np.round(m, 3)}, variance {v_mf[0]:.3f} against true {Sigma[0, 0]:.3f}")
+`}
+hint="v_mf = 1 / np.diag(Lam)."
+solution={String.raw`
+  ratio = {}
+  for rho in (0.0, 0.5, 0.9):
+      Sigma = np.array([[1, rho], [rho, 1]]); Lam = np.linalg.inv(Sigma); mu_t = np.array([1.0, -1.0])
+      m = np.zeros(2)
+      for _ in range(200):
+          for j in (0, 1):
+              o = 1 - j
+              m[j] = mu_t[j] - Lam[j, o] / Lam[j, j] * (m[o] - mu_t[o])
+      v_mf = 1 / np.diag(Lam)
+      ratio[rho] = v_mf[0] / Sigma[0, 0]
+      print(f"rho {rho}: mean-field means {np.round(m, 3)}, variance {v_mf[0]:.3f} against true {Sigma[0, 0]:.3f}")
+`} />
+
+With no correlation, mean field is exact. With correlation 0.5 its variance is 0.75 of the truth, and with correlation 0.9 only 0.19, exactly $1 - \rho^2$, the variance of one variable given the other. The means are right in every case. So a mean-field posterior can locate the answer correctly while claiming five times too much certainty about it, and the error grows precisely when variables are entangled, which in a decoder is when neurons carry redundant information.
+
+<Bridge title="Mean field in brains and machines"
+  neuro="Mean-field theory is a mainstay of theoretical neuroscience: rate models of large networks replace each neuron's input by its average over the population (Week 22), and the variational view explains when that is justified and what it ignores. Proposals that cortex performs variational inference face the same question as the algorithm: how are the correlations between latent causes represented, if at all?"
+  ai="Mean-field variational inference made Bayesian methods scale to topic models with millions of documents and to Bayesian neural networks with millions of weights. Its overconfidence is a known weakness of Bayesian deep learning, and richer families, from full-covariance Gaussians to normalising flows, trade computation for better uncertainty.">
+
+Mean field captures each variable given the others, not the uncertainty they share.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The mean-field family assumes...", options: ["Latent variables are independent under q", "q equals the prior", "q is a point mass", "The posterior is Gaussian"], answer: 0, explain: "Step 1." },
+  { q: "The optimal mean-field factor satisfies log qⱼ* =...", options: ["E over the other factors of log p(x, z), plus a constant", "log p(zⱼ)", "The log-likelihood", "Zero"], answer: 0, explain: "The derivation." },
+  { q: "CAVI updates...", options: ["One factor at a time, each increasing the ELBO", "All factors with gradients", "The data", "The prior"], answer: 0, explain: "The derivation." },
+  { q: "For conjugate exponential-family models, each mean-field factor has...", options: ["The same form as its prior", "No closed form", "A Gaussian form always", "Infinite variance"], answer: 0, explain: "The derivation." },
+  { q: "The naive mean-field equation for an Ising unit is...", options: ["mᵢ = tanh(hᵢ + Σⱼ Jᵢⱼ mⱼ)", "mᵢ = hᵢ", "mᵢ = Σⱼ Jᵢⱼ", "mᵢ = 0"], answer: 0, explain: "Step 3." },
+  { q: "Mean-field errors grow when couplings are...", options: ["Strong", "Weak", "Zero", "Negative only"], answer: 0, explain: "Step 3." },
+  { q: "For a Gaussian target, a mean-field factor's variance is...", options: ["1 over the diagonal of the precision", "The diagonal of the covariance", "Always 1", "Larger than the true variance"], answer: 0, explain: "Step 4." },
+  { q: "Mean-field posteriors tend to be...", options: ["Overconfident when variables are correlated", "Too wide", "Exact", "Biased in the mean always"], answer: 0, explain: "Step 4." },
+]} />
+
+<Flashcards cards={[
+  { front: "Mean-field update?", back: "$\\log q_j^*(z_j) = E_{-j}[\\log p(\\mathbf x, \\mathbf z)] + \\text{const}$" },
+  { front: "CAVI?", back: "Coordinate-ascent variational inference: update each factor in turn by the mean-field rule." },
+  { front: "Ising mean field?", back: "$m_i = \\tanh(h_i + \\sum_jJ_{ij}m_j)$" },
+  { front: "Mean-field variance for a Gaussian?", back: "$1/\\Lambda_{jj}$, the conditional variance, not the marginal $(\\Lambda^{-1})_{jj}$." },
+  { front: "Why is KL(q ‖ p) mode-seeking?", back: "It penalises q heavily where p is small, so q fits inside the posterior." },
+]} />
+
+<Predict revisit question="What variances did the mean-field approximation give for two variables with correlation 0.9?" />
+
+<Key title="Before you go">
+<ul>
+<li>Under independence, each optimal factor is the exponentiated expected log joint.</li>
+<li>CAVI cycles through closed-form updates when the model is conjugate.</li>
+<li>Naive mean-field equations of physics are variational inference for the Ising model.</li>
+<li>Mean field matches conditional, not marginal, uncertainty and is overconfident under correlation.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Jordan, Ghahramani, Jaakkola and Saul (1999), <em>An introduction to variational methods for graphical models</em>.</li>
+<li>Bishop (2006), <em>Pattern Recognition and Machine Learning</em>, section 10.1, which works through the Gaussian example of Step 2.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="A decoder built with mean-field variational inference reports a tight posterior over two correlated latent variables. Explain to a collaborator why the reported uncertainty may be too small, and suggest how to check it." />

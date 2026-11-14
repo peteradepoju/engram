@@ -7,7 +7,7 @@ const N = 40;
 
 /** Probability of K simultaneous spikes in a population: weak pairwise couplings against independence. */
 export function PairwiseSpikes() {
-  const [J, setJ] = useState(0.05);
+  const [J, setJ] = useState(0.09);
   const h = -2.5;
   const lgamma = (k: number): number => { let s = 0; for (let i = 2; i <= k; i++) s += Math.log(i); return s; };
   const logC = (k: number): number => lgamma(N) - lgamma(k) - lgamma(N - k);
@@ -38,7 +38,7 @@ export function PairwiseSpikes() {
         <Stat label="correlation between two neurons" value={pairCorr.toFixed(3)} />
         <Stat label={`P(${k10} or more together): pairwise / independent`} value={(pPair.slice(k10).reduce((a, b) => a + b, 0) / Math.max(pInd.slice(k10).reduce((a, b) => a + b, 0), 1e-300)).toExponential(1)} />
       </div>
-      <p className="text-sm text-ink-2">Forty neurons, each firing in about one time bin in twelve when uncoupled; the independent model is given the same rate as the coupled one. Pairwise correlations of a few hundredths look negligible, yet they make large synchronous events orders of magnitude more likely than independence predicts. This is Schneidman and colleagues' point: weak pairwise correlations can imply strongly correlated network states.</p>
+      <p className="text-sm text-ink-2">Forty neurons, each firing in about one time bin in twelve when uncoupled; the independent model is given the same rate as the coupled one. Pairwise correlations of about one hundredth look negligible, yet they make large synchronous events orders of magnitude more likely than independence predicts. This is Schneidman and colleagues' point: weak pairwise correlations can imply strongly correlated network states.</p>
     </div>
   );
 }
