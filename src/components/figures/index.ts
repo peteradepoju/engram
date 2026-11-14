@@ -301,3 +301,4 @@ export { KalmanGain } from "./kalman-gain";
 export { SmootherLag } from "./smoother-lag";
 export { LdsRotation } from "./lds-rotation";
 export { SwitchingLds } from "./switching-lds";
+export { EmStarts } from "./em-starts";
