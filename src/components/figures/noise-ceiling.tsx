@@ -39,7 +39,7 @@ export function NoiseCeiling() {
         <Stat label="expected ceiling" value={st.ceiling.toFixed(2)} />
         <Stat label="normalised" value={(st.perfect / st.ceiling).toFixed(2)} />
       </div>
-      <p className="text-sm text-ink-2">The true tuning curve is the best any model can do, yet it explains only part of the variance of the measured means, because averaging a few noisy trials leaves noise behind. The noise ceiling is the variance a perfect model could explain; dividing by it gives a score that compares fairly across neurons and datasets.</p>
+      <p className="text-sm text-ink-2">The true tuning curve is the best any model can do, yet it explains only part of the variance of the measured means, because averaging a few noisy trials leaves noise behind. The noise ceiling is the variance a perfect model could explain; dividing by it gives a score that compares fairly across neurons and datasets. With few stimuli the R² itself is noisy, so the normalised score can stray a little above 1.</p>
     </div>
   );
 }

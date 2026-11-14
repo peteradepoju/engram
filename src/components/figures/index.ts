@@ -271,3 +271,8 @@ export { NoiseCeiling } from "./noise-ceiling";
 export { LeakySelection } from "./leaky-selection";
 export { CvVariance } from "./cv-variance";
 export { DoubleDipping } from "./double-dipping";
+export { KmeansSteps } from "./kmeans-steps";
+export { GmmEm } from "./gmm-em";
+export { ChooseK } from "./choose-k";
+export { LinkageRings } from "./linkage-rings";
+export { WaveformClusters } from "./waveform-clusters";

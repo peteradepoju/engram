@@ -1,0 +1,283 @@
+export const meta = {
+  title: "Hierarchical and spectral clustering",
+  intro: "k-means and Gaussian mixtures describe clusters by centres and shapes, and so they fail on groups that are not blobs: rings, chains, manifolds. Two other families describe clusters by who is near whom. Hierarchical clustering merges the closest groups step by step and reports the whole history as a tree, so no single number of clusters has to be chosen. Spectral clustering builds a graph of similarities and cuts it where it is thinnest, using the eigenvectors of the graph Laplacian. Today you implement both and see where each succeeds.",
+  goals: [
+    "Implement agglomerative clustering and compare single, complete and average linkage",
+    "Read a dendrogram and cut it at different heights",
+    "Derive spectral clustering from graph cuts and the graph Laplacian",
+    "Implement spectral clustering and use it on non-convex clusters",
+  ],
+  plan: [
+    { label: "Agglomerative clustering", minutes: 30 },
+    { label: "Linkage and the shape of clusters", minutes: 25 },
+    { label: "Graphs and the Laplacian", minutes: 25 },
+    { label: "Spectral clustering", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "von-luxburg-2007",
+};
+
+<Predict question="Two concentric rings of points, a small ring inside a large one. Which do you expect to separate them: k-means with k = 2, single-linkage hierarchical clustering, or both?" />
+
+<Step n={1} title="Agglomerative clustering" minutes={30} />
+
+**Agglomerative** hierarchical clustering starts with every point in its own cluster and repeatedly merges the two closest clusters until one remains. The sequence of merges, and the distance at which each happened, form a tree called a **dendrogram**; cutting it at a height gives a clustering, and different heights give coarser or finer ones. What "closest clusters" means is the **linkage**: single linkage uses the closest pair of points between the clusters, complete linkage the farthest pair, average linkage the mean over all pairs.
+
+<Video id="7xHsRkOdVwo" title="StatQuest: hierarchical clustering" by="StatQuest with Josh Starmer" note="Josh Starmer on hierarchical clustering: merging the most similar items step by step, the choice of distance and linkage, and reading the dendrogram, illustrated with a heatmap of gene expression." />
+
+<PyCell id="agglom" title="Average linkage from scratch" tests={String.raw`
+  import numpy as np
+  from scipy.cluster.hierarchy import linkage
+  def test_heights():
+      "the merge heights match scipy's average linkage"
+      ref = np.sort(linkage(Xs, method="average")[:, 2])
+      assert np.allclose(np.sort(heights), ref)
+`} prompt="Write agglomerate(X), which keeps a list of clusters (lists of point indices), finds the pair with the smallest average pairwise distance, merges it, records the distance, and repeats until one cluster remains. Check the merge heights against scipy."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
+
+  def agglomerate(X):
+      D = np.sqrt(((X[:, None] - X[None]) ** 2).sum(-1))
+      clusters = [[i] for i in range(len(X))]
+      heights = []
+      while len(clusters) > 1:
+          best = (np.inf, 0, 1)
+          for a in range(len(clusters)):
+              for b in range(a + 1, len(clusters)):
+                  d = ...                                   # average distance between clusters a and b
+                  if d < best[0]:
+                      best = (d, a, b)
+          d, a, b = best
+          heights.append(d)
+          clusters[a] = clusters[a] + clusters[b]
+          del clusters[b]
+      return heights
+
+  g1 = np.random.default_rng(604)
+  Xs = np.vstack([g1.normal([0, 0], 0.5, (10, 2)), g1.normal([3, 0], 0.5, (10, 2)), g1.normal([1.5, 3], 0.5, (10, 2))])
+  heights = agglomerate(Xs)
+  print("last five merge heights:", np.round(heights[-5:], 2))
+  dendrogram(linkage(Xs, method="average"), no_labels=True); plt.ylabel("merge distance"); plt.show()
+`}
+hint="d = D[np.ix_(clusters[a], clusters[b])].mean()."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
+
+  def agglomerate(X):
+      D = np.sqrt(((X[:, None] - X[None]) ** 2).sum(-1))
+      clusters = [[i] for i in range(len(X))]
+      heights = []
+      while len(clusters) > 1:
+          best = (np.inf, 0, 1)
+          for a in range(len(clusters)):
+              for b in range(a + 1, len(clusters)):
+                  d = D[np.ix_(clusters[a], clusters[b])].mean()      # average distance between clusters a and b
+                  if d < best[0]:
+                      best = (d, a, b)
+          d, a, b = best
+          heights.append(d)
+          clusters[a] = clusters[a] + clusters[b]
+          del clusters[b]
+      return heights
+
+  g1 = np.random.default_rng(604)
+  Xs = np.vstack([g1.normal([0, 0], 0.5, (10, 2)), g1.normal([3, 0], 0.5, (10, 2)), g1.normal([1.5, 3], 0.5, (10, 2))])
+  heights = agglomerate(Xs)
+  print("last five merge heights:", np.round(heights[-5:], 2))
+  dendrogram(linkage(Xs, method="average"), no_labels=True); plt.ylabel("merge distance"); plt.show()
+`} />
+
+Your merge heights match scipy's exactly. The last two merges, at 3.25 and 3.49, are far above the rest, which never exceed 1.7: on the dendrogram, these are the long vertical branches that join the three groups. Cutting anywhere between 1.7 and 3.2 gives three clusters, and the length of that range is a visual measure of how clear the three-cluster structure is. The naive algorithm costs about $n^3$ operations, which is fine for hundreds of neurons and too slow for hundreds of thousands of spikes; scipy uses faster algorithms with the same result.
+
+<Step n={2} title="Linkage and the shape of clusters" minutes={25} />
+
+Single linkage merges clusters that have any pair of close points, so it follows chains and curved shapes, but a few points bridging two groups can join them (**chaining**). Complete linkage requires all pairs to be close, so it prefers compact, roughly equal clusters, much like k-means. Average linkage sits between. The dendrogram from scipy's `linkage` can be cut into a fixed number of clusters with `fcluster(Z, k, criterion="maxclust")`.
+
+<Figure caption="k-means against single linkage on two rings. Increase the noise until bridging points chain the rings together." credit="Interactive figure by Engram.">
+  <LinkageRings />
+</Figure>
+
+<PyCell id="rings" title="Linkage on rings" tests={String.raw`
+  import numpy as np
+  def test_single():
+      "single linkage separates clean rings perfectly"
+      assert acc_single == 1.0
+  def test_others():
+      "complete linkage does not"
+      assert acc_complete < 0.8
+  def test_chain():
+      "with outlying points between the rings, single linkage chains them together"
+      assert acc_single_bridge < 0.8
+`} prompt="Make two rings (radii 1 and 3, 150 points each, noise 0.1). Cut single and complete linkage trees into two clusters and score them against the rings. Then add 15 points scattered between the rings and repeat single linkage."
+code={String.raw`
+  def rings(n, g, noise=0.1):
+      a = g.uniform(0, 2 * np.pi, 2 * n)
+      r = np.r_[np.full(n, 1.0), np.full(n, 3.0)]
+      return np.column_stack([r * np.cos(a), r * np.sin(a)]) + noise * g.normal(size=(2 * n, 2)), np.r_[np.zeros(n, int), np.ones(n, int)]
+
+  def acc2(lab, truth):
+      a = np.mean((lab - lab.min()) == truth)
+      return max(a, 1 - a)
+
+  g2 = np.random.default_rng(6041)
+  Xr, yr = rings(150, g2)
+  acc_single = acc2(fcluster(linkage(Xr, "single"), 2, criterion="maxclust"), yr)
+  acc_complete = ...
+  ang = g2.uniform(0, 2 * np.pi, 15); rad = g2.uniform(1.3, 2.7, 15)
+  bridge = np.column_stack([rad * np.cos(ang), rad * np.sin(ang)])
+  lab_b = fcluster(linkage(np.vstack([Xr, bridge]), "single"), 2, criterion="maxclust")[:300]
+  acc_single_bridge = acc2(lab_b, yr)
+  print(f"single {acc_single:.3f}, complete {acc_complete:.3f}; single with 15 bridging points {acc_single_bridge:.3f}")
+`}
+hint="acc_complete = acc2(fcluster(linkage(Xr, 'complete'), 2, criterion='maxclust'), yr)."
+solution={String.raw`
+  def rings(n, g, noise=0.1):
+      a = g.uniform(0, 2 * np.pi, 2 * n)
+      r = np.r_[np.full(n, 1.0), np.full(n, 3.0)]
+      return np.column_stack([r * np.cos(a), r * np.sin(a)]) + noise * g.normal(size=(2 * n, 2)), np.r_[np.zeros(n, int), np.ones(n, int)]
+
+  def acc2(lab, truth):
+      a = np.mean((lab - lab.min()) == truth)
+      return max(a, 1 - a)
+
+  g2 = np.random.default_rng(6041)
+  Xr, yr = rings(150, g2)
+  acc_single = acc2(fcluster(linkage(Xr, "single"), 2, criterion="maxclust"), yr)
+  acc_complete = acc2(fcluster(linkage(Xr, "complete"), 2, criterion="maxclust"), yr)
+  ang = g2.uniform(0, 2 * np.pi, 15); rad = g2.uniform(1.3, 2.7, 15)
+  bridge = np.column_stack([rad * np.cos(ang), rad * np.sin(ang)])
+  lab_b = fcluster(linkage(np.vstack([Xr, bridge]), "single"), 2, criterion="maxclust")[:300]
+  acc_single_bridge = acc2(lab_b, yr)
+  print(f"single {acc_single:.3f}, complete {acc_complete:.3f}; single with 15 bridging points {acc_single_bridge:.3f}")
+`} />
+
+On clean rings single linkage is perfect: within each ring, neighbouring points are 0.1 or less apart, while the rings are 2 apart, so all within-ring merges happen first. Complete linkage scores 66%, cutting both rings with a straight line much as k-means does, because it insists on compact clusters. Add 15 scattered points between the rings and single linkage drops to 50%: the stepping stones link the rings into one cluster, and the two-cluster cut now separates a lone stray point from everything else. One weakness of single linkage is that its answer depends on the few points least representative of either group.
+
+<Step n={3} title="Graphs and the Laplacian" minutes={25} />
+
+Spectral clustering, reviewed by von Luxburg (2007), today's paper, starts from a **similarity graph**: nodes are points, and edge weights $w_{ij}$ are large for nearby points, for instance $w_{ij} = e^{-\lVert\mathbf x_i - \mathbf x_j\rVert^2/2\sigma^2}$. A good clustering cuts few heavy edges.
+
+<Derivation title="Cuts and the Laplacian">
+<div>
+
+Let $D$ be the diagonal matrix of degrees $d_i = \sum_jw_{ij}$ and define the **graph Laplacian** $L = D - W$. For any vector $\mathbf f$,
+
+$$
+\mathbf f^\top L\mathbf f = \frac12\sum_{i,j}w_{ij}(f_i - f_j)^2.
+$$
+
+</div>
+<div>
+
+So $L$ is positive semi-definite, and $\mathbf f^\top L\mathbf f$ is small when $\mathbf f$ changes little across heavy edges. The constant vector gives zero. If the graph has $k$ disconnected components, the indicator vectors of the components all give zero: the multiplicity of the eigenvalue 0 is the number of components.
+
+</div>
+<div>
+
+If $\mathbf f$ is the indicator of a cluster, $\mathbf f^\top L\mathbf f$ is the total weight of edges cut. Minimising cuts with balanced cluster sizes (the ratio cut or normalised cut) is NP-hard, but relaxing $\mathbf f$ from indicators to real vectors turns it into an eigenvalue problem: take the eigenvectors of the smallest eigenvalues.
+
+</div>
+<div>
+
+In practice: compute the first $k$ eigenvectors of the normalised Laplacian $L_{\text{sym}} = I - D^{-1/2}WD^{-1/2}$, put them as columns of an $n \times k$ matrix, normalise its rows to unit length, and run k-means on the rows (Ng, Jordan and Weiss, 2002). Points in the same weakly connected piece of the graph land close together in this embedding, whatever their shape in the original space.
+
+</div>
+</Derivation>
+
+<Step n={4} title="Spectral clustering" minutes={25} />
+
+<PyCell id="spectral" title="Spectral clustering of rings" tests={String.raw`
+  import numpy as np
+  def test_lap():
+      "the normalised Laplacian is symmetric with smallest eigenvalue near 0"
+      assert np.allclose(Lsym, Lsym.T) and abs(np.linalg.eigvalsh(Lsym)[0]) < 1e-8
+  def test_spectral():
+      "spectral clustering separates the rings even with the bridging points"
+      assert acc_spec > 0.95
+`} prompt="Build the Gaussian affinity matrix (sigma 0.3, zero diagonal) for the rings with bridging points, form L_sym, take the eigenvectors of its two smallest eigenvalues, normalise the rows, and cluster them with k-means (k = 2)."
+code={String.raw`
+  from scipy.cluster.vq import kmeans2
+  Xb = np.vstack([Xr, bridge])
+  sigma = 0.3
+  D2 = ((Xb[:, None] - Xb[None]) ** 2).sum(-1)
+  W = np.exp(-D2 / (2 * sigma ** 2)); np.fill_diagonal(W, 0)
+  d = W.sum(1)
+  Lsym = ...
+  vals, vecs = np.linalg.eigh(Lsym)
+  U = vecs[:, :2]
+  U = ...
+  _, lab_spec = kmeans2(U, 2, minit="++", seed=1)
+  acc_spec = acc2(lab_spec[:300], yr)
+  print("smallest eigenvalues:", np.round(vals[:4], 4))
+  print(f"spectral clustering agreement with the rings: {acc_spec:.3f}")
+`}
+hint="Lsym = np.eye(len(d)) - W / np.sqrt(np.outer(d, d)); U = U / np.linalg.norm(U, axis=1, keepdims=True)."
+solution={String.raw`
+  from scipy.cluster.vq import kmeans2
+  Xb = np.vstack([Xr, bridge])
+  sigma = 0.3
+  D2 = ((Xb[:, None] - Xb[None]) ** 2).sum(-1)
+  W = np.exp(-D2 / (2 * sigma ** 2)); np.fill_diagonal(W, 0)
+  d = W.sum(1)
+  Lsym = np.eye(len(d)) - W / np.sqrt(np.outer(d, d))
+  vals, vecs = np.linalg.eigh(Lsym)
+  U = vecs[:, :2]
+  U = U / np.linalg.norm(U, axis=1, keepdims=True)
+  _, lab_spec = kmeans2(U, 2, minit="++", seed=1)
+  acc_spec = acc2(lab_spec[:300], yr)
+  print("smallest eigenvalues:", np.round(vals[:4], 4))
+  print(f"spectral clustering agreement with the rings: {acc_spec:.3f}")
+`} />
+
+Spectral clustering separates the rings perfectly, bridging points and all. The smallest eigenvalues show why: the first is 0, as always, and the second is only 0.0003, nearly a second zero, which means the graph almost falls into two components. The few bridging points add only light edges, because with a width of 0.3 each is weakly connected to anything, and the normalised cut sees through them where single linkage could not. The price is the width $\sigma$: too small and the graph shatters into many pieces; too large and the rings blur into one. Von Luxburg's tutorial discusses rules for choosing it, such as connecting each point to its nearest neighbours instead.
+
+<Bridge title="Graphs in brains and machines"
+  neuro="Graph Laplacians are everywhere in network neuroscience: community detection in connectomes and in functional correlation networks uses spectral methods and their relatives, and the eigenvectors of the structural Laplacian of the human connectome have been proposed as the natural modes of large-scale cortical activity. Hierarchical clustering is the standard way to display transcriptomic cell taxonomies, whose dendrograms show classes, subclasses and types at once."
+  ai="Spectral clustering's embedding, eigenvectors of a graph Laplacian, is the starting point of Laplacian eigenmaps, diffusion maps and the spectral graph convolutions behind graph neural networks. UMAP, which you will meet in Week 61, initialises its embedding with Laplacian eigenvectors.">
+
+Clusters can be defined by connectivity rather than by centres, and the graph Laplacian is how to find them.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Agglomerative clustering starts with...", options: ["Every point in its own cluster", "One cluster", "k random centres", "A graph cut"], answer: 0, explain: "Step 1." },
+  { q: "Single linkage measures cluster distance by...", options: ["The closest pair of points", "The farthest pair", "The centroids", "The average pair"], answer: 0, explain: "Step 1." },
+  { q: "Chaining is a weakness of...", options: ["Single linkage", "Complete linkage", "k-means", "Spectral clustering"], answer: 0, explain: "Step 2." },
+  { q: "A dendrogram lets you...", options: ["Choose the number of clusters by cutting at a height", "Avoid computing distances", "Fit a mixture", "Find eigenvalues"], answer: 0, explain: "Step 1." },
+  { q: "The graph Laplacian is...", options: ["D − W", "W − D", "W²", "D⁻¹W"], answer: 0, explain: "Step 3." },
+  { q: "The multiplicity of the eigenvalue 0 of L equals...", options: ["The number of connected components", "The number of nodes", "The number of edges", "Always 1"], answer: 0, explain: "Step 3." },
+  { q: "Spectral clustering runs k-means on...", options: ["Rows of the Laplacian's smallest eigenvectors", "The raw data", "The affinity matrix", "The degrees"], answer: 0, explain: "Step 3." },
+  { q: "Spectral clustering can separate rings because...", options: ["It uses connectivity, not distance to a centre", "It uses more clusters", "It ignores noise", "It is supervised"], answer: 0, explain: "Step 4." },
+]} />
+
+<Flashcards cards={[
+  { front: "Linkage options?", back: "Single (closest pair), complete (farthest pair), average (mean pair), Ward (increase in within-cluster variance)." },
+  { front: "Graph Laplacian quadratic form?", back: "$\\mathbf f^\\top L\\mathbf f = \\frac12\\sum_{ij}w_{ij}(f_i - f_j)^2$" },
+  { front: "Normalised Laplacian?", back: "$L_{\\text{sym}} = I - D^{-1/2}WD^{-1/2}$" },
+  { front: "Spectral clustering recipe?", back: "Affinity graph, k smallest eigenvectors of $L_{\\text{sym}}$, normalise rows, k-means." },
+  { front: "Why relax cuts to eigenvectors?", back: "Balanced graph cuts are NP-hard; allowing real-valued indicators gives an eigenvalue problem." },
+]} />
+
+<Predict revisit question="Which methods separated the two rings, and which survived bridging points?" />
+
+<Key title="Before you go">
+<ul>
+<li>Hierarchical clustering records merges at every scale in a dendrogram.</li>
+<li>The linkage decides the shape of clusters found: single follows chains, complete prefers compact groups.</li>
+<li>The graph Laplacian turns cutting a similarity graph into an eigenvalue problem.</li>
+<li>Spectral clustering finds connected, non-convex clusters, given a sensible similarity scale.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: von Luxburg (2007), <em>A tutorial on spectral clustering</em>.</li>
+<li>Ng, Jordan and Weiss (2002), <em>On spectral clustering: analysis and an algorithm</em>, Advances in Neural Information Processing Systems 14.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="The affinity width sigma decides what spectral clustering counts as connected. How would you choose it for a dataset of neurons described by their tuning curves, and how would you check that your result does not depend too much on it?" />

@@ -1,0 +1,318 @@
+export const meta = {
+  title: "Cell types from spike waveforms",
+  intro: "An extracellular electrode records spikes, not cell identities. Yet the shape of a neuron's spike carries a clue to what kind of cell fired it: fast-spiking interneurons have narrow spikes, most pyramidal cells broader ones. Classifying recorded units into putative types is one of the most common uses of clustering in systems neuroscience, and one of the easiest to overstate. Today you extract waveform features, choose and fit a mixture model, compare hand-made features with the whole waveform, and validate the clusters against a small set of cells whose identity is known from optogenetic tagging.",
+  goals: [
+    "Extract standard features from extracellular spike waveforms",
+    "Fit Gaussian mixtures to waveform features and choose the number of components",
+    "Compare clustering on hand-made features with clustering on principal components of the waveform",
+    "Validate putative types against ground-truth labels, and report what the clusters can and cannot claim",
+  ],
+  plan: [
+    { label: "What a spike's shape says", minutes: 20 },
+    { label: "Waveform features", minutes: 25 },
+    { label: "A mixture of types", minutes: 30 },
+    { label: "Validation with tagged cells", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "lee-2021",
+};
+
+<Predict question="Recorded units are split into narrow-spiking and broad-spiking clusters, and 40 parvalbumin interneurons identified by optogenetic tagging are checked. Do you expect all 40 to fall in the narrow cluster, most of them, or about half?" />
+
+<Step n={1} title="What a spike's shape says" minutes={20} />
+
+The extracellular spike is roughly the negative of the time derivative of the membrane potential near the electrode, filtered by the tissue. Neurons with fast potassium channels, such as parvalbumin-expressing fast-spiking interneurons (Kv3 channels, Week 30), repolarise quickly and have **narrow** spikes, with a short time from trough to peak; most pyramidal cells have **broad** spikes. The split works well in rodent cortex, but not everywhere: some pyramidal neurons in primate motor cortex, including the large Betz cells, have narrow spikes (Vigneswaran and colleagues, 2011), and spike shape changes with the electrode's position relative to the cell. Lee and colleagues (2021), today's paper, showed that clustering the full waveform with nonlinear methods finds more than two types in monkey premotor cortex, with different physiology and laminar positions.
+
+<Video id="2mv-5qFYV5o" title="Mixtures of Gaussians" by="Neuromatch Academy" note="Neuromatch Academy on modelling data as a mixture of Gaussian components, with the hidden component of each observation inferred from the data: the model used for today's cell types." />
+
+<Figure caption="Mean waveforms of three putative types and their positions in a two-feature space. Increase the variability within types and watch distinct clusters merge into a continuum." credit="Interactive figure by Engram, after Lee and colleagues (2021).">
+  <WaveformClusters />
+</Figure>
+
+<Step n={2} title="Waveform features" minutes={25} />
+
+The setup cell simulates 600 units of three types, narrow-spiking, broad-spiking and a broad type with a slow, shallow repolarisation, each with variability in shape and amplitude and recording noise, sampled at 30 kHz over 2 milliseconds.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  fs = 30.0                                           # samples per millisecond
+  tt = np.arange(60) / fs - 0.5                       # -0.5 to 1.5 ms
+
+  def waveform(tp, ratio, width, amp):
+      trough = -np.exp(-0.5 * (tt / 0.09) ** 2)
+      peak = ratio * np.exp(-0.5 * ((tt - tp) / width) ** 2)
+      return amp * (trough + peak)
+
+  types = {0: (0.30, 0.65, 0.10), 1: (0.65, 0.35, 0.20), 2: (0.80, 0.18, 0.40)}   # trough-to-peak, ratio, peak width
+  def units(n, g):
+      k = g.integers(0, 3, n)
+      W = np.array([waveform(types[c][0] * g.lognormal(0, 0.22), types[c][1] * g.lognormal(0, 0.15),
+                             types[c][2] * g.lognormal(0, 0.1), g.uniform(50, 150)) for c in k])
+      return W + 4 * g.normal(size=W.shape), k
+
+  g0 = np.random.default_rng(605)
+  Wf, wtype = units(600, g0)
+  for c, col in zip(range(3), ["C3", "C0", "C2"]):
+      plt.plot(tt, (Wf[wtype == c][:15] / -Wf[wtype == c][:15].min(1, keepdims=True)).T, color=col, lw=0.6, alpha=0.5)
+  plt.xlabel("time (ms)"); plt.ylabel("normalised voltage"); plt.show()
+`} />
+
+<PyCell id="features" title="Trough-to-peak and peak-to-trough ratio" tests={String.raw`
+  import numpy as np
+  def test_known():
+      "features recovers the trough-to-peak time and ratio of a clean waveform"
+      f = features(waveform(0.5, 0.4, 0.15, 100.0)[None])[0]
+      assert abs(f[0] - 0.5) < 0.05 and abs(f[1] - 0.4) < 0.05
+  def test_shape():
+      "F has one row per unit and three columns"
+      assert F.shape == (600, 3)
+`} prompt="Complete features(W), which returns for each waveform the trough-to-peak time in ms (from the minimum to the largest value after it, each located to a fraction of a sample by sub), the peak-to-trough ratio (peak height over trough depth), and the late amplitude 0.8 ms after the trough, relative to the trough depth."
+code={String.raw`
+  def sub(w, i):
+      """Refine an extremum to a fraction of a sample with a parabola through three points."""
+      if 0 < i < len(w) - 1 and (w[i - 1] - 2 * w[i] + w[i + 1]) != 0:
+          return i + 0.5 * (w[i - 1] - w[i + 1]) / (w[i - 1] - 2 * w[i] + w[i + 1])
+      return float(i)
+
+  def features(W):
+      out = []
+      for w in W:
+          i_tr = int(np.argmin(w))
+          i_pk = i_tr + int(np.argmax(w[i_tr:]))
+          tp = ...
+          ratio = ...
+          late = w[min(i_tr + 24, len(w) - 1)] / -w[i_tr]     # amplitude 0.8 ms after the trough
+          out.append([tp, ratio, late])
+      return np.array(out)
+
+  F = features(Wf)
+  for c in range(3):
+      print(f"type {c}: mean trough-to-peak {F[wtype == c, 0].mean():.2f} ms, ratio {F[wtype == c, 1].mean():.2f}, late amplitude {F[wtype == c, 2].mean():.2f}")
+  plt.scatter(F[:, 0], F[:, 1], c=wtype, s=6, cmap="brg"); plt.xlabel("trough-to-peak (ms)"); plt.ylabel("peak / trough"); plt.show()
+`}
+hint="tp = (sub(w, i_pk) - sub(w, i_tr)) / fs; ratio = w[i_pk] / -w[i_tr]."
+solution={String.raw`
+  def sub(w, i):
+      """Refine an extremum to a fraction of a sample with a parabola through three points."""
+      if 0 < i < len(w) - 1 and (w[i - 1] - 2 * w[i] + w[i + 1]) != 0:
+          return i + 0.5 * (w[i - 1] - w[i + 1]) / (w[i - 1] - 2 * w[i] + w[i + 1])
+      return float(i)
+
+  def features(W):
+      out = []
+      for w in W:
+          i_tr = int(np.argmin(w))
+          i_pk = i_tr + int(np.argmax(w[i_tr:]))
+          tp = (sub(w, i_pk) - sub(w, i_tr)) / fs
+          ratio = w[i_pk] / -w[i_tr]
+          late = w[min(i_tr + 24, len(w) - 1)] / -w[i_tr]     # amplitude 0.8 ms after the trough
+          out.append([tp, ratio, late])
+      return np.array(out)
+
+  F = features(Wf)
+  for c in range(3):
+      print(f"type {c}: mean trough-to-peak {F[wtype == c, 0].mean():.2f} ms, ratio {F[wtype == c, 1].mean():.2f}, late amplitude {F[wtype == c, 2].mean():.2f}")
+  plt.scatter(F[:, 0], F[:, 1], c=wtype, s=6, cmap="brg"); plt.xlabel("trough-to-peak (ms)"); plt.ylabel("peak / trough"); plt.show()
+`} />
+
+The three types separate along the features as designed: narrow-spiking units reach their peak 0.31 ms after the trough, with a tall after-peak (0.68 of the trough) that is over by 0.8 ms; the two broad types peak at 0.65 and 0.84 ms, and differ most in how much of the after-peak remains at 0.8 ms. Timing is located to a fraction of a sample with a parabola through the three samples around each extremum, because at 30 kHz one sample is 0.033 ms, and features that can take only a few discrete values make mixture models collapse onto the lattice (Day 2). Real sorters upsample waveforms for the same reason.
+
+<Step n={3} title="A mixture of types" minutes={30} />
+
+<PyCell id="mixture" title="How many types, and which units" tests={String.raw`
+  import numpy as np
+  def test_k():
+      "BIC on the standardised features chooses at least 3 components"
+      assert k_best >= 3
+  def test_agree():
+      "with 3 components, features and waveform principal components both match the types on more than 85% of units"
+      assert acc_feat > 0.85 and acc_pca > 0.85
+`} prompt="Standardise the features and choose the number of mixture components from 1 to 6 by BIC. Then fit 3 components to the features and to the first three principal components of the amplitude-normalised waveforms, and compare each with the true types."
+code={String.raw`
+  from itertools import permutations
+  def mvn_pdf(X, m, S):
+      L = np.linalg.cholesky(S); Z = np.linalg.solve(L, (X - m).T)
+      return np.exp(-0.5 * (Z ** 2).sum(0) - np.log(np.diag(L)).sum() - 0.5 * len(m) * np.log(2 * np.pi))
+
+  def gmm(X, K, g, iters=200, reg=1e-3):
+      n, d = X.shape; best = None
+      for _ in range(4):
+          mu = X[g.choice(n, K, replace=False)]; Sig = np.array([np.cov(X.T)] * K); pi = np.full(K, 1 / K); prev = -np.inf
+          for _ in range(iters):
+              dens = np.column_stack([pi[k] * mvn_pdf(X, mu[k], Sig[k]) for k in range(K)]) + 1e-300
+              ll = np.log(dens.sum(1)).sum()
+              if ll - prev < 1e-5: break
+              prev = ll; R = dens / dens.sum(1, keepdims=True); Nk = R.sum(0) + 1e-9
+              pi, mu = Nk / n, (R.T @ X) / Nk[:, None]
+              Sig = np.array([((R[:, k, None] * (X - mu[k])).T @ (X - mu[k])) / Nk[k] + reg * np.eye(d) for k in range(K)])
+          if best is None or ll > best[0]: best = (ll, R)
+      ll, R = best
+      return ll, R.argmax(1), (K - 1) + K * d + K * d * (d + 1) / 2
+
+  def agree(lab, truth, k):
+      return max(np.mean(np.array(p)[lab] == truth) for p in permutations(range(k)))
+
+  gm = np.random.default_rng(6051)
+  Fz = (F - F.mean(0)) / F.std(0)
+  bics = []
+  for K in range(1, 7):
+      ll, _, p = gmm(Fz, K, gm)
+      bics.append(...)
+  k_best = int(np.argmin(bics)) + 1
+  _, lab_feat, _ = gmm(Fz, 3, gm)
+  Wn = Wf / -Wf.min(1, keepdims=True)
+  Wc = Wn - Wn.mean(0)
+  U, S, Vt = np.linalg.svd(Wc, full_matrices=False)
+  Z3 = ...
+  Z3 = Z3 / Z3.std(0)
+  _, lab_pca, _ = gmm(Z3, 3, gm)
+  acc_feat, acc_pca = agree(lab_feat, wtype, 3), agree(lab_pca, wtype, 3)
+  print("BIC:", np.round(bics, 0), "-> K =", k_best)
+  print(f"agreement with true types: features {acc_feat:.3f}, waveform PCs {acc_pca:.3f}")
+`}
+hint="bics.append(-2 * ll + p * np.log(len(Fz))); Z3 = Wc @ Vt[:3].T."
+solution={String.raw`
+  from itertools import permutations
+  def mvn_pdf(X, m, S):
+      L = np.linalg.cholesky(S); Z = np.linalg.solve(L, (X - m).T)
+      return np.exp(-0.5 * (Z ** 2).sum(0) - np.log(np.diag(L)).sum() - 0.5 * len(m) * np.log(2 * np.pi))
+
+  def gmm(X, K, g, iters=200, reg=1e-3):
+      n, d = X.shape; best = None
+      for _ in range(4):
+          mu = X[g.choice(n, K, replace=False)]; Sig = np.array([np.cov(X.T)] * K); pi = np.full(K, 1 / K); prev = -np.inf
+          for _ in range(iters):
+              dens = np.column_stack([pi[k] * mvn_pdf(X, mu[k], Sig[k]) for k in range(K)]) + 1e-300
+              ll = np.log(dens.sum(1)).sum()
+              if ll - prev < 1e-5: break
+              prev = ll; R = dens / dens.sum(1, keepdims=True); Nk = R.sum(0) + 1e-9
+              pi, mu = Nk / n, (R.T @ X) / Nk[:, None]
+              Sig = np.array([((R[:, k, None] * (X - mu[k])).T @ (X - mu[k])) / Nk[k] + reg * np.eye(d) for k in range(K)])
+          if best is None or ll > best[0]: best = (ll, R)
+      ll, R = best
+      return ll, R.argmax(1), (K - 1) + K * d + K * d * (d + 1) / 2
+
+  def agree(lab, truth, k):
+      return max(np.mean(np.array(p)[lab] == truth) for p in permutations(range(k)))
+
+  gm = np.random.default_rng(6051)
+  Fz = (F - F.mean(0)) / F.std(0)
+  bics = []
+  for K in range(1, 7):
+      ll, _, p = gmm(Fz, K, gm)
+      bics.append(-2 * ll + p * np.log(len(Fz)))
+  k_best = int(np.argmin(bics)) + 1
+  _, lab_feat, _ = gmm(Fz, 3, gm)
+  Wn = Wf / -Wf.min(1, keepdims=True)
+  Wc = Wn - Wn.mean(0)
+  U, S, Vt = np.linalg.svd(Wc, full_matrices=False)
+  Z3 = Wc @ Vt[:3].T
+  Z3 = Z3 / Z3.std(0)
+  _, lab_pca, _ = gmm(Z3, 3, gm)
+  acc_feat, acc_pca = agree(lab_feat, wtype, 3), agree(lab_pca, wtype, 3)
+  print("BIC:", np.round(bics, 0), "-> K =", k_best)
+  print(f"agreement with true types: features {acc_feat:.3f}, waveform PCs {acc_pca:.3f}")
+`} />
+
+BIC falls steeply to three components, then barely changes, reaching its minimum at five; the curve from 3 to 6 is almost flat, so the data support at least three groups and say little about more. Forcing three components, the hand-made features match the true types on 92% of units and the first three principal components of the normalised waveform on 96%. The principal components use the whole shape, including features that no one thought to measure, which is the argument Lee and colleagues made for clustering full waveforms. The hand-made features have the advantage that each axis means something physiologically, which matters when the clusters must be explained.
+
+<Step n={4} title="Validation with tagged cells" minutes={30} />
+
+In a real recording the true types are unknown for almost every unit. A few can be identified independently: by **optogenetic tagging**, expressing a light-gated channel in one genetic class and finding the units that spike within a few milliseconds of a light pulse; by juxtacellular labelling; or by connectivity inferred from cross-correlograms. These few cells are the only check on the clusters. Here, 40 units of type 0 have been tagged, but tagging is biased towards cells close to the light and with large spikes.
+
+<PyCell id="tagged" title="How pure is the narrow cluster?" tests={String.raw`
+  import numpy as np
+  def test_capture():
+      "the cluster holding most tagged cells contains more than 85% of them"
+      assert capture > 0.85
+  def test_ci():
+      "even a perfect capture of 40 cells leaves a 95% interval reaching below 0.95"
+      assert ci_lo < 0.95 and ci_hi - ci_lo > 0.05
+`} prompt="Pick 40 tagged units of type 0, preferring large amplitudes (sample with probability proportional to amplitude). Find the feature-based cluster that holds most of them, the fraction of tagged cells it captures, and a 95% interval for that fraction (Wilson interval)."
+code={String.raw`
+  amp = -Wf.min(1)
+  idx0 = np.where(wtype == 0)[0]
+  gt = np.random.default_rng(6052)
+  tagged = gt.choice(idx0, 40, replace=False, p=amp[idx0] / amp[idx0].sum())
+  narrow_cluster = np.bincount(lab_feat[tagged], minlength=3).argmax()
+  capture = ...
+  z, n = 1.96, 40
+  centre = (capture + z ** 2 / (2 * n)) / (1 + z ** 2 / n)
+  half = z * np.sqrt(capture * (1 - capture) / n + z ** 2 / (4 * n ** 2)) / (1 + z ** 2 / n)
+  ci_lo, ci_hi = centre - half, centre + half
+  purity = np.mean(wtype[lab_feat == narrow_cluster] == 0)
+  print(f"tagged cells in the narrow cluster: {capture:.3f} (95% interval {ci_lo:.2f} to {ci_hi:.2f})")
+  print(f"purity of the narrow cluster (known only in simulation): {purity:.3f}")
+`}
+hint="capture = np.mean(lab_feat[tagged] == narrow_cluster)."
+solution={String.raw`
+  amp = -Wf.min(1)
+  idx0 = np.where(wtype == 0)[0]
+  gt = np.random.default_rng(6052)
+  tagged = gt.choice(idx0, 40, replace=False, p=amp[idx0] / amp[idx0].sum())
+  narrow_cluster = np.bincount(lab_feat[tagged], minlength=3).argmax()
+  capture = np.mean(lab_feat[tagged] == narrow_cluster)
+  z, n = 1.96, 40
+  centre = (capture + z ** 2 / (2 * n)) / (1 + z ** 2 / n)
+  half = z * np.sqrt(capture * (1 - capture) / n + z ** 2 / (4 * n ** 2)) / (1 + z ** 2 / n)
+  ci_lo, ci_hi = centre - half, centre + half
+  purity = np.mean(wtype[lab_feat == narrow_cluster] == 0)
+  print(f"tagged cells in the narrow cluster: {capture:.3f} (95% interval {ci_lo:.2f} to {ci_hi:.2f})")
+  print(f"purity of the narrow cluster (known only in simulation): {purity:.3f}")
+`} />
+
+All 40 tagged cells fall in one cluster, the narrow-spiking one. Even so, the 95% interval for the capture rate runs from 0.91 to 1: forty cells cannot show that more than about 90% of the class falls in the cluster. And tagging tells you nothing directly about purity, here 99.5%, known only because this is a simulation; in a real recording, broad-spiking cells of other classes in the narrow cluster would go unnoticed unless they too were tagged. The bias of tagging towards large-amplitude units adds a further caveat: the cells most easily tagged are those with the cleanest waveforms, which are also the easiest to classify.
+
+<Callout kind="warning" title="What a waveform cluster can claim">
+
+A cluster of narrow-spiking units is a **putative** type. Tagging measures how many of one class fall in the cluster (its sensitivity) but says little about how many units in the cluster belong to the class (its purity), which needs tagged cells of the other classes too. Waveform shape also depends on where the electrode sits relative to the soma and dendrites, on the filter settings, and on the species and area. Report clusters with these caveats, and treat claims such as "interneurons do X" as hypotheses for tagging experiments to test.
+
+</Callout>
+
+<Bridge title="Cell types in brains and machines"
+  neuro="Cell types are defined by converging evidence: genes, morphology, physiology, connectivity and development. Large atlases from the Allen Institute and the BRAIN Initiative Cell Census Network combine these modalities, and the mapping from extracellular waveform to transcriptomic type is still being worked out. Clustering waveforms is a cheap first step, useful exactly as far as its validation goes."
+  ai="Clustering of learned representations is used in the same spirit to find 'types' of units in artificial networks, such as curve detectors or polysemantic neurons, and it inherits the same caveats: clusters depend on the features chosen, and continua are common.">
+
+A clustering proposes types; independent evidence confirms them.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Fast-spiking interneurons usually have...", options: ["Narrow extracellular spikes", "Broad spikes", "No spikes", "Positive-only spikes"], answer: 0, explain: "Step 1." },
+  { q: "Narrow spikes come from...", options: ["Fast repolarisation, for example Kv3 channels", "Slow sodium channels", "Large dendrites", "Calcium spikes"], answer: 0, explain: "Step 1." },
+  { q: "The narrow-broad rule fails for...", options: ["Some pyramidal cells in primate motor cortex", "All rodent interneurons", "Every pyramidal cell", "No cells"], answer: 0, explain: "Vigneswaran and colleagues (2011)." },
+  { q: "Trough-to-peak time is measured from...", options: ["The minimum to the following maximum", "Onset to minimum", "Peak to peak", "Half-width"], answer: 0, explain: "Step 2." },
+  { q: "Clustering the whole waveform's principal components...", options: ["Uses shape information that hand-made features may miss", "Is always worse", "Needs labels", "Ignores amplitude normalisation"], answer: 0, explain: "Step 3." },
+  { q: "Optogenetic tagging identifies units that...", options: ["Spike within milliseconds of light in an opsin-expressing class", "Have narrow spikes", "Fire most", "Are deepest"], answer: 0, explain: "Step 4." },
+  { q: "Tagging one class mainly measures a cluster's...", options: ["Sensitivity for that class, not its purity", "Purity", "Size", "BIC"], answer: 0, explain: "The callout." },
+  { q: "With 40 tagged cells, a capture rate is uncertain by about...", options: ["Several to ten percentage points", "0.1 points", "50 points", "Nothing"], answer: 0, explain: "Step 4." },
+]} />
+
+<Flashcards cards={[
+  { front: "Narrow against broad spikes?", back: "Short trough-to-peak (about 0.2 to 0.4 ms) is typical of fast-spiking interneurons; longer is typical of pyramidal cells, with exceptions." },
+  { front: "Standard waveform features?", back: "Trough-to-peak time, peak-to-trough ratio, half-width, repolarisation slope." },
+  { front: "Optogenetic tagging?", back: "Identifying units of a genetic class by short-latency spikes to light in opsin-expressing cells." },
+  { front: "Sensitivity against purity?", back: "Sensitivity: fraction of a class captured by a cluster. Purity: fraction of a cluster that belongs to the class." },
+  { front: "Wilson interval?", back: "A confidence interval for a proportion that behaves well for small n and proportions near 0 or 1." },
+]} />
+
+<Predict revisit question="How many of the tagged cells landed in the narrow cluster, and how certain is that number?" />
+
+<Key title="Before you go">
+<ul>
+<li>Spike width reflects repolarisation and gives a clue, not a label, to cell type.</li>
+<li>Mixtures on standardised features, with BIC, give putative types; whole-waveform PCs may separate more.</li>
+<li>Validate clusters with independently identified cells, and report intervals.</li>
+<li>Distinguish sensitivity from purity, and call clusters putative.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Lee, Balasubramanian, Tsolias, Anakwe, Medalla, Shenoy and Chandrasekaran (2021), <em>Non-linear dimensionality reduction on extracellular waveforms reveals cell type diversity in premotor cortex</em>.</li>
+<li>Vigneswaran, Kraskov and Lemon (2011), <em>Large identified pyramidal cells in macaque motor and premotor cortex exhibit "thin spikes": implications for cell type classification</em>, Journal of Neuroscience 31(40), 14235 to 14242.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Design a validation plan for a study that wants to report the activity of putative fast-spiking interneurons recorded with Neuropixels in mouse visual cortex. Which ground truth would you collect, how many cells would you need, and what would you report if the validation were only partial?" />

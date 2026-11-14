@@ -1,0 +1,306 @@
+export const meta = {
+  title: "Gaussian mixtures and the EM algorithm",
+  intro: "k-means gives each point to one cluster and treats every cluster as a round ball of the same size. A Gaussian mixture model replaces both simplifications with a probability model: each cluster is a Gaussian with its own mean, covariance and weight, and each point has a probability of belonging to each. Fitting it introduces one of the most important algorithms in statistics, expectation maximisation, which you will meet again for hidden Markov models, factor analysis and much else. Today you derive EM for mixtures, implement it, and learn its main failure.",
+  goals: [
+    "Write down a Gaussian mixture as a generative model with a hidden cluster label",
+    "Derive the E and M steps for a Gaussian mixture",
+    "Implement EM with full covariances and check that the log-likelihood never decreases",
+    "Explain why the likelihood is unbounded and how to regularise the covariances",
+  ],
+  plan: [
+    { label: "A generative model for clusters", minutes: 20 },
+    { label: "Expectation maximisation", minutes: 35 },
+    { label: "Mixtures where k-means fails", minutes: 25 },
+    { label: "Collapsing components", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "dempster-1977",
+};
+
+<Predict question="A Gaussian mixture is fitted by maximum likelihood. If one component's mean sits exactly on a single data point and its variance shrinks towards zero, what happens to the likelihood: does it fall to zero, stay finite, or grow without bound?" />
+
+<Step n={1} title="A generative model for clusters" minutes={20} />
+
+A **Gaussian mixture model** describes how each data point could have been generated: first choose a cluster $z \in \{1, \dots, K\}$ with probability $\pi_z$, then draw $\mathbf x \sim \mathcal N(\boldsymbol\mu_z, \Sigma_z)$. The label $z$ is hidden, so the probability of a point is a sum over the clusters it might have come from,
+
+$$
+p(\mathbf x) = \sum_{k=1}^K\pi_k\,\mathcal N(\mathbf x;\boldsymbol\mu_k, \Sigma_k).
+$$
+
+Given the parameters, Bayes' rule gives the probability that point $i$ came from cluster $k$, its **responsibility**,
+
+$$
+r_{ik} = \frac{\pi_k\,\mathcal N(\mathbf x_i;\boldsymbol\mu_k, \Sigma_k)}{\sum_j\pi_j\,\mathcal N(\mathbf x_i;\boldsymbol\mu_j, \Sigma_j)}.
+$$
+
+This is the generative classifier of Week 56 (quadratic discriminant analysis), but with the labels unknown.
+
+<Video id="REypj2sy_5U" title="EM algorithm: how it works" by="Victor Lavrenko" note="Victor Lavrenko on expectation maximisation for a mixture of Gaussians: guess the parameters, compute how much each point belongs to each component, re-estimate, and repeat." />
+
+<Step n={2} title="Expectation maximisation" minutes={35} />
+
+The log-likelihood $\sum_i\log\sum_k\pi_k\mathcal N(\mathbf x_i;\boldsymbol\mu_k, \Sigma_k)$ has a sum inside the logarithm, so setting its gradient to zero gives no closed form. Dempster, Laird and Rubin (1977), today's paper, unified many earlier special cases into one algorithm for such problems.
+
+<Derivation title="EM for a Gaussian mixture">
+<div>
+
+If the labels were known, the problem would be easy: each cluster's mean and covariance would be the sample mean and covariance of its points, and $\pi_k$ the fraction of points in it, exactly as in Week 56.
+
+</div>
+<div>
+
+**E step.** We do not know the labels, but with the current parameters we know each point's responsibilities $r_{ik}$. Treat them as soft labels: point $i$ counts as $r_{ik}$ of a point in cluster $k$.
+
+</div>
+<div>
+
+**M step.** Refit each cluster with these fractional counts. With $N_k = \sum_ir_{ik}$:
+
+$$
+\pi_k = \frac{N_k}{n},\quad \boldsymbol\mu_k = \frac{1}{N_k}\sum_ir_{ik}\mathbf x_i,\quad \Sigma_k = \frac{1}{N_k}\sum_ir_{ik}(\mathbf x_i - \boldsymbol\mu_k)(\mathbf x_i - \boldsymbol\mu_k)^\top.
+$$
+
+</div>
+<div>
+
+Dempster and colleagues proved that each E step followed by an M step cannot decrease the log-likelihood. Week 63 shows why: EM is coordinate ascent on a lower bound of the log-likelihood, and the E step makes the bound tight. Like k-means, EM finds a local maximum, so it needs good starts.
+
+</div>
+<div>
+
+k-means is the limit of this algorithm when all covariances are fixed at $\sigma^2I$ with $\sigma \to 0$: the responsibilities become 0 or 1, the nearest centre wins, and the M step computes means.
+
+</div>
+</Derivation>
+
+<Figure caption="EM on a one-dimensional mixture of two Gaussians with different weights and widths. Step through the iterations and watch the log-likelihood rise." credit="Interactive figure by Engram, after Dempster, Laird and Rubin (1977).">
+  <GmmEm />
+</Figure>
+
+<PyCell id="em" title="EM with full covariances" tests={String.raw`
+  import numpy as np
+  def test_resp():
+      "responsibilities are non-negative and sum to one for each point"
+      assert np.all(R >= 0) and np.allclose(R.sum(1), 1)
+  def test_monotone():
+      "the log-likelihood never decreases"
+      assert all(b >= a - 1e-8 for a, b in zip(ll_hist, ll_hist[1:]))
+  def test_fit():
+      "the fitted weights are close to the true 0.5, 0.3 and 0.2"
+      assert np.allclose(np.sort(pi_hat), [0.2, 0.3, 0.5], atol=0.06)
+`} prompt="Complete the E step (responsibilities from the weighted Gaussian densities) and the M step (weights, means and covariances from the responsibilities) of gmm_em, then fit three components to 600 points from a mixture of elongated, tilted Gaussians."
+code={String.raw`
+  import numpy as np
+  from scipy.stats import multivariate_normal as mvn
+
+  def gmm_em(X, K, g, iters=200, reg=1e-6):
+      n, d = X.shape
+      mu = X[g.choice(n, K, replace=False)]
+      Sig = np.array([np.cov(X.T) for _ in range(K)]); pi = np.full(K, 1 / K)
+      ll_hist = []
+      for _ in range(iters):
+          dens = np.column_stack([pi[k] * mvn.pdf(X, mu[k], Sig[k]) for k in range(K)])
+          ll_hist.append(np.log(dens.sum(1)).sum())
+          R = ...                                                  # E step
+          Nk = R.sum(0)
+          pi = ...                                                 # M step
+          mu = (R.T @ X) / Nk[:, None]
+          for k in range(K):
+              D = X - mu[k]
+              Sig[k] = ... + reg * np.eye(d)
+          if len(ll_hist) > 1 and ll_hist[-1] - ll_hist[-2] < 1e-8:
+              break
+      return pi, mu, Sig, R, ll_hist
+
+  ge = np.random.default_rng(602)
+  def tilted(n, m, sx, sy, ang, g):
+      Rm = np.array([[np.cos(ang), -np.sin(ang)], [np.sin(ang), np.cos(ang)]])
+      return m + (g.normal(size=(n, 2)) * [sx, sy]) @ Rm.T
+  Xg = np.vstack([tilted(300, [0, 0], 2.0, 0.4, 0.6, ge), tilted(180, [4, -1], 0.5, 1.5, 0.0, ge), tilted(120, [1, 4], 1.0, 0.3, -0.8, ge)])
+  truth_g = np.repeat([0, 1, 2], [300, 180, 120])
+  best = max((gmm_em(Xg, 3, ge) for _ in range(5)), key=lambda f: f[4][-1])
+  pi_hat, mu_hat, Sig_hat, R, ll_hist = best
+  print(f"{len(ll_hist)} iterations; log-likelihood {ll_hist[0]:.1f} -> {ll_hist[-1]:.1f}")
+  print("weights:", np.round(pi_hat, 3)); print("means:", np.round(mu_hat, 2).tolist())
+`}
+hint="R = dens / dens.sum(1, keepdims=True); pi = Nk / n; Sig[k] = (R[:, k, None] * D).T @ D / Nk[k] + reg * np.eye(d)."
+solution={String.raw`
+  import numpy as np
+  from scipy.stats import multivariate_normal as mvn
+
+  def gmm_em(X, K, g, iters=200, reg=1e-6):
+      n, d = X.shape
+      mu = X[g.choice(n, K, replace=False)]
+      Sig = np.array([np.cov(X.T) for _ in range(K)]); pi = np.full(K, 1 / K)
+      ll_hist = []
+      for _ in range(iters):
+          dens = np.column_stack([pi[k] * mvn.pdf(X, mu[k], Sig[k]) for k in range(K)])
+          ll_hist.append(np.log(dens.sum(1)).sum())
+          R = dens / dens.sum(1, keepdims=True)                    # E step
+          Nk = R.sum(0)
+          pi = Nk / n                                              # M step
+          mu = (R.T @ X) / Nk[:, None]
+          for k in range(K):
+              D = X - mu[k]
+              Sig[k] = (R[:, k, None] * D).T @ D / Nk[k] + reg * np.eye(d)
+          if len(ll_hist) > 1 and ll_hist[-1] - ll_hist[-2] < 1e-8:
+              break
+      return pi, mu, Sig, R, ll_hist
+
+  ge = np.random.default_rng(602)
+  def tilted(n, m, sx, sy, ang, g):
+      Rm = np.array([[np.cos(ang), -np.sin(ang)], [np.sin(ang), np.cos(ang)]])
+      return m + (g.normal(size=(n, 2)) * [sx, sy]) @ Rm.T
+  Xg = np.vstack([tilted(300, [0, 0], 2.0, 0.4, 0.6, ge), tilted(180, [4, -1], 0.5, 1.5, 0.0, ge), tilted(120, [1, 4], 1.0, 0.3, -0.8, ge)])
+  truth_g = np.repeat([0, 1, 2], [300, 180, 120])
+  best = max((gmm_em(Xg, 3, ge) for _ in range(5)), key=lambda f: f[4][-1])
+  pi_hat, mu_hat, Sig_hat, R, ll_hist = best
+  print(f"{len(ll_hist)} iterations; log-likelihood {ll_hist[0]:.1f} -> {ll_hist[-1]:.1f}")
+  print("weights:", np.round(pi_hat, 3)); print("means:", np.round(mu_hat, 2).tolist())
+`} />
+
+From a random start, EM climbs from a log-likelihood of −2,812 to −1,999 in 33 iterations, never stepping down, and recovers the weights almost exactly, 0.50, 0.30 and 0.20, with means within a few hundredths of the truth. The fitted covariances describe each group's tilt and elongation, which k-means has no way to represent. Five starts were run and the one with the highest final likelihood kept; with well-separated groups they mostly agree, but with overlapping ones they often do not.
+
+<Step n={3} title="Mixtures where k-means fails" minutes={25} />
+
+<PyCell id="compare" title="Elongated clusters: k-means against a mixture" tests={String.raw`
+  import numpy as np
+  def test_compare():
+      "the mixture recovers the three tilted groups with accuracy above 0.9, and beats k-means"
+      assert acc_gmm > 0.9 and acc_gmm > acc_kmeans + 0.05
+`} prompt="Assign each point to its most responsible component, and compare the agreement with the true groups against k-means (k = 3, best of 10 starts) on the same data."
+code={String.raw`
+  def kmeans_simple(X, k, g, iters=100):
+      C = X[g.choice(len(X), k, replace=False)]
+      for _ in range(iters):
+          lab = np.argmin(((X[:, None] - C[None]) ** 2).sum(-1), 1)
+          C = np.array([X[lab == j].mean(0) if np.any(lab == j) else C[j] for j in range(k)])
+      return lab, ((X - C[lab]) ** 2).sum()
+
+  def agree(lab, truth, k=3):
+      from itertools import permutations
+      return max(np.mean(np.array(p)[lab] == truth) for p in permutations(range(k)))
+
+  lab_gmm = ...
+  acc_gmm = agree(lab_gmm, truth_g)
+  lab_km, _ = min((kmeans_simple(Xg, 3, ge) for _ in range(10)), key=lambda f: f[1])
+  acc_kmeans = agree(lab_km, truth_g)
+  print(f"agreement with true groups: mixture {acc_gmm:.3f}, k-means {acc_kmeans:.3f}")
+`}
+hint="lab_gmm = np.argmax(R, axis=1)."
+solution={String.raw`
+  def kmeans_simple(X, k, g, iters=100):
+      C = X[g.choice(len(X), k, replace=False)]
+      for _ in range(iters):
+          lab = np.argmin(((X[:, None] - C[None]) ** 2).sum(-1), 1)
+          C = np.array([X[lab == j].mean(0) if np.any(lab == j) else C[j] for j in range(k)])
+      return lab, ((X - C[lab]) ** 2).sum()
+
+  def agree(lab, truth, k=3):
+      from itertools import permutations
+      return max(np.mean(np.array(p)[lab] == truth) for p in permutations(range(k)))
+
+  lab_gmm = np.argmax(R, axis=1)
+  acc_gmm = agree(lab_gmm, truth_g)
+  lab_km, _ = min((kmeans_simple(Xg, 3, ge) for _ in range(10)), key=lambda f: f[1])
+  acc_kmeans = agree(lab_km, truth_g)
+  print(f"agreement with true groups: mixture {acc_gmm:.3f}, k-means {acc_kmeans:.3f}")
+`} />
+
+The mixture assigns 98.3% of points to their true group, k-means 87.5%. k-means draws straight boundaries halfway between centres, so the long tilted group, whose ends reach towards its neighbours, loses its tips to them. The mixture's boundaries are curves where two weighted Gaussian densities are equal, the quadratic boundaries of Week 56, and they follow each group's shape. The price is parameters: each full covariance in $d$ dimensions has $d(d+1)/2$ of them, so in high dimensions mixtures need diagonal or shared covariances, or a reduction to a few dimensions first.
+
+<Step n={4} title="Collapsing components" minutes={25} />
+
+The likelihood of a Gaussian mixture has no maximum. Put one component's mean exactly on a data point and shrink its covariance: the density at that point grows without bound, while the other components keep every other point's density finite, so the total likelihood goes to infinity. EM can fall into these singularities, especially with many components, few points or duplicated values. The standard remedy is to add a small multiple of the identity to every covariance, which is equivalent to a prior on the covariances (a maximum a posteriori estimate rather than maximum likelihood).
+
+<PyCell id="collapse" title="A component that collapses" tests={String.raw`
+  import numpy as np
+  def test_blowup():
+      "without regularisation, the log-likelihood with a collapsed component exceeds the honest fit by more than 20"
+      assert ll_collapsed > ll_honest + 20
+  def test_reg():
+      "with regularisation, no covariance determinant falls below reg squared (1e-4)"
+      assert min_det_reg > 0.9e-4
+`} prompt="Evaluate the log-likelihood of a three-component fit to Xg in which a fourth component, with weight 0.01 and covariance 1e-20 times the identity, sits on a single data point (the other three keep their parameters, with weights scaled by 0.99), and compare it with the honest fit. Then rerun EM on a small sample (20 points, 6 components) with reg = 1e-2 and record the smallest determinant of the fitted covariances."
+code={String.raw`
+  def mixture_ll(X, pi, mu, Sig):
+      return np.log(sum(pi[k] * mvn.pdf(X, mu[k], Sig[k]) for k in range(len(pi)))).sum()
+
+  ll_honest = mixture_ll(Xg, pi_hat, mu_hat, Sig_hat)
+  pi_c = np.r_[0.99 * pi_hat, 0.01]
+  mu_c = np.vstack([mu_hat, Xg[0]])
+  Sig_c = np.concatenate([Sig_hat, [1e-20 * np.eye(2)]])
+  ll_collapsed = mixture_ll(Xg, pi_c, mu_c, Sig_c)
+  print(f"honest fit {ll_honest:.1f}; with a collapsed component {ll_collapsed:.1f}")
+
+  small = Xg[ge.choice(len(Xg), 20, replace=False)]
+  fit_reg = gmm_em(small, 6, np.random.default_rng(3), reg=...)
+  min_det_reg = min(np.linalg.det(S) for S in fit_reg[2])
+  print(f"20 points, 6 components, regularised: smallest covariance determinant {min_det_reg:.4f}")
+`}
+hint="Pass reg=1e-2. The collapsed component makes ll_collapsed large because its density at Xg[0] is about 0.01/(2 pi 1e-20)."
+solution={String.raw`
+  def mixture_ll(X, pi, mu, Sig):
+      return np.log(sum(pi[k] * mvn.pdf(X, mu[k], Sig[k]) for k in range(len(pi)))).sum()
+
+  ll_honest = mixture_ll(Xg, pi_hat, mu_hat, Sig_hat)
+  pi_c = np.r_[0.99 * pi_hat, 0.01]
+  mu_c = np.vstack([mu_hat, Xg[0]])
+  Sig_c = np.concatenate([Sig_hat, [1e-20 * np.eye(2)]])
+  ll_collapsed = mixture_ll(Xg, pi_c, mu_c, Sig_c)
+  print(f"honest fit {ll_honest:.1f}; with a collapsed component {ll_collapsed:.1f}")
+
+  small = Xg[ge.choice(len(Xg), 20, replace=False)]
+  fit_reg = gmm_em(small, 6, np.random.default_rng(3), reg=1e-2)
+  min_det_reg = min(np.linalg.det(S) for S in fit_reg[2])
+  print(f"20 points, 6 components, regularised: smallest covariance determinant {min_det_reg:.4f}")
+`} />
+
+Adding a fourth component that sits on one data point with a vanishing covariance raises the log-likelihood from −1,999 to −1,963, although it explains nothing: it is one point, described perfectly. Make the covariance smaller still and the likelihood rises further, without limit. With regularisation of 0.01 on the diagonal, no fitted covariance in the small-sample fit can shrink below a determinant of $10^{-4}$, and the smallest sits exactly there: a component that has collapsed onto one or two of the 20 points as far as the regularisation allows. That is the warning sign to look for: a component with tiny weight and tiny covariance means too many components for the data.
+
+<Bridge title="Mixtures in brains and machines"
+  neuro="Mixture models are the workhorse of spike sorting, where each neuron's spikes form one component in a space of waveform features, and of cell typing from physiology. Their soft assignments are an honest report of uncertainty: a spike with responsibilities of 0.55 and 0.45 should not be counted with confidence as either neuron's."
+  ai="EM is one of the most reused ideas in machine learning: it trains hidden Markov models for speech (Baum-Welch, Week 65), mixture-of-experts gating, topic models, and, in its variational form, the variational autoencoders of Week 63.">
+
+When labels are hidden, guess them softly, fit as if they were known, and repeat.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In a Gaussian mixture, a responsibility r_ik is...", options: ["The posterior probability that point i came from component k", "The weight of component k", "The distance to the mean", "A fixed label"], answer: 0, explain: "Step 1." },
+  { q: "The E step computes...", options: ["Responsibilities from the current parameters", "New means", "The number of components", "The gradient"], answer: 0, explain: "The derivation." },
+  { q: "The M step sets each mean to...", options: ["The responsibility-weighted average of the points", "The median", "A random point", "The overall mean"], answer: 0, explain: "The derivation." },
+  { q: "Each EM iteration...", options: ["Cannot decrease the log-likelihood", "Always finds the global maximum", "Can decrease it", "Changes the number of components"], answer: 0, explain: "Dempster and colleagues." },
+  { q: "k-means is EM for a mixture with...", options: ["Equal spherical covariances shrinking to zero", "Full covariances", "Unequal weights", "One component"], answer: 0, explain: "The derivation." },
+  { q: "A Gaussian mixture handles elongated clusters because...", options: ["Each component has its own covariance", "It uses more iterations", "It ignores outliers", "It uses medians"], answer: 0, explain: "Step 3." },
+  { q: "The mixture likelihood is unbounded because...", options: ["A component can collapse onto one point", "There are too many points", "The weights can be negative", "EM diverges"], answer: 0, explain: "Step 4." },
+  { q: "Adding a small multiple of the identity to each covariance is equivalent to...", options: ["A prior on the covariances", "More data", "Fewer components", "k-means"], answer: 0, explain: "Step 4." },
+]} />
+
+<Flashcards cards={[
+  { front: "Gaussian mixture density?", back: "$p(\\mathbf x) = \\sum_k\\pi_k\\mathcal N(\\mathbf x;\\boldsymbol\\mu_k, \\Sigma_k)$" },
+  { front: "E step?", back: "$r_{ik} \\propto \\pi_k\\mathcal N(\\mathbf x_i;\\boldsymbol\\mu_k, \\Sigma_k)$, normalised over k." },
+  { front: "M step?", back: "$\\pi_k = N_k/n$; $\\boldsymbol\\mu_k$ and $\\Sigma_k$ are the responsibility-weighted mean and covariance." },
+  { front: "Why does EM never decrease the likelihood?", back: "It is coordinate ascent on a lower bound that the E step makes tight (Week 63)." },
+  { front: "Mixture singularities?", back: "A collapsing component sends the likelihood to infinity; regularise covariances." },
+]} />
+
+<Predict revisit question="What happened to the likelihood when a component collapsed onto a single point?" />
+
+<Key title="Before you go">
+<ul>
+<li>A Gaussian mixture is a generative model with a hidden cluster label.</li>
+<li>EM alternates soft assignment (E) and weighted refitting (M), never decreasing the likelihood.</li>
+<li>Mixtures handle clusters of different shapes, sizes and weights; k-means is a limiting case.</li>
+<li>The likelihood is unbounded; regularise covariances and use several starts.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Dempster, Laird and Rubin (1977), <em>Maximum likelihood from incomplete data via the EM algorithm</em>.</li>
+<li>Bishop (2006), <em>Pattern Recognition and Machine Learning</em>, chapter 9, a clear treatment of mixtures and EM, available free from Microsoft Research.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Describe a neuroscience problem where the soft assignments of a mixture model carry information that a hard clustering would throw away. How would you report or use the uncertainty?" />

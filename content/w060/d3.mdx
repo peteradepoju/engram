@@ -1,0 +1,335 @@
+export const meta = {
+  title: "How many clusters? BIC, the gap statistic and stability",
+  intro: "Every clustering algorithm will return as many clusters as you ask for, and the objective it optimises always improves as you ask for more. So the number of clusters cannot be read off the fit; it has to be chosen by a separate criterion, and on many neural datasets the honest answer is that there is no single right number. Today you implement three criteria that answer different questions, information criteria for mixtures, the gap statistic and clustering stability, and test them on data with clear clusters and on data with none.",
+  goals: [
+    "Show that distortion and likelihood always improve with more clusters",
+    "Choose the number of mixture components with BIC",
+    "Implement the gap statistic and its decision rule",
+    "Measure clustering stability under resampling, and recognise data without clusters",
+  ],
+  plan: [
+    { label: "More clusters always fit better", minutes: 15 },
+    { label: "Information criteria for mixtures", minutes: 30 },
+    { label: "The gap statistic", minutes: 30 },
+    { label: "Stability, and data with no clusters", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "tibshirani-2001",
+};
+
+<Predict question="You run k-means for k from 1 to 8 on 300 neurons whose response features come from a single Gaussian cloud, with no groups at all. Will the within-cluster sum of squares stay flat, fall smoothly, or show a clear elbow at some k?" />
+
+<Step n={1} title="More clusters always fit better" minutes={15} />
+
+With $k = n$ clusters, every point is its own centre and the distortion is zero; a mixture with a component per point has infinite likelihood (Day 2). In between, the best achievable objective improves monotonically with $k$. The popular **elbow method**, looking for a bend in the curve of distortion against $k$, works when the clusters are clear and is unreliable otherwise. Each criterion today compares the improvement from adding a cluster with the improvement you would expect if there were no new structure to find.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def kmeans(X, k, g, restarts=3, iters=60):
+      best = None
+      for _ in range(restarts):
+          C = X[g.choice(len(X), k, replace=False)]
+          lab = None
+          for _ in range(iters):
+              new = np.argmin(((X[:, None] - C[None]) ** 2).sum(-1), 1)
+              if lab is not None and np.array_equal(new, lab): break
+              lab = new
+              C = np.array([X[lab == j].mean(0) if np.any(lab == j) else C[j] for j in range(k)])
+          W = ((X - C[lab]) ** 2).sum()
+          if best is None or W < best[1]:
+              best = (lab, W, C)
+      return best
+
+  g0 = np.random.default_rng(603)
+  true_c = np.array([[0, 0], [4, 0], [0, 4], [4, 4.5]])
+  X4 = np.repeat(true_c, 75, axis=0) + 0.8 * g0.normal(size=(300, 2))          # four groups
+  X1 = g0.normal(size=(300, 2)) * [1.8, 1.2]                                    # one cloud, no groups
+  for name, X in [("four groups", X4), ("no groups", X1)]:
+      W = [kmeans(X, k, g0)[1] for k in range(1, 9)]
+      plt.plot(range(1, 9), W / W[0], "o-", label=name)
+  plt.xlabel("k"); plt.ylabel("distortion (relative to k = 1)"); plt.legend(); plt.show()
+`} />
+
+Both curves fall at every step. The four-group data show a bend at $k = 4$; the single cloud falls smoothly, but it still falls, and someone determined to find clusters could point to a gentle bend anywhere.
+
+<Step n={2} title="Information criteria for mixtures" minutes={30} />
+
+For a probability model such as a Gaussian mixture, the **Bayesian information criterion** penalises the maximised log-likelihood $\hat\ell$ by the number of free parameters $p$:
+
+$$
+\text{BIC} = -2\hat\ell + p\log n.
+$$
+
+It approximates $-2$ times the log of the marginal likelihood (Week 68), and the model with the lowest BIC is preferred. A mixture of $K$ Gaussians in $d$ dimensions with full covariances has $p = (K - 1) + Kd + Kd(d + 1)/2$ parameters. An alternative that makes fewer assumptions is the **held-out log-likelihood**: fit on part of the data and score the rest, exactly as in Week 59.
+
+<Figure caption="BIC for one-dimensional mixtures fitted with 1 to 7 components. Change the true number of groups and the amount of data." credit="Interactive figure by Engram, after Schwarz (1978).">
+  <ChooseK />
+</Figure>
+
+<PyCell id="bic" title="BIC for Gaussian mixtures" tests={String.raw`
+  import numpy as np
+  def test_params():
+      "n_params counts weights, means and full covariances"
+      assert n_params(3, 2) == 2 + 6 + 9
+  def test_choice():
+      "BIC chooses 4 components for the four groups, and 1 for the single cloud"
+      assert k_bic_4 == 4 and k_bic_1 == 1
+`} prompt="Write n_params(K, d) and bic(X, K, g), which fits a mixture with gmm_fit (best of two starts) and returns -2 log-likelihood plus n_params times log n. Choose K from 1 to 7 for both datasets."
+code={String.raw`
+  def mvn_pdf(X, m, S):
+      L = np.linalg.cholesky(S); Z = np.linalg.solve(L, (X - m).T)
+      return np.exp(-0.5 * (Z ** 2).sum(0) - np.log(np.diag(L)).sum() - 0.5 * len(m) * np.log(2 * np.pi))
+
+  def gmm_fit(X, K, g, iters=150, reg=1e-4, tol=1e-4):
+      n, d = X.shape
+      mu = X[g.choice(n, K, replace=False)]; Sig = np.array([np.cov(X.T)] * K); pi = np.full(K, 1 / K)
+      prev = -np.inf
+      for _ in range(iters):
+          dens = np.column_stack([pi[k] * mvn_pdf(X, mu[k], Sig[k]) for k in range(K)]) + 1e-300
+          ll = np.log(dens.sum(1)).sum()
+          if ll - prev < tol: break
+          prev = ll
+          R = dens / dens.sum(1, keepdims=True); Nk = R.sum(0) + 1e-9
+          pi, mu = Nk / n, (R.T @ X) / Nk[:, None]
+          Sig = np.array([((R[:, k, None] * (X - mu[k])).T @ (X - mu[k])) / Nk[k] + reg * np.eye(d) for k in range(K)])
+      dens = np.column_stack([pi[k] * mvn_pdf(X, mu[k], Sig[k]) for k in range(K)])
+      return np.log(dens.sum(1) + 1e-300).sum()
+
+  def n_params(K, d):
+      return ...
+
+  def bic(X, K, g):
+      ll = max(gmm_fit(X, K, g) for _ in range(2))
+      return ...
+
+  gb = np.random.default_rng(6031)
+  bic4 = [bic(X4, K, gb) for K in range(1, 8)]
+  bic1 = [bic(X1, K, gb) for K in range(1, 8)]
+  k_bic_4, k_bic_1 = int(np.argmin(bic4)) + 1, int(np.argmin(bic1)) + 1
+  print("four groups, BIC:", np.round(bic4, 0), "->", k_bic_4)
+  print("one cloud, BIC:  ", np.round(bic1, 0), "->", k_bic_1)
+`}
+hint="n_params: (K - 1) + K * d + K * d * (d + 1) // 2; bic returns -2 * ll + n_params(K, X.shape[1]) * np.log(len(X))."
+solution={String.raw`
+  def mvn_pdf(X, m, S):
+      L = np.linalg.cholesky(S); Z = np.linalg.solve(L, (X - m).T)
+      return np.exp(-0.5 * (Z ** 2).sum(0) - np.log(np.diag(L)).sum() - 0.5 * len(m) * np.log(2 * np.pi))
+
+  def gmm_fit(X, K, g, iters=150, reg=1e-4, tol=1e-4):
+      n, d = X.shape
+      mu = X[g.choice(n, K, replace=False)]; Sig = np.array([np.cov(X.T)] * K); pi = np.full(K, 1 / K)
+      prev = -np.inf
+      for _ in range(iters):
+          dens = np.column_stack([pi[k] * mvn_pdf(X, mu[k], Sig[k]) for k in range(K)]) + 1e-300
+          ll = np.log(dens.sum(1)).sum()
+          if ll - prev < tol: break
+          prev = ll
+          R = dens / dens.sum(1, keepdims=True); Nk = R.sum(0) + 1e-9
+          pi, mu = Nk / n, (R.T @ X) / Nk[:, None]
+          Sig = np.array([((R[:, k, None] * (X - mu[k])).T @ (X - mu[k])) / Nk[k] + reg * np.eye(d) for k in range(K)])
+      dens = np.column_stack([pi[k] * mvn_pdf(X, mu[k], Sig[k]) for k in range(K)])
+      return np.log(dens.sum(1) + 1e-300).sum()
+
+  def n_params(K, d):
+      return (K - 1) + K * d + K * d * (d + 1) // 2
+
+  def bic(X, K, g):
+      ll = max(gmm_fit(X, K, g) for _ in range(2))
+      return -2 * ll + n_params(K, X.shape[1]) * np.log(len(X))
+
+  gb = np.random.default_rng(6031)
+  bic4 = [bic(X4, K, gb) for K in range(1, 8)]
+  bic1 = [bic(X1, K, gb) for K in range(1, 8)]
+  k_bic_4, k_bic_1 = int(np.argmin(bic4)) + 1, int(np.argmin(bic1)) + 1
+  print("four groups, BIC:", np.round(bic4, 0), "->", k_bic_4)
+  print("one cloud, BIC:  ", np.round(bic1, 0), "->", k_bic_1)
+`} />
+
+For the four groups, BIC falls from 2,677 with one component to a minimum of 2,374 at four, then rises again: a fifth component improves the log-likelihood by less than the $6\log 300 \approx 34$ it costs. For the single cloud, the minimum is at one component, though two come within 2 units, a reminder that BIC differences of a few units are weak evidence. BIC assumes the model is right: if the true groups are not Gaussian, say skewed or heavy-tailed, BIC will add components to describe their shape, and each group will be split. The fewer assumptions the clusters satisfy, the more the answer reflects the model rather than the data.
+
+<Step n={3} title="The gap statistic" minutes={30} />
+
+Tibshirani, Walther and Hastie (2001), today's paper, proposed a criterion for any clustering method that makes no distributional assumption about the clusters. Compare $\log W_k$, the log distortion with $k$ clusters, with its expected value under a **reference distribution with no clusters**, uniform over the bounding box of the data:
+
+$$
+\text{Gap}(k) = E^*[\log W_k^*] - \log W_k,
+$$
+
+estimated by clustering $B$ reference datasets. Choose the smallest $k$ such that $\text{Gap}(k) \ge \text{Gap}(k + 1) - s_{k+1}$, where $s_{k+1}$ is the standard deviation of $\log W^*_{k+1}$ across reference sets, inflated by $\sqrt{1 + 1/B}$.
+
+<Video id="AgPQ76RIi6A" title="High quality, high performance clustering with HDBSCAN" by="Leland McInnes, SciPy 2016" note="Leland McInnes on what to want from a clustering algorithm, why k-means and its relatives often fail on real data, and density-based clustering, which finds the number of clusters itself and leaves noise points unassigned." />
+
+<PyCell id="gap" title="The gap statistic" tests={String.raw`
+  import numpy as np
+  def test_choice():
+      "the gap rule chooses 4 for the four groups and 1 for the single cloud"
+      assert k_gap_4 == 4 and k_gap_1 == 1
+`} prompt="Write gap_statistic(X, kmax, B, g): for k = 1 to kmax, compute log W_k on the data and on B uniform reference sets drawn in the bounding box, and return the gaps and the inflated standard deviations. Then apply the decision rule to both datasets."
+code={String.raw`
+  def gap_statistic(X, kmax, B, g):
+      lo, hi = X.min(0), X.max(0)
+      logW = np.array([np.log(kmeans(X, k, g)[1]) for k in range(1, kmax + 1)])
+      ref = np.array([[np.log(kmeans(g.uniform(lo, hi, X.shape), k, g, restarts=2)[1]) for k in range(1, kmax + 1)]
+                      for _ in range(B)])
+      gap = ...
+      s = ref.std(0) * np.sqrt(1 + 1 / B)
+      return gap, s
+
+  def choose_k(gap, s):
+      for k in range(len(gap) - 1):
+          if ...:
+              return k + 1
+      return len(gap)
+
+  gg = np.random.default_rng(6032)
+  gap4, s4 = gap_statistic(X4, 7, 10, gg)
+  gap1, s1 = gap_statistic(X1, 7, 10, gg)
+  k_gap_4, k_gap_1 = choose_k(gap4, s4), choose_k(gap1, s1)
+  print("four groups, gap:", np.round(gap4, 2), "->", k_gap_4)
+  print("one cloud, gap:  ", np.round(gap1, 2), "->", k_gap_1)
+`}
+hint="gap = ref.mean(0) - logW; the condition is gap[k] >= gap[k + 1] - s[k + 1]."
+solution={String.raw`
+  def gap_statistic(X, kmax, B, g):
+      lo, hi = X.min(0), X.max(0)
+      logW = np.array([np.log(kmeans(X, k, g)[1]) for k in range(1, kmax + 1)])
+      ref = np.array([[np.log(kmeans(g.uniform(lo, hi, X.shape), k, g, restarts=2)[1]) for k in range(1, kmax + 1)]
+                      for _ in range(B)])
+      gap = ref.mean(0) - logW
+      s = ref.std(0) * np.sqrt(1 + 1 / B)
+      return gap, s
+
+  def choose_k(gap, s):
+      for k in range(len(gap) - 1):
+          if gap[k] >= gap[k + 1] - s[k + 1]:
+              return k + 1
+      return len(gap)
+
+  gg = np.random.default_rng(6032)
+  gap4, s4 = gap_statistic(X4, 7, 10, gg)
+  gap1, s1 = gap_statistic(X1, 7, 10, gg)
+  k_gap_4, k_gap_1 = choose_k(gap4, s4), choose_k(gap1, s1)
+  print("four groups, gap:", np.round(gap4, 2), "->", k_gap_4)
+  print("one cloud, gap:  ", np.round(gap1, 2), "->", k_gap_1)
+`} />
+
+The gap for the four groups climbs slowly to $k = 3$ and then jumps at $k = 4$, from 0.43 to 0.92: four clusters reduce distortion far more than they would in structureless data. The rule stops at 4 because the gap at 5 is no larger. For the single cloud the gap is largest at $k = 1$ and falls from there, so the rule chooses one cluster, the right answer, which the elbow method cannot give since it never considers $k = 1$ against anything. The uniform reference has a known weakness: in elongated data a uniform box is a poor null, and Tibshirani and colleagues suggest drawing the reference in the frame of the principal components instead.
+
+<Step n={4} title="Stability, and data with no clusters" minutes={30} />
+
+A third idea asks whether the clustering would come out the same on different data from the same source. Draw two random halves of the data, cluster each, use each half's centres to label all the points, and measure how often pairs of points that are together in one labelling are together in the other. Real clusters are found again; arbitrary cuts through a continuum move from sample to sample. Stability has a known weakness, which you will meet: $k = 2$ is often stable even when there is no structure, because a cloud can be cut in half the same way each time.
+
+<PyCell id="stability" title="Stability under resampling" tests={String.raw`
+  import numpy as np
+  def test_pair():
+      "pair_agreement is 1 for identical labelings up to renaming"
+      assert pair_agreement(np.array([0, 0, 1, 1]), np.array([1, 1, 0, 0])) == 1.0
+  def test_four():
+      "for the four groups, k = 4 is more stable than k = 3 and k = 5"
+      assert stab4[4] > stab4[3] and stab4[4] > stab4[5]
+`} prompt="Write pair_agreement(a, b), the fraction of pairs of points on which two labelings agree about being together or apart. Then, for k from 2 to 6, average it over 10 pairs of random half-samples, labelling all points by each half's nearest centres."
+code={String.raw`
+  def pair_agreement(a, b):
+      same_a = a[:, None] == a[None, :]
+      same_b = b[:, None] == b[None, :]
+      iu = np.triu_indices(len(a), 1)
+      return ...
+
+  def stability(X, k, g, reps=10):
+      vals = []
+      for _ in range(reps):
+          perm = g.permutation(len(X)); h1, h2 = perm[: len(X) // 2], perm[len(X) // 2:]
+          C1, C2 = kmeans(X[h1], k, g)[2], kmeans(X[h2], k, g)[2]
+          l1 = np.argmin(((X[:, None] - C1[None]) ** 2).sum(-1), 1)
+          l2 = np.argmin(((X[:, None] - C2[None]) ** 2).sum(-1), 1)
+          vals.append(pair_agreement(l1, l2))
+      return np.mean(vals)
+
+  gst = np.random.default_rng(6033)
+  stab4 = {k: stability(X4, k, gst) for k in range(2, 7)}
+  stab1 = {k: stability(X1, k, gst) for k in range(2, 7)}
+  print("four groups:", {k: round(float(v), 3) for k, v in stab4.items()})
+  print("one cloud:  ", {k: round(float(v), 3) for k, v in stab1.items()})
+`}
+hint="return np.mean(same_a[iu] == same_b[iu])."
+solution={String.raw`
+  def pair_agreement(a, b):
+      same_a = a[:, None] == a[None, :]
+      same_b = b[:, None] == b[None, :]
+      iu = np.triu_indices(len(a), 1)
+      return np.mean(same_a[iu] == same_b[iu])
+
+  def stability(X, k, g, reps=10):
+      vals = []
+      for _ in range(reps):
+          perm = g.permutation(len(X)); h1, h2 = perm[: len(X) // 2], perm[len(X) // 2:]
+          C1, C2 = kmeans(X[h1], k, g)[2], kmeans(X[h2], k, g)[2]
+          l1 = np.argmin(((X[:, None] - C1[None]) ** 2).sum(-1), 1)
+          l2 = np.argmin(((X[:, None] - C2[None]) ** 2).sum(-1), 1)
+          vals.append(pair_agreement(l1, l2))
+      return np.mean(vals)
+
+  gst = np.random.default_rng(6033)
+  stab4 = {k: stability(X4, k, gst) for k in range(2, 7)}
+  stab1 = {k: stability(X1, k, gst) for k in range(2, 7)}
+  print("four groups:", {k: round(float(v), 3) for k, v in stab4.items()})
+  print("one cloud:  ", {k: round(float(v), 3) for k, v in stab1.items()})
+`} />
+
+For the four groups, $k = 4$ is almost perfectly stable, 0.995, while 3, 5 and 6 are less so: with three clusters, which two groups get merged changes from sample to sample. For the single cloud, no $k$ above 2 is stable, but $k = 2$ scores 0.86, higher than $k = 2$ on the real groups. A cloud cut in half along its long axis is cut the same way every time, so stability alone would declare two stable clusters in data that have none. Stability answers "is this partition reproducible?", which is not the same question as "are there clusters?", so use it together with a criterion like the gap that compares against no structure.
+
+<Callout kind="warning" title="Discrete types or a continuum?">
+
+The criteria of today all assume that the question "how many clusters?" has an answer. For neurons it often does not: transcriptomic and physiological studies find some sharply distinct classes, such as excitatory and inhibitory cells, and within them graded variation along continua, so that the number of types depends on the resolution at which one looks. When the criteria disagree, or when the choice changes with the sample, the honest report is the structure itself, a continuum or a hierarchy, rather than a number. Day 4 introduces hierarchical clustering, which reports structure at every resolution at once.
+
+</Callout>
+
+<Bridge title="Choosing the number of groups in brains and machines"
+  neuro="Cell-type atlases from single-cell transcriptomics report numbers of types, over a hundred in mouse visual cortex, that are choices made with criteria like these, together with stability checks and agreement with anatomy and physiology. How many types there are is partly a question about biology and partly a question about resolution."
+  ai="Model selection for unsupervised learning is a recurring problem in machine learning: the number of topics in a topic model, the number of states in a hidden Markov model, the size of a codebook. Bayesian nonparametric models, such as Dirichlet process mixtures, let the data determine the number of components under a prior that favours few.">
+
+The number of clusters is a modelling choice, so justify it with a criterion and check that it is stable.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "As k increases, the k-means distortion...", options: ["Never increases at the optimum", "Always has a clear elbow", "Increases", "Stays the same"], answer: 0, explain: "Step 1." },
+  { q: "BIC penalises each parameter by...", options: ["log n", "2", "n", "1/n"], answer: 0, explain: "Step 2." },
+  { q: "A full-covariance Gaussian mixture with K components in d dimensions has how many covariance parameters?", options: ["K d(d + 1)/2", "K d", "d²", "K"], answer: 0, explain: "Step 2." },
+  { q: "The gap statistic compares the data's log distortion with...", options: ["That of uniform reference data in the bounding box", "That of k = 1", "The likelihood", "Random labels"], answer: 0, explain: "Step 3." },
+  { q: "The gap rule picks the smallest k with...", options: ["Gap(k) ≥ Gap(k + 1) − s(k + 1)", "The largest gap", "The smallest distortion", "Gap(k) = 0"], answer: 0, explain: "Step 3." },
+  { q: "Clustering stability measures...", options: ["Whether the same clusters are found on different samples", "The speed of convergence", "The distortion", "The likelihood"], answer: 0, explain: "Step 4." },
+  { q: "A known weakness of stability is that...", options: ["k = 2 is often stable even without structure", "It always picks k = 1", "It needs labels", "It ignores the data"], answer: 0, explain: "Step 4." },
+  { q: "When neurons vary along a continuum, the number of types...", options: ["Depends on the resolution and may not be well defined", "Is always 2", "Is found by BIC", "Equals the number of neurons"], answer: 0, explain: "The callout." },
+]} />
+
+<Flashcards cards={[
+  { front: "BIC?", back: "$-2\\hat\\ell + p\\log n$; lower is better; approximates the log marginal likelihood." },
+  { front: "Gap statistic?", back: "$\\text{Gap}(k) = E^*[\\log W_k^*] - \\log W_k$ against uniform reference data." },
+  { front: "Gap decision rule?", back: "Smallest k with $\\text{Gap}(k) \\ge \\text{Gap}(k+1) - s_{k+1}$." },
+  { front: "Clustering stability?", back: "Agreement between clusterings of different subsamples; real clusters reappear." },
+  { front: "Elbow method?", back: "Look for a bend in distortion against k; unreliable without clear clusters." },
+]} />
+
+<Predict revisit question="Did the distortion curve for data with no groups show an elbow?" />
+
+<Key title="Before you go">
+<ul>
+<li>Fit always improves with more clusters, so the number must be chosen separately.</li>
+<li>BIC and held-out likelihood choose the number of mixture components.</li>
+<li>The gap statistic compares clustering with the no-cluster expectation.</li>
+<li>Stability under resampling distinguishes real clusters from arbitrary cuts, with care at k = 2.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Tibshirani, Walther and Hastie (2001), <em>Estimating the number of clusters in a data set via the gap statistic</em>.</li>
+<li>Schwarz (1978), <em>Estimating the dimension of a model</em>, Annals of Statistics 6(2), 461 to 464, which introduced BIC.</li>
+<li>Von Luxburg (2010), <em>Clustering stability: an overview</em>, Foundations and Trends in Machine Learning 2(3), 235 to 274.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="If three criteria gave you 3, 5 and 8 clusters for a set of neurons, what would you do next, and what would you write in the paper?" />

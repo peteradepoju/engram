@@ -1,0 +1,289 @@
+export const meta = {
+  title: "k-means: clustering as minimising distortion",
+  intro: "Until now every model in Part 3 has had labels to learn from. Often in neuroscience there are none: you record hundreds of neurons and want to know whether they fall into a few kinds, or you have thousands of trials and suspect a few distinct behavioural states. Clustering looks for groups without labels. Today you derive k-means as coordinate descent on a single objective, implement it, fix its sensitivity to the starting point with k-means++, and map out the kinds of structure it cannot find.",
+  goals: [
+    "State the k-means objective and derive Lloyd's algorithm as coordinate descent on it",
+    "Prove that each step cannot increase the objective, so the algorithm converges",
+    "Implement k-means++ seeding and compare it with random starts",
+    "Recognise the assumptions of k-means and the data on which it fails",
+  ],
+  plan: [
+    { label: "Clustering without labels", minutes: 15 },
+    { label: "Lloyd's algorithm", minutes: 35 },
+    { label: "Starting points and k-means++", minutes: 25 },
+    { label: "What k-means assumes", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "lloyd-1982",
+};
+
+<Predict question="k-means is run with k = 2 on two groups of neurons: a tight group of 200 and a widely spread group of 40, whose centres are well apart. Will it recover the two groups, or will it split the points in some other way?" />
+
+<Step n={1} title="Clustering without labels" minutes={15} />
+
+A **clustering** assigns each of $n$ points to one of $k$ groups so that points in the same group are alike. "Alike" must be defined, and the definition is the model. k-means defines it by squared Euclidean distance to a group centre and asks for the assignment $z_i$ and centres $\boldsymbol\mu_1, \dots, \boldsymbol\mu_k$ that minimise the **distortion**, or within-cluster sum of squares,
+
+$$
+J = \sum_{i=1}^n\lVert\mathbf x_i - \boldsymbol\mu_{z_i}\rVert^2.
+$$
+
+Lloyd devised the algorithm in 1957 at Bell Labs to choose the levels of a quantiser for pulse-code modulation, finding the $k$ values that best represent a signal; his report was published in 1982, today's paper. Representing each neuron by one of $k$ prototype responses is the same problem.
+
+<Video id="4b5d3muPQmA" title="StatQuest: k-means clustering" by="StatQuest with Josh Starmer" note="Josh Starmer on k-means: pick initial centres, assign each point to the nearest, recompute the means, repeat, and compare runs by their total variation." />
+
+<Step n={2} title="Lloyd's algorithm" minutes={35} />
+
+<Derivation title="k-means is coordinate descent">
+<div>
+
+$J$ depends on two sets of unknowns, the assignments and the centres. Minimising over both at once is hard (it is NP-hard in general), but minimising over one with the other fixed is easy.
+
+</div>
+<div>
+
+**Assignment step.** With the centres fixed, each term of $J$ involves only one $z_i$, so set $z_i = \arg\min_j\lVert\mathbf x_i - \boldsymbol\mu_j\rVert^2$: the nearest centre. This cannot increase $J$.
+
+</div>
+<div>
+
+**Update step.** With the assignments fixed, $J$ splits into one sum per cluster. Setting the gradient of $\sum_{i: z_i = j}\lVert\mathbf x_i - \boldsymbol\mu_j\rVert^2$ to zero gives $\boldsymbol\mu_j = $ the mean of the points in cluster $j$. This cannot increase $J$ either.
+
+</div>
+<div>
+
+$J$ is bounded below by 0 and never increases, and there are finitely many assignments, so the algorithm stops after finitely many steps, at a point where neither step can improve $J$: a local minimum, not necessarily the global one.
+
+</div>
+</Derivation>
+
+<Figure caption="Lloyd's algorithm on three groups. Step through the iterations and try different random starts: most converge to the three groups, some to a worse local minimum." credit="Interactive figure by Engram, after Lloyd (1982).">
+  <KmeansSteps />
+</Figure>
+
+The data for today: the responses of 300 neurons to a stimulus, each a peristimulus time histogram of 40 bins. The neurons come from four response classes, transient, sustained, ramping and suppressed, with different gains and noise.
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  t = np.linspace(0, 2, 40)
+  shapes = np.array([
+      np.exp(-((t - 0.3) / 0.12) ** 2),                   # transient
+      1 / (1 + np.exp(-(t - 0.3) / 0.05)),                 # sustained
+      np.clip(t / 2, 0, 1),                                # ramping
+      -0.6 / (1 + np.exp(-(t - 0.3) / 0.05)),              # suppressed
+  ])
+
+  def psths(n, g, noise=0.25):
+      cls = g.integers(0, 4, n)
+      gain = g.uniform(0.7, 1.3, n)
+      return gain[:, None] * shapes[cls] + noise * g.normal(size=(n, 40)), cls
+
+  def match_accuracy(labels, truth, k):
+      """Fraction agreeing with the truth under the best one-to-one renaming of clusters (greedy)."""
+      C = np.array([[np.sum((labels == a) & (truth == b)) for b in range(k)] for a in range(k)])
+      total = 0
+      for _ in range(k):
+          a, b = np.unravel_index(np.argmax(C), C.shape); total += C[a, b]; C[a, :] = -1; C[:, b] = -1
+      return total / len(truth)
+
+  g0 = np.random.default_rng(601)
+  P, cls = psths(300, g0)
+  fig, ax = plt.subplots(1, 4, figsize=(9, 2), sharey=True)
+  for c in range(4):
+      ax[c].plot(t, P[cls == c][:8].T, lw=0.7, alpha=0.6); ax[c].set_title(["transient", "sustained", "ramping", "suppressed"][c], fontsize=9)
+  plt.tight_layout(); plt.show()
+`} />
+
+<PyCell id="kmeans" title="Lloyd's algorithm" tests={String.raw`
+  import numpy as np
+  def test_monotone():
+      "the distortion never increases across iterations"
+      assert all(b <= a + 1e-9 for a, b in zip(history, history[1:]))
+  def test_recovers():
+      "the best of 10 starts recovers the four classes with accuracy above 0.9"
+      assert acc_km > 0.9
+`} prompt="Write kmeans(X, k, g, iters=50): start from k randomly chosen points, then alternate the assignment and update steps, recording the distortion J after each assignment step. Return labels, centres and the history of J. Run it from 10 starts, keep the run with the lowest final J, and compare its clusters with the true classes."
+code={String.raw`
+  def kmeans(X, k, g, iters=50, init=None):
+      C = X[g.choice(len(X), k, replace=False)] if init is None else init.copy()
+      hist = []
+      for _ in range(iters):
+          d = ((X[:, None, :] - C[None, :, :]) ** 2).sum(-1)
+          lab = ...
+          hist.append(d[np.arange(len(X)), lab].sum())
+          for j in range(k):
+              if np.any(lab == j):
+                  C[j] = ...
+          if len(hist) > 1 and hist[-1] == hist[-2]:
+              break
+      return lab, C, hist
+
+  gk = np.random.default_rng(6011)
+  runs = [kmeans(P, 4, gk) for _ in range(10)]
+  finals = [h[-1] for _, _, h in runs]
+  lab_km, C_km, history = runs[int(np.argmin(finals))]
+  acc_km = match_accuracy(lab_km, cls, 4)
+  print("final distortion of the 10 starts:", np.round(sorted(finals), 1))
+  print(f"best run: {len(history)} iterations, accuracy against the true classes {acc_km:.3f}")
+`}
+hint="lab = np.argmin(d, axis=1); C[j] = X[lab == j].mean(0)."
+solution={String.raw`
+  def kmeans(X, k, g, iters=50, init=None):
+      C = X[g.choice(len(X), k, replace=False)] if init is None else init.copy()
+      hist = []
+      for _ in range(iters):
+          d = ((X[:, None, :] - C[None, :, :]) ** 2).sum(-1)
+          lab = np.argmin(d, axis=1)
+          hist.append(d[np.arange(len(X)), lab].sum())
+          for j in range(k):
+              if np.any(lab == j):
+                  C[j] = X[lab == j].mean(0)
+          if len(hist) > 1 and hist[-1] == hist[-2]:
+              break
+      return lab, C, hist
+
+  gk = np.random.default_rng(6011)
+  runs = [kmeans(P, 4, gk) for _ in range(10)]
+  finals = [h[-1] for _, _, h in runs]
+  lab_km, C_km, history = runs[int(np.argmin(finals))]
+  acc_km = match_accuracy(lab_km, cls, 4)
+  print("final distortion of the 10 starts:", np.round(sorted(finals), 1))
+  print(f"best run: {len(history)} iterations, accuracy against the true classes {acc_km:.3f}")
+`} />
+
+Seven of the ten starts reach the same distortion, 850.6, and that solution matches the true classes on 98.7% of neurons, converging in five iterations. The other three stop at 1,115 or 1,428: local minima in which two centres share one class while another class is merged with a neighbour. Nothing in a single run warns you of this; only comparing the distortion across starts does. The few neurons the best solution misassigns are mostly low-gain ones whose responses are hard to tell apart through the noise, sustained cells with weak gain looking like ramping ones, for example.
+
+<Step n={3} title="Starting points and k-means++" minutes={25} />
+
+Random starts often place two centres in one group and none in another, and Lloyd's algorithm cannot move a centre across a gap. Arthur and Vassilvitskii (2007) proposed **k-means++**: choose the first centre at random, then each further centre at random with probability proportional to its squared distance from the nearest centre already chosen. Distant points are favoured, so centres spread out, and the expected distortion is provably within a factor of order $\log k$ of the optimum.
+
+<PyCell id="kpp" title="k-means++ seeding" tests={String.raw`
+  import numpy as np
+  def test_seed():
+      "kpp_init returns k distinct rows of X"
+      C = kpp_init(P, 4, np.random.default_rng(0))
+      assert C.shape == (4, 40) and len({tuple(np.round(c, 8)) for c in C}) == 4
+  def test_better():
+      "with eight groups, k-means++ reaches the good solution more often than random starts"
+      assert np.mean(np.array(fin_pp) < good) > np.mean(np.array(fin_rand) < good)
+`} prompt="Write kpp_init(X, k, g). Then, on data with eight well-separated groups, run 40 single starts of k-means from random points and 40 from k-means++ seeds, and count how often each reaches a distortion within 5% of the best found."
+code={String.raw`
+  def kpp_init(X, k, g):
+      C = [X[g.integers(len(X))]]
+      for _ in range(1, k):
+          d2 = np.min(((X[:, None, :] - np.array(C)[None]) ** 2).sum(-1), axis=1)
+          C.append(...)
+      return np.array(C)
+
+  gs = np.random.default_rng(6012)
+  centres8 = 4 * gs.normal(size=(8, 2))
+  X8 = np.repeat(centres8, 40, axis=0) + 0.6 * gs.normal(size=(320, 2))
+  fin_rand = [kmeans(X8, 8, gs)[2][-1] for _ in range(40)]
+  fin_pp = [kmeans(X8, 8, gs, init=kpp_init(X8, 8, gs))[2][-1] for _ in range(40)]
+  good = 1.05 * min(fin_rand + fin_pp)
+  print(f"reached the good solution: random starts {np.mean(np.array(fin_rand) < good):.2f}, k-means++ {np.mean(np.array(fin_pp) < good):.2f}")
+`}
+hint="C.append(X[g.choice(len(X), p=d2 / d2.sum())])."
+solution={String.raw`
+  def kpp_init(X, k, g):
+      C = [X[g.integers(len(X))]]
+      for _ in range(1, k):
+          d2 = np.min(((X[:, None, :] - np.array(C)[None]) ** 2).sum(-1), axis=1)
+          C.append(X[g.choice(len(X), p=d2 / d2.sum())])
+      return np.array(C)
+
+  gs = np.random.default_rng(6012)
+  centres8 = 4 * gs.normal(size=(8, 2))
+  X8 = np.repeat(centres8, 40, axis=0) + 0.6 * gs.normal(size=(320, 2))
+  fin_rand = [kmeans(X8, 8, gs)[2][-1] for _ in range(40)]
+  fin_pp = [kmeans(X8, 8, gs, init=kpp_init(X8, 8, gs))[2][-1] for _ in range(40)]
+  good = 1.05 * min(fin_rand + fin_pp)
+  print(f"reached the good solution: random starts {np.mean(np.array(fin_rand) < good):.2f}, k-means++ {np.mean(np.array(fin_pp) < good):.2f}")
+`} />
+
+With eight groups, single random starts reach the best solution only 15% of the time, and k-means++ seeds 55% of the time. k-means++ is not a guarantee, which is why in practice it is combined with several restarts, but it makes each restart much more likely to count. Its cost is a pass over the data per centre, negligible beside the iterations that follow.
+
+<Step n={4} title="What k-means assumes" minutes={30} />
+
+Because it uses only distances to centres, k-means carves space into convex cells, the **Voronoi** regions of the centres, with boundaries halfway between them. It works best when clusters are round, of similar spread and of similar size. Unequal spreads and sizes pull boundaries in the wrong place; elongated clusters are cut across; and scaling the features changes the answer, because it changes the distances.
+
+<PyCell id="limits" title="Unequal groups" tests={String.raw`
+  import numpy as np
+  def test_captured():
+      "overall agreement looks high, yet k-means puts more than 15% of the wide group in the tight cluster"
+      assert acc_unequal > 0.9 and captured > 6
+`} prompt="Simulate a tight group of 200 neurons (sd 0.5) centred at 0 and a wide group of 40 (sd 2.5) centred at 4, in two dimensions. Run k-means with k = 2 from k-means++ seeds (best of 5) and measure the agreement with the true groups and how many wide-group points are captured by the tight cluster."
+code={String.raw`
+  gu = np.random.default_rng(6013)
+  Xu = np.vstack([0.5 * gu.normal(size=(200, 2)), np.array([4.0, 0]) + 2.5 * gu.normal(size=(40, 2))])
+  yu = np.r_[np.zeros(200, int), np.ones(40, int)]
+  runs_u = [kmeans(Xu, 2, gu, init=kpp_init(Xu, 2, gu)) for _ in range(5)]
+  lab_u, C_u, _ = min(runs_u, key=lambda run: run[2][-1])
+  acc_unequal = match_accuracy(lab_u, yu, 2)
+  tight_label = np.bincount(lab_u[:200]).argmax()
+  captured = ...
+  print(f"agreement {acc_unequal:.3f}; wide-group points assigned to the tight cluster: {captured} of 40")
+  print("centres:", np.round(C_u, 2))
+`}
+hint="captured = int(np.sum(lab_u[200:] == tight_label))."
+solution={String.raw`
+  gu = np.random.default_rng(6013)
+  Xu = np.vstack([0.5 * gu.normal(size=(200, 2)), np.array([4.0, 0]) + 2.5 * gu.normal(size=(40, 2))])
+  yu = np.r_[np.zeros(200, int), np.ones(40, int)]
+  runs_u = [kmeans(Xu, 2, gu, init=kpp_init(Xu, 2, gu)) for _ in range(5)]
+  lab_u, C_u, _ = min(runs_u, key=lambda run: run[2][-1])
+  acc_unequal = match_accuracy(lab_u, yu, 2)
+  tight_label = np.bincount(lab_u[:200]).argmax()
+  captured = int(np.sum(lab_u[200:] == tight_label))
+  print(f"agreement {acc_unequal:.3f}; wide-group points assigned to the tight cluster: {captured} of 40")
+  print("centres:", np.round(C_u, 2))
+`} />
+
+Overall agreement is 95%, which sounds like success, but it hides a systematic error: 12 of the 40 wide-group neurons, 30%, are assigned to the tight cluster, and the wide cluster's centre is pushed out to 5.6 instead of 4. k-means places the boundary halfway between the centres, ignoring that one group is five times as spread as the other, so wide-group points that stray towards the tight group are captured. Whenever the agreement statistic is dominated by a large group, check each group separately. Day 2's Gaussian mixtures give each cluster its own spread and weight, which is the principled fix.
+
+<Bridge title="Prototypes in brains and machines"
+  neuro="Competitive learning, in which neurons compete to respond to an input and the winner moves its weights towards it, is an online form of k-means; it was proposed as a model of how cortical feature detectors and self-organising maps form (Rumelhart and Zipser, 1985; Kohonen, 1982). Clustering of response profiles is also how many studies define functional cell classes, with the caveats of today's Step 4."
+  ai="Vector quantisation, Lloyd's original problem, is still central to machine learning: the codebooks of VQ-VAEs and of audio and image tokenisers are learned by k-means-like updates, and k-means on learned embeddings is a standard first look at what a network represents.">
+
+k-means finds the k prototypes that best summarise the data in squared distance, and nothing else.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "k-means minimises...", options: ["The sum of squared distances to assigned centres", "The number of clusters", "The likelihood of a mixture with free covariances", "The distance between centres"], answer: 0, explain: "Step 1." },
+  { q: "In the update step, each centre becomes...", options: ["The mean of its points", "The median of all points", "A random point", "The farthest point"], answer: 0, explain: "The derivation." },
+  { q: "Lloyd's algorithm always...", options: ["Converges, possibly to a local minimum", "Finds the global minimum", "Diverges", "Needs labels"], answer: 0, explain: "The derivation." },
+  { q: "k-means++ chooses each new centre with probability proportional to...", options: ["Squared distance to the nearest chosen centre", "Uniform", "Distance to the mean", "Density"], answer: 0, explain: "Step 3." },
+  { q: "k-means boundaries between clusters are...", options: ["Straight lines halfway between centres", "Curved", "Circles", "Learned freely"], answer: 0, explain: "Step 4." },
+  { q: "Rescaling one feature in k-means...", options: ["Can change the clustering", "Never matters", "Only changes the centres' units", "Speeds it up"], answer: 0, explain: "Distances change." },
+  { q: "A tight large group next to a wide small group leads k-means to...", options: ["Capture some of the wide group's points in the tight cluster", "Work perfectly", "Return one cluster", "Fail to converge"], answer: 0, explain: "Step 4." },
+  { q: "Lloyd developed the algorithm for...", options: ["Quantising signals for pulse-code modulation", "Spike sorting", "Gene expression", "Image classification"], answer: 0, explain: "Step 1." },
+]} />
+
+<Flashcards cards={[
+  { front: "k-means objective?", back: "$J = \\sum_i\\lVert\\mathbf x_i - \\boldsymbol\\mu_{z_i}\\rVert^2$" },
+  { front: "Lloyd's two steps?", back: "Assign each point to the nearest centre; move each centre to the mean of its points." },
+  { front: "Why does k-means converge?", back: "Each step cannot increase J, J ≥ 0, and there are finitely many assignments." },
+  { front: "k-means++?", back: "Seed centres one at a time with probability proportional to squared distance from the nearest existing centre." },
+  { front: "k-means assumptions?", back: "Round clusters of similar spread and size, in a space where Euclidean distance is meaningful." },
+]} />
+
+<Predict revisit question="Did k-means recover the tight group and the wide group?" />
+
+<Key title="Before you go">
+<ul>
+<li>k-means minimises within-cluster squared distance by alternating assignment and mean updates.</li>
+<li>It converges to a local minimum; use k-means++ seeds and several restarts.</li>
+<li>Its boundaries are halfway between centres, so it prefers round, equal clusters.</li>
+<li>Feature scaling and the choice of k are decisions you make, not ones it makes.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Lloyd (1982), <em>Least squares quantization in PCM</em>.</li>
+<li>Arthur and Vassilvitskii (2007), <em>k-means++: the advantages of careful seeding</em>, Proceedings of the 18th ACM-SIAM Symposium on Discrete Algorithms, 1027 to 1035.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Think of a dataset in neuroscience that people cluster (response profiles, cell morphologies, behavioural bouts). Which of k-means' assumptions are likely to fail there, and what would the failure look like in the results?" />
