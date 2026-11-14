@@ -1,0 +1,266 @@
+export const meta = {
+  title: "Forge: Week 56 challenge, quiz and deep read",
+  intro: "This week built the classification toolkit: logistic regression and its failure on separable data, softmax for many classes, generative classifiers from LDA to naive Bayes, decision thresholds and ROC curves, and the time-resolved decoding analysis of Hung and colleagues. Today's challenge compares three decoders on the same population, not only by accuracy but by whether their probabilities can be trusted, then uses those probabilities to make cost-sensitive decisions about rare events. Then the quiz, and a critique of the fast-readout paper.",
+  goals: [
+    "Compare softmax, shrinkage LDA and naive Bayes decoders on accuracy and calibration",
+    "Choose a decision threshold from costs on validation data and evaluate it honestly",
+    "Prove that the logistic loss is convex and that LDA's log-odds are linear",
+    "Critique fast-readout decoding as evidence about how the brain represents objects",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "hung-2005",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. A logistic weight is 0.7. By what factor does a one-unit increase in its input multiply the odds?
+2. False negatives cost 3 times false positives. What is the Bayes threshold on the probability?
+3. Two Gaussian score distributions are separated by d′ = 2. What is the AUC?
+
+<PyCell code={String.raw`
+  import numpy as np
+  from scipy.stats import norm
+  print("1.", round(np.exp(0.7), 3))
+  print("2.", 1 / (1 + 3))
+  print("3.", round(norm.cdf(2 / np.sqrt(2)), 3))
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: three decoders, two scores.** A population of 60 neurons is tuned to 6 stimulus categories, with a shared fluctuation in excitability on each trial. Fit softmax regression, shrinkage LDA and Poisson naive Bayes on 300 training trials, and compare them on 3,000 test trials by accuracy and by **expected calibration error**: sort test trials into bins of confidence (the largest predicted probability) and average the gap between confidence and accuracy in each bin, weighted by bin size.
+
+<PyCell id="partA" title="Part A: accuracy and calibration" tests={String.raw`
+  import numpy as np
+  def test_ece():
+      "ece is zero for a perfectly calibrated toy example"
+      P = np.array([[0.8, 0.2]] * 10); y_ = np.array([0] * 8 + [1] * 2)
+      assert abs(ece(P, y_)) < 1e-9
+  def test_results():
+      "results has accuracy and ECE for the three decoders, with accuracies above chance"
+      assert set(results) == {"softmax", "shrinkage LDA", "naive Bayes"} and all(v[0] > 0.3 for v in results.values())
+  def test_nb():
+      "naive Bayes is the worst calibrated of the three"
+      assert results["naive Bayes"][1] == max(v[1] for v in results.values())
+`} prompt="Write ece(P, y) with 10 equal-width confidence bins. The three fitting functions are provided; compute each decoder's test probabilities, then store (accuracy, ECE) in results."
+code={String.raw`
+  import numpy as np
+  from scipy.optimize import minimize
+  r = np.random.default_rng(566)
+  C, N = 6, 60
+  pref = r.normal(size=(C, N)) * 0.2
+
+  def trials(n):
+      y = r.integers(0, C, n)
+      gain = np.exp(0.4 * r.normal(size=(n, 1)) - 0.08)
+      return r.poisson(3.0 * np.exp(pref[y]) * gain).astype(float), y
+
+  X, y = trials(300); X_te, y_te = trials(3000)
+  mu, sd = X.mean(0), X.std(0) + 1e-9
+  Z, Z_te = (X - mu) / sd, (X_te - mu) / sd
+
+  def softmax(S):
+      S = S - S.max(1, keepdims=True); E = np.exp(S); return E / E.sum(1, keepdims=True)
+
+  def fit_softmax(Z, y, lam=0.01):
+      A = np.c_[np.ones(len(y)), Z]; Y = np.eye(C)[y]
+      def f(w):
+          W = w.reshape(A.shape[1], C); P = softmax(A @ W)
+          G = A.T @ (P - Y) / len(y); G[1:] += lam * W[1:]
+          return -np.mean(np.log(P[np.arange(len(y)), y])) + 0.5 * lam * np.sum(W[1:] ** 2), G.ravel()
+      W = minimize(f, np.zeros(A.shape[1] * C), jac=True, method="L-BFGS-B").x.reshape(A.shape[1], C)
+      return lambda Zn: softmax(np.c_[np.ones(len(Zn)), Zn] @ W)
+
+  def fit_lda(Z, y, gamma=0.3):
+      mus = np.array([Z[y == k].mean(0) for k in range(C)]); Zc = Z - mus[y]
+      S = Zc.T @ Zc / (len(y) - C); S = (1 - gamma) * S + gamma * np.trace(S) / Z.shape[1] * np.eye(Z.shape[1])
+      W = np.linalg.solve(S, mus.T); b = -0.5 * np.sum(W * mus.T, 0)
+      return lambda Zn: softmax(Zn @ W + b)
+
+  def fit_nb(X, y):
+      rates = np.array([X[y == k].mean(0) for k in range(C)]) + 1e-3
+      return lambda Xn: softmax(Xn @ np.log(rates).T - rates.sum(1))
+
+  def ece(P, y, bins=10):
+      conf, pred = P.max(1), P.argmax(1)
+      edges = np.linspace(0, 1, bins + 1); total = 0.0
+      for lo, hi in zip(edges[:-1], edges[1:]):
+          m = (conf > lo) & (conf <= hi)
+          if m.any():
+              total += ...
+      return total
+
+  probs = {"softmax": fit_softmax(Z, y)(Z_te), "shrinkage LDA": fit_lda(Z, y)(Z_te), "naive Bayes": fit_nb(X, y)(X_te)}
+  results = {}
+  for name, P in probs.items():
+      results[name] = ...
+      print(f"{name:14s} accuracy {results[name][0]:.3f}, mean confidence {P.max(1).mean():.3f}, ECE {results[name][1]:.3f}")
+`}
+hint="total += m.mean() * abs(conf[m].mean() - np.mean(pred[m] == y[m])); results[name] = (np.mean(P.argmax(1) == y_te), ece(P, y_te))."
+solution={String.raw`
+  import numpy as np
+  from scipy.optimize import minimize
+  r = np.random.default_rng(566)
+  C, N = 6, 60
+  pref = r.normal(size=(C, N)) * 0.2
+
+  def trials(n):
+      y = r.integers(0, C, n)
+      gain = np.exp(0.4 * r.normal(size=(n, 1)) - 0.08)
+      return r.poisson(3.0 * np.exp(pref[y]) * gain).astype(float), y
+
+  X, y = trials(300); X_te, y_te = trials(3000)
+  mu, sd = X.mean(0), X.std(0) + 1e-9
+  Z, Z_te = (X - mu) / sd, (X_te - mu) / sd
+
+  def softmax(S):
+      S = S - S.max(1, keepdims=True); E = np.exp(S); return E / E.sum(1, keepdims=True)
+
+  def fit_softmax(Z, y, lam=0.01):
+      A = np.c_[np.ones(len(y)), Z]; Y = np.eye(C)[y]
+      def f(w):
+          W = w.reshape(A.shape[1], C); P = softmax(A @ W)
+          G = A.T @ (P - Y) / len(y); G[1:] += lam * W[1:]
+          return -np.mean(np.log(P[np.arange(len(y)), y])) + 0.5 * lam * np.sum(W[1:] ** 2), G.ravel()
+      W = minimize(f, np.zeros(A.shape[1] * C), jac=True, method="L-BFGS-B").x.reshape(A.shape[1], C)
+      return lambda Zn: softmax(np.c_[np.ones(len(Zn)), Zn] @ W)
+
+  def fit_lda(Z, y, gamma=0.3):
+      mus = np.array([Z[y == k].mean(0) for k in range(C)]); Zc = Z - mus[y]
+      S = Zc.T @ Zc / (len(y) - C); S = (1 - gamma) * S + gamma * np.trace(S) / Z.shape[1] * np.eye(Z.shape[1])
+      W = np.linalg.solve(S, mus.T); b = -0.5 * np.sum(W * mus.T, 0)
+      return lambda Zn: softmax(Zn @ W + b)
+
+  def fit_nb(X, y):
+      rates = np.array([X[y == k].mean(0) for k in range(C)]) + 1e-3
+      return lambda Xn: softmax(Xn @ np.log(rates).T - rates.sum(1))
+
+  def ece(P, y, bins=10):
+      conf, pred = P.max(1), P.argmax(1)
+      edges = np.linspace(0, 1, bins + 1); total = 0.0
+      for lo, hi in zip(edges[:-1], edges[1:]):
+          m = (conf > lo) & (conf <= hi)
+          if m.any():
+              total += m.mean() * abs(conf[m].mean() - np.mean(pred[m] == y[m]))
+      return total
+
+  probs = {"softmax": fit_softmax(Z, y)(Z_te), "shrinkage LDA": fit_lda(Z, y)(Z_te), "naive Bayes": fit_nb(X, y)(X_te)}
+  results = {}
+  for name, P in probs.items():
+      results[name] = (np.mean(P.argmax(1) == y_te), ece(P, y_te))
+      print(f"{name:14s} accuracy {results[name][0]:.3f}, mean confidence {P.max(1).mean():.3f}, ECE {results[name][1]:.3f}")
+`} />
+
+Shrinkage LDA is the most accurate (80.7%), softmax next (75.9%) and naive Bayes last (73.8%), with chance at 16.7%. The calibration scores separate them more sharply. Softmax and LDA say what they mean: mean confidence 0.75 and 0.80 against accuracies of 0.76 and 0.81, expected calibration errors of about 0.01 to 0.02. Naive Bayes claims 85% confidence while being right 74% of the time, an error of 0.11, because the shared fluctuation in excitability is counted as independent evidence in every neuron. If you want a decoder's probabilities to stand for uncertainty, check calibration first; accuracy will not reveal the problem.
+
+**Part B: costly decisions.** Category 0 is a rare target (about one trial in six) that you must detect, and a miss costs 5 times a false alarm. Using the softmax decoder's probability of category 0, choose the threshold that minimises cost on 300 validation trials, then report the cost per trial on the test set, compared with the default threshold of 0.5 and with the Bayes threshold of 1/6.
+
+<PyCell id="partB" title="Part B: a threshold chosen by cost" tests={String.raw`
+  import numpy as np
+  def test_costs():
+      "the validated threshold beats the default 0.5 on test cost"
+      assert cost_val_thr < cost_default
+  def test_near_bayes():
+      "the validated threshold is within 0.15 of the Bayes threshold"
+      assert abs(thr_val - 1 / 6) < 0.15
+`} prompt="Draw 300 validation trials. Compute the cost (1 per false alarm, 5 per miss) on a grid of thresholds for the softmax probability of category 0, choose the best, and evaluate it, the default 0.5 and the Bayes threshold 1/6 on the test set (cost per trial)."
+code={String.raw`
+  dec = fit_softmax(Z, y)
+  X_va, y_va = trials(300); P_va = dec((X_va - mu) / sd)[:, 0]; P_te0 = probs["softmax"][:, 0]
+  t_va, t_te = (y_va == 0), (y_te == 0)
+  cost = lambda p, t, thr: (np.sum((p > thr) & ~t) + 5 * np.sum((p <= thr) & t)) / len(t)
+  grid = np.linspace(0.02, 0.9, 45)
+  thr_val = ...
+  cost_val_thr, cost_default, cost_bayes = cost(P_te0, t_te, thr_val), cost(P_te0, t_te, 0.5), cost(P_te0, t_te, 1 / 6)
+  print(f"validated threshold {thr_val:.2f}: test cost {cost_val_thr:.3f} per trial")
+  print(f"default 0.5: {cost_default:.3f}; Bayes 1/6: {cost_bayes:.3f}")
+`}
+hint="thr_val = grid[int(np.argmin([cost(P_va, t_va, g) for g in grid]))]."
+solution={String.raw`
+  dec = fit_softmax(Z, y)
+  X_va, y_va = trials(300); P_va = dec((X_va - mu) / sd)[:, 0]; P_te0 = probs["softmax"][:, 0]
+  t_va, t_te = (y_va == 0), (y_te == 0)
+  cost = lambda p, t, thr: (np.sum((p > thr) & ~t) + 5 * np.sum((p <= thr) & t)) / len(t)
+  grid = np.linspace(0.02, 0.9, 45)
+  thr_val = grid[int(np.argmin([cost(P_va, t_va, g) for g in grid]))]
+  cost_val_thr, cost_default, cost_bayes = cost(P_te0, t_te, thr_val), cost(P_te0, t_te, 0.5), cost(P_te0, t_te, 1 / 6)
+  print(f"validated threshold {thr_val:.2f}: test cost {cost_val_thr:.3f} per trial")
+  print(f"default 0.5: {cost_default:.3f}; Bayes 1/6: {cost_bayes:.3f}")
+`} />
+
+The threshold chosen on validation trials, 0.24, gives a test cost of 0.182 per trial, a quarter less than the default 0.5 (0.246) and essentially equal to the Bayes threshold of 1/6 (0.181). With misses five times worse than false alarms, the decoder should report the rare target whenever its probability exceeds about one in six, and it is the calibration of the softmax probabilities that makes the Bayes formula work here. The validated threshold differs from 1/6 because 300 validation trials contain only about 50 targets, a reminder that thresholds, like any hyperparameter, are estimated with noise.
+
+**Part C (written).** Answer in your journal. First, if you had to report the brain's uncertainty about the stimulus from a decoder, which of the three decoders would you trust, and what check would you run first? Second, Hung and colleagues reported accuracy only. Name one analysis from this week that would have added to their conclusions, and what it might have shown.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The logistic loss is convex" task="For $L(\mathbf w) = -\sum_i [y_i\log\sigma(\mathbf x_i^\top\mathbf w) + (1 - y_i)\log(1 - \sigma(\mathbf x_i^\top\mathbf w))]$, show that the Hessian is $X^\top SX$ with $S = \text{diag}(p_i(1 - p_i))$, and that it is positive semi-definite.">
+
+The gradient is $\sum_i (p_i - y_i)\mathbf x_i$ with $p_i = \sigma(\mathbf x_i^\top\mathbf w)$. Differentiating again, $\partial p_i/\partial\mathbf w = p_i(1 - p_i)\mathbf x_i$, so the Hessian is $\sum_i p_i(1 - p_i)\mathbf x_i\mathbf x_i^\top = X^\top SX$.
+
+For any vector $\mathbf v$, $\mathbf v^\top X^\top SX\mathbf v = \sum_i p_i(1 - p_i)(\mathbf x_i^\top\mathbf v)^2 \ge 0$, since every $p_i(1 - p_i) \gt 0$.
+
+So the loss is convex: every local minimum is global, and gradient descent or Newton's method cannot get stuck. (Strict convexity can fail, as on separable data, where the minimum is not attained at all.)
+
+</Prove>
+
+<Prove title="2. LDA's log-odds are linear" task="If $\mathbf x \mid y = k \sim \mathcal N(\boldsymbol\mu_k, \Sigma)$ with a shared $\Sigma$ and prior $\pi_k$, show that $\log\frac{P(y = 1 \mid \mathbf x)}{P(y = 0 \mid \mathbf x)} = \mathbf w^\top\mathbf x + b$ with $\mathbf w = \Sigma^{-1}(\boldsymbol\mu_1 - \boldsymbol\mu_0)$.">
+
+By Bayes' rule the log-odds is $\log\frac{\pi_1}{\pi_0} + \log\mathcal N(\mathbf x; \boldsymbol\mu_1, \Sigma) - \log\mathcal N(\mathbf x; \boldsymbol\mu_0, \Sigma)$.
+
+The normalising constants are equal and cancel. The exponents give $-\frac12(\mathbf x - \boldsymbol\mu_1)^\top\Sigma^{-1}(\mathbf x - \boldsymbol\mu_1) + \frac12(\mathbf x - \boldsymbol\mu_0)^\top\Sigma^{-1}(\mathbf x - \boldsymbol\mu_0)$.
+
+Expanding, the $\mathbf x^\top\Sigma^{-1}\mathbf x$ terms cancel, leaving $(\boldsymbol\mu_1 - \boldsymbol\mu_0)^\top\Sigma^{-1}\mathbf x - \frac12\boldsymbol\mu_1^\top\Sigma^{-1}\boldsymbol\mu_1 + \frac12\boldsymbol\mu_0^\top\Sigma^{-1}\boldsymbol\mu_0$.
+
+So the log-odds is linear in $\mathbf x$, exactly the form of logistic regression: LDA and logistic regression share a model family and differ in how they fit it, by class densities or by the conditional likelihood.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 56 quiz (15 questions)" questions={[
+  { q: "The logistic score is...", options: ["The log-odds", "A probability", "The odds", "A count"], answer: 0, explain: "Day 1." },
+  { q: "The logistic gradient is...", options: ["Xᵀ(p − y)", "XᵀXw", "p(1 − p)", "y − Xw"], answer: 0, explain: "Day 1." },
+  { q: "Unpenalised logistic regression on separable data...", options: ["Has diverging weights", "Converges", "Underfits", "Is undefined from the start"], answer: 0, explain: "Day 1." },
+  { q: "Softmax probabilities are unchanged by...", options: ["Adding a constant to all scores", "Doubling all scores", "Removing a class", "Changing one score"], answer: 0, explain: "Day 2." },
+  { q: "One-vs-rest classifiers' probabilities...", options: ["Need not sum to one", "Always sum to one", "Are calibrated", "Are identical to softmax"], answer: 0, explain: "Day 2." },
+  { q: "A direction decoder's errors fall mostly on...", options: ["Neighbouring directions", "Opposite directions", "Random directions", "None"], answer: 0, explain: "Day 2." },
+  { q: "LDA assumes classes are Gaussian with...", options: ["A shared covariance", "Different covariances", "Independent features", "Equal means"], answer: 0, explain: "Day 3." },
+  { q: "QDA's boundaries are...", options: ["Quadratic", "Linear", "Circular only", "Absent"], answer: 0, explain: "Day 3." },
+  { q: "Naive Bayes with correlated noise is usually...", options: ["Overconfident", "Underconfident", "Calibrated", "Worse than chance"], answer: 0, explain: "Day 3." },
+  { q: "With a false negative costing 9 times a false positive, the threshold is...", options: ["0.1", "0.9", "0.5", "0.01"], answer: 0, explain: "Day 4." },
+  { q: "The AUC is...", options: ["P(random positive outscores random negative)", "Accuracy", "Precision", "Recall"], answer: 0, explain: "Day 4." },
+  { q: "For rare events, accuracy is...", options: ["Misleading", "The best score", "Equal to recall", "Always low"], answer: 0, explain: "Day 4." },
+  { q: "Shrinkage LDA stabilises...", options: ["The covariance estimate", "The class means", "The labels", "The time bins"], answer: 0, explain: "Day 5." },
+  { q: "A dynamic code shows in temporal generalisation as...", options: ["High diagonal, low off-diagonal", "Uniformly high", "Uniformly low", "High off-diagonal"], answer: 0, explain: "Day 5." },
+  { q: "Hung and colleagues read object category from IT with...", options: ["Linear classifiers on a few hundred sites", "Single neurons only", "fMRI", "Deep networks"], answer: 0, explain: "The deep read." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Hung, Kreiman, Poggio and DiCarlo (2005) its third pass and write your critique under the five headings. Focus on one question: **what does fast linear readout tell us about how inferior temporal cortex represents objects?** Consider the choice of a linear classifier and what nonlinear decoders might add; the use of multi-unit activity and of sites recorded on different days, combined as if simultaneous (what does that assume about correlations?); the claim of invariance to position and scale, and how it was tested; how accuracy depends on the number of sites, and what that says about redundancy; whether readout by a classifier is the same as readout by the brain; and how this paper's method became the standard for comparing deep networks with IT (Week 49's brain scores). End with one experiment that would test whether downstream areas actually use the linear readout.
+
+<Callout kind="research">
+
+Temporal generalisation on real data: the Allen Brain Observatory Neuropixels recordings (reachable from the Colab notebook) include responses of many visual areas to natural images. Decode image identity over time in two areas, compute the temporal generalisation matrix in each, and compare their shapes. Is the code in higher areas more stable or more dynamic? Use shrinkage LDA and five-fold cross-validation, and check that accuracy before image onset is at chance.
+
+</Callout>
+
+<Key title="Week 56 review checklist">
+<ul>
+<li>I can fit logistic and softmax regression and explain divergence on separable data.</li>
+<li>I can build LDA, QDA and naive Bayes classifiers and say when each is appropriate.</li>
+<li>I can choose thresholds from costs and evaluate classifiers with ROC curves, AUC, balanced accuracy, precision and recall.</li>
+<li>I can measure the calibration of a classifier's probabilities.</li>
+<li>I can run time-resolved and temporal generalisation decoding with proper cross-validation.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then write the methods paragraph for a decoding analysis of your own design: the classifier and why, the cross-validation scheme, the score reported and why, and the control that shows chance-level performance where there should be no information." />

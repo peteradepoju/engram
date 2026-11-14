@@ -1,0 +1,254 @@
+export const meta = {
+  title: "Decision theory: losses, thresholds and ROC curves",
+  intro: "A classifier that outputs probabilities has not yet made a decision. Turning a probability into an action needs a threshold, and the right threshold depends on what mistakes cost and how common each class is. Today you derive the Bayes decision rule for unequal costs, learn to describe a classifier across all thresholds at once with the ROC curve and its area, and see how rare events, which neuroscience is full of, make accuracy a misleading score.",
+  goals: [
+    "Derive the threshold that minimises expected cost from the costs of the two errors",
+    "Compute an ROC curve and its area, and interpret the area as a probability",
+    "Relate the area under the curve to d′ for Gaussian scores",
+    "Evaluate classifiers of rare events with balanced accuracy, precision and recall",
+  ],
+  plan: [
+    { label: "The Bayes decision rule", minutes: 20 },
+    { label: "Thresholds and costs", minutes: 25 },
+    { label: "ROC curves and their area", minutes: 30 },
+    { label: "Rare events", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "fawcett-2006",
+};
+
+<Predict question="A detector of sharp-wave ripples in hippocampal recordings is evaluated on data where ripples occupy 5% of time bins. A detector that never reports a ripple has what accuracy: about 50%, about 95%, or 0%?" />
+
+<Step n={1} title="The Bayes decision rule" minutes={20} />
+
+Suppose a classifier gives the probability $p = P(y = 1 \mid \mathbf x)$, a false positive costs $c_\text{FP}$ and a false negative $c_\text{FN}$ (correct decisions cost nothing). Saying "1" has expected cost $(1 - p)\,c_\text{FP}$ and saying "0" has expected cost $p\,c_\text{FN}$. Saying "1" is better when $p\,c_\text{FN} \gt (1 - p)\,c_\text{FP}$, that is, when
+
+$$
+p \gt p^* = \frac{c_\text{FP}}{c_\text{FP} + c_\text{FN}}.
+$$
+
+With equal costs the threshold is 0.5. If missing a seizure is ten times worse than a false alarm, the threshold drops to $1/11 \approx 0.09$. This is the **Bayes decision rule**, and it requires calibrated probabilities: a model whose 0.3 means 0.3. Signal detection theory (Week 48) is the same analysis, with the criterion playing the role of the threshold.
+
+<Video id="4jRBRDbJemM" title="ROC and AUC, clearly explained" by="StatQuest with Josh Starmer" note="Josh Starmer on summarising a classifier across every threshold with the ROC curve, and on what the area under it measures." />
+
+<Step n={2} title="Thresholds and costs" minutes={25} />
+
+<PyCell id="costs" title="The threshold that minimises cost" tests={String.raw`
+  import numpy as np
+  def test_cost():
+      "total_cost counts false positives times c_fp plus false negatives times c_fn"
+      t = np.array([1, 0, 1, 0]); p = np.array([0.9, 0.8, 0.2, 0.1])
+      assert total_cost(p, t, 0.5, 1.0, 5.0) == 1 * 1.0 + 1 * 5.0
+  def test_best():
+      "the empirically best threshold is within 0.05 of the Bayes threshold for each cost ratio"
+      assert all(abs(best[k] - 1 / (1 + k)) < 0.05 for k in best)
+`} prompt="Write total_cost(p, t, thr, c_fp, c_fn). For calibrated probabilities on 20,000 test trials, find the threshold on a grid that minimises cost when a false negative costs k times a false positive, for k = 1, 4 and 9, and compare with the Bayes threshold 1 / (1 + k)."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(564)
+  n = 20000
+  score = r.normal(size=n)
+  p_true = 1 / (1 + np.exp(-(1.5 * score - 0.5)))       # calibrated probabilities
+  t = (r.random(n) < p_true).astype(int)
+
+  def total_cost(p, t, thr, c_fp, c_fn):
+      say1 = p > thr
+      return ...
+
+  grid = np.linspace(0.01, 0.99, 99)
+  best = {}
+  for k in [1, 4, 9]:
+      costs = [total_cost(p_true, t, g, 1.0, k) for g in grid]
+      best[k] = grid[int(np.argmin(costs))]
+      print(f"false negatives cost {k}x: best threshold {best[k]:.2f}, Bayes threshold {1 / (1 + k):.2f}")
+`}
+hint="return c_fp * np.sum(say1 & (t == 0)) + c_fn * np.sum(~say1 & (t == 1))."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(564)
+  n = 20000
+  score = r.normal(size=n)
+  p_true = 1 / (1 + np.exp(-(1.5 * score - 0.5)))       # calibrated probabilities
+  t = (r.random(n) < p_true).astype(int)
+
+  def total_cost(p, t, thr, c_fp, c_fn):
+      say1 = p > thr
+      return c_fp * np.sum(say1 & (t == 0)) + c_fn * np.sum(~say1 & (t == 1))
+
+  grid = np.linspace(0.01, 0.99, 99)
+  best = {}
+  for k in [1, 4, 9]:
+      costs = [total_cost(p_true, t, g, 1.0, k) for g in grid]
+      best[k] = grid[int(np.argmin(costs))]
+      print(f"false negatives cost {k}x: best threshold {best[k]:.2f}, Bayes threshold {1 / (1 + k):.2f}")
+`} />
+
+The empirical minimum of the total cost sits at thresholds of 0.47, 0.20 and 0.11 for cost ratios of 1, 4 and 9, against Bayes thresholds of 0.50, 0.20 and 0.10. When misses are expensive, the right policy is to say "yes" on evidence that is far from convincing: at a ratio of 9, a 15% chance of an event is enough to act. The match depends on the probabilities being calibrated; with an overconfident model such as yesterday's naive Bayes decoder, the formula would put the threshold in the wrong place.
+
+<Step n={3} title="ROC curves and their area" minutes={30} />
+
+<Figure caption="Score distributions for negatives and positives separated by d′, a threshold, and the ROC curve traced by moving it. The area under the curve does not depend on the threshold." credit="Interactive figure by Engram, after Fawcett (2006).">
+  <RocCurve />
+</Figure>
+
+When costs are unknown, or the classifier will be used at different thresholds, describe it at all of them. The **ROC curve** plots the true positive rate against the false positive rate as the threshold sweeps from high to low. Its **area** (AUC) has a direct meaning: the probability that a randomly chosen positive gets a higher score than a randomly chosen negative, which is also the Mann-Whitney statistic. For Gaussian scores with equal variance separated by $d'$, $\text{AUC} = \Phi(d'/\sqrt 2)$, linking ROC analysis to the psychophysics of Week 48.
+
+<PyCell id="roc" title="ROC from scratch" tests={String.raw`
+  import numpy as np
+  def test_roc():
+      "roc_curve returns rates from (0, 0) to (1, 1), non-decreasing"
+      f, tp = roc_curve(np.array([0.1, 0.4, 0.35, 0.8]), np.array([0, 0, 1, 1]))
+      assert f[0] == 0 and tp[0] == 0 and f[-1] == 1 and tp[-1] == 1 and np.all(np.diff(f) >= 0)
+  def test_auc():
+      "the trapezoid AUC matches the pairwise probability and the d' formula within 0.01"
+      assert abs(auc_trap - auc_pairs) < 0.01 and abs(auc_trap - auc_theory) < 0.01
+`} prompt="Write roc_curve(scores, labels): sort trials by decreasing score and accumulate true and false positive rates, starting from (0, 0). Compute the area by the trapezoid rule, the fraction of positive-negative pairs ranked correctly (on a subsample), and the theoretical value for d' = 1.2."
+code={String.raw`
+  from scipy.stats import norm
+  dp = 1.2
+  lab = r.integers(0, 2, 4000)
+  sc = r.normal(size=4000) + dp * lab
+
+  def roc_curve(scores, labels):
+      order = np.argsort(-scores)
+      l = labels[order]
+      tpr = np.r_[0, np.cumsum(l) / l.sum()]
+      fpr = ...
+      return fpr, tpr
+
+  fpr, tpr = roc_curve(sc, lab)
+  auc_trap = np.trapz(tpr, fpr) if hasattr(np, "trapz") else np.trapezoid(tpr, fpr)
+  pos, neg = sc[lab == 1][:800], sc[lab == 0][:800]
+  auc_pairs = ...
+  auc_theory = norm.cdf(dp / np.sqrt(2))
+  print(f"AUC: trapezoid {auc_trap:.3f}, pairwise {auc_pairs:.3f}, theory {auc_theory:.3f}")
+  plt.plot(fpr, tpr); plt.plot([0, 1], [0, 1], "k:"); plt.xlabel("false positive rate"); plt.ylabel("true positive rate"); plt.show()
+`}
+hint="fpr = np.r_[0, np.cumsum(1 - l) / (1 - l).sum()]; auc_pairs = np.mean(pos[:, None] > neg[None, :])."
+solution={String.raw`
+  from scipy.stats import norm
+  dp = 1.2
+  lab = r.integers(0, 2, 4000)
+  sc = r.normal(size=4000) + dp * lab
+
+  def roc_curve(scores, labels):
+      order = np.argsort(-scores)
+      l = labels[order]
+      tpr = np.r_[0, np.cumsum(l) / l.sum()]
+      fpr = np.r_[0, np.cumsum(1 - l) / (1 - l).sum()]
+      return fpr, tpr
+
+  fpr, tpr = roc_curve(sc, lab)
+  auc_trap = np.trapz(tpr, fpr) if hasattr(np, "trapz") else np.trapezoid(tpr, fpr)
+  pos, neg = sc[lab == 1][:800], sc[lab == 0][:800]
+  auc_pairs = np.mean(pos[:, None] > neg[None, :])
+  auc_theory = norm.cdf(dp / np.sqrt(2))
+  print(f"AUC: trapezoid {auc_trap:.3f}, pairwise {auc_pairs:.3f}, theory {auc_theory:.3f}")
+  plt.plot(fpr, tpr); plt.plot([0, 1], [0, 1], "k:"); plt.xlabel("false positive rate"); plt.ylabel("true positive rate"); plt.show()
+`} />
+
+The three numbers agree: 0.802 by the trapezoid rule, 0.800 from counting correctly ranked pairs on a subsample, and 0.802 from $\Phi(1.2/\sqrt 2)$. The area is a property of the scores, not of any threshold, which makes it a good summary of how separable two classes are. Its limitation is the other side of the same coin: it averages over thresholds you would never use, and two classifiers with equal AUC can differ greatly at the one operating point that matters for your application.
+
+<Step n={4} title="Rare events" minutes={25} />
+
+Ripples, spikes in a noisy trace, seizures and lapses are rare. With 5% positives, a detector that always says "no" is 95% accurate and useless. Better scores for rare events are **balanced accuracy** (the mean of the true positive and true negative rates), **recall** (the true positive rate) and **precision** (the fraction of reported events that are real). The ROC curve is unaffected by prevalence; precision is not.
+
+<PyCell id="rare" title="Scores that see through imbalance" tests={String.raw`
+  import numpy as np
+  def test_trivial():
+      "the always-no detector has accuracy near 0.95 and balanced accuracy 0.5"
+      assert abs(scores_triv["accuracy"] - 0.95) < 0.01 and abs(scores_triv["balanced"] - 0.5) < 1e-9
+  def test_precision():
+      "at the same threshold, precision falls when events become rarer while recall stays the same"
+      assert prec_rare < prec_common - 0.2 and abs(rec_rare - rec_common) < 0.03
+`} prompt="Write metrics(pred, t) returning accuracy, balanced accuracy, precision and recall. Score the always-no detector on data with 5% events, then score a real detector (threshold 1.5 on a score with d' = 2) at 5% and at 30% prevalence."
+code={String.raw`
+  def metrics(pred, t):
+      tp, tn = np.sum(pred & (t == 1)), np.sum(~pred & (t == 0))
+      fp, fn = np.sum(pred & (t == 0)), np.sum(~pred & (t == 1))
+      return {"accuracy": (tp + tn) / len(t), "balanced": ...,
+              "precision": tp / max(tp + fp, 1), "recall": tp / (tp + fn)}
+
+  def events(n, prev, g):
+      t_ = (g.random(n) < prev).astype(int)
+      return g.normal(size=n) + 2.0 * t_, t_
+
+  s5, t5 = events(20000, 0.05, r); s30, t30 = events(20000, 0.30, r)
+  scores_triv = metrics(np.zeros(20000, bool), t5)
+  m5, m30 = metrics(s5 > 1.5, t5), metrics(s30 > 1.5, t30)
+  prec_rare, rec_rare, prec_common, rec_common = m5["precision"], m5["recall"], m30["precision"], m30["recall"]
+  print("always no, 5% events:", {k: round(float(v), 3) for k, v in scores_triv.items()})
+  print("detector, 5% events: ", {k: round(float(v), 3) for k, v in m5.items()})
+  print("detector, 30% events:", {k: round(float(v), 3) for k, v in m30.items()})
+`}
+hint="'balanced': 0.5 * (tp / (tp + fn) + tn / (tn + fp))."
+solution={String.raw`
+  def metrics(pred, t):
+      tp, tn = np.sum(pred & (t == 1)), np.sum(~pred & (t == 0))
+      fp, fn = np.sum(pred & (t == 0)), np.sum(~pred & (t == 1))
+      return {"accuracy": (tp + tn) / len(t), "balanced": 0.5 * (tp / (tp + fn) + tn / (tn + fp)),
+              "precision": tp / max(tp + fp, 1), "recall": tp / (tp + fn)}
+
+  def events(n, prev, g):
+      t_ = (g.random(n) < prev).astype(int)
+      return g.normal(size=n) + 2.0 * t_, t_
+
+  s5, t5 = events(20000, 0.05, r); s30, t30 = events(20000, 0.30, r)
+  scores_triv = metrics(np.zeros(20000, bool), t5)
+  m5, m30 = metrics(s5 > 1.5, t5), metrics(s30 > 1.5, t30)
+  prec_rare, rec_rare, prec_common, rec_common = m5["precision"], m5["recall"], m30["precision"], m30["recall"]
+  print("always no, 5% events:", {k: round(float(v), 3) for k, v in scores_triv.items()})
+  print("detector, 5% events: ", {k: round(float(v), 3) for k, v in m5.items()})
+  print("detector, 30% events:", {k: round(float(v), 3) for k, v in m30.items()})
+`} />
+
+The detector that never reports an event scores 95.1% accuracy and 50% balanced accuracy, which answers the prediction and shows why accuracy is the wrong score here. The real detector has lower accuracy (91.9%) but a balanced accuracy of 81%, and finds 68% of events. At 5% prevalence only 34% of its reports are real events; at 30% prevalence the same detector, with the same threshold and the same recall (69%), has a precision of 81%. Nothing about the detector changed, only how rare the events were. A ripple detector tuned on a dataset rich in ripples will therefore disappoint on long recordings where ripples are scarce, unless its threshold is reset.
+
+<Bridge title="Decisions in brains and machines"
+  neuro="Animals set their own thresholds. A mouse in a detection task that is rewarded more for hits than it is punished for false alarms should, and usually does, lower its criterion; signal detection theory separates this shift from any change in sensitivity. The same separation applies to a neural decoder: its AUC measures what the population can tell apart, whatever threshold a downstream area might use."
+  ai="Deployed classifiers, from medical screening to content filtering, choose operating points on their ROC curves by weighing costs, and they must be re-thresholded when the prevalence of what they detect changes. Calibration, which makes probabilities usable for such decisions, is the subject of Week 68.">
+
+Probability first, then a decision weighed by its costs: and score detectors of rare events with measures that cannot be fooled by doing nothing.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "If a false negative costs 4 times a false positive, the Bayes threshold on p is...", options: ["0.2", "0.8", "0.5", "0.25"], answer: 0, explain: "c_FP / (c_FP + c_FN) = 1/5." },
+  { q: "The Bayes decision rule needs probabilities that are...", options: ["Calibrated", "Sparse", "Binary", "Large"], answer: 0, explain: "0.3 must mean 0.3." },
+  { q: "An ROC curve plots...", options: ["True positive rate against false positive rate", "Precision against recall", "Accuracy against threshold", "Loss against epochs"], answer: 0, explain: "Across thresholds." },
+  { q: "The AUC equals...", options: ["The probability a random positive outscores a random negative", "Accuracy at threshold 0.5", "The precision", "d′"], answer: 0, explain: "The Mann-Whitney statistic." },
+  { q: "For equal-variance Gaussian scores, AUC is...", options: ["Φ(d′/√2)", "Φ(d′)", "d′/2", "1 − d′"], answer: 0, explain: "Step 3." },
+  { q: "With 5% positives, always predicting negative gives an accuracy of...", options: ["95%", "50%", "5%", "0%"], answer: 0, explain: "Accuracy is fooled by imbalance." },
+  { q: "Balanced accuracy of the always-negative detector is...", options: ["50%", "95%", "0%", "100%"], answer: 0, explain: "Recall 0, specificity 1." },
+  { q: "When events become rarer, at a fixed threshold...", options: ["Precision falls, recall stays", "Recall falls, precision stays", "Both stay", "Both rise"], answer: 0, explain: "More false alarms per real event." },
+]} />
+
+<Flashcards cards={[
+  { front: "Bayes threshold?", back: "Say 1 when $p \\gt c_{FP}/(c_{FP} + c_{FN})$." },
+  { front: "ROC curve?", back: "True positive rate against false positive rate as the threshold varies." },
+  { front: "AUC meaning?", back: "P(score of a random positive > score of a random negative)." },
+  { front: "Balanced accuracy?", back: "Mean of the true positive rate and the true negative rate." },
+  { front: "Precision against recall?", back: "Precision: fraction of reported events that are real. Recall: fraction of real events reported." },
+]} />
+
+<Predict revisit question="What accuracy does a ripple detector that never reports a ripple achieve when ripples fill 5% of bins?" />
+
+<Key title="Before you go">
+<ul>
+<li>The best threshold depends on the costs of the two errors, and needs calibrated probabilities.</li>
+<li>ROC curves summarise a classifier at every threshold; the AUC is a ranking probability.</li>
+<li>For Gaussian scores, AUC and d′ are two views of the same separation.</li>
+<li>For rare events, report balanced accuracy, precision and recall, never accuracy alone.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Fawcett (2006), <em>An introduction to ROC analysis</em>.</li>
+<li>Green and Swets (1966), <em>Signal Detection Theory and Psychophysics</em>, the classic link between ROC analysis and perception.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Think of a detector used in neuroscience (spikes, ripples, seizures, sleep stages, behavioural events). Estimate the prevalence of what it detects, the costs of its two kinds of error, and the threshold the Bayes rule would recommend. Which score would you report to describe it, and why?" />

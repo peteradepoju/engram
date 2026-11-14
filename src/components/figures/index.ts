@@ -251,3 +251,8 @@ export { RidgeShrinkage } from "./ridge-shrinkage";
 export { ConstraintGeometry } from "./constraint-geometry";
 export { LassoPath } from "./lasso-path";
 export { ReceptiveFieldEstimate } from "./receptive-field-estimate";
+export { LogisticBoundary } from "./logistic-boundary";
+export { SoftmaxRegions } from "./softmax-regions";
+export { LdaQda } from "./lda-qda";
+export { RocCurve } from "./roc-curve";
+export { CategoryDecoding } from "./category-decoding";

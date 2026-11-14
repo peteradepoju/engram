@@ -1,0 +1,279 @@
+export const meta = {
+  title: "Decoding categories from population activity",
+  intro: "In 2005 Chou Hung, Gabriel Kreiman, Tomaso Poggio and James DiCarlo showed that a simple linear classifier, reading a few hundred sites in monkey inferior temporal cortex, could tell which object a monkey was seeing within about 125 ms of the image appearing. The study became a template for decoding analyses. Today you build that template on simulated data: time-resolved decoding with a shrinkage LDA classifier, decoding accuracy as a function of how many neurons are read, and the temporal generalisation matrix, which asks whether the code stays the same over time.",
+  goals: [
+    "Run a time-resolved decoding analysis with cross-validation in every time bin",
+    "Use shrinkage LDA as a fast and robust population decoder",
+    "Measure how decoding accuracy grows with the number of neurons, with and without correlated noise",
+    "Build a temporal generalisation matrix and interpret a stable against a dynamic code",
+  ],
+  plan: [
+    { label: "Fast readout of object identity", minutes: 20 },
+    { label: "Decoding over time", minutes: 35 },
+    { label: "How many neurons?", minutes: 25 },
+    { label: "Does the code change over time?", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "hung-2005",
+};
+
+<Predict question="A decoder is trained on population activity 100 to 125 ms after an image appears and tested on activity 250 to 275 ms after. If the neurons' code for the image changes over time while still carrying the same information, will accuracy at the later time be as high as a decoder trained there, near chance, or somewhere between?" />
+
+<Step n={1} title="Fast readout of object identity" minutes={20} />
+
+Hung and colleagues, today's paper, recorded multi-unit activity at a few hundred sites in inferior temporal cortex while monkeys viewed 77 images in 8 categories, and trained linear classifiers on the spike counts in short windows. Category could be read out above chance from about 100 ms after image onset, from windows as short as 12.5 ms, and with accuracy growing steadily with the number of sites. The point was not that a monkey uses this classifier, but that the information is available in a form a single downstream layer of neurons could read.
+
+<Figure caption="The accuracy over time of an optimal linear decoder of a binary category, for populations of different sizes (grey), with and without correlated noise between neurons. Choose the number of neurons and the noise correlation." credit="Interactive figure by Engram, after Hung, Kreiman, Poggio and DiCarlo (2005).">
+  <CategoryDecoding />
+</Figure>
+
+<Video id="Kdsp6soqA7o" title="The confusion matrix" by="StatQuest with Josh Starmer" note="Josh Starmer on confusion matrices, the table of which classes are mistaken for which, used to summarise multi-class decoders like today's." />
+
+<Step n={2} title="Decoding over time" minutes={35} />
+
+A simulated population of 100 neurons responds to images from 4 categories. After a latency of about 80 ms, each category evokes its own pattern of rate changes. Spike counts are taken in 25 ms bins from −50 to 300 ms. In each bin, train and test a classifier with five-fold cross-validation.
+
+The classifier is **shrinkage LDA**: LDA with its pooled covariance pulled towards a multiple of the identity, $\hat\Sigma_\gamma = (1 - \gamma)\hat\Sigma + \gamma\frac{\text{tr}\hat\Sigma}{D}I$. With 100 neurons and a few hundred trials, the raw covariance is too noisy to invert; shrinkage, a cousin of ridge, fixes that in closed form, which makes it the standard decoder for this kind of analysis.
+
+<PyCell id="timecourse" title="Accuracy in every time bin" tests={String.raw`
+  import numpy as np
+  def test_lda():
+      "shrink_lda_fit returns one weight vector and bias per class"
+      W, b = shrink_lda_fit(counts[:, 5, :], cats, 0.2)
+      assert W.shape == (N, 4) and b.shape == (4,)
+  def test_baseline():
+      "accuracy before stimulus onset is near chance (0.25)"
+      assert np.all(np.abs(acc_t[times < 50] - 0.25) < 0.08)
+  def test_peak():
+      "accuracy after 150 ms exceeds 0.6"
+      assert acc_t[times >= 150].max() > 0.6
+`} prompt="Complete shrink_lda_fit(X, y, gamma): class means, pooled covariance, shrinkage towards the identity, and per-class linear scores w_k = S^-1 mu_k and b_k = -w_k · mu_k / 2. Then compute five-fold cross-validated accuracy in every time bin."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(565)
+  N, C, n_trials = 100, 4, 240
+  times = np.arange(-50, 300, 25)                       # bin starts (ms)
+  patterns = r.normal(size=(C, N)) * 0.2                # category-specific modulation
+  def time_course(t):
+      return np.clip((t - 80) / 50, 0, 1)                # responses begin about 80 ms after onset
+  cats = r.integers(0, C, n_trials)
+  shared = r.normal(size=(n_trials, len(times), 1)) * 0.3
+  log_rate = np.log(2.0) + time_course(times)[None, :, None] * patterns[cats][:, None, :] + shared
+  counts = r.poisson(np.exp(log_rate)).astype(float)    # trials x bins x neurons
+
+  def shrink_lda_fit(X, y, gamma):
+      classes = np.arange(C)
+      mus = np.array([X[y == k].mean(0) for k in classes])
+      Xc = X - mus[y]
+      S = Xc.T @ Xc / (len(y) - C)
+      S = ...
+      W = np.linalg.solve(S, mus.T)                     # D x C
+      b = ...
+      return W, b
+
+  def cv_acc(X, y, gamma=0.2, K=5):
+      folds = np.array_split(np.arange(len(y)), K); correct = 0
+      for te in folds:
+          tr = np.setdiff1d(np.arange(len(y)), te)
+          W, b = shrink_lda_fit(X[tr], y[tr], gamma)
+          correct += np.sum((X[te] @ W + b).argmax(1) == y[te])
+      return correct / len(y)
+
+  acc_t = np.array([cv_acc(counts[:, j, :], cats) for j in range(len(times))])
+  for t_, a in zip(times, acc_t):
+      if t_ % 50 == 0: print(f"{t_:4d} ms: accuracy {a:.2f}")
+  plt.plot(times + 12.5, acc_t, "o-"); plt.axhline(0.25, color="grey", ls="--"); plt.axvline(0, color="k")
+  plt.xlabel("time from image onset (ms)"); plt.ylabel("cross-validated accuracy"); plt.show()
+`}
+hint="S = (1 - gamma) * S + gamma * np.trace(S) / X.shape[1] * np.eye(X.shape[1]); b = -0.5 * np.sum(W * mus.T, axis=0)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(565)
+  N, C, n_trials = 100, 4, 240
+  times = np.arange(-50, 300, 25)                       # bin starts (ms)
+  patterns = r.normal(size=(C, N)) * 0.2                # category-specific modulation
+  def time_course(t):
+      return np.clip((t - 80) / 50, 0, 1)                # responses begin about 80 ms after onset
+  cats = r.integers(0, C, n_trials)
+  shared = r.normal(size=(n_trials, len(times), 1)) * 0.3
+  log_rate = np.log(2.0) + time_course(times)[None, :, None] * patterns[cats][:, None, :] + shared
+  counts = r.poisson(np.exp(log_rate)).astype(float)    # trials x bins x neurons
+
+  def shrink_lda_fit(X, y, gamma):
+      classes = np.arange(C)
+      mus = np.array([X[y == k].mean(0) for k in classes])
+      Xc = X - mus[y]
+      S = Xc.T @ Xc / (len(y) - C)
+      S = (1 - gamma) * S + gamma * np.trace(S) / X.shape[1] * np.eye(X.shape[1])
+      W = np.linalg.solve(S, mus.T)                     # D x C
+      b = -0.5 * np.sum(W * mus.T, axis=0)
+      return W, b
+
+  def cv_acc(X, y, gamma=0.2, K=5):
+      folds = np.array_split(np.arange(len(y)), K); correct = 0
+      for te in folds:
+          tr = np.setdiff1d(np.arange(len(y)), te)
+          W, b = shrink_lda_fit(X[tr], y[tr], gamma)
+          correct += np.sum((X[te] @ W + b).argmax(1) == y[te])
+      return correct / len(y)
+
+  acc_t = np.array([cv_acc(counts[:, j, :], cats) for j in range(len(times))])
+  for t_, a in zip(times, acc_t):
+      if t_ % 50 == 0: print(f"{t_:4d} ms: accuracy {a:.2f}")
+  plt.plot(times + 12.5, acc_t, "o-"); plt.axhline(0.25, color="grey", ls="--"); plt.axvline(0, color="k")
+  plt.xlabel("time from image onset (ms)"); plt.ylabel("cross-validated accuracy"); plt.show()
+`} />
+
+Before the image appears, accuracy sits at chance (0.25), as it must: a decoder that beat chance there would signal a bug or a leak. It begins to rise in the bin starting at 75 ms, reaches 0.39 at 100 ms and 0.86 by 150 ms, and stays above 0.8, all from 25 ms of spikes in 100 neurons. The rise lags the true response onset of 80 ms because the category signal starts small; the latency at which decoding first becomes significant always depends on signal size, trial numbers and bin width, so comparisons of latency between areas need matched analyses.
+
+<Step n={3} title="How many neurons?" minutes={25} />
+
+Decoding accuracy as a function of the number of neurons is the population's learning curve over a different axis. Subsample the population and decode the late window (200 to 300 ms, four bins summed).
+
+<PyCell id="neurons" title="Accuracy against population size" tests={String.raw`
+  import numpy as np
+  def test_grows():
+      "accuracy grows with the number of neurons"
+      assert acc_n[-1] > acc_n[0] + 0.2
+  def test_avg():
+      "each entry averages 10 random subsets"
+      assert acc_n.shape == (len(sizes),)
+`} prompt="Sum counts over the bins from 200 to 275 ms. For each population size, average the cross-validated accuracy over 10 random subsets of neurons."
+code={String.raw`
+  late = counts[:, times >= 200, :].sum(1)
+  sizes = [2, 5, 10, 25, 50, 100]
+  acc_n = np.zeros(len(sizes))
+  for i, m in enumerate(sizes):
+      accs = []
+      for rep in range(10):
+          sub = r.choice(N, m, replace=False)
+          accs.append(...)
+      acc_n[i] = np.mean(accs)
+      print(f"{m:3d} neurons: accuracy {acc_n[i]:.2f}")
+`}
+hint="accs.append(cv_acc(late[:, sub], cats))."
+solution={String.raw`
+  late = counts[:, times >= 200, :].sum(1)
+  sizes = [2, 5, 10, 25, 50, 100]
+  acc_n = np.zeros(len(sizes))
+  for i, m in enumerate(sizes):
+      accs = []
+      for rep in range(10):
+          sub = r.choice(N, m, replace=False)
+          accs.append(cv_acc(late[:, sub], cats))
+      acc_n[i] = np.mean(accs)
+      print(f"{m:3d} neurons: accuracy {acc_n[i]:.2f}")
+`} />
+
+Two neurons decode at 41% (chance 25%), five at 62%, ten at 74%, and 50 almost perfectly, from the late window. Each neuron adds a little independent information, so accuracy climbs steadily and then saturates near 100%. In this simulation the shared fluctuation in excitability does not limit decoding much, because it shifts all neurons together, along a direction the shrinkage LDA can learn to ignore. Correlations that mimic the signal itself, information-limiting correlations, would cap accuracy below 100% however many neurons were added, as the figure shows.
+
+<Step n={4} title="Does the code change over time?" minutes={25} />
+
+Accuracy in each bin says *whether* category is decodable, not *how* it is coded. Train in one bin and test in every other: if the code is stable, a decoder trained early works late; if it changes, accuracy falls off the diagonal. King and Dehaene called this the **temporal generalisation** method. Simulate a population whose pattern for each category switches between an early and a late phase, and compare.
+
+<PyCell id="temporal" title="Temporal generalisation" tests={String.raw`
+  import numpy as np
+  def test_shape():
+      "G is a square matrix over time bins"
+      assert G.shape == (len(times), len(times))
+  def test_dynamic():
+      "the diagonal is high late, but early-trained decoders fail on late bins"
+      j_e, j_l = list(times).index(100), list(times).index(250)
+      assert G[j_l, j_l] > 0.6 and G[j_e, j_l] < 0.4
+`} prompt="Simulate a dynamic code: from 80 to 175 ms the categories use one set of patterns, from 175 ms another. Then fill G[i, j] with the accuracy of a decoder trained on bin i (all trials in the training folds) and tested on bin j (the held-out folds), averaged over five folds."
+code={String.raw`
+  patterns2 = r.normal(size=(C, N)) * 0.2
+  early = (times >= 80) & (times < 175)
+  pat_t = np.where(early[None, :, None, None], patterns[None, None], patterns2[None, None])[0]   # bins x C x N
+  mod = time_course(times)[:, None, None] * pat_t
+  log_rate2 = np.log(2.0) + mod[:, cats, :].transpose(1, 0, 2) + shared
+  counts2 = r.poisson(np.exp(log_rate2)).astype(float)
+
+  folds = np.array_split(np.arange(n_trials), 5)
+  G = np.zeros((len(times), len(times)))
+  for te in folds:
+      tr = np.setdiff1d(np.arange(n_trials), te)
+      for i in range(len(times)):
+          W, b = shrink_lda_fit(counts2[tr, i, :], cats[tr], 0.2)
+          for j in range(len(times)):
+              G[i, j] += ...
+  G /= n_trials
+  print(f"train 100 ms, test 100 ms: {G[list(times).index(100), list(times).index(100)]:.2f}; test 250 ms: {G[list(times).index(100), list(times).index(250)]:.2f}")
+  print(f"train 250 ms, test 250 ms: {G[list(times).index(250), list(times).index(250)]:.2f}")
+  plt.imshow(G, origin="lower", extent=[times[0], times[-1] + 25, times[0], times[-1] + 25], vmin=0.25, vmax=1)
+  plt.xlabel("test time (ms)"); plt.ylabel("training time (ms)"); plt.colorbar(); plt.show()
+`}
+hint="G[i, j] += np.sum((counts2[te, j, :] @ W + b).argmax(1) == cats[te])."
+solution={String.raw`
+  patterns2 = r.normal(size=(C, N)) * 0.2
+  early = (times >= 80) & (times < 175)
+  pat_t = np.where(early[None, :, None, None], patterns[None, None], patterns2[None, None])[0]   # bins x C x N
+  mod = time_course(times)[:, None, None] * pat_t
+  log_rate2 = np.log(2.0) + mod[:, cats, :].transpose(1, 0, 2) + shared
+  counts2 = r.poisson(np.exp(log_rate2)).astype(float)
+
+  folds = np.array_split(np.arange(n_trials), 5)
+  G = np.zeros((len(times), len(times)))
+  for te in folds:
+      tr = np.setdiff1d(np.arange(n_trials), te)
+      for i in range(len(times)):
+          W, b = shrink_lda_fit(counts2[tr, i, :], cats[tr], 0.2)
+          for j in range(len(times)):
+              G[i, j] += np.sum((counts2[te, j, :] @ W + b).argmax(1) == cats[te])
+  G /= n_trials
+  print(f"train 100 ms, test 100 ms: {G[list(times).index(100), list(times).index(100)]:.2f}; test 250 ms: {G[list(times).index(100), list(times).index(250)]:.2f}")
+  print(f"train 250 ms, test 250 ms: {G[list(times).index(250), list(times).index(250)]:.2f}")
+  plt.imshow(G, origin="lower", extent=[times[0], times[-1] + 25, times[0], times[-1] + 25], vmin=0.25, vmax=1)
+  plt.xlabel("test time (ms)"); plt.ylabel("training time (ms)"); plt.colorbar(); plt.show()
+`} />
+
+In the dynamic code, a decoder trained at 100 ms works at 100 ms (0.42, early in the response) and one trained at 250 ms works at 250 ms (0.81), but the early decoder tested at 250 ms is at chance (0.26), although the category information is fully present there. That answers the prediction: when the code changes, decoders do not transfer. The matrix shows two blocks along the diagonal, one per coding phase, with little between them. A stable code would instead fill a square from response onset onwards. The distinction matters for theories of working memory and of how cortex transforms information, and time-resolved decoding alone cannot see it.
+
+<Bridge title="Readout in brains and machines"
+  neuro="A linear decoder's success says the information is present and linearly accessible; it does not say the brain reads it that way. Hung and colleagues were careful to frame their result as a bound on what is available to downstream neurons, and the temporal generalisation method extends the question from what is coded to how the code evolves."
+  ai="Linear probes are the machine learning version of the same analysis: train a linear classifier on a layer's activations to ask what that layer represents. They carry the same caveats, which Week 99 returns to when probing deep networks, and their results have been compared directly with decoding from IT cortex.">
+
+Decoding asks what a population makes available to a simple reader, when, and in what format.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Hung and colleagues decoded object category from IT within about...", options: ["100 to 125 ms", "1 s", "10 ms", "500 ms"], answer: 0, explain: "Today's paper." },
+  { q: "Shrinkage LDA pulls the covariance towards...", options: ["A multiple of the identity", "Zero", "The class means", "The correlation matrix"], answer: 0, explain: "Stabilising its inverse." },
+  { q: "Time-resolved decoding trains and tests...", options: ["Separately in each time bin", "Once on all bins", "Only at the peak", "On the test set"], answer: 0, explain: "With cross-validation in each bin." },
+  { q: "Accuracy before stimulus onset should be...", options: ["At chance", "At its peak", "Zero", "One"], answer: 0, explain: "A built-in control." },
+  { q: "With correlated noise, accuracy against population size...", options: ["Saturates", "Grows without limit", "Falls", "Is constant"], answer: 0, explain: "Information-limiting correlations." },
+  { q: "In a temporal generalisation matrix, a stable code gives...", options: ["High accuracy off the diagonal", "Only a thin diagonal", "Chance everywhere", "A checkerboard"], answer: 0, explain: "Decoders transfer across time." },
+  { q: "A dynamic code gives...", options: ["A high diagonal but low off-diagonal accuracy", "Uniform accuracy", "Chance on the diagonal", "Nothing"], answer: 0, explain: "Step 4." },
+  { q: "Successful linear decoding shows that information is...", options: ["Linearly available to a downstream reader", "Used by the brain", "Causally necessary", "Absent elsewhere"], answer: 0, explain: "The bridge." },
+]} />
+
+<Flashcards cards={[
+  { front: "Shrinkage LDA covariance?", back: "$(1 - \\gamma)\\hat\\Sigma + \\gamma\\frac{\\text{tr}\\hat\\Sigma}{D}I$." },
+  { front: "Time-resolved decoding?", back: "Cross-validated decoding repeated in each time bin, giving accuracy as a function of time." },
+  { front: "Temporal generalisation?", back: "Train at time i, test at time j; off-diagonal accuracy reveals whether the code is stable." },
+  { front: "Accuracy against number of neurons?", back: "Grows, then saturates when noise correlations limit information." },
+  { front: "What decoding shows?", back: "Information is present and readable by the chosen decoder, not that the brain uses it." },
+]} />
+
+<Predict revisit question="With a code that changed over time, did a decoder trained at 100 ms work at 250 ms?" />
+
+<Key title="Before you go">
+<ul>
+<li>Time-resolved, cross-validated decoding shows when information becomes available.</li>
+<li>Shrinkage LDA is a fast, stable decoder for many neurons and few trials.</li>
+<li>Accuracy against population size reveals redundancy and information limits.</li>
+<li>Temporal generalisation distinguishes stable from dynamic codes.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Hung, Kreiman, Poggio and DiCarlo (2005), <em>Fast readout of object identity from macaque inferior temporal cortex</em>.</li>
+<li>King and Dehaene (2014), <em>Characterizing the dynamics of mental representations: the temporal generalization method</em>, Trends in Cognitive Sciences 18(4), 203 to 210.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Sketch the temporal generalisation matrix you would expect for working memory of a stimulus over a delay (Week 46), under two hypotheses: persistent activity and a dynamic code. Which experimental result would distinguish them?" />

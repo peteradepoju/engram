@@ -1,0 +1,324 @@
+export const meta = {
+  title: "Generative classifiers: LDA, QDA and naive Bayes",
+  intro: "Logistic and softmax regression model the probability of a class given the data directly; they are discriminative. Generative classifiers take the opposite route: they model how the data of each class are distributed, then use Bayes' rule to turn that into a classification. You have used one already, the Poisson Bayesian decoder of Week 36. Today you build the three classics, linear and quadratic discriminant analysis and naive Bayes, compare them with logistic regression, and see what their assumptions buy and cost.",
+  goals: [
+    "Explain the difference between generative and discriminative classifiers",
+    "Derive linear discriminant analysis from Gaussian classes with a shared covariance",
+    "Show when quadratic discriminant analysis beats LDA",
+    "Build a Poisson naive Bayes decoder and check whether its probabilities can be trusted",
+  ],
+  plan: [
+    { label: "Two ways to classify", minutes: 20 },
+    { label: "Linear discriminant analysis", minutes: 30 },
+    { label: "Quadratic boundaries", minutes: 25 },
+    { label: "Naive Bayes for spike counts", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "fisher-1936",
+};
+
+<Predict question="A naive Bayes decoder assumes neurons are independent given the stimulus. If the neurons actually share correlated noise, will its stated confidence (the probability it gives its chosen class) be too high, about right, or too low compared with how often it is correct?" />
+
+<Step n={1} title="Two ways to classify" minutes={20} />
+
+A **discriminative** classifier models $p(y \mid \mathbf x)$ directly and learns only the boundary between classes. A **generative** classifier models the class-conditional distributions $p(\mathbf x \mid y)$ and the class frequencies $p(y)$, and classifies by Bayes' rule:
+
+$$
+p(y = k \mid \mathbf x) = \frac{p(\mathbf x \mid y = k)\,p(y = k)}{\sum_j p(\mathbf x \mid y = j)\,p(y = j)}.
+$$
+
+Generative models make stronger assumptions, but they also do more: they can simulate data, handle missing inputs, and, when their assumptions are right, learn from fewer examples. Ng and Jordan made this last point precise, and you will reproduce their study in Week 75.
+
+<Video id="azXCzI57Yfc" title="Linear discriminant analysis, clearly explained" by="StatQuest with Josh Starmer" note="Josh Starmer on LDA as a way to find the axis that best separates classes, maximising the distance between their means relative to their spread: Fisher's original idea." />
+
+<Step n={2} title="Linear discriminant analysis" minutes={30} />
+
+Suppose each class is Gaussian with its own mean $\boldsymbol\mu_k$ but a **shared** covariance $\Sigma$. Then the log-odds between two classes is
+
+$$
+\log\frac{p(y = 1 \mid \mathbf x)}{p(y = 0 \mid \mathbf x)} = (\boldsymbol\mu_1 - \boldsymbol\mu_0)^\top\Sigma^{-1}\mathbf x + \text{const},
+$$
+
+because the quadratic terms $\mathbf x^\top\Sigma^{-1}\mathbf x$ cancel. The boundary is linear, with weight vector $\mathbf w = \Sigma^{-1}(\boldsymbol\mu_1 - \boldsymbol\mu_0)$. Fisher, today's paper, found the same direction in 1936 by a different argument: it is the projection that maximises the separation of the class means relative to the spread within each class. Week 36's optimal linear decoder in the presence of correlated noise used exactly this formula.
+
+<PyCell id="lda" title="LDA from means and a pooled covariance" tests={String.raw`
+  import numpy as np
+  def test_fit():
+      "lda_fit returns w = Sigma^-1 (mu1 - mu0) with the pooled covariance, and the matching intercept"
+      w, b = lda_fit(X_tr, y_tr)
+      m0, m1 = X_tr[y_tr == 0].mean(0), X_tr[y_tr == 1].mean(0)
+      Sp = (np.cov(X_tr[y_tr == 0].T) * (np.sum(y_tr == 0) - 1) + np.cov(X_tr[y_tr == 1].T) * (np.sum(y_tr == 1) - 1)) / (len(y_tr) - 2)
+      assert np.allclose(w, np.linalg.solve(Sp, m1 - m0))
+  def test_small():
+      "with 30 training trials LDA is within 2% of logistic regression"
+      assert abs(acc[30][0] - acc[30][1]) < 0.02
+  def test_large():
+      "with 2,000 training trials they are within 1% of each other"
+      assert abs(acc[2000][0] - acc[2000][1]) < 0.01
+`} prompt="Write lda_fit(X, y), returning the weight vector and intercept (with equal class priors, b = -w · (mu0 + mu1) / 2). Compare LDA and penalised logistic regression on Gaussian classes with correlated features, at 30 and at 2,000 training trials, averaging test accuracy over 20 training sets."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  r = np.random.default_rng(563)
+  D = 10
+  L = np.linalg.cholesky(0.6 * np.ones((D, D)) + 0.4 * np.eye(D))     # correlated features
+  mu_diff = np.r_[0.8, -0.5, 0.3, np.zeros(D - 3)]
+
+  def draw(n, g):
+      y = g.integers(0, 2, n)
+      X = (g.normal(size=(n, D)) @ L.T) + np.outer(y - 0.5, mu_diff)
+      return X, y
+
+  def lda_fit(X, y):
+      m0, m1 = X[y == 0].mean(0), X[y == 1].mean(0)
+      S = (np.cov(X[y == 0].T) * (np.sum(y == 0) - 1) + np.cov(X[y == 1].T) * (np.sum(y == 1) - 1)) / (len(y) - 2)
+      w = ...
+      b = ...
+      return w, b
+
+  def logreg_fit(X, y, lam=1e-2):
+      A = np.c_[np.ones(len(y)), X]
+      def f(w):
+          p = np.clip(1 / (1 + np.exp(-A @ w)), 1e-12, 1 - 1e-12)
+          return -np.mean(y * np.log(p) + (1 - y) * np.log(1 - p)) + 0.5 * lam * w[1:] @ w[1:], A.T @ (p - y) / len(y) + lam * np.r_[0, w[1:]]
+      w = minimize(f, np.zeros(D + 1), jac=True).x
+      return w[1:], w[0]
+
+  X_te, y_te = draw(5000, r)
+  X_tr, y_tr = draw(200, r)
+  acc = {}
+  for n in [30, 2000]:
+      a_l, a_g = [], []
+      for rep in range(20):
+          Xn, yn = draw(n, r)
+          for fitter, store in [(lda_fit, a_l), (logreg_fit, a_g)]:
+              w, b = fitter(Xn, yn); store.append(np.mean((X_te @ w + b > 0) == (y_te == 1)))
+      acc[n] = (np.mean(a_l), np.mean(a_g))
+      print(f"{n:5d} training trials: LDA {acc[n][0]:.3f}, logistic regression {acc[n][1]:.3f}")
+`}
+hint="w = np.linalg.solve(S, m1 - m0); b = -w @ (m0 + m1) / 2."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  r = np.random.default_rng(563)
+  D = 10
+  L = np.linalg.cholesky(0.6 * np.ones((D, D)) + 0.4 * np.eye(D))     # correlated features
+  mu_diff = np.r_[0.8, -0.5, 0.3, np.zeros(D - 3)]
+
+  def draw(n, g):
+      y = g.integers(0, 2, n)
+      X = (g.normal(size=(n, D)) @ L.T) + np.outer(y - 0.5, mu_diff)
+      return X, y
+
+  def lda_fit(X, y):
+      m0, m1 = X[y == 0].mean(0), X[y == 1].mean(0)
+      S = (np.cov(X[y == 0].T) * (np.sum(y == 0) - 1) + np.cov(X[y == 1].T) * (np.sum(y == 1) - 1)) / (len(y) - 2)
+      w = np.linalg.solve(S, m1 - m0)
+      b = -w @ (m0 + m1) / 2
+      return w, b
+
+  def logreg_fit(X, y, lam=1e-2):
+      A = np.c_[np.ones(len(y)), X]
+      def f(w):
+          p = np.clip(1 / (1 + np.exp(-A @ w)), 1e-12, 1 - 1e-12)
+          return -np.mean(y * np.log(p) + (1 - y) * np.log(1 - p)) + 0.5 * lam * w[1:] @ w[1:], A.T @ (p - y) / len(y) + lam * np.r_[0, w[1:]]
+      w = minimize(f, np.zeros(D + 1), jac=True).x
+      return w[1:], w[0]
+
+  X_te, y_te = draw(5000, r)
+  X_tr, y_tr = draw(200, r)
+  acc = {}
+  for n in [30, 2000]:
+      a_l, a_g = [], []
+      for rep in range(20):
+          Xn, yn = draw(n, r)
+          for fitter, store in [(lda_fit, a_l), (logreg_fit, a_g)]:
+              w, b = fitter(Xn, yn); store.append(np.mean((X_te @ w + b > 0) == (y_te == 1)))
+      acc[n] = (np.mean(a_l), np.mean(a_g))
+      print(f"{n:5d} training trials: LDA {acc[n][0]:.3f}, logistic regression {acc[n][1]:.3f}")
+`} />
+
+When its assumptions hold, LDA does as well as logistic regression at both sizes: 68.3% with 30 training trials and 77.4% with 2,000, identical to logistic regression to three decimal places. LDA gets there in one step, from two means and a covariance, without any iterative optimisation, which is why it remains a favourite for decoding from many neurons with few trials, usually with the covariance shrunk towards its diagonal for stability. Its weights are not simply the difference of the class means: the inverse covariance subtracts the correlated noise, the same correction that made Week 36's optimal linear decoder better than one that ignored correlations.
+
+<Step n={3} title="Quadratic boundaries" minutes={25} />
+
+<Figure caption="Two Gaussian classes, the LDA boundary (dashed) and the QDA decision (shading), with error rates computed on a fine grid. Change the spread of one class and the distance between the means." credit="Interactive figure by Engram.">
+  <LdaQda />
+</Figure>
+
+If each class has its own covariance $\Sigma_k$, the quadratic terms no longer cancel and the boundary is a quadric: **quadratic discriminant analysis** (QDA). The classifier compares $\log p(\mathbf x \mid k) = -\frac12\log|\Sigma_k| - \frac12(\mathbf x - \boldsymbol\mu_k)^\top\Sigma_k^{-1}(\mathbf x - \boldsymbol\mu_k)$ across classes. It needs a covariance per class, $D(D+1)/2$ numbers each, so it needs more data.
+
+<PyCell id="qda" title="When the classes differ in spread" tests={String.raw`
+  import numpy as np
+  def test_logpdf():
+      "gauss_logpdf matches scipy's multivariate normal"
+      from scipy.stats import multivariate_normal
+      S = np.array([[1.0, 0.3], [0.3, 2.0]]); x = np.array([[0.2, -0.4]])
+      assert abs(gauss_logpdf(x, np.zeros(2), S)[0] - multivariate_normal(np.zeros(2), S).logpdf(x[0])) < 1e-9
+  def test_better():
+      "QDA beats LDA by at least 5 points when one class is three times as spread"
+      assert acc_qda > acc_lda + 0.05
+`} prompt="Write gauss_logpdf(X, mu, S) for each row of X. Fit QDA (a mean and covariance per class) to two-dimensional classes with the same mean in one direction but a three-fold difference in spread, and compare its test accuracy with LDA's."
+code={String.raw`
+  def gauss_logpdf(X, mu, S):
+      d = X - mu
+      sol = np.linalg.solve(S, d.T).T
+      return ...
+
+  def two_classes(n, g):
+      y = g.integers(0, 2, n)
+      X = g.normal(size=(n, 2)) * np.where(y[:, None] == 1, 3.0, 1.0) + np.c_[0.5 * y, np.zeros(n)]
+      return X, y
+
+  Xq, yq = two_classes(400, r); Xq_te, yq_te = two_classes(5000, r)
+  params = [(Xq[yq == k].mean(0), np.cov(Xq[yq == k].T)) for k in (0, 1)]
+  score = gauss_logpdf(Xq_te, *params[1]) - gauss_logpdf(Xq_te, *params[0])
+  acc_qda = np.mean((score > 0) == (yq_te == 1))
+  w, b = lda_fit(Xq, yq)
+  acc_lda = np.mean((Xq_te @ w + b > 0) == (yq_te == 1))
+  print(f"LDA accuracy {acc_lda:.3f}; QDA accuracy {acc_qda:.3f}")
+`}
+hint="return -0.5 * np.sum(d * sol, axis=1) - 0.5 * np.linalg.slogdet(S)[1] - 0.5 * len(mu) * np.log(2 * np.pi)."
+solution={String.raw`
+  def gauss_logpdf(X, mu, S):
+      d = X - mu
+      sol = np.linalg.solve(S, d.T).T
+      return -0.5 * np.sum(d * sol, axis=1) - 0.5 * np.linalg.slogdet(S)[1] - 0.5 * len(mu) * np.log(2 * np.pi)
+
+  def two_classes(n, g):
+      y = g.integers(0, 2, n)
+      X = g.normal(size=(n, 2)) * np.where(y[:, None] == 1, 3.0, 1.0) + np.c_[0.5 * y, np.zeros(n)]
+      return X, y
+
+  Xq, yq = two_classes(400, r); Xq_te, yq_te = two_classes(5000, r)
+  params = [(Xq[yq == k].mean(0), np.cov(Xq[yq == k].T)) for k in (0, 1)]
+  score = gauss_logpdf(Xq_te, *params[1]) - gauss_logpdf(Xq_te, *params[0])
+  acc_qda = np.mean((score > 0) == (yq_te == 1))
+  w, b = lda_fit(Xq, yq)
+  acc_lda = np.mean((Xq_te @ w + b > 0) == (yq_te == 1))
+  print(f"LDA accuracy {acc_lda:.3f}; QDA accuracy {acc_qda:.3f}")
+`} />
+
+When one class is three times as spread out as the other but their means nearly coincide, LDA can do little better than guessing (55.8%), because no straight line separates a tight cloud from a wide one around it. QDA, with a covariance for each class, draws a closed boundary around the tighter class and reaches 82.9%. Differences in variability are common in neural data: a neuron's response may become more or less variable with attention or arousal, so a class can be distinguishable by spread alone.
+
+<Step n={4} title="Naive Bayes for spike counts" minutes={30} />
+
+**Naive Bayes** assumes the inputs are independent given the class, so $p(\mathbf x \mid k) = \prod_j p(x_j \mid k)$. For spike counts with Poisson rates $\lambda_{jk}$ this is the Bayesian decoder of Week 36: $\log p(\mathbf x \mid k) = \sum_j [x_j\log\lambda_{jk} - \lambda_{jk}] + \text{const}$. It needs only one mean per neuron and class, so it learns fast. But real neurons share noise. Decode eight directions from neurons whose counts include a shared fluctuation, and check its confidence: if it says 90%, is it right 90% of the time?
+
+<PyCell id="nb" title="A Poisson naive Bayes decoder and its confidence" tests={String.raw`
+  import numpy as np
+  def test_post():
+      "nb_posterior returns probabilities over 8 classes that sum to one"
+      P = nb_posterior(Xc_te[:5], rates)
+      assert P.shape == (5, 8) and np.allclose(P.sum(1), 1)
+  def test_overconfident():
+      "with correlated noise the decoder's mean confidence exceeds its accuracy by at least 0.05"
+      assert conf_corr - acc_corr > 0.05
+  def test_indep():
+      "with independent noise its confidence is within 0.05 of its accuracy"
+      assert abs(conf_ind - acc_ind) < 0.05
+`} prompt="Estimate each neuron's mean count for each class from the training trials. Write nb_posterior(X, rates), the naive Bayes posterior with equal priors. Compare mean confidence (largest posterior) with accuracy for test trials with and without a shared gain fluctuation."
+code={String.raw`
+  K8, N8 = 8, 60
+  dirs8 = np.arange(K8) * 2 * np.pi / K8
+  pref8 = r.uniform(0, 2 * np.pi, N8)
+
+  def trials_counts(n, g, shared=0.0):
+      lab = g.integers(0, K8, n)
+      gain = np.exp(shared * g.normal(size=(n, 1)) - shared ** 2 / 2)      # a common fluctuation in excitability
+      lam = 2.0 * (1 + 0.8 * np.cos(dirs8[lab][:, None] - pref8)) * gain
+      return g.poisson(lam).astype(float), lab
+
+  def nb_posterior(X, rates):
+      ll = X @ np.log(rates).T - rates.sum(1)          # n x K log-likelihoods
+      ll -= ll.max(1, keepdims=True)
+      P = np.exp(ll)
+      return ...
+
+  for name, shared in [("independent", 0.0), ("correlated", 0.5)]:
+      Xc, lc = trials_counts(800, r, shared); Xc_te, lc_te = trials_counts(3000, r, shared)
+      rates = ...
+      P = nb_posterior(Xc_te, rates)
+      acc_, conf_ = np.mean(P.argmax(1) == lc_te), P.max(1).mean()
+      if shared == 0: acc_ind, conf_ind = acc_, conf_
+      else: acc_corr, conf_corr = acc_, conf_
+      print(f"{name:12s} noise: accuracy {acc_:.3f}, mean confidence {conf_:.3f}")
+`}
+hint="return P / P.sum(1, keepdims=True); rates = np.array([Xc[lc == k].mean(0) for k in range(K8)]) + 1e-3."
+solution={String.raw`
+  K8, N8 = 8, 60
+  dirs8 = np.arange(K8) * 2 * np.pi / K8
+  pref8 = r.uniform(0, 2 * np.pi, N8)
+
+  def trials_counts(n, g, shared=0.0):
+      lab = g.integers(0, K8, n)
+      gain = np.exp(shared * g.normal(size=(n, 1)) - shared ** 2 / 2)      # a common fluctuation in excitability
+      lam = 2.0 * (1 + 0.8 * np.cos(dirs8[lab][:, None] - pref8)) * gain
+      return g.poisson(lam).astype(float), lab
+
+  def nb_posterior(X, rates):
+      ll = X @ np.log(rates).T - rates.sum(1)          # n x K log-likelihoods
+      ll -= ll.max(1, keepdims=True)
+      P = np.exp(ll)
+      return P / P.sum(1, keepdims=True)
+
+  for name, shared in [("independent", 0.0), ("correlated", 0.5)]:
+      Xc, lc = trials_counts(800, r, shared); Xc_te, lc_te = trials_counts(3000, r, shared)
+      rates = np.array([Xc[lc == k].mean(0) for k in range(K8)]) + 1e-3
+      P = nb_posterior(Xc_te, rates)
+      acc_, conf_ = np.mean(P.argmax(1) == lc_te), P.max(1).mean()
+      if shared == 0: acc_ind, conf_ind = acc_, conf_
+      else: acc_corr, conf_corr = acc_, conf_
+      print(f"{name:12s} noise: accuracy {acc_:.3f}, mean confidence {conf_:.3f}")
+`} />
+
+With independent noise, naive Bayes is right on 98.9% of trials and claims 99.0% confidence: its probabilities are trustworthy, because its assumption is true. With a shared fluctuation in excitability, its accuracy falls to 88.3% but its confidence only to 96.0%: it is overconfident by 7.7 points, which answers the prediction. Every neuron's count rises and falls together on a trial, and naive Bayes counts that one shared event sixty times over as independent evidence. Its *ranking* of the classes remains useful, so accuracy is respectable, but its probabilities cannot be used as confidence without recalibration (Week 68), and any analysis that interprets them as the brain's uncertainty would be misled.
+
+<Bridge title="Generative models in brains and machines"
+  neuro="The idea that perception inverts a generative model of how the world produces sensory signals runs from Helmholtz to predictive coding (Week 48). Bayesian decoders are the analyst's version: they ask what each stimulus predicts about the neurons and invert it. Their failure with correlated noise is a reminder that the generative model must include the noise structure, which is often what neuroscience knows least about."
+  ai="Generative and discriminative approaches have swapped places in machine learning more than once. Today's largest models are generative, trained to model the data itself, and are then used to classify, by asking which label makes the data most probable or by prompting.">
+
+Model how each class produces the data, then invert: powerful when the model is right, overconfident when it is not.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A generative classifier models...", options: ["p(x | y) and p(y)", "p(y | x) only", "The boundary only", "Nothing"], answer: 0, explain: "Then applies Bayes' rule." },
+  { q: "LDA's boundary is linear because...", options: ["The classes share a covariance, so quadratic terms cancel", "It uses logistic regression", "Features are independent", "The data are binary"], answer: 0, explain: "Step 2." },
+  { q: "LDA's weight vector is...", options: ["Σ⁻¹(μ₁ − μ₀)", "μ₁ − μ₀", "Σ(μ₁ − μ₀)", "The first principal component"], answer: 0, explain: "Fisher's direction." },
+  { q: "With few training trials and Gaussian data, LDA compared with logistic regression is...", options: ["Often at least as accurate", "Always much worse", "Undefined", "Identical"], answer: 0, explain: "Its assumptions help with little data." },
+  { q: "QDA beats LDA when...", options: ["Classes have different covariances", "Classes share a covariance", "Data are scarce", "There are many classes"], answer: 0, explain: "Step 3." },
+  { q: "Naive Bayes assumes inputs are...", options: ["Independent given the class", "Independent", "Gaussian", "Correlated"], answer: 0, explain: "Conditional independence." },
+  { q: "With shared noise, a naive Bayes decoder is usually...", options: ["Overconfident", "Underconfident", "Perfectly calibrated", "Unable to classify"], answer: 0, explain: "It counts correlated evidence as independent." },
+  { q: "Fisher's 1936 paper found the discriminant by maximising...", options: ["Between-class separation relative to within-class spread", "The likelihood", "Variance", "Sparsity"], answer: 0, explain: "Today's paper." },
+]} />
+
+<Flashcards cards={[
+  { front: "Generative against discriminative?", back: "Generative: model p(x | y)p(y), invert with Bayes. Discriminative: model p(y | x) directly." },
+  { front: "LDA?", back: "Gaussian classes with a shared covariance; linear boundary with $\\mathbf w = \\Sigma^{-1}(\\boldsymbol\\mu_1 - \\boldsymbol\\mu_0)$." },
+  { front: "QDA?", back: "Gaussian classes with their own covariances; quadratic boundary; needs more data." },
+  { front: "Poisson naive Bayes log-likelihood?", back: "$\\sum_j [x_j\\log\\lambda_{jk} - \\lambda_{jk}]$ + const." },
+  { front: "Why naive Bayes is overconfident with correlated noise?", back: "It multiplies evidence from neurons as if independent, so shared fluctuations are counted many times." },
+]} />
+
+<Predict revisit question="With correlated noise, was the naive Bayes decoder's confidence too high, about right, or too low?" />
+
+<Key title="Before you go">
+<ul>
+<li>Generative classifiers model each class's data and invert with Bayes' rule.</li>
+<li>LDA is optimal for Gaussian classes with a shared covariance, and competitive when data are scarce.</li>
+<li>QDA captures differences in spread, at the cost of more parameters.</li>
+<li>Naive Bayes is fast and often accurate, but its probabilities are overconfident when inputs share noise.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Fisher (1936), <em>The use of multiple measurements in taxonomic problems</em>.</li>
+<li>Averbeck, Latham and Pouget (2006), <em>Neural correlations, population coding and computation</em>, Nature Reviews Neuroscience 7, 358 to 366, on why correlations matter for decoders.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Explain, for a decoder of your choice, what the generative model of the data would have to include to be realistic (tuning, noise, correlations, drift). Which of these is your field least sure about, and how would a wrong assumption show up in the decoder's behaviour?" />

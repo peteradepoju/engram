@@ -1,0 +1,299 @@
+export const meta = {
+  title: "Softmax regression for many classes",
+  intro: "Most decoding problems have more than two answers: which of eight reach directions, which of several odours, which object. Softmax regression generalises logistic regression to K classes: one linear score per class, turned into probabilities that sum to one. Today you derive its loss and gradient, fit it to decode reach direction from a simulated motor cortex population, compare it with the shortcut of training many binary classifiers, and read the structure of its mistakes from a confusion matrix.",
+  goals: [
+    "Write the softmax function and its cross-entropy loss, and derive the gradient",
+    "Fit softmax regression to decode one of eight reach directions from a population",
+    "Compare softmax with one-vs-rest binary classifiers",
+    "Read a confusion matrix and turn class probabilities into a continuous estimate",
+  ],
+  plan: [
+    { label: "Softmax and its loss", minutes: 20 },
+    { label: "Decoding eight directions", minutes: 35 },
+    { label: "One-vs-rest", minutes: 20 },
+    { label: "The structure of mistakes", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "bridle-1990",
+};
+
+<Predict question="A decoder classifies eight reach directions, 45 degrees apart, from motor cortex activity and is right on 70% of trials. When it is wrong, are its mistakes spread evenly over the other seven directions, or concentrated on the neighbouring directions?" />
+
+<Step n={1} title="Softmax and its loss" minutes={20} />
+
+With $K$ classes, give each class $k$ a weight vector $\mathbf w_k$ and a score $z_k = \mathbf w_k^\top\mathbf x$. The **softmax** turns scores into probabilities:
+
+$$
+p_k(\mathbf x) = \frac{e^{z_k}}{\sum_{j=1}^K e^{z_j}}.
+$$
+
+The probabilities are positive and sum to one, the largest score wins, and adding the same constant to every score changes nothing, which is why one class's weights can be fixed at zero (for $K = 2$ this recovers logistic regression). The loss is again the negative log-likelihood, the cross-entropy $-\sum_i \log p_{y_i}(\mathbf x_i)$, and with one-hot labels $Y$ and probabilities $P$ (both $n \times K$) its gradient with respect to the weight matrix $W$ ($p \times K$) is
+
+$$
+\nabla_W L = X^\top(P - Y).
+$$
+
+Bridle, today's paper, argued in 1990 that networks with this output layer should be read as estimating class probabilities, and gave the function the name it still has.
+
+<Figure caption="Softmax regression with four classes in two dimensions: decision regions, shaded by the winning probability, and the class probabilities at a test point. Scale the weights and move the point." credit="Interactive figure by Engram.">
+  <SoftmaxRegions />
+</Figure>
+
+<Video id="N8pVCbTlves" title="Cross entropy" by="Neuromatch Academy (Deep Learning course)" note="Neuromatch's video on the cross-entropy loss for classifying into many classes, the loss you minimise today." />
+
+<Step n={2} title="Decoding eight directions" minutes={35} />
+
+Eighty motor cortex neurons are cosine-tuned to reach direction (Week 4) and fire Poisson counts in a 200 ms window. Fit softmax regression to 320 training trials and decode 2,000 test trials.
+
+<PyCell id="softmax" title="Softmax regression from scratch" tests={String.raw`
+  import numpy as np
+  def test_softmax():
+      "softmax is stable for large scores and its rows sum to 1"
+      P = softmax(np.array([[1000.0, 1001.0], [0.0, 0.0]]))
+      assert np.allclose(P.sum(1), 1) and np.allclose(P[1], [0.5, 0.5]) and np.isfinite(P).all()
+  def test_grad():
+      "loss_grad returns the loss and X'(P - Y) / n plus the penalty"
+      W0 = 0.01 * np.ones((A_tr.shape[1], K)); L, G = loss_grad(W0.ravel())
+      e = np.zeros_like(W0); e[3, 2] = 1e-6
+      L2, _ = loss_grad((W0 + e).ravel()); assert abs((L2 - L) / 1e-6 - G.reshape(W0.shape)[3, 2]) < 1e-4
+  def test_acc():
+      "test accuracy is between 0.6 and 0.95"
+      assert 0.6 < acc_soft < 0.95
+`} prompt="Write a numerically stable softmax (subtract the row maximum), and loss_grad(w_flat), returning the mean cross-entropy plus a small L2 penalty and its gradient, for use with scipy's L-BFGS. Fit and report test accuracy."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  r = np.random.default_rng(562)
+  K, N = 8, 80
+  dirs = np.arange(K) * 2 * np.pi / K
+  pref = r.uniform(0, 2 * np.pi, N); depth = r.uniform(0.2, 1.0, N)
+
+  def trials(n, g):
+      lab = g.integers(0, K, n)
+      rates = 10 * (1 + depth * np.cos(dirs[lab][:, None] - pref))
+      return g.poisson(rates * 0.2).astype(float), lab
+
+  X_tr, lab_tr = trials(320, r); X_te, lab_te = trials(2000, r)
+  mu, sd = X_tr.mean(0), X_tr.std(0) + 1e-9
+  A_tr, A_te = np.c_[np.ones(320), (X_tr - mu) / sd], np.c_[np.ones(2000), (X_te - mu) / sd]
+  Y_tr = np.eye(K)[lab_tr]
+
+  def softmax(Z):
+      Z = Z - Z.max(axis=1, keepdims=True)
+      E = np.exp(Z)
+      return ...
+
+  def loss_grad(w_flat, lam=1e-2):
+      W = w_flat.reshape(A_tr.shape[1], K)
+      P = softmax(A_tr @ W)
+      loss = -np.mean(np.log(P[np.arange(len(lab_tr)), lab_tr])) + 0.5 * lam * np.sum(W[1:] ** 2)
+      G = ...
+      G[1:] += lam * W[1:]
+      return loss, G.ravel()
+
+  res = minimize(loss_grad, np.zeros(A_tr.shape[1] * K), jac=True, method="L-BFGS-B")
+  W = res.x.reshape(A_tr.shape[1], K)
+  P_te = softmax(A_te @ W)
+  acc_soft = np.mean(P_te.argmax(1) == lab_te)
+  print(f"converged: {res.success}; test accuracy {acc_soft:.3f} (chance {1 / K:.3f})")
+`}
+hint="return E / E.sum(axis=1, keepdims=True); G = A_tr.T @ (P - Y_tr) / len(lab_tr)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  r = np.random.default_rng(562)
+  K, N = 8, 80
+  dirs = np.arange(K) * 2 * np.pi / K
+  pref = r.uniform(0, 2 * np.pi, N); depth = r.uniform(0.2, 1.0, N)
+
+  def trials(n, g):
+      lab = g.integers(0, K, n)
+      rates = 10 * (1 + depth * np.cos(dirs[lab][:, None] - pref))
+      return g.poisson(rates * 0.2).astype(float), lab
+
+  X_tr, lab_tr = trials(320, r); X_te, lab_te = trials(2000, r)
+  mu, sd = X_tr.mean(0), X_tr.std(0) + 1e-9
+  A_tr, A_te = np.c_[np.ones(320), (X_tr - mu) / sd], np.c_[np.ones(2000), (X_te - mu) / sd]
+  Y_tr = np.eye(K)[lab_tr]
+
+  def softmax(Z):
+      Z = Z - Z.max(axis=1, keepdims=True)
+      E = np.exp(Z)
+      return E / E.sum(axis=1, keepdims=True)
+
+  def loss_grad(w_flat, lam=1e-2):
+      W = w_flat.reshape(A_tr.shape[1], K)
+      P = softmax(A_tr @ W)
+      loss = -np.mean(np.log(P[np.arange(len(lab_tr)), lab_tr])) + 0.5 * lam * np.sum(W[1:] ** 2)
+      G = A_tr.T @ (P - Y_tr) / len(lab_tr)
+      G[1:] += lam * W[1:]
+      return loss, G.ravel()
+
+  res = minimize(loss_grad, np.zeros(A_tr.shape[1] * K), jac=True, method="L-BFGS-B")
+  W = res.x.reshape(A_tr.shape[1], K)
+  P_te = softmax(A_te @ W)
+  acc_soft = np.mean(P_te.argmax(1) == lab_te)
+  print(f"converged: {res.success}; test accuracy {acc_soft:.3f} (chance {1 / K:.3f})")
+`} />
+
+L-BFGS converges in a fraction of a second and the decoder is right on 80% of test trials, against 12.5% by chance, from 200 ms of activity in 80 neurons. Nothing beyond the gradient formula was needed: the optimiser handles step sizes, and the small penalty keeps the weights finite even though eight classes in 81 dimensions could otherwise be separated almost perfectly on 320 trials.
+
+<Step n={3} title="One-vs-rest" minutes={20} />
+
+A common shortcut trains $K$ separate binary classifiers, each separating one class from all the others, and picks the class whose classifier is most confident. It works, but its $K$ probabilities are not fitted jointly, so they need not sum to one.
+
+<PyCell id="ovr" title="Eight binary classifiers" tests={String.raw`
+  import numpy as np
+  def test_ovr():
+      "S holds one column of probabilities per binary classifier"
+      assert S.shape == (2000, K) and np.all((S > 0) & (S < 1))
+  def test_compare():
+      "softmax is at least as accurate as one-vs-rest, whose probabilities do not sum to one"
+      assert acc_soft >= acc_ovr and np.abs(S.sum(1) - 1).mean() > 0.05
+`} prompt="For each class k, fit a penalised binary logistic regression of (lab_tr == k) with L-BFGS, and store its test probabilities in column k of S. Compare accuracy with softmax and check how far the rows of S are from summing to one."
+code={String.raw`
+  def fit_binary(A, t, lam=1e-2):
+      def f(w):
+          p = 1 / (1 + np.exp(-A @ w)); p = np.clip(p, 1e-12, 1 - 1e-12)
+          L = -np.mean(t * np.log(p) + (1 - t) * np.log(1 - p)) + 0.5 * lam * np.sum(w[1:] ** 2)
+          G = A.T @ (p - t) / len(t); G[1:] += lam * w[1:]
+          return L, G
+      return minimize(f, np.zeros(A.shape[1]), jac=True, method="L-BFGS-B").x
+
+  S = np.zeros((2000, K))
+  for k in range(K):
+      w_k = ...
+      S[:, k] = ...
+  acc_ovr = np.mean(S.argmax(1) == lab_te)
+  print(f"one-vs-rest accuracy {acc_ovr:.3f}, softmax {acc_soft:.3f}")
+  print(f"one-vs-rest probability sums: mean {S.sum(1).mean():.2f}, range {S.sum(1).min():.2f} to {S.sum(1).max():.2f}")
+`}
+hint="w_k = fit_binary(A_tr, (lab_tr == k).astype(float)); S[:, k] = 1 / (1 + np.exp(-A_te @ w_k))."
+solution={String.raw`
+  def fit_binary(A, t, lam=1e-2):
+      def f(w):
+          p = 1 / (1 + np.exp(-A @ w)); p = np.clip(p, 1e-12, 1 - 1e-12)
+          L = -np.mean(t * np.log(p) + (1 - t) * np.log(1 - p)) + 0.5 * lam * np.sum(w[1:] ** 2)
+          G = A.T @ (p - t) / len(t); G[1:] += lam * w[1:]
+          return L, G
+      return minimize(f, np.zeros(A.shape[1]), jac=True, method="L-BFGS-B").x
+
+  S = np.zeros((2000, K))
+  for k in range(K):
+      w_k = fit_binary(A_tr, (lab_tr == k).astype(float))
+      S[:, k] = 1 / (1 + np.exp(-A_te @ w_k))
+  acc_ovr = np.mean(S.argmax(1) == lab_te)
+  print(f"one-vs-rest accuracy {acc_ovr:.3f}, softmax {acc_soft:.3f}")
+  print(f"one-vs-rest probability sums: mean {S.sum(1).mean():.2f}, range {S.sum(1).min():.2f} to {S.sum(1).max():.2f}")
+`} />
+
+Eight separate binary classifiers manage only 68.6% against softmax's 80%. Each one-vs-rest problem is unbalanced (one class against seven) and harder than it looks, and the eight classifiers are never calibrated against one another, so taking the largest of their probabilities is a poor way to choose. Their probabilities sum to 0.98 on average but anywhere from 0.02 to 2.54 on individual trials, so they cannot be read as a distribution over directions. Softmax fits all classes jointly, which is why it is the standard choice.
+
+<Step n={4} title="The structure of mistakes" minutes={30} />
+
+Accuracy treats every mistake alike, but the classes here have an order around a circle. A **confusion matrix**, counting how often each true class is decoded as each predicted class, shows where the errors go. And since the softmax gives a full probability distribution over directions, you can also decode a continuous angle, by taking the direction of the probability-weighted average of the eight unit vectors, which matters when real reaches are not restricted to the eight trained directions.
+
+<PyCell id="confusion" title="Where the errors go" tests={String.raw`
+  import numpy as np
+  def test_conf():
+      "C is the 8 by 8 confusion matrix with rows normalised to 1"
+      assert C.shape == (K, K) and np.allclose(C.sum(1), 1)
+  def test_neigh():
+      "most errors go to the two neighbouring directions"
+      assert frac_neighbour > 0.6
+  def test_angle():
+      "for reaches in arbitrary directions, the continuous estimate has a smaller mean absolute error than the argmax estimate"
+      assert err_cont < err_argmax
+`} prompt="Build the row-normalised confusion matrix C. Compute the fraction of errors that land on a neighbouring direction (one step either way round the circle). Then, for 2,000 reaches in arbitrary directions (not only the eight trained ones), decode a continuous angle from the class probabilities Pc and compare its mean absolute angular error with that of the argmax decision."
+code={String.raw`
+  pred = P_te.argmax(1)
+  C = np.zeros((K, K))
+  for t_, p_ in zip(lab_te, pred):
+      C[t_, p_] += 1
+  C = C / C.sum(1, keepdims=True)
+  wrong = pred != lab_te
+  step = (pred - lab_te) % K
+  frac_neighbour = ...
+  g3 = np.random.default_rng(5621)                     # reaches in any direction, not only the eight trained ones
+  theta = g3.uniform(0, 2 * np.pi, 2000)
+  Xc = g3.poisson(10 * (1 + depth * np.cos(theta[:, None] - pref)) * 0.2).astype(float)
+  Pc = softmax(np.c_[np.ones(2000), (Xc - mu) / sd] @ W)
+  ang_err = lambda est: np.abs(np.angle(np.exp(1j * (est - theta))))
+  theta_cont = ...
+  err_argmax, err_cont = np.degrees(ang_err(dirs[Pc.argmax(1)]).mean()), np.degrees(ang_err(theta_cont).mean())
+  print(f"errors on neighbouring directions: {frac_neighbour:.2f} of all errors")
+  print(f"mean angular error: argmax {err_argmax:.1f} degrees, probability-weighted {err_cont:.1f} degrees")
+  plt.imshow(C, cmap="viridis"); plt.xlabel("decoded direction"); plt.ylabel("true direction"); plt.colorbar(); plt.show()
+`}
+hint="frac_neighbour = np.mean(np.isin(step[wrong], [1, K - 1])); theta_cont = np.angle(Pc @ np.exp(1j * dirs))."
+solution={String.raw`
+  pred = P_te.argmax(1)
+  C = np.zeros((K, K))
+  for t_, p_ in zip(lab_te, pred):
+      C[t_, p_] += 1
+  C = C / C.sum(1, keepdims=True)
+  wrong = pred != lab_te
+  step = (pred - lab_te) % K
+  frac_neighbour = np.mean(np.isin(step[wrong], [1, K - 1]))
+  g3 = np.random.default_rng(5621)                     # reaches in any direction, not only the eight trained ones
+  theta = g3.uniform(0, 2 * np.pi, 2000)
+  Xc = g3.poisson(10 * (1 + depth * np.cos(theta[:, None] - pref)) * 0.2).astype(float)
+  Pc = softmax(np.c_[np.ones(2000), (Xc - mu) / sd] @ W)
+  ang_err = lambda est: np.abs(np.angle(np.exp(1j * (est - theta))))
+  theta_cont = np.angle(Pc @ np.exp(1j * dirs))
+  err_argmax, err_cont = np.degrees(ang_err(dirs[Pc.argmax(1)]).mean()), np.degrees(ang_err(theta_cont).mean())
+  print(f"errors on neighbouring directions: {frac_neighbour:.2f} of all errors")
+  print(f"mean angular error: argmax {err_argmax:.1f} degrees, probability-weighted {err_cont:.1f} degrees")
+  plt.imshow(C, cmap="viridis"); plt.xlabel("decoded direction"); plt.ylabel("true direction"); plt.colorbar(); plt.show()
+`} />
+
+Every single error falls on a neighbouring direction, 45 degrees away; the decoder never confuses opposite or distant directions. That answers the prediction, and it reflects the population code: cosine tuning makes nearby directions produce similar activity, so the classes inherit the circle's geometry. The probabilities carry this structure too. For reaches in arbitrary directions, picking the most probable of the eight trained directions gives a mean error of 18 degrees, but the probability-weighted average direction gives 11.8 degrees, interpolating between the trained directions in proportion to the evidence. Accuracy alone would have hidden both facts.
+
+<Bridge title="Many classes in brains and machines"
+  neuro="Winner-take-all circuits, in which neurons representing alternatives inhibit each other until one dominates, are a biological counterpart of the softmax. Divisive normalisation (Week 46), which divides each response by the summed activity of a pool, has the same mathematical form as the softmax's denominator."
+  ai="The softmax is the output of every classification network and the heart of attention in Transformers, where it turns similarity scores into weights over tokens. Its temperature, the scale of the scores, controls how confident or how spread out the resulting distribution is, exactly as the weight scale did in today's figure.">
+
+One score per class, normalised: the softmax turns a population's evidence into a choice with a confidence.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The softmax probabilities...", options: ["Are positive and sum to one", "Can be negative", "Sum to K", "Are independent"], answer: 0, explain: "Normalised exponentials." },
+  { q: "Adding the same constant to every class score...", options: ["Leaves the probabilities unchanged", "Doubles them", "Changes the winner", "Makes them sum to two"], answer: 0, explain: "It cancels in the ratio." },
+  { q: "With two classes, softmax regression reduces to...", options: ["Logistic regression", "Linear regression", "LDA", "k-means"], answer: 0, explain: "Fix one class's weights at zero." },
+  { q: "The gradient of the softmax cross-entropy is...", options: ["Xᵀ(P − Y)", "Xᵀ(Y − XW)", "PᵀY", "Zero"], answer: 0, explain: "Step 1." },
+  { q: "Subtracting the row maximum before exponentiating...", options: ["Prevents overflow without changing the result", "Changes the probabilities", "Is required for accuracy", "Removes a class"], answer: 0, explain: "Numerical stability." },
+  { q: "One-vs-rest probabilities...", options: ["Need not sum to one", "Always sum to one", "Are always better", "Are identical to softmax"], answer: 0, explain: "Step 3." },
+  { q: "Errors of a direction decoder concentrate on...", options: ["Neighbouring directions", "The opposite direction", "Random directions", "No errors occur"], answer: 0, explain: "Step 4." },
+  { q: "A confusion matrix row shows...", options: ["How a true class is distributed over decoded classes", "The weights", "The loss", "The probabilities of one trial"], answer: 0, explain: "Rows: true classes." },
+]} />
+
+<Flashcards cards={[
+  { front: "Softmax?", back: "$p_k = e^{z_k}/\\sum_j e^{z_j}$." },
+  { front: "Multinomial cross-entropy gradient?", back: "$X^\\top(P - Y)$ with one-hot labels Y." },
+  { front: "Stable softmax?", back: "Subtract the largest score in each row before exponentiating." },
+  { front: "One-vs-rest?", back: "K binary classifiers, each class against the others; pick the most confident." },
+  { front: "Continuous estimate from class probabilities?", back: "For circular classes, the angle of $\\sum_k p_k e^{i\\theta_k}$." },
+]} />
+
+<Predict revisit question="Were the direction decoder's mistakes spread evenly or concentrated on neighbours?" />
+
+<Key title="Before you go">
+<ul>
+<li>Softmax regression gives one linear score per class and probabilities that sum to one.</li>
+<li>Its loss is the cross-entropy, with gradient Xᵀ(P − Y), and it should be computed stably.</li>
+<li>One-vs-rest classifiers predict similarly but give incoherent probabilities.</li>
+<li>Confusion matrices reveal the structure of errors; probabilities can be turned into continuous estimates.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Bridle (1990), <em>Probabilistic interpretation of feedforward classification network outputs, with relationships to statistical pattern recognition</em>.</li>
+<li>Georgopoulos, Schwartz and Kettner (1986), <em>Neuronal population coding of movement direction</em> (Week 4), the population behind today's data.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Choose a decoding problem with more than two classes in which the classes have structure (an order, a circle, a hierarchy). Describe what the confusion matrix would look like if the brain represented that structure, and what it would look like if it did not." />

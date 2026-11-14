@@ -1,0 +1,297 @@
+export const meta = {
+  title: "Logistic regression: probabilities, cross-entropy and boundaries",
+  intro: "Many questions in neuroscience have categorical answers: left or right, seen or not seen, face or house, rewarded or not. Classification predicts such answers. Logistic regression, which you have used since Week 35 for spikes and Week 51 for choices, is the foundation: a linear score passed through a sigmoid to give a probability. Today you derive its loss from the likelihood, fit it by gradient descent and by Newton's method, meet the strange failure that happens when the classes can be separated perfectly, and see why a penalty is the cure.",
+  goals: [
+    "Derive the cross-entropy loss of logistic regression from the Bernoulli likelihood",
+    "Fit logistic regression by gradient descent and by Newton's method, and compare their speed",
+    "Interpret weights as changes in log-odds and the decision boundary as a hyperplane",
+    "Explain why perfectly separable data make the weights diverge, and fix it with a penalty",
+  ],
+  plan: [
+    { label: "From scores to probabilities", minutes: 20 },
+    { label: "Cross-entropy and its gradient", minutes: 30 },
+    { label: "Newton's method", minutes: 25 },
+    { label: "When the classes separate", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "cox-1958",
+};
+
+<Predict question="A decoder classifies two stimuli from 50 neurons using 40 trials, and the classes happen to be perfectly separable in the training data. If you fit logistic regression without any penalty, what happens to the weights: they converge to sensible values, they converge to zero, or they grow without limit?" />
+
+<Step n={1} title="From scores to probabilities" minutes={20} />
+
+Logistic regression models the probability that $y = 1$ given inputs $\mathbf x$ as
+
+$$
+p(\mathbf x) = \sigma(\mathbf w^\top\mathbf x + b) = \frac{1}{1 + e^{-(\mathbf w^\top\mathbf x + b)}}.
+$$
+
+The score $z = \mathbf w^\top\mathbf x + b$ is the **log-odds**, $\log\frac{p}{1-p}$, so each weight is the change in log-odds per unit change in its input, and $e^{w_j}$ the factor by which the odds are multiplied. The **decision boundary**, where $p = 0.5$, is the hyperplane $\mathbf w^\top\mathbf x + b = 0$; contours of equal probability are parallel to it, closer together when $\lVert\mathbf w\rVert$ is large. Cox's 1958 paper, today's paper, set out this model for binary data, and it remains the default first classifier in almost every field.
+
+<Figure caption="Logistic regression fitted to two classes. The solid line is the decision boundary; the dashed lines are where the model is 90% sure. Change how separated the classes are and the size of the penalty." credit="Interactive figure by Engram.">
+  <LogisticBoundary />
+</Figure>
+
+<Video id="yIYKR4sgzI8" title="StatQuest: logistic regression" by="StatQuest with Josh Starmer" note="Josh Starmer's introduction to logistic regression: fitting an S-shaped probability curve by maximum likelihood rather than least squares." />
+
+<Step n={2} title="Cross-entropy and its gradient" minutes={30} />
+
+<Derivation title="The loss of logistic regression">
+<div>
+
+Each label is a Bernoulli draw with probability $p_i = \sigma(z_i)$, so the likelihood is $\prod_i p_i^{y_i}(1 - p_i)^{1 - y_i}$, and the negative log-likelihood is the **cross-entropy**
+
+$$
+L(\mathbf w) = -\sum_i \left[y_i\log p_i + (1 - y_i)\log(1 - p_i)\right].
+$$
+
+</div>
+<div>
+
+Using $\sigma'(z) = \sigma(z)(1 - \sigma(z))$, the derivative of each term with respect to $z_i$ simplifies to $p_i - y_i$. By the chain rule, with the bias folded into $\mathbf w$ through a column of ones,
+
+$$
+\nabla L = X^\top(\mathbf p - \mathbf y),
+$$
+
+the same form as least squares, with predicted probabilities in place of predicted values.
+
+</div>
+<div>
+
+The Hessian is $X^\top SX$ with $S = \text{diag}(p_i(1 - p_i))$, which is positive semi-definite: the loss is convex, so any minimum is the global one.
+
+</div>
+</Derivation>
+
+<PyCell id="gd" title="Gradient descent on the cross-entropy" tests={String.raw`
+  import numpy as np
+  def test_loss():
+      "cross_entropy matches the formula"
+      w0 = np.array([0.1, -0.2, 0.3]); p = 1 / (1 + np.exp(-A @ w0))
+      assert abs(cross_entropy(w0) + np.sum(y * np.log(p) + (1 - y) * np.log(1 - p))) < 1e-9
+  def test_grad():
+      "grad matches a finite-difference derivative"
+      w0 = np.array([0.1, -0.2, 0.3]); e = np.array([0, 1e-6, 0])
+      assert abs(grad(w0)[1] - (cross_entropy(w0 + e) - cross_entropy(w0 - e)) / 2e-6) < 1e-3
+  def test_fit():
+      "gradient descent reduces the loss and recovers the weights roughly"
+      assert losses[-1] < losses[0] and np.abs(w_gd - w_true).max() < 0.5
+`} prompt="Write cross_entropy(w) and grad(w) for the design A (a column of ones and two inputs). Run 2,000 steps of gradient descent with step size 0.002 and record the loss every step."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(561)
+  n = 400
+  Xin = r.normal(size=(n, 2))
+  A = np.c_[np.ones(n), Xin]
+  w_true = np.array([-0.5, 2.0, -1.0])
+  y = (r.random(n) < 1 / (1 + np.exp(-A @ w_true))).astype(float)
+
+  def cross_entropy(w):
+      p = 1 / (1 + np.exp(-A @ w))
+      return ...
+
+  def grad(w):
+      p = 1 / (1 + np.exp(-A @ w))
+      return ...
+
+  w_gd = np.zeros(3); losses = []
+  for step in range(2000):
+      w_gd -= 0.002 * grad(w_gd)
+      losses.append(cross_entropy(w_gd))
+  print("true weights:  ", w_true); print("gradient descent:", np.round(w_gd, 3))
+  print(f"loss after 1, 100 and 2000 steps: {losses[0]:.2f}, {losses[99]:.2f}, {losses[-1]:.2f}")
+  plt.semilogy(np.array(losses) - min(losses) + 1e-3); plt.xlabel("step"); plt.ylabel("loss above its minimum"); plt.show()
+`}
+hint="return -np.sum(y * np.log(p) + (1 - y) * np.log(1 - p)); return A.T @ (p - y)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(561)
+  n = 400
+  Xin = r.normal(size=(n, 2))
+  A = np.c_[np.ones(n), Xin]
+  w_true = np.array([-0.5, 2.0, -1.0])
+  y = (r.random(n) < 1 / (1 + np.exp(-A @ w_true))).astype(float)
+
+  def cross_entropy(w):
+      p = 1 / (1 + np.exp(-A @ w))
+      return -np.sum(y * np.log(p) + (1 - y) * np.log(1 - p))
+
+  def grad(w):
+      p = 1 / (1 + np.exp(-A @ w))
+      return A.T @ (p - y)
+
+  w_gd = np.zeros(3); losses = []
+  for step in range(2000):
+      w_gd -= 0.002 * grad(w_gd)
+      losses.append(cross_entropy(w_gd))
+  print("true weights:  ", w_true); print("gradient descent:", np.round(w_gd, 3))
+  print(f"loss after 1, 100 and 2000 steps: {losses[0]:.2f}, {losses[99]:.2f}, {losses[-1]:.2f}")
+  plt.semilogy(np.array(losses) - min(losses) + 1e-3); plt.xlabel("step"); plt.ylabel("loss above its minimum"); plt.show()
+`} />
+
+Gradient descent recovers weights of −0.59, 2.20 and −1.28 against true values of −0.5, 2.0 and −1.0, which is as close as 400 noisy labels allow. The loss falls quickly at first (from 245 to 157 in 100 steps) and then creeps: after 2,000 steps it is still improving in the second decimal place. The plot on a log scale shows the slow, geometric approach typical of gradient descent on a problem whose curvature differs between directions, as you saw in Week 12.
+
+<Step n={3} title="Newton's method" minutes={25} />
+
+Because the Hessian is cheap for a few weights, Newton's method, $\mathbf w \leftarrow \mathbf w - (X^\top SX)^{-1}X^\top(\mathbf p - \mathbf y)$, converges in a handful of steps. Each step is a weighted least-squares problem, which is why it is also called **iteratively reweighted least squares**, the algorithm inside most GLM software.
+
+<PyCell id="newton" title="Converging in a few steps" tests={String.raw`
+  import numpy as np
+  def test_newton():
+      "newton returns the same weights as long gradient descent, within 0.01"
+      assert np.abs(w_nt - w_gd).max() < 0.01
+  def test_fast():
+      "the loss stops changing (to 1e-8) within 10 Newton steps"
+      assert np.argmax(np.abs(np.diff(nt_losses)) < 1e-8) < 10
+`} prompt="Write newton(A, y, steps), returning the weights and the loss after each step. Compare the number of steps it needs with gradient descent."
+code={String.raw`
+  def newton(A, y, steps=12):
+      w = np.zeros(A.shape[1]); ls = []
+      for _ in range(steps):
+          p = 1 / (1 + np.exp(-A @ w))
+          H = ...
+          w = w - np.linalg.solve(H, A.T @ (p - y))
+          ls.append(cross_entropy(w))
+      return w, ls
+
+  w_nt, nt_losses = newton(A, y)
+  print("Newton weights:", np.round(w_nt, 4))
+  print("loss after each step:", np.round(nt_losses[:6], 4))
+`}
+hint="H = A.T @ (A * (p * (1 - p))[:, None])."
+solution={String.raw`
+  def newton(A, y, steps=12):
+      w = np.zeros(A.shape[1]); ls = []
+      for _ in range(steps):
+          p = 1 / (1 + np.exp(-A @ w))
+          H = A.T @ (A * (p * (1 - p))[:, None])
+          w = w - np.linalg.solve(H, A.T @ (p - y))
+          ls.append(cross_entropy(w))
+      return w, ls
+
+  w_nt, nt_losses = newton(A, y)
+  print("Newton weights:", np.round(w_nt, 4))
+  print("loss after each step:", np.round(nt_losses[:6], 4))
+`} />
+
+Newton's method reaches the same weights in four or five steps: the loss is 174.5, 159.0, 156.79, 156.715 and then constant to four decimal places. Each step uses the curvature to jump towards the minimum, and near the minimum the number of correct digits roughly doubles each step. For models with a few hundred weights this makes Newton the method of choice; for millions of weights, as in neural networks, the Hessian is too large to form, and variants of gradient descent take over.
+
+<Step n={4} title="When the classes separate" minutes={30} />
+
+Decoders are often fitted to more neurons than trials, and then the training classes can usually be separated perfectly by some hyperplane. On such data, scaling up the weights pushes every $p_i$ closer to its label, so the cross-entropy keeps decreasing towards zero and has no minimum. Fit 40 trials of 50 neurons and watch.
+
+<PyCell id="separable" title="Weights that run away" tests={String.raw`
+  import numpy as np
+  def test_separable():
+      "the unpenalised training accuracy reaches 100% while the weight norm keeps growing"
+      assert acc_train == 1.0 and norms[-1] > norms[10] > norms[5]
+  def test_penalty():
+      "with a penalty the norm stays bounded and the test accuracy is at least as good"
+      assert norm_pen < 0.5 * norms[-1] and acc_test_pen >= acc_test_free - 0.02
+`} prompt="Run gradient descent without a penalty on the 40-trial, 50-neuron decoding problem and record the weight norm. Then fit with an L2 penalty (add lam * w to the gradient, intercept excluded) and compare the norms and the test accuracies on 2,000 new trials."
+code={String.raw`
+  g = np.random.default_rng(562)
+  Nn, n_tr = 50, 40
+  mu = g.normal(size=Nn) * 0.3                     # mean response difference between the two stimuli
+  def trials(n):
+      lab = g.integers(0, 2, n).astype(float)
+      return np.c_[np.ones(n), (2 * lab[:, None] - 1) * mu / 2 + g.normal(size=(n, Nn))], lab
+  A_tr, y_tr = trials(n_tr); A_te, y_te = trials(2000)
+
+  def fit_gd(A, y, lam=0.0, steps=20000, lr=0.05):
+      w = np.zeros(A.shape[1]); norms = []
+      for s in range(steps):
+          p = 1 / (1 + np.exp(-A @ w))
+          gpen = lam * np.r_[0, w[1:]]
+          w -= lr * (A.T @ (p - y) / len(y) + gpen)
+          if s % 1000 == 0: norms.append(np.linalg.norm(w[1:]))
+      return w, norms
+
+  acc = lambda A, y, w: np.mean((A @ w > 0) == (y == 1))
+  w_free, norms = fit_gd(A_tr, y_tr)
+  acc_train, acc_test_free = acc(A_tr, y_tr, w_free), acc(A_te, y_te, w_free)
+  w_pen, _ = ...
+  norm_pen, acc_test_pen = np.linalg.norm(w_pen[1:]), acc(A_te, y_te, w_pen)
+  print(f"no penalty: training accuracy {acc_train:.2f}, weight norm after 5k, 10k, 20k steps: {norms[5]:.1f}, {norms[10]:.1f}, {norms[-1]:.1f}; test accuracy {acc_test_free:.3f}")
+  print(f"penalty 0.1: weight norm {norm_pen:.2f}; test accuracy {acc_test_pen:.3f}")
+`}
+hint="w_pen, _ = fit_gd(A_tr, y_tr, lam=0.1)."
+solution={String.raw`
+  g = np.random.default_rng(562)
+  Nn, n_tr = 50, 40
+  mu = g.normal(size=Nn) * 0.3                     # mean response difference between the two stimuli
+  def trials(n):
+      lab = g.integers(0, 2, n).astype(float)
+      return np.c_[np.ones(n), (2 * lab[:, None] - 1) * mu / 2 + g.normal(size=(n, Nn))], lab
+  A_tr, y_tr = trials(n_tr); A_te, y_te = trials(2000)
+
+  def fit_gd(A, y, lam=0.0, steps=20000, lr=0.05):
+      w = np.zeros(A.shape[1]); norms = []
+      for s in range(steps):
+          p = 1 / (1 + np.exp(-A @ w))
+          gpen = lam * np.r_[0, w[1:]]
+          w -= lr * (A.T @ (p - y) / len(y) + gpen)
+          if s % 1000 == 0: norms.append(np.linalg.norm(w[1:]))
+      return w, norms
+
+  acc = lambda A, y, w: np.mean((A @ w > 0) == (y == 1))
+  w_free, norms = fit_gd(A_tr, y_tr)
+  acc_train, acc_test_free = acc(A_tr, y_tr, w_free), acc(A_te, y_te, w_free)
+  w_pen, _ = fit_gd(A_tr, y_tr, lam=0.1)
+  norm_pen, acc_test_pen = np.linalg.norm(w_pen[1:]), acc(A_te, y_te, w_pen)
+  print(f"no penalty: training accuracy {acc_train:.2f}, weight norm after 5k, 10k, 20k steps: {norms[5]:.1f}, {norms[10]:.1f}, {norms[-1]:.1f}; test accuracy {acc_test_free:.3f}")
+  print(f"penalty 0.1: weight norm {norm_pen:.2f}; test accuracy {acc_test_pen:.3f}")
+`} />
+
+With 50 neurons and 40 trials, the training trials are perfectly separable: unpenalised training accuracy reaches 100%, and the weight norm keeps growing, from 5.1 after 5,000 steps to 5.8 after 10,000 and 6.4 after 20,000. It grows only logarithmically in the number of steps, but it never stops, because the loss has no minimum: any separating direction can be scaled up to drive every probability closer to its label. That answers the prediction. The model's predicted probabilities become absurdly confident while its test accuracy, 72%, is unremarkable. With a penalty of 0.1 the norm settles at 1.47, the probabilities stay sensible, and test accuracy is slightly better (75%). In practice, decoders with many neurons should always be penalised, with the penalty chosen by cross-validation.
+
+<Bridge title="Classification in brains and machines"
+  neuro="A downstream neuron that sums weighted inputs and fires when the sum crosses a threshold is a linear classifier; logistic regression is its probabilistic version. Decoding studies use the same model to ask whether a category is linearly readable from a population, which is a statement about what a downstream area could compute in one step."
+  ai="Logistic regression is the output layer of almost every classification network: the network computes features, and a final linear layer with a sigmoid or softmax turns them into probabilities. The divergence on separable data reappears there: gradient descent on separable data drifts towards the maximum-margin direction, which links logistic regression to the support vector machines of Week 57.">
+
+A linear score, a sigmoid and the cross-entropy: the simplest classifier, and the last layer of the most complex ones.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In logistic regression the linear score is...", options: ["The log-odds of class 1", "The probability", "The odds", "The label"], answer: 0, explain: "z = log(p / (1 − p))." },
+  { q: "A weight of log 2 on an input means one unit of that input...", options: ["Doubles the odds", "Doubles the probability", "Adds 2 to the probability", "Halves the odds"], answer: 0, explain: "Odds multiply by e^w." },
+  { q: "The cross-entropy gradient is...", options: ["Xᵀ(p − y)", "Xᵀ(y − Xw)", "XᵀX", "p(1 − p)"], answer: 0, explain: "Step 2." },
+  { q: "The logistic loss is...", options: ["Convex", "Non-convex", "Linear", "Discontinuous"], answer: 0, explain: "Its Hessian is positive semi-definite." },
+  { q: "Newton's method for logistic regression is also called...", options: ["Iteratively reweighted least squares", "Coordinate descent", "Backpropagation", "EM"], answer: 0, explain: "Each step is a weighted least-squares problem." },
+  { q: "On perfectly separable data, unpenalised logistic regression...", options: ["Has weights that grow without limit", "Converges quickly", "Fails to separate", "Sets weights to zero"], answer: 0, explain: "The loss has no minimum." },
+  { q: "The decision boundary of logistic regression is...", options: ["A hyperplane", "A circle", "A curve", "Undefined"], answer: 0, explain: "wᵀx + b = 0." },
+  { q: "Cox's 1958 paper introduced...", options: ["Regression analysis of binary data", "The lasso", "Support vector machines", "Neural networks"], answer: 0, explain: "Today's paper." },
+]} />
+
+<Flashcards cards={[
+  { front: "Logistic model?", back: "$p = \\sigma(\\mathbf w^\\top\\mathbf x + b)$, $\\sigma(z) = 1/(1 + e^{-z})$." },
+  { front: "Cross-entropy loss?", back: "$-\\sum_i [y_i\\log p_i + (1 - y_i)\\log(1 - p_i)]$." },
+  { front: "Gradient and Hessian?", back: "$X^\\top(\\mathbf p - \\mathbf y)$ and $X^\\top\\text{diag}(p_i(1 - p_i))X$." },
+  { front: "Separable data?", back: "No finite maximum-likelihood weights; add a penalty or stop early." },
+  { front: "Weights as odds?", back: "A one-unit change in $x_j$ multiplies the odds by $e^{w_j}$." },
+]} />
+
+<Predict revisit question="On perfectly separable training data, what did the unpenalised weights do?" />
+
+<Key title="Before you go">
+<ul>
+<li>Logistic regression is a linear model of the log-odds, fitted by minimising cross-entropy.</li>
+<li>The gradient is Xᵀ(p − y); Newton's method converges in a few steps.</li>
+<li>Weights change the odds multiplicatively; the boundary is a hyperplane.</li>
+<li>With more neurons than trials, classes separate and weights diverge unless penalised.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Cox (1958), <em>The regression analysis of binary sequences</em>.</li>
+<li>Bishop, <em>Pattern Recognition and Machine Learning</em> (2006), section 4.3, free online from Microsoft Research.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Describe a binary question about the brain that a decoder could answer. Write down what a weight of the logistic decoder would mean, why it should not be read as how much a neuron 'cares' about the category, and how you would avoid separability problems." />
