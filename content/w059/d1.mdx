@@ -1,0 +1,259 @@
+export const meta = {
+  title: "Cross-validation and nested cross-validation",
+  intro: "Every model this part of the course has fitted ended with a number: an accuracy, an R squared, an error. This week is about whether that number can be believed. Today you build K-fold cross-validation from scratch, measure how much a single train and test split wobbles, and then meet the most common way that careful people still fool themselves: choosing a hyperparameter by cross-validation and reporting the winning score. Nested cross-validation fixes it, at a price you will measure.",
+  goals: [
+    "Implement K-fold cross-validation and explain what it estimates",
+    "Measure the variability of a single train and test split against K-fold estimates",
+    "Show that the best cross-validated score among many candidates is optimistic",
+    "Implement nested cross-validation and explain when it is needed",
+  ],
+  plan: [
+    { label: "One split is not enough", minutes: 20 },
+    { label: "K-fold cross-validation", minutes: 30 },
+    { label: "The optimism of the winner", minutes: 25 },
+    { label: "Nested cross-validation", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "varoquaux-2017",
+};
+
+<Predict question="You try 12 values of a regularisation strength, pick the one with the best 5-fold cross-validated decoding accuracy, and report that accuracy. On fresh data from the same experiment, will the chosen decoder typically do about as well, noticeably worse, or better?" />
+
+<Step n={1} title="One split is not enough" minutes={20} />
+
+Week 54 split the data into training, validation and test sets. With the few hundred trials of a typical neuroscience session, each of those sets is small, and the score on a small test set is noisy: a test set of 50 trials measures an accuracy of 70% with a standard error of about 6.5 percentage points. **K-fold cross-validation** uses the data more efficiently. Split the trials into $K$ folds; train on $K - 1$ of them and test on the one left out; rotate, so that every trial is tested exactly once; and average. Varoquaux and colleagues (2017), today's paper, studied how well this works for brain decoding, and found the error bars to be much larger than most papers assumed.
+
+<Video id="fSytzGwwBVw" title="Machine learning fundamentals: cross validation" by="StatQuest with Josh Starmer" note="Josh Starmer on why we hold data back for testing, and how K-fold and leave-one-out cross-validation use every observation for both training and testing." />
+
+<PyCell code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  def population(n, g, p=50, signal=0.25):
+      """n trials of p neurons; the stimulus (+1 or -1) shifts every neuron's rate a little, along a random direction."""
+      w = np.random.default_rng(0).normal(size=p)
+      y = np.where(g.random(n) < 0.5, 1.0, -1.0)
+      X = signal * np.outer(y, w) + g.normal(size=(n, p))
+      return X, y
+
+  def ridge_fit(X, y, lam):
+      mu = X.mean(0)
+      Xc = X - mu
+      w = np.linalg.solve(Xc.T @ Xc + lam * np.eye(X.shape[1]), Xc.T @ (y - y.mean()))
+      return w, mu, y.mean()
+
+  def ridge_acc(model, X, y):
+      w, mu, b = model
+      return np.mean(np.sign((X - mu) @ w + b) == y)
+
+  print("ready: population(n, g) simulates trials; ridge_fit and ridge_acc fit and score a ridge decoder")
+`} />
+
+<Step n={2} title="K-fold cross-validation" minutes={30} />
+
+<PyCell id="kfold" title="K-fold from scratch" tests={String.raw`
+  import numpy as np
+  def test_folds():
+      "kfold_indices returns K disjoint test folds that together cover every trial once"
+      folds = kfold_indices(23, 5, np.random.default_rng(0))
+      assert len(folds) == 5 and sorted(np.concatenate(folds).tolist()) == list(range(23))
+  def test_spread():
+      "single 25% splits vary more across reshuffles than 5-fold estimates do"
+      assert np.std(single) > np.std(fivefold)
+`} prompt="Write kfold_indices(n, K, g), which shuffles the trial indices and splits them into K nearly equal test folds, and cv_acc(X, y, lam, K, g), which returns the mean test accuracy across folds. Then compare, over 40 reshuffles of the same 120 trials, the spread of a single 75/25 split and of 5-fold cross-validation."
+code={String.raw`
+  def kfold_indices(n, K, g):
+      return ...
+
+  def cv_acc(X, y, lam, K, g):
+      scores = []
+      for te in kfold_indices(len(y), K, g):
+          tr = np.setdiff1d(np.arange(len(y)), te)
+          scores.append(ridge_acc(ridge_fit(X[tr], y[tr], lam), X[te], y[te]))
+      return np.mean(scores)
+
+  gk = np.random.default_rng(591)
+  X, y = population(120, gk)
+  single, fivefold = [], []
+  for s in range(40):
+      perm = gk.permutation(120)
+      tr, te = perm[:90], perm[90:]
+      single.append(ridge_acc(ridge_fit(X[tr], y[tr], 10.0), X[te], y[te]))
+      fivefold.append(cv_acc(X, y, 10.0, 5, gk))
+  print(f"single split: mean {np.mean(single):.3f}, spread (sd) {np.std(single):.3f}")
+  print(f"5-fold CV:    mean {np.mean(fivefold):.3f}, spread (sd) {np.std(fivefold):.3f}")
+`}
+hint="return np.array_split(g.permutation(n), K)."
+solution={String.raw`
+  def kfold_indices(n, K, g):
+      return np.array_split(g.permutation(n), K)
+
+  def cv_acc(X, y, lam, K, g):
+      scores = []
+      for te in kfold_indices(len(y), K, g):
+          tr = np.setdiff1d(np.arange(len(y)), te)
+          scores.append(ridge_acc(ridge_fit(X[tr], y[tr], lam), X[te], y[te]))
+      return np.mean(scores)
+
+  gk = np.random.default_rng(591)
+  X, y = population(120, gk)
+  single, fivefold = [], []
+  for s in range(40):
+      perm = gk.permutation(120)
+      tr, te = perm[:90], perm[90:]
+      single.append(ridge_acc(ridge_fit(X[tr], y[tr], 10.0), X[te], y[te]))
+      fivefold.append(cv_acc(X, y, 10.0, 5, gk))
+  print(f"single split: mean {np.mean(single):.3f}, spread (sd) {np.std(single):.3f}")
+  print(f"5-fold CV:    mean {np.mean(fivefold):.3f}, spread (sd) {np.std(fivefold):.3f}")
+`} />
+
+Both methods agree on the mean, about 85%, but a single split with 30 test trials wanders with a standard deviation of 5 percentage points depending on which trials happened to land in the test set, while the 5-fold estimate, which tests every trial once, wanders by about 2.4. Notice what the spread does not include: both numbers vary only with how this one session was split. A new session, a new animal or a new day would add variability that no amount of reshuffling can reveal.
+
+<Callout kind="note" title="Which K?">
+
+Each training set in K-fold cross-validation has $(K - 1)/K$ of the data, so the estimate describes a model trained on slightly less data than the final one, a small pessimistic bias that shrinks as $K$ grows. Leave-one-out ($K = n$) removes most of that bias but gives highly correlated training sets and, as Varoquaux and colleagues found for decoding, unstable estimates. Five or ten folds, repeated with several shuffles, is the usual compromise.
+
+</Callout>
+
+<Step n={3} title="The optimism of the winner" minutes={25} />
+
+Cross-validation estimates the performance of one fixed procedure. As soon as you compare several, say 12 values of the ridge penalty, and keep the best, the winning score is no longer an estimate of anything: it is the maximum of 12 noisy numbers, and maxima of noisy numbers are biased upwards. Cawley and Talbot (2010) showed that this selection bias can be as large as the differences between learning algorithms that papers report.
+
+<Figure caption="Every candidate has the same true accuracy, 60%. The best of their cross-validated scores is optimistic, more so with many candidates and few trials." credit="Interactive figure by Engram, after Cawley and Talbot (2010).">
+  <SelectionBias />
+</Figure>
+
+<PyCell id="optimism" title="The winner's curse in decoding" tests={String.raw`
+  import numpy as np
+  def test_optimism():
+      "averaged over sessions, the best CV score exceeds the chosen decoder's accuracy on fresh data by more than 0.02"
+      assert len(best_cv) == 20 and np.mean(best_cv) > np.mean(fresh) + 0.02
+`} prompt="For 20 simulated sessions of 80 trials, choose the penalty with the best 5-fold accuracy from the grid, record that best score, then refit with that penalty on all 80 trials and record its accuracy on 2,000 fresh trials."
+code={String.raw`
+  lams = np.logspace(-1, 4, 12)
+  go = np.random.default_rng(592)
+  X_new, y_new = population(2000, go, signal=0.15)
+  best_cv, fresh = [], []
+  for session in range(20):
+      Xs, ys = population(80, go, signal=0.15)
+      scores = [cv_acc(Xs, ys, lam, 5, go) for lam in lams]
+      k = ...
+      best_cv.append(scores[k])
+      fresh.append(...)
+  print(f"mean best CV score {np.mean(best_cv):.3f}; mean accuracy of the chosen decoders on fresh data {np.mean(fresh):.3f}")
+`}
+hint="k = int(np.argmax(scores)); fresh.append(ridge_acc(ridge_fit(Xs, ys, lams[k]), X_new, y_new))."
+solution={String.raw`
+  lams = np.logspace(-1, 4, 12)
+  go = np.random.default_rng(592)
+  X_new, y_new = population(2000, go, signal=0.15)
+  best_cv, fresh = [], []
+  for session in range(20):
+      Xs, ys = population(80, go, signal=0.15)
+      scores = [cv_acc(Xs, ys, lam, 5, go) for lam in lams]
+      k = int(np.argmax(scores))
+      best_cv.append(scores[k])
+      fresh.append(ridge_acc(ridge_fit(Xs, ys, lams[k]), X_new, y_new))
+  print(f"mean best CV score {np.mean(best_cv):.3f}; mean accuracy of the chosen decoders on fresh data {np.mean(fresh):.3f}")
+`} />
+
+Across 20 sessions, the winning cross-validated score averages 78.6%, but the decoders it picked are right on 75.6% of fresh trials: three points of optimism from choosing among 12 penalties with 80 trials. That is a large error in a field where effects of a few points are reported, and it was produced by an analysis that used cross-validation at every step. The penalty chosen is usually a fine one; it is only the reported number that is wrong.
+
+<Step n={4} title="Nested cross-validation" minutes={30} />
+
+The fix is to treat the choice of hyperparameter as part of the learning procedure, and to cross-validate the whole procedure. In **nested cross-validation**, an outer loop splits off a test fold; on the remaining data an inner cross-validation chooses the penalty; the model refitted with that penalty is scored on the outer test fold, which played no part in the choice. The outer average estimates how well "choose a penalty by inner cross-validation, then fit" performs on new data.
+
+<PyCell id="nested" title="Nested cross-validation" tests={String.raw`
+  import numpy as np
+  def test_nested():
+      "unlike the best inner score, the nested estimate is not optimistic about fresh-data accuracy"
+      assert len(nested) == 20 and np.mean(nested) < np.mean(fresh) + 0.005 < np.mean(best_cv)
+`} prompt="Write nested_acc(X, y, lams, g): for each of 5 outer folds, choose the penalty by 5-fold cross-validation on the outer training trials only, refit on them, and score on the outer test fold. Run it on the same 20 sessions and compare with the fresh-data accuracies."
+code={String.raw`
+  def nested_acc(X, y, lams, g):
+      outer = []
+      for te in kfold_indices(len(y), 5, g):
+          tr = np.setdiff1d(np.arange(len(y)), te)
+          inner = [cv_acc(X[tr], y[tr], lam, 5, g) for lam in lams]
+          lam_best = ...
+          outer.append(...)
+      return np.mean(outer)
+
+  go = np.random.default_rng(592)
+  _ = population(2000, go, signal=0.15)          # replay the same random stream as before
+  nested = []
+  for session in range(20):
+      Xs, ys = population(80, go, signal=0.15)
+      for lam in lams: cv_acc(Xs, ys, lam, 5, go)   # (keeps the sessions identical to Step 3)
+      nested.append(nested_acc(Xs, ys, lams, go))
+  print(f"best CV {np.mean(best_cv):.3f}, nested CV {np.mean(nested):.3f}, fresh data {np.mean(fresh):.3f}")
+`}
+hint="lam_best = lams[int(np.argmax(inner))]; outer.append(ridge_acc(ridge_fit(X[tr], y[tr], lam_best), X[te], y[te]))."
+solution={String.raw`
+  def nested_acc(X, y, lams, g):
+      outer = []
+      for te in kfold_indices(len(y), 5, g):
+          tr = np.setdiff1d(np.arange(len(y)), te)
+          inner = [cv_acc(X[tr], y[tr], lam, 5, g) for lam in lams]
+          lam_best = lams[int(np.argmax(inner))]
+          outer.append(ridge_acc(ridge_fit(X[tr], y[tr], lam_best), X[te], y[te]))
+      return np.mean(outer)
+
+  go = np.random.default_rng(592)
+  _ = population(2000, go, signal=0.15)          # replay the same random stream as before
+  nested = []
+  for session in range(20):
+      Xs, ys = population(80, go, signal=0.15)
+      for lam in lams: cv_acc(Xs, ys, lam, 5, go)   # (keeps the sessions identical to Step 3)
+      nested.append(nested_acc(Xs, ys, lams, go))
+  print(f"best CV {np.mean(best_cv):.3f}, nested CV {np.mean(nested):.3f}, fresh data {np.mean(fresh):.3f}")
+`} />
+
+The nested estimate averages 71.3%, below the fresh-data accuracy of 75.6%, not above it. The optimism has gone, replaced by the small pessimism of Step 2: each outer model, with its penalty, was trained on 64 trials rather than 80, and with so few trials that costs accuracy. Nested estimates err on the safe side, which is the side to err on. The price is computation, $5 \times 5 \times 12$ fits per session here, and a subtler point: nested cross-validation scores the procedure, so it may choose different penalties in different outer folds. To report a final model, rerun the inner selection on all the data and keep the nested score as its estimate.
+
+<Bridge title="Honest evaluation in brains and machines"
+  neuro="Decoding analyses are now standard in systems neuroscience and neuroimaging, and their conclusions often rest on accuracies a few points above chance from a few dozen trials. Varoquaux and colleagues showed that with such numbers the error bars from cross-validation span ten percentage points or more, and that the choice of how to split, by trial, by run or by session, changes the answer."
+  ai="Machine learning benchmarks are a giant shared nested cross-validation done badly: the test set is fixed, thousands of papers tune against it, and the reported numbers drift upwards. Recht and colleagues (Week 54) measured that drift on ImageNet by collecting a new test set.">
+
+A score from the data used to make choices measures how well you chose, not how well you will do.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In K-fold cross-validation, each trial is used for testing...", options: ["Exactly once", "K times", "Never", "K − 1 times"], answer: 0, explain: "Step 2." },
+  { q: "Compared with one 75/25 split, a 5-fold estimate...", options: ["Varies less across reshuffles", "Varies more", "Is always higher", "Needs a separate test set"], answer: 0, explain: "Step 2." },
+  { q: "The best of several CV scores is...", options: ["Optimistically biased", "Unbiased", "Pessimistic", "Exactly the test accuracy"], answer: 0, explain: "Step 3." },
+  { q: "The optimism of the winner grows with...", options: ["More candidates and fewer trials", "More trials", "Fewer candidates", "A larger test set"], answer: 0, explain: "The figure." },
+  { q: "Nested cross-validation estimates the performance of...", options: ["The whole procedure, including hyperparameter choice", "One fixed hyperparameter", "The training set", "The best fold"], answer: 0, explain: "Step 4." },
+  { q: "In nested CV, the hyperparameter is chosen using...", options: ["Only the outer training trials", "All trials", "The outer test fold", "Fresh data"], answer: 0, explain: "Step 4." },
+  { q: "K-fold estimates are slightly pessimistic because...", options: ["Each model trains on (K − 1)/K of the data", "They use the test set twice", "They ignore noise", "K is too large"], answer: 0, explain: "The callout." },
+  { q: "Leave-one-out cross-validation tends to give...", options: ["Low bias but unstable estimates", "High bias", "No variance", "The same as a single split"], answer: 0, explain: "The callout." },
+]} />
+
+<Flashcards cards={[
+  { front: "K-fold cross-validation?", back: "Split into K folds; train on K − 1, test on the remaining one; rotate and average." },
+  { front: "Selection bias (winner's curse)?", back: "The best of several noisy validation scores overestimates the chosen model's performance." },
+  { front: "Nested cross-validation?", back: "An inner CV chooses hyperparameters on each outer training set; the outer folds score the whole procedure." },
+  { front: "What does a CV score estimate?", back: "The performance of a fixed procedure trained on about (K − 1)/K of the data." },
+  { front: "Standard error of an accuracy a on n trials?", back: "$\\sqrt{a(1 - a)/n}$" },
+]} />
+
+<Predict revisit question="Did the chosen decoders do as well on fresh data as their winning cross-validated scores suggested?" />
+
+<Key title="Before you go">
+<ul>
+<li>K-fold cross-validation uses every trial for testing once and gives steadier estimates than one split.</li>
+<li>The best score among many candidates is optimistic, by more with many candidates and few trials.</li>
+<li>Nested cross-validation evaluates the selection procedure honestly.</li>
+<li>Report the procedure, the folds and an uncertainty, not just the best number.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Varoquaux, Raamana, Engemann, Hoyos-Idrobo, Schwartz and Thirion (2017), <em>Assessing and tuning brain decoders: cross-validation, caveats, and guidelines</em>.</li>
+<li>Cawley and Talbot (2010), <em>On over-fitting in model selection and subsequent selection bias in performance evaluation</em>, Journal of Machine Learning Research 11, 2079 to 2107.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Find a decoding result in a paper you know. Can you tell from the methods whether hyperparameters were chosen on the same data used to report accuracy? Write what you would need to know to trust the number." />

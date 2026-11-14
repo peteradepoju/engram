@@ -1,0 +1,300 @@
+export const meta = {
+  title: "Choosing metrics, and the noise ceiling",
+  intro: "A model's score depends on what you choose to measure as much as on the model. Accuracy rewards a decoder that ignores the rare class; correlation forgives a model that gets the scale of a response wrong; R squared punishes a perfect model of a noisy neuron. Today you meet the metrics used for decoders and encoding models, see what each one hides, and learn to divide by the noise ceiling: the score that a perfect model would get on data this noisy.",
+  goals: [
+    "Compute balanced accuracy and the area under the ROC curve, and say when plain accuracy misleads",
+    "Explain the difference between correlation and R squared for judging a prediction",
+    "Estimate a neuron's signal power from repeated trials and compute a normalised correlation",
+    "Score a Poisson encoding model in bits per spike",
+  ],
+  plan: [
+    { label: "Metrics for decoders", minutes: 25 },
+    { label: "Correlation against R squared", minutes: 20 },
+    { label: "The noise ceiling", minutes: 35 },
+    { label: "Bits per spike", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "schoppe-2016",
+};
+
+<Predict question="A model predicts a neuron's mean response to each stimulus exactly, but the responses were averaged over only 4 noisy repeats. Will its R squared on the measured means be close to 1, around 0.7, or close to 0?" />
+
+<Step n={1} title="Metrics for decoders" minutes={25} />
+
+On 900 trials of a detection task, the animal saw a faint stimulus on 90 of them. A decoder that always says "no stimulus" is right on 90% of trials and knows nothing. **Balanced accuracy**, the mean of the accuracies within each class, gives it 50%. The **area under the ROC curve** (Week 56) goes further and uses the decoder's continuous score rather than its thresholded decisions: it is the probability that a randomly chosen positive trial scores higher than a randomly chosen negative one.
+
+<PyCell id="imbalance" title="Accuracy, balanced accuracy and AUC" tests={String.raw`
+  import numpy as np
+  def test_bal():
+      "balanced_acc gives 0.5 for a decoder that always predicts the majority class"
+      assert abs(balanced_acc(np.array([0, 0, 0, 1]), np.zeros(4)) - 0.5) < 1e-12
+  def test_auc():
+      "auc matches a brute-force count of positive-negative pairs"
+      assert abs(auc(np.array([0.1, 0.4, 0.35, 0.8]), np.array([0, 0, 1, 1])) - 0.75) < 1e-12
+  def test_story():
+      "the lazy decoder has high accuracy but chance balanced accuracy, and the real decoder has AUC above 0.75"
+      assert acc_lazy > 0.85 and abs(bal_lazy - 0.5) < 1e-9 and auc_real > 0.75
+`} prompt="Write balanced_acc(y, pred), the mean of the per-class accuracies, and auc(score, y), using the rank formula: the sum of the ranks of the positive scores, minus n_pos (n_pos + 1) / 2, divided by n_pos n_neg. Compare a lazy decoder (always 0) with a decoder that thresholds a noisy neural score."
+code={String.raw`
+  import numpy as np
+  from scipy.stats import rankdata
+  gm = np.random.default_rng(592)
+
+  def balanced_acc(y, pred):
+      return ...
+
+  def auc(score, y):
+      ranks = rankdata(score)
+      n_pos, n_neg = np.sum(y == 1), np.sum(y == 0)
+      return ...
+
+  y_det = (np.arange(900) < 90).astype(int)
+  score = 1.5 * y_det + gm.normal(size=900)                 # a neuron that fires a little more when the stimulus is present
+  pred_lazy = np.zeros(900); pred_real = (score > 1.0).astype(int)
+  acc_lazy, bal_lazy = np.mean(pred_lazy == y_det), balanced_acc(y_det, pred_lazy)
+  auc_real = auc(score, y_det)
+  print(f"lazy decoder: accuracy {acc_lazy:.3f}, balanced accuracy {bal_lazy:.3f}")
+  print(f"real decoder: accuracy {np.mean(pred_real == y_det):.3f}, balanced accuracy {balanced_acc(y_det, pred_real):.3f}, AUC {auc_real:.3f}")
+`}
+hint="balanced_acc: np.mean([np.mean(pred[y == c] == c) for c in np.unique(y)]); auc: (ranks[y == 1].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)."
+solution={String.raw`
+  import numpy as np
+  from scipy.stats import rankdata
+  gm = np.random.default_rng(592)
+
+  def balanced_acc(y, pred):
+      return np.mean([np.mean(pred[y == c] == c) for c in np.unique(y)])
+
+  def auc(score, y):
+      ranks = rankdata(score)
+      n_pos, n_neg = np.sum(y == 1), np.sum(y == 0)
+      return (ranks[y == 1].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
+
+  y_det = (np.arange(900) < 90).astype(int)
+  score = 1.5 * y_det + gm.normal(size=900)                 # a neuron that fires a little more when the stimulus is present
+  pred_lazy = np.zeros(900); pred_real = (score > 1.0).astype(int)
+  acc_lazy, bal_lazy = np.mean(pred_lazy == y_det), balanced_acc(y_det, pred_lazy)
+  auc_real = auc(score, y_det)
+  print(f"lazy decoder: accuracy {acc_lazy:.3f}, balanced accuracy {bal_lazy:.3f}")
+  print(f"real decoder: accuracy {np.mean(pred_real == y_det):.3f}, balanced accuracy {balanced_acc(y_det, pred_real):.3f}, AUC {auc_real:.3f}")
+`} />
+
+The lazy decoder scores 90% accuracy and exactly 50% balanced accuracy: it has learned the base rate and nothing else. The real decoder, which thresholds the neuron's response, has lower accuracy, 81%, because it raises false alarms on some of the 810 blank trials, but its balanced accuracy of 73.5% shows that it detects the stimulus. Its AUC, 0.83, does not depend on the threshold at all; it would be the same whether the decoder were tuned for few false alarms or few misses. When classes are unbalanced, as with rare events, lapses or a minority of hit trials, report balanced accuracy or AUC, and state chance.
+
+<Step n={2} title="Correlation against R squared" minutes={20} />
+
+For encoding models, two scores dominate. The **correlation** $r$ between predicted and measured responses asks whether the prediction goes up and down at the right times. **R squared**, $1 - \sum(y - \hat y)^2/\sum(y - \bar y)^2$, asks whether it gets the actual values right. A prediction with the right shape but the wrong gain or offset has a perfect correlation and a poor, even negative, R squared.
+
+<Video id="2AQKmw14mHM" title="R-squared, clearly explained" by="StatQuest with Josh Starmer" note="Josh Starmer on R squared as the fraction of variation explained, and how it relates to the correlation coefficient." />
+
+<PyCell id="scale" title="Right shape, wrong scale" tests={String.raw`
+  import numpy as np
+  def test_scores():
+      "the mis-scaled prediction has correlation above 0.95 and negative R squared"
+      assert r_scaled > 0.95 and r2_scaled < 0
+`} prompt="Write r2(y, p). Then score a prediction that equals the true response multiplied by 2.5 and shifted by 3, against noisy measurements, with both correlation and R squared."
+code={String.raw`
+  def r2(y, p):
+      return ...
+
+  stim = np.linspace(0, 2 * np.pi, 60)
+  true_resp = 5 + 3 * np.sin(stim)
+  measured = true_resp + 0.5 * gm.normal(size=60)
+  pred_scaled = 2.5 * true_resp + 3
+  r_scaled = np.corrcoef(measured, pred_scaled)[0, 1]
+  r2_scaled = r2(measured, pred_scaled)
+  print(f"mis-scaled prediction: correlation {r_scaled:.3f}, R squared {r2_scaled:.2f}")
+  print(f"correct prediction:    correlation {np.corrcoef(measured, true_resp)[0, 1]:.3f}, R squared {r2(measured, true_resp):.3f}")
+`}
+hint="return 1 - np.sum((y - p) ** 2) / np.sum((y - np.mean(y)) ** 2)."
+solution={String.raw`
+  def r2(y, p):
+      return 1 - np.sum((y - p) ** 2) / np.sum((y - np.mean(y)) ** 2)
+
+  stim = np.linspace(0, 2 * np.pi, 60)
+  true_resp = 5 + 3 * np.sin(stim)
+  measured = true_resp + 0.5 * gm.normal(size=60)
+  pred_scaled = 2.5 * true_resp + 3
+  r_scaled = np.corrcoef(measured, pred_scaled)[0, 1]
+  r2_scaled = r2(measured, pred_scaled)
+  print(f"mis-scaled prediction: correlation {r_scaled:.3f}, R squared {r2_scaled:.2f}")
+  print(f"correct prediction:    correlation {np.corrcoef(measured, true_resp)[0, 1]:.3f}, R squared {r2(measured, true_resp):.3f}")
+`} />
+
+The mis-scaled prediction and the correct one have the same correlation with the data, 0.97, because correlation is unchanged by multiplying or shifting a prediction. R squared tells them apart: 0.94 for the correct prediction and about −23 for the mis-scaled one, which is far worse than predicting the mean. Which to use depends on the claim. If the model is meant to predict firing rates, say to drive a simulation or a prosthesis, use R squared or a likelihood. If the claim is only that the model captures which stimuli drive the neuron more or less, correlation is defensible, but say so.
+
+<Step n={3} title="The noise ceiling" minutes={35} />
+
+Neurons respond differently to repeats of the same stimulus. Only the part of the response that is the same across repeats, the **signal**, can be predicted by any model of the stimulus; the rest is noise. Schoppe and colleagues (2016), today's paper, compared ways to correct for this, and recommended the **normalised correlation**
+
+$$
+CC_{\text{norm}} = \frac{\text{Cov}(\hat y, \bar y)}{\sqrt{\text{Var}(\hat y)\,SP}},
+$$
+
+where $\bar y$ is the response averaged over $N$ repeats and $SP$ is the **signal power** of Sahani and Linden (2003), estimated without bias from the repeats as
+
+$$
+SP = \frac{1}{N - 1}\left(N\,\text{Var}(\bar y) - \overline{\text{Var}(y_n)}\right),
+$$
+
+with $\overline{\text{Var}(y_n)}$ the average over repeats of the variance of each single repeat across stimuli. A perfect model has $CC_{\text{norm}}$ close to 1 however noisy the neuron.
+
+<Figure caption="A perfect model of a noisy neuron. With few repeats, the measured means are noisy and even the true tuning explains only part of their variance. Dividing by the noise ceiling corrects for it." credit="Interactive figure by Engram, after Sahani and Linden (2003) and Schoppe and colleagues (2016).">
+  <NoiseCeiling />
+</Figure>
+
+<PyCell id="ceiling" title="Signal power and normalised correlation" tests={String.raw`
+  import numpy as np
+  def test_sp():
+      "signal_power recovers the variance of the true tuning to within 25% on a large example"
+      gg = np.random.default_rng(9)
+      tune = gg.normal(size=400)
+      R = tune + 2.0 * gg.normal(size=(10, 400))
+      assert abs(signal_power(R) / np.var(tune) - 1) < 0.25
+  def test_norm():
+      "across noisy neurons, the perfect model's raw correlation is well below 1 but its normalised correlation is close to 1"
+      assert np.mean(raw_cc) < 0.85 and abs(np.mean(norm_cc) - 1) < 0.1
+`} prompt="Write signal_power(R), where R has one row per repeat and one column per stimulus, using the formula above. Then, for 30 simulated neurons with different noise levels and 5 repeats each, compute the raw correlation between the true tuning (a perfect model) and the measured mean, and the normalised correlation."
+code={String.raw`
+  def signal_power(R):
+      N = R.shape[0]
+      return ...
+
+  def cc_norm(pred, R):
+      ybar = R.mean(0)
+      return np.cov(pred, ybar, bias=True)[0, 1] / np.sqrt(np.var(pred) * signal_power(R))
+
+  gc = np.random.default_rng(5930)
+  raw_cc, norm_cc = [], []
+  for neuron in range(30):
+      tuning = 3 * np.sin(np.linspace(0, 2 * np.pi, 40) + gc.uniform(0, 6.3)) + gc.normal(size=40)
+      R = tuning + gc.uniform(2, 6) * gc.normal(size=(5, 40))
+      raw_cc.append(np.corrcoef(tuning, R.mean(0))[0, 1])
+      norm_cc.append(cc_norm(tuning, R))
+  print(f"perfect model, raw correlation: mean {np.mean(raw_cc):.3f} (range {min(raw_cc):.2f} to {max(raw_cc):.2f})")
+  print(f"perfect model, normalised:      mean {np.mean(norm_cc):.3f} (range {min(norm_cc):.2f} to {max(norm_cc):.2f})")
+`}
+hint="return (N * np.var(R.mean(0)) - np.mean(np.var(R, axis=1))) / (N - 1)."
+solution={String.raw`
+  def signal_power(R):
+      N = R.shape[0]
+      return (N * np.var(R.mean(0)) - np.mean(np.var(R, axis=1))) / (N - 1)
+
+  def cc_norm(pred, R):
+      ybar = R.mean(0)
+      return np.cov(pred, ybar, bias=True)[0, 1] / np.sqrt(np.var(pred) * signal_power(R))
+
+  gc = np.random.default_rng(5930)
+  raw_cc, norm_cc = [], []
+  for neuron in range(30):
+      tuning = 3 * np.sin(np.linspace(0, 2 * np.pi, 40) + gc.uniform(0, 6.3)) + gc.normal(size=40)
+      R = tuning + gc.uniform(2, 6) * gc.normal(size=(5, 40))
+      raw_cc.append(np.corrcoef(tuning, R.mean(0))[0, 1])
+      norm_cc.append(cc_norm(tuning, R))
+  print(f"perfect model, raw correlation: mean {np.mean(raw_cc):.3f} (range {min(raw_cc):.2f} to {max(raw_cc):.2f})")
+  print(f"perfect model, normalised:      mean {np.mean(norm_cc):.3f} (range {min(norm_cc):.2f} to {max(norm_cc):.2f})")
+`} />
+
+The perfect model, the true tuning curve, correlates with the measured means by only 0.81 on average, and by as little as 0.66 for the noisiest neuron. Read naively, that says the model misses a third of the structure in some neurons; in fact it misses nothing. The normalised correlation averages 1.06, close to 1, with a spread from 0.93 to 1.39 that reflects how hard signal power is to estimate from 5 repeats: for noisy neurons the estimate of $SP$ in the denominator can be small, so individual values can exceed 1. Schoppe and colleagues recommend excluding neurons whose signal power is not reliably above zero, and reporting normalised scores together with the number of repeats.
+
+<Step n={4} title="Bits per spike" minutes={25} />
+
+For spike counts, a natural score is the log-likelihood of held-out data under the model's Poisson rates (Week 35). Raw log-likelihoods depend on the amount of data, so they are reported relative to a model that predicts the neuron's mean rate on every trial, and divided by the number of spikes:
+
+$$
+\text{bits per spike} = \frac{\log L_{\text{model}} - \log L_{\text{mean}}}{n_{\text{spikes}}\log 2}.
+$$
+
+Zero means no better than the mean rate; negative means worse, which a model that overfits can easily be.
+
+<PyCell id="bps" title="Scoring a Poisson model" tests={String.raw`
+  import numpy as np
+  def test_bps():
+      "the true rates score above zero, and above a model with the tuning half as strong"
+      assert bps_true > 0.05 and bps_true > bps_half
+  def test_bad():
+      "a model with overconfident rates scores below zero"
+      assert bps_bad < 0
+`} prompt="Write bits_per_spike(counts, rate), using the Poisson log-likelihood (the log k! terms cancel in the difference, so you may drop them). Score the true rates, rates with half the modulation, and overconfident rates that exaggerate the modulation fourfold."
+code={String.raw`
+  def bits_per_spike(counts, rate):
+      ll = lambda lam: np.sum(counts * np.log(lam) - lam)
+      base = np.full_like(rate, counts.mean())
+      return ...
+
+  gb = np.random.default_rng(594)
+  theta = gb.uniform(0, 2 * np.pi, 3000)
+  rate_true = 2 * np.exp(0.8 * np.cos(theta))
+  counts = gb.poisson(rate_true)
+  mean_rate = rate_true.mean()
+  rate_half = mean_rate * np.exp(0.4 * np.cos(theta)) / np.mean(np.exp(0.4 * np.cos(theta)))
+  rate_bad = mean_rate * np.exp(3.2 * np.cos(theta)) / np.mean(np.exp(3.2 * np.cos(theta)))
+  bps_true, bps_half, bps_bad = (bits_per_spike(counts, r_) for r_ in (rate_true, rate_half, rate_bad))
+  print(f"bits per spike: true {bps_true:.3f}, half tuning {bps_half:.3f}, overconfident {bps_bad:.3f}")
+`}
+hint="return (ll(rate) - ll(base)) / (counts.sum() * np.log(2))."
+solution={String.raw`
+  def bits_per_spike(counts, rate):
+      ll = lambda lam: np.sum(counts * np.log(lam) - lam)
+      base = np.full_like(rate, counts.mean())
+      return (ll(rate) - ll(base)) / (counts.sum() * np.log(2))
+
+  gb = np.random.default_rng(594)
+  theta = gb.uniform(0, 2 * np.pi, 3000)
+  rate_true = 2 * np.exp(0.8 * np.cos(theta))
+  counts = gb.poisson(rate_true)
+  mean_rate = rate_true.mean()
+  rate_half = mean_rate * np.exp(0.4 * np.cos(theta)) / np.mean(np.exp(0.4 * np.cos(theta)))
+  rate_bad = mean_rate * np.exp(3.2 * np.cos(theta)) / np.mean(np.exp(3.2 * np.cos(theta)))
+  bps_true, bps_half, bps_bad = (bits_per_spike(counts, r_) for r_ in (rate_true, rate_half, rate_bad))
+  print(f"bits per spike: true {bps_true:.3f}, half tuning {bps_half:.3f}, overconfident {bps_bad:.3f}")
+`} />
+
+The true rates gain 0.22 bits per spike over the mean-rate model, the half-strength model 0.16, and the overconfident model loses 0.78 bits per spike: exaggerating the tuning makes rare spikes at the troughs, where it predicts almost none, extremely surprising. Likelihood-based scores punish confident errors much more than they reward confident successes, which is why they are good at exposing overfitted encoding models that R squared on trial-averaged data would forgive.
+
+<Bridge title="Metrics in brains and machines"
+  neuro="Comparing models across neurons, areas and laboratories needs scores that do not depend on how noisy each recording was. Normalised correlation and fraction of explainable variance let a model of a reliable V1 cell and a model of a noisy prefrontal cell be put on the same scale, and they reveal when a model is already as good as the data allow."
+  ai="Machine learning has the same problem under a different name: irreducible error, or Bayes error. When a benchmark's labels are noisy, no model can reach 100%, and gains near the top may be fitting the noise in the test labels rather than the task. Estimates of label noise play the role of the noise ceiling.">
+
+A score means little until you know the score of a perfect model on the same data.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "With 90% of trials in one class, always predicting that class gives balanced accuracy...", options: ["0.5", "0.9", "0.1", "1"], answer: 0, explain: "Step 1." },
+  { q: "AUC is the probability that...", options: ["A random positive scores above a random negative", "A trial is classified correctly", "The model is calibrated", "The classes are balanced"], answer: 0, explain: "Step 1." },
+  { q: "A prediction with the right shape but twice the gain has...", options: ["High correlation, poor R squared", "Poor correlation, high R squared", "Both perfect", "Both zero"], answer: 0, explain: "Step 2." },
+  { q: "R squared can be negative when...", options: ["The prediction is worse than the mean", "The data are noisy", "There are few stimuli", "Never"], answer: 0, explain: "Step 2." },
+  { q: "Signal power is...", options: ["The variance of the response that is repeatable across trials", "The total variance", "The noise variance", "The mean rate"], answer: 0, explain: "Step 3." },
+  { q: "A perfect model of a noisy neuron has normalised correlation...", options: ["Close to 1", "Close to 0", "Equal to its raw correlation", "Negative"], answer: 0, explain: "Step 3." },
+  { q: "Bits per spike compares a model's log-likelihood with...", options: ["A constant mean-rate model", "A perfect model", "Zero", "The training data"], answer: 0, explain: "Step 4." },
+  { q: "Negative bits per spike means the model is...", options: ["Worse than predicting the mean rate", "Perfect", "Calibrated", "Uncertain"], answer: 0, explain: "Step 4." },
+]} />
+
+<Flashcards cards={[
+  { front: "Balanced accuracy?", back: "The mean of the per-class accuracies; chance is 1/(number of classes) whatever the class balance." },
+  { front: "Correlation against R squared?", back: "Correlation ignores gain and offset; R squared requires the actual values to be right." },
+  { front: "Signal power (Sahani and Linden)?", back: "$SP = \\frac{1}{N - 1}(N\\,\\text{Var}(\\bar y) - \\overline{\\text{Var}(y_n)})$" },
+  { front: "Normalised correlation?", back: "$CC_{\\text{norm}} = \\text{Cov}(\\hat y, \\bar y)/\\sqrt{\\text{Var}(\\hat y)SP}$; about 1 for a perfect model." },
+  { front: "Bits per spike?", back: "Held-out log-likelihood gain over a mean-rate model, per spike, in bits." },
+]} />
+
+<Predict revisit question="How much of the variance in noisy measured means could a perfect model explain?" />
+
+<Key title="Before you go">
+<ul>
+<li>Choose the metric to match the question; plain accuracy misleads with unbalanced classes.</li>
+<li>Correlation measures shape; R squared also requires the right scale and offset.</li>
+<li>Trial-to-trial noise caps any model's score; normalise by the noise ceiling.</li>
+<li>Score spiking models by held-out bits per spike relative to the mean rate.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Schoppe, Harper, Willmore, King and Schnupp (2016), <em>Measuring the performance of neural models</em>.</li>
+<li>Sahani and Linden (2003), <em>How linear are auditory cortical responses?</em>, Advances in Neural Information Processing Systems 15, which introduced the signal power estimate.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Pick an encoding or decoding result you know. Which metric did it report, and what would the alternative metrics of today have shown? Was a noise ceiling reported, and if not, how would you estimate one from the data the authors had?" />

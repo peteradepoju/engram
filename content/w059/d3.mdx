@@ -1,0 +1,257 @@
+export const meta = {
+  title: "Leakage: when test data sneak into training",
+  intro: "Cross-validation is only honest if the test trials are truly unseen. Leakage is any route by which information about them reaches the model: preprocessing fitted on all the data, test trials that sit next to training trials in time, or splits that let a decoder recognise the session rather than the stimulus. Leakage does not produce errors or warnings; it produces good results. Today you build three leaks on data with no real signal at all, watch each one decode pure noise, and close them.",
+  goals: [
+    "Define leakage and name its common forms in neural data analysis",
+    "Show that feature selection outside cross-validation decodes pure noise, and fix it",
+    "Show how temporal autocorrelation inflates randomly split cross-validation, and use blocked folds",
+    "Choose the unit of splitting (trial, block, session, animal) to match the claim",
+  ],
+  plan: [
+    { label: "What leakage is", minutes: 15 },
+    { label: "Preprocessing inside the loop", minutes: 30 },
+    { label: "Time: blocked cross-validation", minutes: 30 },
+    { label: "Sessions and animals: group splits", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "kaufman-2012",
+};
+
+<Predict question="You record 2,000 neurons on 40 trials, with labels assigned at random so that no neuron carries information. You pick the 10 neurons whose responses best separate the labels across all 40 trials, then run 5-fold cross-validation of a decoder on them. What accuracy do you expect: about 50%, about 70%, or above 90%?" />
+
+<Step n={1} title="What leakage is" minutes={15} />
+
+Kaufman and colleagues (2012), today's paper, defined leakage as the introduction of information about the target that would not be legitimately available when the model is used. They gave it a formal definition and a catalogue drawn from data-mining competitions, where leaks repeatedly let teams win with models that would have been useless in practice. Neuroscience has its own catalogue, and its signature is the same: a result that is better than it should be.
+
+<Video id="n9jz7G68pVg" title="What is data leakage in machine learning?" by="Krish Naik" note="Krish Naik on the two main kinds of leakage: features that would not be available at prediction time, and preprocessing that lets the test data influence training." />
+
+<Step n={2} title="Preprocessing inside the loop" minutes={30} />
+
+Any step that learns from the data, whether choosing features, z-scoring, fitting PCA or imputing missing values, is part of the model and must be fitted on the training folds only. The most damaging case is feature selection, because it directly searches for features that separate the labels, including in the trials that will later be used for testing.
+
+<Figure caption="Pure noise, decoded. Selecting features with all the data before cross-validation produces accuracy far above chance, and more so the more features there were to choose from." credit="Interactive figure by Engram, after Ambroise and McLachlan (2002) and Kriegeskorte and colleagues (2009).">
+  <LeakySelection />
+</Figure>
+
+<PyCell id="selection" title="Selection outside and inside the folds" tests={String.raw`
+  import numpy as np
+  def test_leak():
+      "leaky selection reports accuracy above 0.75 on pure noise"
+      assert leaky > 0.75
+  def test_honest():
+      "selection inside each training fold gives accuracy near chance"
+      assert 0.3 < honest < 0.7
+`} prompt="Write top_features(X, y, k), returning the k features with the largest absolute difference in class means. Then run 5-fold cross-validation of a nearest-centroid decoder twice: once with features chosen on all 40 trials, once with features chosen on the training folds only."
+code={String.raw`
+  import numpy as np
+  gl = np.random.default_rng(593)
+  Xn = gl.normal(size=(40, 2000))
+  yn = np.tile([0, 1], 20)
+
+  def top_features(X, y, k=10):
+      diff = ...
+      return np.argsort(diff)[-k:]
+
+  def centroid_cv(X, y, select_inside):
+      folds = np.array_split(np.random.default_rng(0).permutation(len(y)), 5)
+      fixed = None if select_inside else top_features(X, y)
+      right = 0
+      for te in folds:
+          tr = np.setdiff1d(np.arange(len(y)), te)
+          f = top_features(X[tr], y[tr]) if select_inside else fixed
+          c0, c1 = X[tr][y[tr] == 0][:, f].mean(0), X[tr][y[tr] == 1][:, f].mean(0)
+          d0 = ((X[te][:, f] - c0) ** 2).sum(1); d1 = ((X[te][:, f] - c1) ** 2).sum(1)
+          right += np.sum((d1 < d0).astype(int) == y[te])
+      return right / len(y)
+
+  leaky, honest = centroid_cv(Xn, yn, False), centroid_cv(Xn, yn, True)
+  print(f"select on all data, then CV: {leaky:.3f}")
+  print(f"select inside each fold:     {honest:.3f}")
+`}
+hint="diff = np.abs(X[y == 1].mean(0) - X[y == 0].mean(0))."
+solution={String.raw`
+  import numpy as np
+  gl = np.random.default_rng(593)
+  Xn = gl.normal(size=(40, 2000))
+  yn = np.tile([0, 1], 20)
+
+  def top_features(X, y, k=10):
+      diff = np.abs(X[y == 1].mean(0) - X[y == 0].mean(0))
+      return np.argsort(diff)[-k:]
+
+  def centroid_cv(X, y, select_inside):
+      folds = np.array_split(np.random.default_rng(0).permutation(len(y)), 5)
+      fixed = None if select_inside else top_features(X, y)
+      right = 0
+      for te in folds:
+          tr = np.setdiff1d(np.arange(len(y)), te)
+          f = top_features(X[tr], y[tr]) if select_inside else fixed
+          c0, c1 = X[tr][y[tr] == 0][:, f].mean(0), X[tr][y[tr] == 1][:, f].mean(0)
+          d0 = ((X[te][:, f] - c0) ** 2).sum(1); d1 = ((X[te][:, f] - c1) ** 2).sum(1)
+          right += np.sum((d1 < d0).astype(int) == y[te])
+      return right / len(y)
+
+  leaky, honest = centroid_cv(Xn, yn, False), centroid_cv(Xn, yn, True)
+  print(f"select on all data, then CV: {leaky:.3f}")
+  print(f"select inside each fold:     {honest:.3f}")
+`} />
+
+Selecting on all 40 trials and then cross-validating reports 92.5% accuracy from neurons that carry no information. With 2,000 candidates, some neurons separate the two labels well by chance in these particular trials, test trials included, and the selection found them. Repeating the selection inside each training fold gives 47.5%, which is chance. Ambroise and McLachlan (2002) found exactly this error in published gene-expression classifiers, where tens of thousands of genes and a few dozen patients produced near-perfect, entirely spurious accuracy.
+
+<Step n={3} title="Time: blocked cross-validation" minutes={30} />
+
+Neural recordings drift: electrodes move, cells adapt, the animal's arousal wanders, the calcium indicator bleaches. Neighbouring trials are therefore more alike than distant ones. If conditions are presented in blocks, a decoder can identify the condition from the drift alone, and a random split puts the near neighbours of every test trial in the training set.
+
+<PyCell id="temporal" title="Drift and a blocked design" tests={String.raw`
+  import numpy as np
+  def test_random():
+      "randomly split cross-validation decodes the block condition from drift alone"
+      assert acc_random > 0.75
+  def test_blocked():
+      "folds made of whole blocks bring accuracy back near chance"
+      assert acc_blocked < 0.65
+`} prompt="Simulate 400 trials in blocks of 25, alternating between two conditions, from 20 neurons whose rates drift as random walks and carry no information about the condition. Score a 1-nearest-neighbour decoder with 5 random folds and with 5 folds made of whole consecutive blocks."
+code={String.raw`
+  gt = np.random.default_rng(5931)
+  T, B = 400, 25
+  cond = (np.arange(T) // B) % 2                       # blocks of 25 trials, alternating conditions
+  drift = np.cumsum(0.3 * gt.normal(size=(T, 20)), axis=0)
+  Xd = drift + gt.normal(size=(T, 20))                 # no condition signal at all
+
+  def nn_cv(X, y, folds):
+      right = 0
+      for te in folds:
+          tr = np.setdiff1d(np.arange(len(y)), te)
+          d = ((X[te][:, None, :] - X[tr][None, :, :]) ** 2).sum(-1)
+          right += np.sum(y[tr][np.argmin(d, axis=1)] == y[te])
+      return right / len(y)
+
+  random_folds = np.array_split(gt.permutation(T), 5)
+  blocked_folds = ...
+  acc_random, acc_blocked = nn_cv(Xd, cond, random_folds), nn_cv(Xd, cond, blocked_folds)
+  print(f"random folds: {acc_random:.3f}; blocked folds: {acc_blocked:.3f}")
+`}
+hint="Consecutive trials: blocked_folds = np.array_split(np.arange(T), 5). With 400 trials each fold holds 80 trials, which is 3.2 blocks; that is fine, as long as test trials are not interleaved with training trials."
+solution={String.raw`
+  gt = np.random.default_rng(5931)
+  T, B = 400, 25
+  cond = (np.arange(T) // B) % 2                       # blocks of 25 trials, alternating conditions
+  drift = np.cumsum(0.3 * gt.normal(size=(T, 20)), axis=0)
+  Xd = drift + gt.normal(size=(T, 20))                 # no condition signal at all
+
+  def nn_cv(X, y, folds):
+      right = 0
+      for te in folds:
+          tr = np.setdiff1d(np.arange(len(y)), te)
+          d = ((X[te][:, None, :] - X[tr][None, :, :]) ** 2).sum(-1)
+          right += np.sum(y[tr][np.argmin(d, axis=1)] == y[te])
+      return right / len(y)
+
+  random_folds = np.array_split(gt.permutation(T), 5)
+  blocked_folds = np.array_split(np.arange(T), 5)
+  acc_random, acc_blocked = nn_cv(Xd, cond, random_folds), nn_cv(Xd, cond, blocked_folds)
+  print(f"random folds: {acc_random:.3f}; blocked folds: {acc_blocked:.3f}")
+`} />
+
+With random folds the nearest-neighbour decoder reaches 80% accuracy, although the neurons know nothing about the condition: every test trial has a neighbour in time, in the same block and so with the same label, sitting in the training set with almost the same drifted rates. Folds of consecutive trials remove the neighbours and the accuracy falls to 48%. For data that are correlated in time, such as blocked designs, continuous behaviour or calcium imaging, use contiguous folds, and consider leaving a gap of a few trials between training and test segments, so that slow drift cannot bridge the boundary.
+
+<Step n={4} title="Sessions and animals: group splits" minutes={30} />
+
+The unit of splitting must match the unit of the claim. A claim that "this decoder will work on a new trial from these sessions" is tested by splitting trials. A claim that "the code generalises to new sessions or new animals" must be tested by leaving out whole sessions or animals, because trials from one session share things, from electrode positions to the animal's strategy, that a decoder can exploit without learning the code at all.
+
+<PyCell id="session" title="Leave one session out" tests={String.raw`
+  import numpy as np
+  def test_trialwise():
+      "splitting by trial reaches accuracy above 0.7"
+      assert acc_trial > 0.7
+  def test_group():
+      "leaving whole sessions out reveals chance-level generalisation"
+      assert acc_session < 0.65
+`} prompt="Six sessions each have their own recording offset across 30 neurons, and in each session most trials happen to be of one choice, a different one in alternate sessions; the neurons carry no choice signal. Compare 6-fold cross-validation over shuffled trials with leave-one-session-out, using the nearest-neighbour decoder from Step 3."
+code={String.raw`
+  gs = np.random.default_rng(5932)
+  sessions, labels, rows = [], [], []
+  for s in range(6):
+      offset = 2 * gs.normal(size=30)                       # session-specific recording offset
+      p_right = 0.9 if s % 2 == 0 else 0.1                  # the animal's bias differs by session
+      ys = (gs.random(60) < p_right).astype(int)
+      rows.append(offset + gs.normal(size=(60, 30))); labels.append(ys); sessions.append(np.full(60, s))
+  Xs, ys_all, sess = np.vstack(rows), np.concatenate(labels), np.concatenate(sessions)
+
+  trial_folds = np.array_split(gs.permutation(len(ys_all)), 6)
+  session_folds = ...
+  acc_trial, acc_session = nn_cv(Xs, ys_all, trial_folds), nn_cv(Xs, ys_all, session_folds)
+  print(f"split by trial: {acc_trial:.3f}; leave one session out: {acc_session:.3f}")
+`}
+hint="session_folds = [np.where(sess == s)[0] for s in range(6)]."
+solution={String.raw`
+  gs = np.random.default_rng(5932)
+  sessions, labels, rows = [], [], []
+  for s in range(6):
+      offset = 2 * gs.normal(size=30)                       # session-specific recording offset
+      p_right = 0.9 if s % 2 == 0 else 0.1                  # the animal's bias differs by session
+      ys = (gs.random(60) < p_right).astype(int)
+      rows.append(offset + gs.normal(size=(60, 30))); labels.append(ys); sessions.append(np.full(60, s))
+  Xs, ys_all, sess = np.vstack(rows), np.concatenate(labels), np.concatenate(sessions)
+
+  trial_folds = np.array_split(gs.permutation(len(ys_all)), 6)
+  session_folds = [np.where(sess == s)[0] for s in range(6)]
+  acc_trial, acc_session = nn_cv(Xs, ys_all, trial_folds), nn_cv(Xs, ys_all, session_folds)
+  print(f"split by trial: {acc_trial:.3f}; leave one session out: {acc_session:.3f}")
+`} />
+
+Splitting by trial gives 82% accuracy: the decoder recognises which session a trial came from by its offsets, and in each session one choice dominates. Leaving each session out in turn gives 58%, close to chance (with only six sessions, chance itself wobbles by several points). Both numbers are correct answers to different questions. The first says that within these sessions choice can be predicted, which here is true only because the animal's bias differed between sessions; the second says that nothing about choice transfers to a new session, which is the claim a paper about a neural code would usually want to make.
+
+<Callout kind="warning" title="Target leakage">
+
+The subtlest leaks are features that are partly computed from the answer. Decoding a choice from activity in a window that ends after the movement began; predicting reaction time from a feature normalised by the trial's duration; using a pupil measure that responds to the reward that followed the choice. Before trusting a decoder, write down, for every feature, the moment it becomes available, and check that it precedes the thing being predicted.
+
+</Callout>
+
+<Bridge title="Leakage in brains and machines"
+  neuro="Many decoding results in neuroscience have been weakened by leaks of exactly these kinds: voxels or neurons selected on all the data, randomly split trials from blocked designs, and pooled sessions. Kriegeskorte and colleagues found circular selection in a large fraction of fMRI papers in high-profile journals (Day 5)."
+  ai="Kapoor and Narayanan (2023) surveyed machine-learning-based science and found leakage behind errors in hundreds of papers across many fields, including models whose apparent advantage over simple baselines vanished once it was removed. Their checklist of leakage types maps closely onto today's.">
+
+If information about the test set can reach the model by any route, it will.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "Leakage is...", options: ["Information about the test targets reaching the model during training", "Overfitting the training set", "Missing data", "A slow learning rate"], answer: 0, explain: "Step 1." },
+  { q: "Feature selection should be done...", options: ["Inside each training fold", "On all the data before cross-validation", "On the test set", "After reporting"], answer: 0, explain: "Step 2." },
+  { q: "Z-scoring features with the mean and sd of all trials is...", options: ["A mild leak; fit them on training folds", "Always fine", "Required", "A form of regularisation"], answer: 0, explain: "Any step that learns from data is part of the model." },
+  { q: "In a blocked design with drift, random folds...", options: ["Let the decoder use drift to identify the block", "Remove drift", "Are pessimistic", "Are required"], answer: 0, explain: "Step 3." },
+  { q: "To claim a code generalises across animals, split by...", options: ["Animal", "Trial", "Time bin", "Neuron"], answer: 0, explain: "Step 4." },
+  { q: "Leave-one-session-out accuracy is low but trial-split accuracy is high. This suggests...", options: ["The decoder exploits session identity", "The code is strong", "Too few trials", "Overregularisation"], answer: 0, explain: "Step 4." },
+  { q: "Target leakage occurs when...", options: ["A feature is partly computed from, or after, the outcome", "The target is noisy", "The target is balanced", "The test set is small"], answer: 0, explain: "The callout." },
+  { q: "The usual symptom of leakage is...", options: ["A result better than it should be", "A crash", "A warning", "A slower fit"], answer: 0, explain: "Leaks produce good results." },
+]} />
+
+<Flashcards cards={[
+  { front: "Leakage?", back: "Information that would not be available at prediction time reaching the model, usually through the test data." },
+  { front: "Pipeline rule?", back: "Every step that learns from data (selection, scaling, PCA, imputation) is fitted on training folds only." },
+  { front: "Blocked cross-validation?", back: "Folds made of contiguous time or whole blocks, so test trials have no near neighbours in training." },
+  { front: "Group cross-validation?", back: "Leave out whole sessions, animals or subjects when the claim is about generalising to new ones." },
+  { front: "Target leakage?", back: "A feature computed partly from the outcome, or from data recorded after it." },
+]} />
+
+<Predict revisit question="What accuracy did a decoder reach on pure noise with features selected using all the trials?" />
+
+<Key title="Before you go">
+<ul>
+<li>Leakage produces results that are too good, with no warning.</li>
+<li>Fit every data-dependent step inside the cross-validation loop.</li>
+<li>Use blocked folds when trials are correlated in time.</li>
+<li>Split by the unit your claim generalises over: trial, block, session or animal.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Kaufman, Rosset, Perlich and Stitelman (2012), <em>Leakage in data mining: formulation, detection, and avoidance</em>.</li>
+<li>Kapoor and Narayanan (2023), <em>Leakage and the reproducibility crisis in machine-learning-based science</em>, Patterns 4(9), 100804.</li>
+<li>Ambroise and McLachlan (2002), <em>Selection bias in gene extraction on the basis of microarray gene-expression data</em>, PNAS 99(10), 6562 to 6566: the same selection leak, found in genomics.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Draw the timeline of one trial in an experiment you know, marking when each candidate feature becomes available and when the thing you would decode happens. Then list how the trials were grouped (blocks, sessions, animals) and say which split each kind of claim would need." />

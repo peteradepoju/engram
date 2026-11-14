@@ -266,3 +266,8 @@ export { TreeInstability } from "./tree-instability";
 export { ForestAverage } from "./forest-average";
 export { BoostingSteps } from "./boosting-steps";
 export { PartialDependence } from "./partial-dependence";
+export { SelectionBias } from "./selection-bias";
+export { NoiseCeiling } from "./noise-ceiling";
+export { LeakySelection } from "./leaky-selection";
+export { CvVariance } from "./cv-variance";
+export { DoubleDipping } from "./double-dipping";

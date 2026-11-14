@@ -1,0 +1,295 @@
+export const meta = {
+  title: "Comparing models: tests, permutations and uncertainty",
+  intro: "Decoder A scores 74% and decoder B scores 70%. Is A better, or did it get luckier trials? Is either better than chance? Today you answer both questions properly. You compare two decoders on the same test trials with a paired test and a bootstrap interval, test a cross-validated accuracy against chance by permuting labels through the whole pipeline, and find out why the obvious t-test across cross-validation folds declares differences that are not there.",
+  goals: [
+    "Compare two classifiers on the same test trials with McNemar's test and a paired bootstrap",
+    "Test a cross-validated decoder against chance with a label-permutation test",
+    "Explain why t-tests across cross-validation folds are overconfident, and apply a correction",
+    "Report a model comparison with an effect size and an honest interval",
+  ],
+  plan: [
+    { label: "Paired comparison on one test set", minutes: 30 },
+    { label: "Better than chance? Permutation tests", minutes: 30 },
+    { label: "The trouble with t-tests on folds", minutes: 30 },
+    { label: "Reporting", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "dietterich-1998",
+};
+
+<Predict question="Two decoders have exactly the same true accuracy. You compare them on 15 random train and test splits of one dataset and run an ordinary paired t-test on the 15 differences. How often will you find p below 0.05: about 5% of the time, or much more often?" />
+
+<Step n={1} title="Paired comparison on one test set" minutes={30} />
+
+Dietterich (1998), today's paper, compared statistical tests for the question "is algorithm A more accurate than algorithm B?" by simulating situations where the true answer was known. When there is one test set, he recommended **McNemar's test**. It uses only the trials where the decoders disagree: $b$, where A is right and B wrong, and $c$, the reverse. If they are equally good, disagreements should split evenly, and
+
+$$
+\chi^2 = \frac{(|b - c| - 1)^2}{b + c}
+$$
+
+has approximately a chi-squared distribution with one degree of freedom. Because both decoders see the same trials, easy and hard trials cancel out, which makes the paired test much more sensitive than comparing the two accuracies as if they were independent.
+
+<Figure caption="The sampling distribution of an accuracy measured on n test trials. With small test sets, differences of several points are within the noise." credit="Interactive figure by Engram.">
+  <CvVariance />
+</Figure>
+
+<PyCell id="paired" title="McNemar and a paired bootstrap" tests={String.raw`
+  import numpy as np
+  def test_mcnemar():
+      "mcnemar returns the chi-squared statistic and its p-value"
+      stat, p = mcnemar(np.array([1, 1, 1, 0]), np.array([0, 0, 1, 0]))
+      assert abs(stat - 0.5) < 1e-12 and 0.4 < p < 0.5
+  def test_power():
+      "the paired test detects the difference that the unpaired comparison misses"
+      assert p_paired < 0.05 < p_unpaired
+  def test_ci():
+      "the bootstrap interval for the accuracy difference excludes zero"
+      assert ci[0] > 0
+`} prompt="Write mcnemar(right_a, right_b), taking boolean arrays of which test trials each decoder got right. Then compute a 95% paired bootstrap interval for the difference in accuracy, resampling test trials (the same resample for both decoders)."
+code={String.raw`
+  import numpy as np
+  from scipy.stats import chi2, norm
+  gp = np.random.default_rng(594)
+
+  def mcnemar(right_a, right_b):
+      b = np.sum(right_a & ~right_b); c = np.sum(~right_a & right_b)
+      stat = ...
+      return stat, chi2.sf(stat, 1)
+
+  # 300 test trials; trial difficulty is shared, and decoder A is slightly better
+  n = 300
+  difficulty = gp.normal(size=n)
+  right_a = (difficulty + 0.62 + 0.3 * gp.normal(size=n)) > 0
+  right_b = (difficulty + 0.40 + 0.3 * gp.normal(size=n)) > 0
+  acc_a, acc_b = right_a.mean(), right_b.mean()
+  stat, p_paired = mcnemar(right_a, right_b)
+  pooled = (acc_a + acc_b) / 2
+  z = (acc_a - acc_b) / np.sqrt(2 * pooled * (1 - pooled) / n)
+  p_unpaired = 2 * norm.sf(abs(z))
+
+  boot = []
+  for _ in range(2000):
+      idx = gp.integers(0, n, n)
+      boot.append(...)
+  ci = np.percentile(boot, [2.5, 97.5])
+  print(f"accuracy A {acc_a:.3f}, B {acc_b:.3f}")
+  print(f"unpaired two-proportion test p = {p_unpaired:.3f}; McNemar p = {p_paired:.4f}")
+  print(f"paired bootstrap 95% interval for A minus B: {ci[0]:.3f} to {ci[1]:.3f}")
+`}
+hint="stat = (abs(b - c) - 1) ** 2 / (b + c); boot.append(right_a[idx].mean() - right_b[idx].mean())."
+solution={String.raw`
+  import numpy as np
+  from scipy.stats import chi2, norm
+  gp = np.random.default_rng(594)
+
+  def mcnemar(right_a, right_b):
+      b = np.sum(right_a & ~right_b); c = np.sum(~right_a & right_b)
+      stat = (abs(b - c) - 1) ** 2 / (b + c)
+      return stat, chi2.sf(stat, 1)
+
+  # 300 test trials; trial difficulty is shared, and decoder A is slightly better
+  n = 300
+  difficulty = gp.normal(size=n)
+  right_a = (difficulty + 0.62 + 0.3 * gp.normal(size=n)) > 0
+  right_b = (difficulty + 0.40 + 0.3 * gp.normal(size=n)) > 0
+  acc_a, acc_b = right_a.mean(), right_b.mean()
+  stat, p_paired = mcnemar(right_a, right_b)
+  pooled = (acc_a + acc_b) / 2
+  z = (acc_a - acc_b) / np.sqrt(2 * pooled * (1 - pooled) / n)
+  p_unpaired = 2 * norm.sf(abs(z))
+
+  boot = []
+  for _ in range(2000):
+      idx = gp.integers(0, n, n)
+      boot.append(right_a[idx].mean() - right_b[idx].mean())
+  ci = np.percentile(boot, [2.5, 97.5])
+  print(f"accuracy A {acc_a:.3f}, B {acc_b:.3f}")
+  print(f"unpaired two-proportion test p = {p_unpaired:.3f}; McNemar p = {p_paired:.4f}")
+  print(f"paired bootstrap 95% interval for A minus B: {ci[0]:.3f} to {ci[1]:.3f}")
+`} />
+
+Decoder A is right on 71.7% of the 300 test trials and B on 65.0%. Treated as two independent proportions, the difference gives p = 0.08, not significant. McNemar's test, which looks only at the trials where they disagree, gives p = 0.003, and the paired bootstrap interval for the difference, 2.7 to 10.7 points, excludes zero. The difference between the analyses is the shared difficulty: most trials are easy or hard for both decoders, and the unpaired test counts that shared variation as noise. Report the interval as well as the p-value: it says the improvement is real but could be as small as three points.
+
+<Video id="Xz0x-8-cgaQ" title="Bootstrapping main ideas" by="StatQuest with Josh Starmer" note="Josh Starmer on the bootstrap: resample the data with replacement, recompute the statistic many times, and read its uncertainty from the spread." />
+
+<Step n={2} title="Better than chance? Permutation tests" minutes={30} />
+
+Is a cross-validated accuracy of 62% on 80 trials better than chance? The binomial distribution is the wrong null, because cross-validation folds are not independent tests. The robust answer is a **permutation test** (Ojala and Garriga, 2010): shuffle the labels, which destroys any real relation between activity and label, run the entire cross-validation pipeline on the shuffled data, and repeat many times. The p-value is the fraction of shuffles that score at least as well as the real labels, counting the real labels as one of them.
+
+<PyCell id="permtest" title="A permutation test for a decoder" tests={String.raw`
+  import numpy as np
+  def test_null():
+      "the null distribution has 200 values centred near chance"
+      assert len(null) == 200 and abs(np.mean(null) - 0.5) < 0.05
+  def test_p():
+      "the real accuracy is significant, and the p-value counts the observed labels"
+      assert p_perm < 0.05 and p_perm >= 1 / 201
+`} prompt="Complete the permutation test: for 200 shuffles, permute the labels, rerun the 5-fold nearest-centroid cross-validation, and store the accuracy. Compute p = (1 + number of shuffles at least as accurate as the real labels) / (1 + 200)."
+code={String.raw`
+  def centroid_cv5(X, y, seed=0):
+      folds = np.array_split(np.random.default_rng(seed).permutation(len(y)), 5)
+      right = 0
+      for te in folds:
+          tr = np.setdiff1d(np.arange(len(y)), te)
+          c0, c1 = X[tr][y[tr] == 0].mean(0), X[tr][y[tr] == 1].mean(0)
+          right += np.sum((((X[te] - c1) ** 2).sum(1) < ((X[te] - c0) ** 2).sum(1)) == y[te])
+      return right / len(y)
+
+  gq = np.random.default_rng(5941)
+  yq = np.tile([0, 1], 40)
+  Xq = 0.4 * yq[:, None] * np.ones(15) + gq.normal(size=(80, 15))      # a weak signal in 15 neurons
+  real = centroid_cv5(Xq, yq)
+  null = []
+  for s in range(200):
+      null.append(...)
+  p_perm = ...
+  print(f"cross-validated accuracy {real:.3f}; null mean {np.mean(null):.3f}, null 95th percentile {np.percentile(null, 95):.3f}; p = {p_perm:.4f}")
+`}
+hint="null.append(centroid_cv5(Xq, gq.permutation(yq))); p_perm = (1 + np.sum(np.array(null) >= real)) / (1 + len(null))."
+solution={String.raw`
+  def centroid_cv5(X, y, seed=0):
+      folds = np.array_split(np.random.default_rng(seed).permutation(len(y)), 5)
+      right = 0
+      for te in folds:
+          tr = np.setdiff1d(np.arange(len(y)), te)
+          c0, c1 = X[tr][y[tr] == 0].mean(0), X[tr][y[tr] == 1].mean(0)
+          right += np.sum((((X[te] - c1) ** 2).sum(1) < ((X[te] - c0) ** 2).sum(1)) == y[te])
+      return right / len(y)
+
+  gq = np.random.default_rng(5941)
+  yq = np.tile([0, 1], 40)
+  Xq = 0.4 * yq[:, None] * np.ones(15) + gq.normal(size=(80, 15))      # a weak signal in 15 neurons
+  real = centroid_cv5(Xq, yq)
+  null = []
+  for s in range(200):
+      null.append(centroid_cv5(Xq, gq.permutation(yq)))
+  p_perm = (1 + np.sum(np.array(null) >= real)) / (1 + len(null))
+  print(f"cross-validated accuracy {real:.3f}; null mean {np.mean(null):.3f}, null 95th percentile {np.percentile(null, 95):.3f}; p = {p_perm:.4f}")
+`} />
+
+The decoder scores 72.5%. Across 200 shuffles the null accuracies centre on 49.7%, and only 5% of them reach 60%, so 72.5% is well outside the null: p = 0.005, which is the smallest value 200 shuffles can give, 1/201. With more shuffles the p-value could be smaller, so for a strong effect report "p below 0.005 with 200 permutations" rather than a precise number. The key detail is that each shuffle reran the folds and the centroid fitting: any leak or bias in the pipeline is present in the null too, so it cannot fake significance.
+
+<Step n={3} title="The trouble with t-tests on folds" minutes={30} />
+
+The obvious way to compare two algorithms is to run them on many random train and test splits and do a paired t-test on the differences. Dietterich showed that this test rejects far too often when the algorithms are equally good, because the splits overlap: the training sets share most of their trials, so the differences are positively correlated, and the t-test treats them as independent. Nadeau and Bengio (2003) proposed a corrected variance: with $J$ splits and $n_{\text{te}}$ test and $n_{\text{tr}}$ training trials, replace $\hat\sigma^2/J$ by $\left(\frac1J + \frac{n_{\text{te}}}{n_{\text{tr}}}\right)\hat\sigma^2$.
+
+<PyCell id="cvttest" title="False positives from overlapping splits" tests={String.raw`
+  import numpy as np
+  def test_rates():
+      "the naive t-test rejects a true null more than 10% of the time; the corrected test less than 10%"
+      assert len(p_naive) == 150 and np.mean(np.array(p_naive) < 0.05) > 0.10 and np.mean(np.array(p_corr) < 0.05) < 0.10
+`} prompt="For 150 simulated datasets in which decoders A and B (nearest centroid on two different, equally informative sets of neurons) have the same true accuracy, run 15 random 80/20 splits, compute both t-statistics on the 15 paired differences, and record their p-values. Count how often each rejects at 0.05."
+code={String.raw`
+  from scipy.stats import t as t_dist
+
+  def centroid_acc(Xtr, ytr, Xte, yte):
+      c0, c1 = Xtr[ytr == 0].mean(0), Xtr[ytr == 1].mean(0)
+      return np.mean((((Xte - c1) ** 2).sum(1) < ((Xte - c0) ** 2).sum(1)) == yte)
+
+  gt = np.random.default_rng(5942)
+  J, n, n_te = 15, 100, 20
+  p_naive, p_corr = [], []
+  for dataset in range(150):
+      yd = np.tile([0, 1], n // 2)
+      Xd = 0.35 * yd[:, None] * np.ones(10) + gt.normal(size=(n, 10))
+      diffs = []
+      for j in range(J):
+          perm = gt.permutation(n); te, tr = perm[:n_te], perm[n_te:]
+          a = centroid_acc(Xd[tr][:, :5], yd[tr], Xd[te][:, :5], yd[te])     # neurons 0 to 4
+          b = centroid_acc(Xd[tr][:, 5:], yd[tr], Xd[te][:, 5:], yd[te])     # neurons 5 to 9
+          diffs.append(a - b)
+      d, s2 = np.mean(diffs), np.var(diffs, ddof=1)
+      if s2 == 0: s2 = 1e-12
+      t_naive = d / np.sqrt(s2 / J)
+      t_corr = ...
+      p_naive.append(2 * t_dist.sf(abs(t_naive), J - 1)); p_corr.append(2 * t_dist.sf(abs(t_corr), J - 1))
+  print(f"false positive rate: naive t-test {np.mean(np.array(p_naive) < 0.05):.3f}, corrected {np.mean(np.array(p_corr) < 0.05):.3f} (nominal 0.05)")
+`}
+hint="t_corr = d / np.sqrt((1 / J + n_te / (n - n_te)) * s2)."
+solution={String.raw`
+  from scipy.stats import t as t_dist
+
+  def centroid_acc(Xtr, ytr, Xte, yte):
+      c0, c1 = Xtr[ytr == 0].mean(0), Xtr[ytr == 1].mean(0)
+      return np.mean((((Xte - c1) ** 2).sum(1) < ((Xte - c0) ** 2).sum(1)) == yte)
+
+  gt = np.random.default_rng(5942)
+  J, n, n_te = 15, 100, 20
+  p_naive, p_corr = [], []
+  for dataset in range(150):
+      yd = np.tile([0, 1], n // 2)
+      Xd = 0.35 * yd[:, None] * np.ones(10) + gt.normal(size=(n, 10))
+      diffs = []
+      for j in range(J):
+          perm = gt.permutation(n); te, tr = perm[:n_te], perm[n_te:]
+          a = centroid_acc(Xd[tr][:, :5], yd[tr], Xd[te][:, :5], yd[te])     # neurons 0 to 4
+          b = centroid_acc(Xd[tr][:, 5:], yd[tr], Xd[te][:, 5:], yd[te])     # neurons 5 to 9
+          diffs.append(a - b)
+      d, s2 = np.mean(diffs), np.var(diffs, ddof=1)
+      if s2 == 0: s2 = 1e-12
+      t_naive = d / np.sqrt(s2 / J)
+      t_corr = d / np.sqrt((1 / J + n_te / (n - n_te)) * s2)
+      p_naive.append(2 * t_dist.sf(abs(t_naive), J - 1)); p_corr.append(2 * t_dist.sf(abs(t_corr), J - 1))
+  print(f"false positive rate: naive t-test {np.mean(np.array(p_naive) < 0.05):.3f}, corrected {np.mean(np.array(p_corr) < 0.05):.3f} (nominal 0.05)")
+`} />
+
+When the two decoders are equally good, the naive t-test declares a significant difference in 36% of datasets, seven times the nominal 5%. The corrected test rejects in 8%, close to nominal. The naive test is wrong because each pair of splits shares most of its training trials and many test trials, so 15 splits contain far less independent information than 15 experiments would. The same mistake appears whenever cross-validation folds, bootstrap resamples or trials from one animal are counted as if they were independent replications.
+
+<Step n={4} title="Reporting" minutes={15} />
+
+A good model comparison reports, for each model, the cross-validated score with its uncertainty and the splitting scheme; the paired difference between models with an interval, not only a p-value; and the result against chance from a permutation test of the whole pipeline. When the question is whether a result holds across animals or sessions, the unit of replication is the animal or the session: compute one score per animal and test across animals, rather than pooling trials.
+
+<Callout kind="note" title="Is chance really 50%?">
+
+With unbalanced classes, small samples or a decoder that tends to predict one class, the accuracy expected by chance can differ from one over the number of classes. Permutation tests take care of this automatically, because the null distribution is computed with the same decoder, the same folds and the same class balance as the real analysis. Combrisson and Jerbi (2015) showed how far theoretical chance levels can mislead with the small samples typical of neuroscience.
+
+</Callout>
+
+<Bridge title="Comparison in brains and machines"
+  neuro="Model comparison is the core of computational neuroscience: does a model with adaptation explain the neuron better than one without, does a recurrent network explain the population better than a feedforward one? The answer is only as good as the test, and paired, permutation-based and across-animal tests guard against the commonest overclaims."
+  ai="Machine learning's leaderboards often rank methods by differences smaller than their run-to-run variability. Bouthillier and colleagues (2021) measured the variance from random seeds, data splits and hyperparameter search in deep learning benchmarks, and found that many reported improvements fell within it.">
+
+Two numbers are only different if the difference is larger than its uncertainty.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "McNemar's test uses...", options: ["Only the trials where the two decoders disagree", "All trials equally", "Only the trials both get right", "The training set"], answer: 0, explain: "Step 1." },
+  { q: "A paired test is more sensitive than an unpaired one because...", options: ["Shared trial difficulty cancels", "It uses more data", "It is one-sided", "It assumes normality"], answer: 0, explain: "Step 1." },
+  { q: "In a permutation test of a decoder, each shuffle should rerun...", options: ["The whole cross-validation pipeline", "Only the test step", "Nothing; just shuffle predictions", "Only feature selection"], answer: 0, explain: "Step 2." },
+  { q: "The permutation p-value is...", options: ["(1 + number of shuffles at least as good) / (1 + number of shuffles)", "The fraction of shuffles worse than real", "Always 0.05", "The null mean"], answer: 0, explain: "Step 2." },
+  { q: "A paired t-test across random CV splits is...", options: ["Overconfident, because splits share training data", "Too conservative", "Exactly right", "Unpaired"], answer: 0, explain: "Step 3." },
+  { q: "The Nadeau-Bengio correction inflates the variance by...", options: ["1/J + n_te/n_tr instead of 1/J", "J", "n_te", "Nothing"], answer: 0, explain: "Step 3." },
+  { q: "To claim a result across animals, the unit of replication is...", options: ["The animal", "The trial", "The fold", "The neuron"], answer: 0, explain: "Step 4." },
+  { q: "Chance level for a decoder is best established by...", options: ["A permutation test", "1/number of classes always", "The training accuracy", "A t-test"], answer: 0, explain: "The callout." },
+]} />
+
+<Flashcards cards={[
+  { front: "McNemar's test?", back: "$\\chi^2 = (|b - c| - 1)^2/(b + c)$ on the disagreement counts; one degree of freedom." },
+  { front: "Paired bootstrap?", back: "Resample test trials with replacement, recompute both accuracies on the same resample, and take percentiles of the difference." },
+  { front: "Permutation test for a decoder?", back: "Shuffle labels, rerun the full pipeline, repeat; p = (1 + count ≥ real)/(1 + shuffles)." },
+  { front: "Why are CV t-tests overconfident?", back: "Overlapping training sets make the per-split differences correlated." },
+  { front: "Corrected resampled t-test?", back: "Variance factor $1/J + n_{te}/n_{tr}$ (Nadeau and Bengio, 2003)." },
+]} />
+
+<Predict revisit question="How often did the naive t-test find a difference between two equally good decoders?" />
+
+<Key title="Before you go">
+<ul>
+<li>Compare decoders on the same test trials with a paired test or a paired bootstrap.</li>
+<li>Test against chance by permuting labels through the whole pipeline.</li>
+<li>Do not trust ordinary t-tests across overlapping splits; correct them or avoid them.</li>
+<li>Report effect sizes with intervals, and replicate across the unit of your claim.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Dietterich (1998), <em>Approximate statistical tests for comparing supervised classification learning algorithms</em>.</li>
+<li>Nadeau and Bengio (2003), <em>Inference for the generalization error</em>, Machine Learning 52(3), 239 to 281.</li>
+<li>Ojala and Garriga (2010), <em>Permutation tests for studying classifier performance</em>, Journal of Machine Learning Research 11, 1833 to 1863.</li>
+<li>Combrisson and Jerbi (2015), <em>Exceeding chance level by chance: the caveat of theoretical chance levels in brain signal classification and statistical assessment of decoding accuracy</em>, Journal of Neuroscience Methods 250, 126 to 136.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Design the statistical comparison for a study comparing two encoding models of neurons recorded in 6 mice. What is the unit of replication, which test would you use, and what would you plot to show the result honestly?" />

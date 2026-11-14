@@ -1,0 +1,268 @@
+export const meta = {
+  title: "Case study: circular analysis and double dipping",
+  intro: "In 2009 Kriegeskorte and colleagues showed that a large fraction of neuroimaging papers in leading journals had selected their data with a test and then measured the same effect in the same data. The resulting effects were inflated, sometimes from nothing. The error is just as easy to make with neurons as with voxels. Today you reproduce circular analysis and its quieter cousin, regression to the mean, and then audit a complete analysis containing three of this week's mistakes, repairing it until it tells the truth.",
+  goals: [
+    "Explain circular analysis and show how it inflates selected effects",
+    "Use split data to get unbiased estimates for selected neurons",
+    "Recognise regression to the mean in longitudinal selections",
+    "Audit an analysis pipeline for leakage and selection, and repair it",
+  ],
+  plan: [
+    { label: "Selecting and measuring in the same data", minutes: 30 },
+    { label: "Regression to the mean", minutes: 20 },
+    { label: "An audit", minutes: 40 },
+    { label: "Habits that prevent it", minutes: 15 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "kriegeskorte-2009",
+};
+
+<Predict question="You select the 10% of neurons that responded most strongly to a stimulus on Monday, and record the same neurons responding to the same stimulus on Tuesday. Nothing about the neurons has changed. Will their Tuesday responses be about the same, weaker, or stronger on average?" />
+
+<Step n={1} title="Selecting and measuring in the same data" minutes={30} />
+
+A **circular analysis** uses the data to choose what to analyse and then tests or measures that choice on the same data. Selecting neurons that prefer condition A, then reporting how much they prefer A; choosing the time window where a decoder peaks, then reporting the peak accuracy; defining a region by its response to faces, then showing that it responds to faces. In each case noise that helped an item pass the selection is counted as signal. Kriegeskorte, Simmons, Bellgowan and Baker (2009), today's paper, called it double dipping, showed it in a sample of published studies, and gave the remedy: the data used for selection and for measurement must be independent.
+
+<Video id="HDCOUXE3HMM" title="p-hacking: what it is and how to avoid it" by="StatQuest with Josh Starmer" note="Josh Starmer on how trying analyses until one works, or adding data until a test passes, produces false positives, and how to avoid it. Circular analysis is a version of the same problem." />
+
+<Figure caption="Of 400 neurons, 40 truly prefer condition A. Selecting by the A minus B difference and measuring it on the same trials inflates the effect; measuring on held-out trials does not." credit="Interactive figure by Engram, after Kriegeskorte and colleagues (2009).">
+  <DoubleDipping />
+</Figure>
+
+<PyCell id="dip" title="Inflation by selection" tests={String.raw`
+  import numpy as np
+  def test_circular():
+      "the circular estimate is more than 1.5 times the true effect of the selected neurons"
+      assert circular > 1.5 * truth_sel
+  def test_split():
+      "the held-out estimate is within 0.1 of the true effect of the neurons selected on the first half"
+      assert abs(held_out - truth_half) < 0.1
+`} prompt="Simulate 400 neurons on 20 trials of each condition; 40 neurons have a true preference of 0.5 for A. Select neurons whose t-statistic for A against B exceeds 2, and report their mean A minus B on the same trials. Then select on trials 1 to 10 only and measure on trials 11 to 20."
+code={String.raw`
+  import numpy as np
+  gd = np.random.default_rng(595)
+  true_eff = np.where(np.arange(400) < 40, 0.5, 0.0)
+  A = true_eff[:, None] + gd.normal(size=(400, 20))
+  B = gd.normal(size=(400, 20))
+
+  def tstat(a, b):
+      return (a.mean(1) - b.mean(1)) / np.sqrt(a.var(1, ddof=1) / a.shape[1] + b.var(1, ddof=1) / b.shape[1])
+
+  sel = tstat(A, B) > 2
+  circular = np.mean(A[sel].mean(1) - B[sel].mean(1))
+  truth_sel = true_eff[sel].mean()
+
+  sel_half = tstat(A[:, :10], B[:, :10]) > 2
+  held_out = ...
+  truth_half = true_eff[sel_half].mean()
+  print(f"selected {sel.sum()} neurons; circular estimate {circular:.2f}, their true mean effect {truth_sel:.2f}")
+  print(f"selected on half: {sel_half.sum()} neurons; held-out estimate {held_out:.2f}, their true mean effect {truth_half:.2f}")
+`}
+hint="held_out = np.mean(A[sel_half, 10:].mean(1) - B[sel_half, 10:].mean(1))."
+solution={String.raw`
+  import numpy as np
+  gd = np.random.default_rng(595)
+  true_eff = np.where(np.arange(400) < 40, 0.5, 0.0)
+  A = true_eff[:, None] + gd.normal(size=(400, 20))
+  B = gd.normal(size=(400, 20))
+
+  def tstat(a, b):
+      return (a.mean(1) - b.mean(1)) / np.sqrt(a.var(1, ddof=1) / a.shape[1] + b.var(1, ddof=1) / b.shape[1])
+
+  sel = tstat(A, B) > 2
+  circular = np.mean(A[sel].mean(1) - B[sel].mean(1))
+  truth_sel = true_eff[sel].mean()
+
+  sel_half = tstat(A[:, :10], B[:, :10]) > 2
+  held_out = np.mean(A[sel_half, 10:].mean(1) - B[sel_half, 10:].mean(1))
+  truth_half = true_eff[sel_half].mean()
+  print(f"selected {sel.sum()} neurons; circular estimate {circular:.2f}, their true mean effect {truth_sel:.2f}")
+  print(f"selected on half: {sel_half.sum()} neurons; held-out estimate {held_out:.2f}, their true mean effect {truth_half:.2f}")
+`} />
+
+Selecting all 400 neurons with a t-statistic above 2 picks 25, and their circular A minus B estimate is 0.78, more than three times their true mean effect of 0.22 (and larger than the strongest true effect in the population, 0.5). Many of the selected neurons have no true preference at all and passed by chance, and the true ones passed partly because their noise happened to favour A. Selecting on the first ten trials and measuring on the last ten gives 0.11 for a set whose true mean effect is 0.11: unbiased. The price is power, since each half has only ten trials; that is the honest price of asking the data two questions.
+
+<Step n={2} title="Regression to the mean" minutes={20} />
+
+Selection on one occasion and measurement on another is not circular, but it carries a related trap. Items selected for extreme values on a noisy measurement will on average be less extreme next time, simply because part of what made them extreme was noise that does not repeat. Galton found it in the heights of parents and children (Week 55); in neuroscience it can look like adaptation, plasticity or learning.
+
+<PyCell id="rtm" title="Neurons that seem to adapt" tests={String.raw`
+  import numpy as np
+  def test_drop():
+      "the top neurons on day 1 respond less on day 2, and the bottom ones more, with no real change"
+      assert day2_top < day1_top - 0.3 and day2_bottom > day1_bottom + 0.3
+`} prompt="Simulate 300 neurons with stable true responses, measured with noise on two days. Select the top 10% and the bottom 10% on day 1, and compare their mean responses on the two days."
+code={String.raw`
+  gr = np.random.default_rng(5951)
+  true_resp = gr.normal(5, 1, 300)
+  day1 = true_resp + gr.normal(0, 1, 300)
+  day2 = true_resp + gr.normal(0, 1, 300)
+  top = day1 >= np.percentile(day1, 90)
+  bottom = ...
+  day1_top, day2_top = day1[top].mean(), day2[top].mean()
+  day1_bottom, day2_bottom = day1[bottom].mean(), day2[bottom].mean()
+  print(f"top 10% on day 1:    {day1_top:.2f} then {day2_top:.2f}")
+  print(f"bottom 10% on day 1: {day1_bottom:.2f} then {day2_bottom:.2f}")
+`}
+hint="bottom = day1 <= np.percentile(day1, 10)."
+solution={String.raw`
+  gr = np.random.default_rng(5951)
+  true_resp = gr.normal(5, 1, 300)
+  day1 = true_resp + gr.normal(0, 1, 300)
+  day2 = true_resp + gr.normal(0, 1, 300)
+  top = day1 >= np.percentile(day1, 90)
+  bottom = day1 <= np.percentile(day1, 10)
+  day1_top, day2_top = day1[top].mean(), day2[top].mean()
+  day1_bottom, day2_bottom = day1[bottom].mean(), day2[bottom].mean()
+  print(f"top 10% on day 1:    {day1_top:.2f} then {day2_top:.2f}")
+  print(f"bottom 10% on day 1: {day1_bottom:.2f} then {day2_bottom:.2f}")
+`} />
+
+The neurons that responded most on day 1, averaging 7.2, average 5.9 on day 2; the weakest rise from 2.6 to 3.9. Nothing changed. Half the spread between neurons on any one day is measurement noise, so the extremes on day 1 are partly extreme noise, which does not repeat. Report it as adaptation in the strong cells and facilitation in the weak ones and it would look like homeostatic plasticity. The fix is the same as before: select the neurons on independent data, such as a separate set of trials on day 1, and compare days on data not used for selection, or analyse all neurons without selecting.
+
+<Step n={3} title="An audit" minutes={40} />
+
+Below is a complete analysis, of the kind that appears in many papers' methods. 120 trials in blocks of 20 alternate between two conditions; 500 neurons were recorded. The pipeline z-scores every neuron using all trials, keeps the 20 neurons that best separate the conditions, and reports 5-fold cross-validated accuracy of a nearest-centroid decoder with random folds. The data contain drift and no condition signal at all. Find every leak and write an honest version.
+
+<PyCell id="audit" title="Repair the pipeline" tests={String.raw`
+  import numpy as np
+  def test_leaky():
+      "the published pipeline reports well above chance on null data"
+      assert leaky_acc > 0.7
+  def test_honest():
+      "the honest pipeline reports accuracy near chance (0.35 to 0.65)"
+      assert 0.35 < honest_acc < 0.65
+`} prompt="Write honest_pipeline(X, y): use three folds, each made of two consecutive whole blocks (one of each condition), and inside each fold compute the z-scoring means and standard deviations and the feature selection from training trials only."
+code={String.raw`
+  ga = np.random.default_rng(5952)
+  T = 120
+  y_a = (np.arange(T) // 20) % 2
+  X_a = np.cumsum(0.25 * ga.normal(size=(T, 500)), axis=0) + ga.normal(size=(T, 500))
+
+  def select(X, y, k=20):
+      return np.argsort(np.abs(X[y == 1].mean(0) - X[y == 0].mean(0)))[-k:]
+
+  def centroid_score(Xtr, ytr, Xte, yte):
+      c0, c1 = Xtr[ytr == 0].mean(0), Xtr[ytr == 1].mean(0)
+      return np.sum((((Xte - c1) ** 2).sum(1) < ((Xte - c0) ** 2).sum(1)) == yte)
+
+  def published_pipeline(X, y):
+      Z = (X - X.mean(0)) / X.std(0)                         # leak 1: statistics from all trials
+      f = select(Z, y)                                       # leak 2: selection on all trials
+      folds = np.array_split(np.random.default_rng(0).permutation(len(y)), 5)   # leak 3: random folds
+      right = 0
+      for te in folds:
+          tr = np.setdiff1d(np.arange(len(y)), te)
+          right += centroid_score(Z[tr][:, f], y[tr], Z[te][:, f], y[te])
+      return right / len(y)
+
+  def honest_pipeline(X, y):
+      folds = np.array_split(np.arange(len(y)), 3)           # pairs of whole blocks, one of each condition
+      right = 0
+      for te in folds:
+          tr = np.setdiff1d(np.arange(len(y)), te)
+          ...
+      return right / len(y)
+
+  leaky_acc, honest_acc = published_pipeline(X_a, y_a), honest_pipeline(X_a, y_a)
+  print(f"published pipeline: {leaky_acc:.3f}; honest pipeline: {honest_acc:.3f}")
+`}
+hint="Inside the loop: mu, sd = X[tr].mean(0), X[tr].std(0); Ztr, Zte = (X[tr] - mu) / sd, (X[te] - mu) / sd; f = select(Ztr, y[tr]); right += centroid_score(Ztr[:, f], y[tr], Zte[:, f], y[te])."
+solution={String.raw`
+  ga = np.random.default_rng(5952)
+  T = 120
+  y_a = (np.arange(T) // 20) % 2
+  X_a = np.cumsum(0.25 * ga.normal(size=(T, 500)), axis=0) + ga.normal(size=(T, 500))
+
+  def select(X, y, k=20):
+      return np.argsort(np.abs(X[y == 1].mean(0) - X[y == 0].mean(0)))[-k:]
+
+  def centroid_score(Xtr, ytr, Xte, yte):
+      c0, c1 = Xtr[ytr == 0].mean(0), Xtr[ytr == 1].mean(0)
+      return np.sum((((Xte - c1) ** 2).sum(1) < ((Xte - c0) ** 2).sum(1)) == yte)
+
+  def published_pipeline(X, y):
+      Z = (X - X.mean(0)) / X.std(0)                         # leak 1: statistics from all trials
+      f = select(Z, y)                                       # leak 2: selection on all trials
+      folds = np.array_split(np.random.default_rng(0).permutation(len(y)), 5)   # leak 3: random folds
+      right = 0
+      for te in folds:
+          tr = np.setdiff1d(np.arange(len(y)), te)
+          right += centroid_score(Z[tr][:, f], y[tr], Z[te][:, f], y[te])
+      return right / len(y)
+
+  def honest_pipeline(X, y):
+      folds = np.array_split(np.arange(len(y)), 3)           # pairs of whole blocks, one of each condition
+      right = 0
+      for te in folds:
+          tr = np.setdiff1d(np.arange(len(y)), te)
+          mu, sd = X[tr].mean(0), X[tr].std(0)
+          Ztr, Zte = (X[tr] - mu) / sd, (X[te] - mu) / sd
+          f = select(Ztr, y[tr])
+          right += centroid_score(Ztr[:, f], y[tr], Zte[:, f], y[te])
+      return right / len(y)
+
+  leaky_acc, honest_acc = published_pipeline(X_a, y_a), honest_pipeline(X_a, y_a)
+  print(f"published pipeline: {leaky_acc:.3f}; honest pipeline: {honest_acc:.3f}")
+`} />
+
+The published pipeline reports 72.5% on data with no condition signal. Each of its three leaks contributes: the global z-scoring is the mildest, the selection of 20 neurons from 500 using all trials is the strongest, and the random folds let drift do the rest. The honest pipeline reports 40%. That is below chance, and it is not a bug: with only three folds and strong drift, a test pair of blocks sits next to training blocks of the opposite condition, so honest estimates on drifting data swing widely around chance, above or below. A permutation test of the honest pipeline (Day 4) would show that 40% is entirely consistent with no signal. The lesson is not only that the published number was wrong, but that with six blocks this experiment cannot measure a small effect at all, which is a design problem no analysis can fix.
+
+<Step n={4} title="Habits that prevent it" minutes={15} />
+
+None of today's errors needs bad intent; each is the natural first way to write the analysis. Habits help more than vigilance:
+
+<ul>
+<li>Write the whole analysis as one function from raw data to score, and cross-validate the function. Anything outside it that touches the labels is a suspect.</li>
+<li>Decide the splitting unit before looking at results, from the claim you want to make.</li>
+<li>Run the full pipeline on shuffled labels and on simulated null data. If it finds signal there, it is leaking.</li>
+<li>Keep a lockbox: a portion of the data, such as one session or one animal, that is analysed once, at the end, with the final pipeline.</li>
+<li>Preregister the analysis, or at least write it down and date it, before running it on the final data.</li>
+</ul>
+
+<Bridge title="Circularity in brains and machines"
+  neuro="Circular analysis and regression to the mean have each produced published neuroscience findings that did not hold: inflated correlations between brain activity and personality measures, selected neurons whose tuning seemed to change with learning, and regions whose selectivity was defined and tested on the same scans. Vul and colleagues (2009) documented the correlation case at about the same time as Kriegeskorte's paper."
+  ai="Machine learning research has its own double dipping: tuning on the test set, selecting the best of many random seeds, and choosing benchmarks on which a method happens to work. Benchmark contamination in large language models, where test questions appear in training data, is the same leak at enormous scale.">
+
+Select with one part of the data, measure with another.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A circular analysis...", options: ["Selects and measures using the same data", "Uses a circular statistic", "Uses cross-validation", "Has no selection"], answer: 0, explain: "Step 1." },
+  { q: "Circular estimates of a selected effect are...", options: ["Inflated", "Unbiased", "Deflated", "Zero"], answer: 0, explain: "Step 1." },
+  { q: "A stricter selection threshold makes the circular inflation...", options: ["Larger", "Smaller", "Unchanged", "Negative"], answer: 0, explain: "The figure." },
+  { q: "The remedy for circular analysis is...", options: ["Independent data for selection and measurement", "More neurons", "A stricter threshold", "Smoothing"], answer: 0, explain: "Step 1." },
+  { q: "Neurons selected for strong responses on day 1 respond less on day 2 because of...", options: ["Regression to the mean", "Adaptation", "Plasticity", "Drift"], answer: 0, explain: "Step 2." },
+  { q: "Which is NOT a leak in the audited pipeline?", options: ["Using a nearest-centroid decoder", "Z-scoring with all trials", "Selecting features on all trials", "Random folds in a blocked design"], answer: 0, explain: "Step 3." },
+  { q: "Running a pipeline on shuffled labels tests for...", options: ["Leaks and biases in the pipeline", "Overfitting only", "The noise ceiling", "Effect size"], answer: 0, explain: "Step 4." },
+  { q: "A lockbox is...", options: ["Data analysed only once, at the end", "An encrypted file", "The training set", "A random seed"], answer: 0, explain: "Step 4." },
+]} />
+
+<Flashcards cards={[
+  { front: "Circular analysis (double dipping)?", back: "Selecting data by a test and then measuring or testing the same effect in the same data." },
+  { front: "Fix for circularity?", back: "Select on one independent part of the data (trials, runs, sessions) and measure on another." },
+  { front: "Regression to the mean?", back: "Items selected for extreme noisy measurements are, on average, less extreme when remeasured." },
+  { front: "Null-data check?", back: "Run the full pipeline on shuffled labels or simulated noise; any signal found is an artefact." },
+  { front: "Lockbox?", back: "Held-back data analysed once with the final, fixed pipeline." },
+]} />
+
+<Predict revisit question="Did the strongest responders on Monday respond as strongly on Tuesday?" />
+
+<Key title="Before you go">
+<ul>
+<li>Selecting and measuring in the same data inflates effects, sometimes from nothing.</li>
+<li>Independent halves for selection and measurement give honest estimates.</li>
+<li>Regression to the mean can masquerade as adaptation or learning.</li>
+<li>Write analyses as single functions, test them on null data, and keep a lockbox.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Kriegeskorte, Simmons, Bellgowan and Baker (2009), <em>Circular analysis in systems neuroscience: the dangers of double dipping</em>.</li>
+<li>Vul, Harris, Winkielman and Pashler (2009), <em>Puzzlingly high correlations in fMRI studies of emotion, personality, and social cognition</em>, Perspectives on Psychological Science 4(3), 274 to 290.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Write down one analysis you have done, or plan to do, in which you selected neurons, trials, time windows or channels. Was the selection independent of the measurement? If not, describe exactly how you would split the data to fix it, and what it would cost in statistical power." />
