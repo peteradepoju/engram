@@ -1,0 +1,267 @@
+export const meta = {
+  title: "Forge: Week 57 challenge, quiz and deep read",
+  intro: "This week turned linear methods into nonlinear ones without giving up convexity: feature maps and the kernel trick, kernel ridge regression and random features, the maximum-margin classifier, its dual and kernel SVMs, and kernels chosen to test hypotheses about neural codes. Today's challenge compares linear, kernel and random-feature decoders on one nonlinear problem with honest model selection, and then tests a classic result: the number of support vectors bounds the leave-one-out error. Then the quiz, and a critique of Cortes and Vapnik.",
+  goals: [
+    "Compare linear, kernel and random-feature decoders with nested cross-validation",
+    "Check the support-vector bound on leave-one-out error",
+    "Prove the kernel trick for the quadratic kernel and the representer property of ridge",
+    "Critique the support-vector network paper in the light of what came after",
+  ],
+  plan: [
+    { label: "Warm-up predictions", minutes: 10 },
+    { label: "Weekly challenge", minutes: 60 },
+    { label: "Derivation set", minutes: 10 },
+    { label: "Weekly quiz", minutes: 15 },
+    { label: "Deep read and critique", minutes: 25 },
+  ],
+  paper: "cortes-vapnik-1995",
+};
+
+<Step n={1} title="Warm-up predictions" minutes={10} />
+
+Predict, then run.
+
+1. How many monomials of degree at most 2 are there in 10 variables?
+2. Two inputs are at distance 2. What is their Gaussian kernel value with γ = 0.5?
+3. An SVM has 12 support vectors among 200 training examples. What is the bound on its leave-one-out error?
+
+<PyCell code={String.raw`
+  from math import comb
+  import numpy as np
+  print("1.", comb(10 + 2, 2))
+  print("2.", round(np.exp(-0.5 * 2 ** 2), 4))
+  print("3.", 12 / 200)
+`} />
+
+<Step n={2} title="Weekly challenge" minutes={60} />
+
+**Part A: three decoders, chosen honestly.** A behavioural choice depends nonlinearly on a population of 8 neurons: the animal goes right when the activity of two of them lies inside an elliptical region, and the other six are irrelevant. Compare a linear SVM, a Gaussian-kernel SVM with γ chosen by an inner cross-validation, and a linear SVM on 300 random Fourier features, using an outer five-fold cross-validation for the final accuracy.
+
+<PyCell id="partA" title="Part A: nested cross-validation of three decoders" tests={String.raw`
+  import numpy as np
+  def test_keys():
+      "outer has a mean accuracy for each decoder"
+      assert set(outer) == {"linear", "gaussian", "random features"}
+  def test_order():
+      "both nonlinear decoders beat the linear one by at least 10 points"
+      assert outer["gaussian"] > outer["linear"] + 0.1 and outer["random features"] > outer["linear"] + 0.1
+`} prompt="The SVM solver, kernels and data are provided. In each outer fold, choose gamma for the Gaussian SVM by three-fold cross-validation on the outer training trials only, refit, and score on the outer test fold. Do the same for the linear and random-feature decoders (no inner choice needed). Store mean outer accuracies."
+code={String.raw`
+  import numpy as np
+  r = np.random.default_rng(576)
+
+  def svm_dual(K, Y, C=1.0, sweeps=40):
+      n = len(Y); a = np.zeros(n); f = np.zeros(n)
+      for s in range(sweeps):
+          for i in range(n):
+              new = min(max(a[i] - (Y[i] * f[i] - 1) / K[i, i], 0.0), C)
+              if new != a[i]:
+                  f += (new - a[i]) * Y[i] * K[:, i]; a[i] = new
+      return a
+
+  def gauss_k(A, B, g):
+      return np.exp(-g * np.maximum((A ** 2).sum(1)[:, None] - 2 * A @ B.T + (B ** 2).sum(1)[None, :], 0)) + 1
+
+  n, D = 300, 8
+  X = r.normal(size=(n, D))
+  q = (X[:, :2] ** 2 / np.array([1.0, 2.0])).sum(1)
+  Y = np.where(q < np.median(q), 1.0, -1.0)                 # inside an ellipse in 2 of 8 dimensions
+  W_rf = r.normal(size=(300, D)) * np.sqrt(0.2); b_rf = r.uniform(0, 2 * np.pi, 300)
+  rf = lambda A: np.sqrt(2 / 300) * np.cos(A @ W_rf.T + b_rf)
+
+  def score(K_tr, Y_tr, K_te, Y_te):
+      a = svm_dual(K_tr, Y_tr)
+      return np.mean(np.sign(K_te @ (a * Y_tr)) == Y_te)
+
+  gammas = [0.01, 0.05, 0.2, 1.0]
+  outer = {"linear": [], "gaussian": [], "random features": []}
+  for te in np.array_split(np.arange(n), 5):
+      tr = np.setdiff1d(np.arange(n), te)
+      outer["linear"].append(score(X[tr] @ X[tr].T + 1, Y[tr], X[te] @ X[tr].T + 1, Y[te]))
+      F_tr, F_te = rf(X[tr]), rf(X[te])
+      outer["random features"].append(score(F_tr @ F_tr.T + 1, Y[tr], F_te @ F_tr.T + 1, Y[te]))
+      inner = []
+      for g in gammas:
+          acc_g = []
+          for ite in np.array_split(tr, 3):
+              itr = np.setdiff1d(tr, ite)
+              acc_g.append(...)
+          inner.append(np.mean(acc_g))
+      g_best = gammas[int(np.argmax(inner))]
+      outer["gaussian"].append(...)
+  outer = {k: float(np.mean(v)) for k, v in outer.items()}
+  for k, v in outer.items():
+      print(f"{k:16s} outer cross-validated accuracy {v:.3f}")
+  print(f"(chance is {max(np.mean(Y > 0), np.mean(Y < 0)):.3f})")
+`}
+hint="acc_g.append(score(gauss_k(X[itr], X[itr], g), Y[itr], gauss_k(X[ite], X[itr], g), Y[ite])); outer['gaussian'].append(score(gauss_k(X[tr], X[tr], g_best), Y[tr], gauss_k(X[te], X[tr], g_best), Y[te]))."
+solution={String.raw`
+  import numpy as np
+  r = np.random.default_rng(576)
+
+  def svm_dual(K, Y, C=1.0, sweeps=40):
+      n = len(Y); a = np.zeros(n); f = np.zeros(n)
+      for s in range(sweeps):
+          for i in range(n):
+              new = min(max(a[i] - (Y[i] * f[i] - 1) / K[i, i], 0.0), C)
+              if new != a[i]:
+                  f += (new - a[i]) * Y[i] * K[:, i]; a[i] = new
+      return a
+
+  def gauss_k(A, B, g):
+      return np.exp(-g * np.maximum((A ** 2).sum(1)[:, None] - 2 * A @ B.T + (B ** 2).sum(1)[None, :], 0)) + 1
+
+  n, D = 300, 8
+  X = r.normal(size=(n, D))
+  q = (X[:, :2] ** 2 / np.array([1.0, 2.0])).sum(1)
+  Y = np.where(q < np.median(q), 1.0, -1.0)                 # inside an ellipse in 2 of 8 dimensions
+  W_rf = r.normal(size=(300, D)) * np.sqrt(0.2); b_rf = r.uniform(0, 2 * np.pi, 300)
+  rf = lambda A: np.sqrt(2 / 300) * np.cos(A @ W_rf.T + b_rf)
+
+  def score(K_tr, Y_tr, K_te, Y_te):
+      a = svm_dual(K_tr, Y_tr)
+      return np.mean(np.sign(K_te @ (a * Y_tr)) == Y_te)
+
+  gammas = [0.01, 0.05, 0.2, 1.0]
+  outer = {"linear": [], "gaussian": [], "random features": []}
+  for te in np.array_split(np.arange(n), 5):
+      tr = np.setdiff1d(np.arange(n), te)
+      outer["linear"].append(score(X[tr] @ X[tr].T + 1, Y[tr], X[te] @ X[tr].T + 1, Y[te]))
+      F_tr, F_te = rf(X[tr]), rf(X[te])
+      outer["random features"].append(score(F_tr @ F_tr.T + 1, Y[tr], F_te @ F_tr.T + 1, Y[te]))
+      inner = []
+      for g in gammas:
+          acc_g = []
+          for ite in np.array_split(tr, 3):
+              itr = np.setdiff1d(tr, ite)
+              acc_g.append(score(gauss_k(X[itr], X[itr], g), Y[itr], gauss_k(X[ite], X[itr], g), Y[ite]))
+          inner.append(np.mean(acc_g))
+      g_best = gammas[int(np.argmax(inner))]
+      outer["gaussian"].append(score(gauss_k(X[tr], X[tr], g_best), Y[tr], gauss_k(X[te], X[tr], g_best), Y[te]))
+  outer = {k: float(np.mean(v)) for k, v in outer.items()}
+  for k, v in outer.items():
+      print(f"{k:16s} outer cross-validated accuracy {v:.3f}")
+  print(f"(chance is {max(np.mean(Y > 0), np.mean(Y < 0)):.3f})")
+`} />
+
+The linear decoder is no better than chance (43%, against 50%): an ellipse centred on the mean cannot be approximated by a single straight cut, and the linear model's errors are slightly worse than guessing because of its arbitrary tilt. The Gaussian-kernel SVM, with γ chosen inside each outer fold, reaches 78%, and the random-feature decoder 72%, with a fixed γ and only 300 features. The nested scheme matters: each outer accuracy was computed on trials that played no part in choosing γ, so 78% is an honest estimate of how the whole procedure, including the choice, would do on new data. Six irrelevant neurons hold both nonlinear decoders back; Week 58's trees, which select inputs as they go, cope better with that.
+
+**Part B: support vectors bound the leave-one-out error.** If a training example is not a support vector, removing it leaves the SVM unchanged, so it is still classified correctly when left out. Only support vectors can become errors, so the leave-one-out error is at most the fraction of support vectors. Check this on 80 crescent-shaped examples for several values of C.
+
+<PyCell id="partB" title="Part B: the support-vector bound" tests={String.raw`
+  import numpy as np
+  def test_bound():
+      "for every C, the leave-one-out error does not exceed the fraction of support vectors"
+      assert all(loo <= sv + 1e-9 for loo, sv in results.values())
+`} prompt="For each C, fit the Gaussian SVM (gamma = 2) to all 80 examples and count support vectors; then compute the leave-one-out error by refitting without each example in turn."
+code={String.raw`
+  def moons(n, g):
+      y = np.where(g.random(n) < 0.5, -1.0, 1.0); a = np.pi * g.random(n)
+      x = np.c_[np.where(y > 0, np.cos(a), 1 - np.cos(a)), np.where(y > 0, np.sin(a), 0.5 - np.sin(a))]
+      return x + 0.25 * g.normal(size=(n, 2)), y
+
+  Xm, Ym = moons(80, r)
+  Km = gauss_k(Xm, Xm, 2.0)
+  results = {}
+  for C in [0.3, 1.0, 10.0]:
+      a_all = svm_dual(Km, Ym, C, sweeps=80)
+      frac_sv = np.mean(a_all > 1e-8)
+      errors = 0
+      for i in range(80):
+          keep = np.arange(80) != i
+          a = svm_dual(Km[np.ix_(keep, keep)], Ym[keep], C, sweeps=80)
+          errors += ...
+      results[C] = (errors / 80, frac_sv)
+      print(f"C = {C:5.1f}: leave-one-out error {errors / 80:.3f}; support-vector fraction {frac_sv:.3f}")
+`}
+hint="errors += np.sign(Km[i, keep] @ (a * Ym[keep])) != Ym[i]."
+solution={String.raw`
+  def moons(n, g):
+      y = np.where(g.random(n) < 0.5, -1.0, 1.0); a = np.pi * g.random(n)
+      x = np.c_[np.where(y > 0, np.cos(a), 1 - np.cos(a)), np.where(y > 0, np.sin(a), 0.5 - np.sin(a))]
+      return x + 0.25 * g.normal(size=(n, 2)), y
+
+  Xm, Ym = moons(80, r)
+  Km = gauss_k(Xm, Xm, 2.0)
+  results = {}
+  for C in [0.3, 1.0, 10.0]:
+      a_all = svm_dual(Km, Ym, C, sweeps=80)
+      frac_sv = np.mean(a_all > 1e-8)
+      errors = 0
+      for i in range(80):
+          keep = np.arange(80) != i
+          a = svm_dual(Km[np.ix_(keep, keep)], Ym[keep], C, sweeps=80)
+          errors += np.sign(Km[i, keep] @ (a * Ym[keep])) != Ym[i]
+      results[C] = (errors / 80, frac_sv)
+      print(f"C = {C:5.1f}: leave-one-out error {errors / 80:.3f}; support-vector fraction {frac_sv:.3f}")
+`} />
+
+For every C the leave-one-out error is well below the fraction of support vectors: 0.075 against 0.60 at $C = 0.3$, and 0.062 against 0.31 at $C = 10$. The bound holds, as the argument guarantees, but it is loose, because most support vectors are still classified correctly when left out. Its value lies elsewhere: it shows why sparse solutions generalise, and it costs nothing to compute. Large C gives fewer support vectors and so a tighter bound, but not a lower error, a reminder that a bound is a guarantee, not an estimate.
+
+**Part C (written).** Answer in your journal. First, in Part A, explain why gamma had to be chosen inside each outer training fold rather than once on all the data, and what the reported accuracy would have meant otherwise. Second, the random-feature decoder used a fixed γ of 0.05. Describe how you would choose its number of features and γ, and why you might prefer it to the exact kernel SVM for a dataset of 100,000 trials.
+
+<Step n={3} title="Derivation set" minutes={10} />
+
+<Prove title="1. The quadratic kernel as an inner product" task="For $\mathbf x, \mathbf z \in \mathbb R^d$, show that $(1 + \mathbf x^\top\mathbf z)^2 = \phi(\mathbf x)^\top\phi(\mathbf z)$ for a feature map $\phi$ containing 1, $\sqrt2x_i$, $x_i^2$ and $\sqrt2x_ix_j$ for $i \lt j$.">
+
+Expand: $(1 + \mathbf x^\top\mathbf z)^2 = 1 + 2\sum_i x_iz_i + \left(\sum_i x_iz_i\right)^2$.
+
+The square is $\sum_i x_i^2z_i^2 + 2\sum_{i \lt j}x_ix_jz_iz_j$.
+
+Each term is a product of the same function of $\mathbf x$ and of $\mathbf z$: $1 \cdot 1$, $(\sqrt2x_i)(\sqrt2z_i)$, $(x_i^2)(z_i^2)$ and $(\sqrt2x_ix_j)(\sqrt2z_iz_j)$. Summing them is exactly $\phi(\mathbf x)^\top\phi(\mathbf z)$, with $1 + d + d + d(d-1)/2 = \binom{d+2}{2}$ features.
+
+</Prove>
+
+<Prove title="2. Ridge weights lie in the span of the inputs" task="Show that the minimiser of $\lVert\mathbf y - X\mathbf w\rVert^2 + \lambda\lVert\mathbf w\rVert^2$ with $\lambda \gt 0$ has the form $\mathbf w = X^\top\boldsymbol\alpha$, so that predictions need only inner products between inputs.">
+
+Write any $\mathbf w$ as $\mathbf w = X^\top\boldsymbol\alpha + \mathbf w_\perp$, where $\mathbf w_\perp$ is orthogonal to every row of $X$.
+
+Then $X\mathbf w = XX^\top\boldsymbol\alpha$ does not depend on $\mathbf w_\perp$, so the squared-error term does not either.
+
+The penalty is $\lVert X^\top\boldsymbol\alpha\rVert^2 + \lVert\mathbf w_\perp\rVert^2$ by Pythagoras, which is reduced by setting $\mathbf w_\perp = \mathbf 0$. So the minimiser lies in the span of the inputs, $\mathbf w = X^\top\boldsymbol\alpha$.
+
+Predictions are $\mathbf w^\top\mathbf x = \sum_i\alpha_i\mathbf x_i^\top\mathbf x$: only inner products appear. The same argument, applied in a kernel's feature space with any loss, is the representer theorem.
+
+</Prove>
+
+<Step n={4} title="Weekly quiz" minutes={15} />
+
+<Quiz id="weekly" title="Week 57 quiz (15 questions)" questions={[
+  { q: "The kernel trick replaces...", options: ["Inner products of features by kernel values", "Labels by kernels", "Gradients by kernels", "Data by noise"], answer: 0, explain: "Day 1." },
+  { q: "The Gaussian kernel corresponds to...", options: ["Infinitely many features", "Two features", "No features", "Only squares"], answer: 0, explain: "Day 1." },
+  { q: "A valid kernel produces Gram matrices that are...", options: ["Positive semi-definite", "Diagonal", "Negative", "Sparse"], answer: 0, explain: "Day 1." },
+  { q: "Kernel ridge coefficients are...", options: ["(K + λI)⁻¹y", "K⁻¹", "Xᵀy", "λy"], answer: 0, explain: "Day 2." },
+  { q: "Random Fourier features approximate...", options: ["A shift-invariant kernel", "The labels", "The loss", "PCA"], answer: 0, explain: "Day 2." },
+  { q: "A short kernel length-scale gives...", options: ["Flexible, high-variance fits", "Smooth fits", "Linear fits", "Constant fits"], answer: 0, explain: "Day 2." },
+  { q: "The hard-margin SVM maximises...", options: ["The margin 1/‖w‖", "Training accuracy", "The number of support vectors", "‖w‖"], answer: 0, explain: "Day 3." },
+  { q: "The hinge loss is zero when...", options: ["y f(x) ≥ 1", "y f(x) ≤ 0", "f(x) = 0", "Always"], answer: 0, explain: "Day 3." },
+  { q: "On separable data, gradient descent on logistic loss converges in direction to...", options: ["The max-margin direction", "Zero", "A random direction", "The mean difference"], answer: 0, explain: "Day 3." },
+  { q: "In the SVM dual, αᵢ = C means the example is...", options: ["Inside the margin or misclassified", "Far from the boundary", "Ignored", "On the boundary only"], answer: 0, explain: "Day 4." },
+  { q: "Support vectors are the examples with...", options: ["αᵢ > 0", "αᵢ = 0", "Largest inputs", "Correct labels"], answer: 0, explain: "Day 4." },
+  { q: "From pure selectivity, an XOR rule needs...", options: ["A nonlinear decoder", "A linear decoder", "No decoder", "More noise"], answer: 0, explain: "Day 5." },
+  { q: "Kernel PCA diagonalises...", options: ["The centred kernel matrix", "The covariance", "The labels", "XᵀX only"], answer: 0, explain: "Day 5." },
+  { q: "A spike-train kernel can decode...", options: ["Timing differences that counts miss", "Only counts", "Nothing", "Only rates"], answer: 0, explain: "Day 5." },
+  { q: "The leave-one-out error of an SVM is at most...", options: ["The fraction of support vectors", "Zero", "C", "The margin"], answer: 0, explain: "Part B." },
+]} />
+
+<Step n={5} title="Deep read and critique" minutes={25} />
+
+Give Cortes and Vapnik (1995) its third pass and write your critique under the five headings. Focus on one question: **what made support vector machines so successful, and why were they overtaken?** Consider the combination of three ideas (maximum margin, soft margins, kernels) and which mattered most in their experiments; the role of convexity, which guarantees a unique solution and made results reproducible; the bound on generalisation through the number of support vectors and how tight it is in practice (Part B); the digit-recognition benchmarks and how the comparison with neural networks of the time was set up; the cost of the kernel matrix for large datasets; and what deep networks offered that fixed kernels did not. End with one kind of neuroscience dataset for which you would still choose a kernel SVM today, and why.
+
+<Callout kind="research">
+
+The neural tangent kernel describes very wide networks trained by gradient descent as kernel machines with a particular kernel. Read Jacot, Gabriel and Hongler (2018), compute the kernel of a wide one-hidden-layer ReLU network by sampling many random hidden units (it is a random-feature kernel), and compare kernel ridge with it against kernel ridge with a Gaussian kernel on the tuning-curve data of Day 2. How different are their fits, and how does the comparison change with the amount of data?
+
+</Callout>
+
+<Key title="Week 57 review checklist">
+<ul>
+<li>I can explain feature maps, the kernel trick and Mercer's condition.</li>
+<li>I can fit kernel ridge regression and approximate it with random features.</li>
+<li>I can derive the SVM primal and dual and solve the dual by coordinate ascent.</li>
+<li>I can choose kernels and their hyperparameters with nested cross-validation.</li>
+<li>I can use kernels to test hypotheses about neural codes, from mixed selectivity to spike timing.</li>
+</ul>
+</Key>
+
+<JournalPrompt prompt="Answer Part C. Then compare, in a paragraph, a kernel SVM and a small neural network as decoders for a dataset of a few hundred trials from a hundred neurons: what each assumes, how each is tuned, and which you would try first." />

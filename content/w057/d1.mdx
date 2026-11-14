@@ -1,0 +1,244 @@
+export const meta = {
+  title: "Feature maps and the kernel trick",
+  intro: "Linear models are fast, convex and well understood, but many relations are not linear. The classic fix is to transform the inputs into a richer set of features and fit a linear model to those. Kernel methods take this to its limit: they work with feature spaces of enormous, even infinite, dimension without ever computing the features, because every quantity they need can be written in terms of inner products between examples. Today you see why nonlinear features help, how the kernel trick computes inner products cheaply, and what makes a function a valid kernel.",
+  goals: [
+    "Show how a nonlinear feature map makes a problem linearly separable",
+    "Verify the kernel trick for a polynomial kernel",
+    "Explain why the Gaussian kernel corresponds to infinitely many features",
+    "Check whether a function is a valid kernel through the eigenvalues of its Gram matrix",
+  ],
+  plan: [
+    { label: "Lifting into features", minutes: 25 },
+    { label: "Inner products without features", minutes: 30 },
+    { label: "Infinitely many features", minutes: 20 },
+    { label: "What makes a kernel", minutes: 30 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "hofmann-2008",
+};
+
+<Predict question="Computing the polynomial kernel (1 + x·x′)³ for 100-dimensional inputs takes about 100 multiplications. How many features would you need to compute explicitly to get the same inner product: about 300, about 10,000, or about 180,000?" />
+
+<Step n={1} title="Lifting into features" minutes={25} />
+
+A **feature map** $\phi$ sends each input $\mathbf x$ to a vector of features, and a linear model in $\phi(\mathbf x)$ is a nonlinear model in $\mathbf x$. Add the products and squares of the inputs, and a linear classifier can draw conic boundaries; add higher powers, and almost any shape.
+
+<Figure caption="Two concentric rings cannot be split by a straight line, but adding the feature x₁² + x₂² lets a flat cut separate them; mapped back, the cut is a circle. Move the threshold." credit="Interactive figure by Engram.">
+  <KernelLift />
+</Figure>
+
+A neuroscience example of the same idea: in a task where the right answer depends on the combination of a stimulus and a context (an exclusive or), neurons that respond only to the stimulus or only to the context cannot be read out linearly, while neurons with **nonlinear mixed selectivity**, responding to particular combinations, make the answer linearly decodable. Such neurons act like a feature map, and they are common in prefrontal cortex.
+
+<PyCell id="xor" title="An exclusive or, before and after a feature" tests={String.raw`
+  import numpy as np
+  def test_raw():
+      "a linear classifier on the raw inputs is near chance"
+      assert acc_raw < 0.65
+  def test_lifted():
+      "adding the product feature makes it nearly perfect"
+      assert acc_lift > 0.95
+`} prompt="The label is the exclusive or of the signs of two inputs. Fit penalised logistic regression on the raw inputs, then on the inputs plus their product x1 * x2, and compare test accuracy."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  r = np.random.default_rng(571)
+
+  def xor_data(n):
+      X = r.normal(size=(n, 2))
+      return X, ((X[:, 0] > 0) != (X[:, 1] > 0)).astype(float)
+
+  def logreg(A, y, lam=1e-3):
+      def f(w):
+          p = np.clip(1 / (1 + np.exp(-A @ w)), 1e-12, 1 - 1e-12)
+          return -np.mean(y * np.log(p) + (1 - y) * np.log(1 - p)) + lam * w @ w, A.T @ (p - y) / len(y) + 2 * lam * w
+      return minimize(f, np.zeros(A.shape[1]), jac=True).x
+
+  X, y = xor_data(400); X_te, y_te = xor_data(2000)
+  raw = lambda X: np.c_[np.ones(len(X)), X]
+  lift = lambda X: ...
+  acc = lambda F, w, y: np.mean((F @ w > 0) == (y == 1))
+  acc_raw = acc(raw(X_te), logreg(raw(X), y), y_te)
+  acc_lift = acc(lift(X_te), logreg(lift(X), y), y_te)
+  print(f"raw inputs: test accuracy {acc_raw:.3f}; with the product feature: {acc_lift:.3f}")
+`}
+hint="lift = lambda X: np.c_[np.ones(len(X)), X, X[:, 0] * X[:, 1]]."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  r = np.random.default_rng(571)
+
+  def xor_data(n):
+      X = r.normal(size=(n, 2))
+      return X, ((X[:, 0] > 0) != (X[:, 1] > 0)).astype(float)
+
+  def logreg(A, y, lam=1e-3):
+      def f(w):
+          p = np.clip(1 / (1 + np.exp(-A @ w)), 1e-12, 1 - 1e-12)
+          return -np.mean(y * np.log(p) + (1 - y) * np.log(1 - p)) + lam * w @ w, A.T @ (p - y) / len(y) + 2 * lam * w
+      return minimize(f, np.zeros(A.shape[1]), jac=True).x
+
+  X, y = xor_data(400); X_te, y_te = xor_data(2000)
+  raw = lambda X: np.c_[np.ones(len(X)), X]
+  lift = lambda X: np.c_[np.ones(len(X)), X, X[:, 0] * X[:, 1]]
+  acc = lambda F, w, y: np.mean((F @ w > 0) == (y == 1))
+  acc_raw = acc(raw(X_te), logreg(raw(X), y), y_te)
+  acc_lift = acc(lift(X_te), logreg(lift(X), y), y_te)
+  print(f"raw inputs: test accuracy {acc_raw:.3f}; with the product feature: {acc_lift:.3f}")
+`} />
+
+On the raw inputs, logistic regression is right on 59.8% of test trials, barely above chance: no straight line splits the four quadrants of an exclusive or. Adding the single feature $x_1x_2$, whose sign *is* the answer, takes it to 98.3%. The model is still linear, in three features instead of two; the work was done by choosing the right feature. In general we do not know which features to add, which is where kernels come in: they let the model use a vast set of candidate features at once.
+
+<Step n={2} title="Inner products without features" minutes={30} />
+
+All the products of up to $q$ inputs make a feature space that grows like $d^q$. But many learning algorithms touch the data only through inner products $\phi(\mathbf x)^\top\phi(\mathbf x')$, and for some feature maps that inner product has a shortcut. For the **polynomial kernel**,
+
+$$
+k(\mathbf x, \mathbf x') = (1 + \mathbf x^\top\mathbf x')^q = \phi(\mathbf x)^\top\phi(\mathbf x'),
+$$
+
+where $\phi$ contains every monomial up to degree $q$, each scaled by a suitable constant. Computing the left side costs one inner product in the original space. Replacing inner products by kernel evaluations, and never forming $\phi$, is the **kernel trick**.
+
+<Video id="Toet3EiSFcM" title="Support vector machines part 2: the polynomial kernel" by="StatQuest with Josh Starmer" note="Josh Starmer on how a polynomial kernel computes relationships between points as if they were in a higher dimension, without ever moving them there." />
+
+<PyCell id="trick" title="The trick, checked" tests={String.raw`
+  import numpy as np
+  def test_phi():
+      "phi2 lists the 6 scaled monomials for degree 2 in two dimensions"
+      assert phi2(np.array([1.0, 2.0])).shape == (6,)
+  def test_equal():
+      "phi2(x) · phi2(z) equals (1 + x · z)² for random vectors"
+      x, z = r.normal(size=2), r.normal(size=2)
+      assert abs(phi2(x) @ phi2(z) - (1 + x @ z) ** 2) < 1e-10
+  def test_count():
+      "n_features counts monomials of degree up to q in d dimensions"
+      assert n_features(2, 2) == 6 and n_features(100, 3) == 176851
+`} prompt="Write phi2(x), the explicit degree-2 feature map for two-dimensional inputs: (1, √2 x1, √2 x2, x1², x2², √2 x1 x2). Check the kernel identity numerically. Then write n_features(d, q), the number of monomials of degree at most q in d variables, which is the binomial coefficient C(d + q, q)."
+code={String.raw`
+  from math import comb
+
+  def phi2(x):
+      x1, x2 = x
+      return ...
+
+  def n_features(d, q):
+      return ...
+
+  x, z = r.normal(size=2), r.normal(size=2)
+  print(f"explicit features: {phi2(x) @ phi2(z):.6f}; kernel: {(1 + x @ z) ** 2:.6f}")
+  for d, q in [(2, 2), (100, 2), (100, 3), (1000, 3)]:
+      print(f"d = {d:4d}, degree {q}: {n_features(d, q):,} features against {d} multiplications for the kernel")
+`}
+hint="return np.array([1, np.sqrt(2) * x1, np.sqrt(2) * x2, x1 ** 2, x2 ** 2, np.sqrt(2) * x1 * x2]); return comb(d + q, q)."
+solution={String.raw`
+  from math import comb
+
+  def phi2(x):
+      x1, x2 = x
+      return np.array([1, np.sqrt(2) * x1, np.sqrt(2) * x2, x1 ** 2, x2 ** 2, np.sqrt(2) * x1 * x2])
+
+  def n_features(d, q):
+      return comb(d + q, q)
+
+  x, z = r.normal(size=2), r.normal(size=2)
+  print(f"explicit features: {phi2(x) @ phi2(z):.6f}; kernel: {(1 + x @ z) ** 2:.6f}")
+  for d, q in [(2, 2), (100, 2), (100, 3), (1000, 3)]:
+      print(f"d = {d:4d}, degree {q}: {n_features(d, q):,} features against {d} multiplications for the kernel")
+`} />
+
+The explicit six-feature map and the kernel give the same number, 0.140907, to six places. The counting shows why this matters. Degree-2 features of 100 inputs number 5,151; degree-3 features 176,851, which answers the prediction; with 1,000 inputs, 168 million. The kernel always costs one inner product of the original inputs. Any algorithm that can be written in terms of inner products, ridge regression tomorrow and the support vector machine later this week, can therefore use these huge feature spaces for the price of an $n \times n$ matrix of kernel values.
+
+<Step n={3} title="Infinitely many features" minutes={20} />
+
+The most used kernel is the **Gaussian** (or RBF) kernel, $k(\mathbf x, \mathbf x') = \exp(-\gamma\lVert\mathbf x - \mathbf x'\rVert^2)$. Expanding $e^{2\gamma\mathbf x^\top\mathbf x'}$ as a power series shows that its feature map contains monomials of every degree, infinitely many features, yet each kernel value costs one distance. It measures similarity: 1 for identical inputs, falling towards 0 as they move apart on the scale $1/\sqrt{\gamma}$. A linear model in its feature space is a weighted sum of bumps centred on the training examples, which is why kernel methods with this kernel can fit almost any smooth function.
+
+<Step n={4} title="What makes a kernel" minutes={30} />
+
+Not every similarity function is an inner product in some feature space. **Mercer's condition** says $k$ is a valid kernel exactly when every Gram matrix $K_{ij} = k(\mathbf x_i, \mathbf x_j)$ it produces is symmetric and positive semi-definite, that is, has no negative eigenvalues. Sums and products of kernels are kernels, which is how new ones are built.
+
+<PyCell id="psd" title="Kernel or not?" tests={String.raw`
+  import numpy as np
+  def test_gram():
+      "gram(k, X) returns the n x n matrix of kernel values"
+      G = gram(lambda a, b: a @ b, np.eye(3)); assert np.allclose(G, np.eye(3))
+  def test_valid():
+      "Gaussian, polynomial and their sum have no negative eigenvalues; the negative distance does"
+      assert min_eig["gaussian"] > -1e-8 and min_eig["polynomial"] > -1e-8 and min_eig["sum"] > -1e-8 and min_eig["negative distance"] < -1e-3
+`} prompt="Write gram(k, X). For 40 random points in three dimensions, compute the smallest eigenvalue of the Gram matrix for the Gaussian kernel, the degree-2 polynomial kernel, their sum, and the 'similarity' minus the Euclidean distance, which is not a kernel."
+code={String.raw`
+  def gram(k, X):
+      return ...
+
+  Xp = r.normal(size=(40, 3))
+  kernels = {"gaussian": lambda a, b: np.exp(-0.5 * np.sum((a - b) ** 2)),
+             "polynomial": lambda a, b: (1 + a @ b) ** 2,
+             "sum": lambda a, b: np.exp(-0.5 * np.sum((a - b) ** 2)) + (1 + a @ b) ** 2,
+             "negative distance": lambda a, b: -np.sqrt(np.sum((a - b) ** 2))}
+  min_eig = {name: np.linalg.eigvalsh(gram(k, Xp)).min() for name, k in kernels.items()}
+  for name, v in min_eig.items():
+      print(f"{name:18s} smallest eigenvalue {v:.4f}")
+`}
+hint="return np.array([[k(a, b) for b in X] for a in X])."
+solution={String.raw`
+  def gram(k, X):
+      return np.array([[k(a, b) for b in X] for a in X])
+
+  Xp = r.normal(size=(40, 3))
+  kernels = {"gaussian": lambda a, b: np.exp(-0.5 * np.sum((a - b) ** 2)),
+             "polynomial": lambda a, b: (1 + a @ b) ** 2,
+             "sum": lambda a, b: np.exp(-0.5 * np.sum((a - b) ** 2)) + (1 + a @ b) ** 2,
+             "negative distance": lambda a, b: -np.sqrt(np.sum((a - b) ** 2))}
+  min_eig = {name: np.linalg.eigvalsh(gram(k, Xp)).min() for name, k in kernels.items()}
+  for name, v in min_eig.items():
+      print(f"{name:18s} smallest eigenvalue {v:.4f}")
+`} />
+
+The Gaussian kernel, the polynomial kernel and their sum all have smallest eigenvalues at or above zero (the polynomial kernel's is zero to rounding error, because its six-dimensional feature space cannot span 40 points). The negative distance, which looks like a perfectly reasonable similarity, has an eigenvalue of −97: there is no feature space in which it is an inner product, and an algorithm that assumed otherwise could try to minimise a function that has no minimum. The eigenvalue check is a practical test for any home-made similarity measure, for example between spike trains or behavioural sequences, before it is used as a kernel.
+
+<Bridge title="Kernels in brains and machines"
+  neuro="Expanding inputs into many nonlinear features before a linear readout is a recurring motif in the brain: the cerebellum's granule cells, the fly mushroom body's Kenyon cells (Week 39) and the random-like mixed selectivity of prefrontal neurons all multiply the dimensionality of their inputs, making many more distinctions linearly readable downstream."
+  ai="Kernel methods dominated machine learning before deep networks, and the two are closer than they look: a very wide neural network trained by gradient descent behaves like a kernel method with a particular kernel, the neural tangent kernel, which is one way theory tries to explain why large networks generalise.">
+
+Expand into many features and read out linearly: the kernel trick does it implicitly, and the brain may do it explicitly.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A feature map lets a linear model...", options: ["Represent nonlinear functions of the inputs", "Ignore the inputs", "Become non-convex", "Use fewer parameters"], answer: 0, explain: "Linear in the features." },
+  { q: "An exclusive or becomes linearly separable when you add...", options: ["The product of the inputs", "Their sum", "A constant", "Noise"], answer: 0, explain: "Step 1." },
+  { q: "The kernel trick works for algorithms that use the data only through...", options: ["Inner products", "Labels", "Gradients", "Means"], answer: 0, explain: "Replace them by kernel values." },
+  { q: "(1 + x·x′)² corresponds to features that include...", options: ["All monomials up to degree 2", "Only squares", "Only the inputs", "Infinitely many terms"], answer: 0, explain: "With scaling constants." },
+  { q: "The Gaussian kernel's feature space is...", options: ["Infinite-dimensional", "Two-dimensional", "The input space", "Empty"], answer: 0, explain: "Monomials of every degree." },
+  { q: "A function is a valid kernel if its Gram matrices are...", options: ["Symmetric positive semi-definite", "Diagonal", "Invertible", "Sparse"], answer: 0, explain: "Mercer's condition." },
+  { q: "The sum of two kernels is...", options: ["A kernel", "Never a kernel", "A kernel only if equal", "A distance"], answer: 0, explain: "Positive semi-definite matrices add." },
+  { q: "Nonlinear mixed selectivity makes an XOR task...", options: ["Linearly decodable", "Impossible", "Slower", "Noisier"], answer: 0, explain: "It acts like a feature map." },
+]} />
+
+<Flashcards cards={[
+  { front: "Kernel trick?", back: "Replace $\\phi(\\mathbf x)^\\top\\phi(\\mathbf x')$ by $k(\\mathbf x, \\mathbf x')$ without computing $\\phi$." },
+  { front: "Polynomial kernel?", back: "$(1 + \\mathbf x^\\top\\mathbf x')^q$: all monomials up to degree q." },
+  { front: "Gaussian kernel?", back: "$\\exp(-\\gamma\\lVert\\mathbf x - \\mathbf x'\\rVert^2)$: infinitely many features, similarity on scale $1/\\sqrt\\gamma$." },
+  { front: "Mercer's condition?", back: "Every Gram matrix is symmetric positive semi-definite." },
+  { front: "Building kernels?", back: "Sums, products and positive scalings of kernels are kernels." },
+]} />
+
+<Predict revisit question="How many explicit features does the degree-3 polynomial kernel on 100 inputs correspond to?" />
+
+<Key title="Before you go">
+<ul>
+<li>Nonlinear features make linear methods flexible.</li>
+<li>Kernels compute inner products in feature space at the cost of one inner product in input space.</li>
+<li>The Gaussian kernel corresponds to infinitely many features and measures similarity.</li>
+<li>A valid kernel produces positive semi-definite Gram matrices.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Hofmann, Schölkopf and Smola (2008), <em>Kernel methods in machine learning</em>.</li>
+<li>Rigotti, Barak, Warden, Wang, Daw, Miller and Fusi (2013), <em>The importance of mixed selectivity in complex cognitive tasks</em>, Week 46's paper on nonlinear mixed selectivity.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Pick a brain circuit that expands its inputs into many more neurons (granule cells, Kenyon cells, dentate gyrus). Write down what kernel, roughly, the expansion might implement, and what the downstream linear readout gains from it." />

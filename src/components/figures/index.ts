@@ -256,3 +256,8 @@ export { SoftmaxRegions } from "./softmax-regions";
 export { LdaQda } from "./lda-qda";
 export { RocCurve } from "./roc-curve";
 export { CategoryDecoding } from "./category-decoding";
+export { KernelLift } from "./kernel-lift";
+export { KernelRidgeFit } from "./kernel-ridge-fit";
+export { MarginExplorer } from "./margin-explorer";
+export { KernelSvm } from "./kernel-svm";
+export { KernelWidth } from "./kernel-width";

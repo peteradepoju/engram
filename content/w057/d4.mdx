@@ -1,0 +1,284 @@
+export const meta = {
+  title: "The dual, support vectors and kernel SVMs",
+  intro: "The support vector machine becomes a kernel method through its dual: an equivalent optimisation problem over one weight per training example, in which the data appear only through inner products. Today you derive the dual, solve it with a simple coordinate ascent, read the support vectors and the optimality conditions off the solution, and then swap in a Gaussian kernel to classify data no straight line can separate. Cortes and Vapnik's 1995 paper, this week's deep read, put these pieces together into the soft-margin SVM that dominated machine learning for a decade.",
+  goals: [
+    "Derive the dual of the soft-margin SVM",
+    "Solve the dual by coordinate ascent and check the optimality conditions",
+    "Train a Gaussian-kernel SVM and count its support vectors",
+    "Choose C and the kernel width by cross-validation",
+  ],
+  plan: [
+    { label: "The dual problem", minutes: 25 },
+    { label: "Solving the dual", minutes: 30 },
+    { label: "Kernel SVMs", minutes: 25 },
+    { label: "Choosing C and γ", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "cortes-vapnik-1995",
+};
+
+<Predict question="A Gaussian-kernel SVM is trained on 200 examples of two interleaved crescents. Roughly what fraction of the training examples will end up as support vectors: under 5%, about 20 to 40%, or nearly all of them?" />
+
+<Step n={1} title="The dual problem" minutes={25} />
+
+<Derivation title="From the soft-margin primal to its dual">
+<div>
+
+Write the soft-margin SVM with slack variables: minimise $\frac12\lVert\mathbf w\rVert^2 + C\sum_i\xi_i$ subject to $y_i(\mathbf w^\top\mathbf x_i + b) \ge 1 - \xi_i$ and $\xi_i \ge 0$. Introduce multipliers $\alpha_i \ge 0$ and $\mu_i \ge 0$ for the two sets of constraints. The Lagrangian is
+
+$$
+\mathcal L = \tfrac12\lVert\mathbf w\rVert^2 + C\sum_i\xi_i - \sum_i\alpha_i\left[y_i(\mathbf w^\top\mathbf x_i + b) - 1 + \xi_i\right] - \sum_i\mu_i\xi_i.
+$$
+
+</div>
+<div>
+
+Setting its derivatives to zero: $\partial/\partial\mathbf w$ gives $\mathbf w = \sum_i\alpha_iy_i\mathbf x_i$; $\partial/\partial b$ gives $\sum_i\alpha_iy_i = 0$; $\partial/\partial\xi_i$ gives $\alpha_i = C - \mu_i$, so $0 \le \alpha_i \le C$.
+
+</div>
+<div>
+
+Substituting back eliminates $\mathbf w$, $b$ and $\boldsymbol\xi$, leaving the **dual**:
+
+$$
+\max_{\boldsymbol\alpha}\ \sum_i\alpha_i - \tfrac12\sum_{i,j}\alpha_i\alpha_jy_iy_j\,\mathbf x_i^\top\mathbf x_j \quad\text{subject to}\quad 0 \le \alpha_i \le C,\ \sum_i\alpha_iy_i = 0.
+$$
+
+The data enter only through $\mathbf x_i^\top\mathbf x_j$, so a kernel can replace them, and the classifier becomes $f(\mathbf x) = \sum_i\alpha_iy_ik(\mathbf x_i, \mathbf x) + b$.
+
+</div>
+</Derivation>
+
+The optimality (KKT) conditions sort the examples into three groups: $\alpha_i = 0$ for examples beyond the margin ($y_if \ge 1$), $0 \lt \alpha_i \lt C$ for those exactly on it ($y_if = 1$), and $\alpha_i = C$ for those inside it or misclassified ($y_if \le 1$). The last two groups are the support vectors.
+
+<Video id="_PwhiWxHK8o" title="16. Learning: support vector machines" by="Patrick Winston, MIT 6.034 Artificial Intelligence" note="Patrick Winston's lecture working through the support vector machine from the widest-street idea to the Lagrangian, the dual and kernels, with his characteristic clarity." />
+
+<Step n={2} title="Solving the dual" minutes={30} />
+
+A simple and effective solver updates one $\alpha_i$ at a time, holding the others fixed, and clips it to $[0, C]$. The equality constraint $\sum_i\alpha_iy_i = 0$ comes from the bias $b$; a common trick removes it by folding the bias into the kernel (adding a constant 1 to every kernel value), after which each coordinate update is a one-dimensional quadratic with a closed-form solution.
+
+<PyCell id="dual" title="Dual coordinate ascent" tests={String.raw`
+  import numpy as np
+  def test_box():
+      "every alpha lies in [0, C]"
+      assert np.all(alpha >= -1e-12) and np.all(alpha <= C + 1e-12)
+  def test_kkt():
+      "zero alphas have margin at least 1 (within 0.05) and alphas at C have margin at most 1"
+      m = Y * f_train
+      assert np.all(m[alpha < 1e-8] > 1 - 0.05) and np.all(m[alpha > C - 1e-8] < 1 + 0.05)
+  def test_acc():
+      "the linear SVM's test accuracy is above 0.8"
+      assert acc_lin > 0.8
+`} prompt="Complete svm_dual: for each i in turn, compute the gradient of the dual, g_i = y_i f(x_i) - 1 (with f maintained incrementally), take the Newton step alpha_i - g_i / K_ii, clip it to [0, C], and update f. Run it with a linear kernel plus 1 on overlapping data, then check the KKT conditions."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(574)
+
+  def svm_dual(K, Y, C, sweeps=100):
+      n = len(Y); alpha = np.zeros(n); f = np.zeros(n)          # f = K (alpha * Y)
+      for s in range(sweeps):
+          for i in range(n):
+              g = Y[i] * f[i] - 1
+              new = ...
+              d = new - alpha[i]
+              if d != 0:
+                  f += d * Y[i] * K[:, i]
+                  alpha[i] = new
+      return alpha, f
+
+  Y = np.repeat([-1.0, 1.0], 100); X = r.normal(size=(200, 2)) + np.outer(Y, [0.9, 0.5])
+  Yt = np.repeat([-1.0, 1.0], 1000); Xt = r.normal(size=(2000, 2)) + np.outer(Yt, [0.9, 0.5])
+  C = 1.0
+  K = X @ X.T + 1
+  alpha, f_train = svm_dual(K, Y, C)
+  w = (alpha * Y) @ X; b = np.sum(alpha * Y)                       # the bias folded into the kernel
+  acc_lin = np.mean(np.sign(Xt @ w + b) == Yt)
+  print(f"support vectors: {np.sum(alpha > 1e-8)} of 200 ({np.sum(alpha > C - 1e-8)} at the bound C)")
+  print(f"w = {np.round(w, 3)}, b = {b:.3f}; test accuracy {acc_lin:.3f}")
+`}
+hint="new = min(max(alpha[i] - g / K[i, i], 0.0), C)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(574)
+
+  def svm_dual(K, Y, C, sweeps=100):
+      n = len(Y); alpha = np.zeros(n); f = np.zeros(n)          # f = K (alpha * Y)
+      for s in range(sweeps):
+          for i in range(n):
+              g = Y[i] * f[i] - 1
+              new = min(max(alpha[i] - g / K[i, i], 0.0), C)
+              d = new - alpha[i]
+              if d != 0:
+                  f += d * Y[i] * K[:, i]
+                  alpha[i] = new
+      return alpha, f
+
+  Y = np.repeat([-1.0, 1.0], 100); X = r.normal(size=(200, 2)) + np.outer(Y, [0.9, 0.5])
+  Yt = np.repeat([-1.0, 1.0], 1000); Xt = r.normal(size=(2000, 2)) + np.outer(Yt, [0.9, 0.5])
+  C = 1.0
+  K = X @ X.T + 1
+  alpha, f_train = svm_dual(K, Y, C)
+  w = (alpha * Y) @ X; b = np.sum(alpha * Y)                       # the bias folded into the kernel
+  acc_lin = np.mean(np.sign(Xt @ w + b) == Yt)
+  print(f"support vectors: {np.sum(alpha > 1e-8)} of 200 ({np.sum(alpha > C - 1e-8)} at the bound C)")
+  print(f"w = {np.round(w, 3)}, b = {b:.3f}; test accuracy {acc_lin:.3f}")
+`} />
+
+On overlapping classes with $C = 1$, 90 of the 200 examples are support vectors, 85 of them at the bound $C$: they sit inside the margin or on the wrong side, as overlapping classes must. The recovered weights, (0.98, 0.73), give 84.5% test accuracy, the same as the primal solver yesterday on similar data. The KKT checks pass: every example with $\alpha_i = 0$ has a margin of at least 1, and every one at $C$ has a margin of at most 1. With overlap, support vectors are numerous; the sparsity of the SVM is greatest when classes are well separated.
+
+<Step n={3} title="Kernel SVMs" minutes={25} />
+
+<Figure caption="A Gaussian-kernel SVM on two interleaved crescents, solved by dual coordinate ascent. Support vectors are outlined. Change C and the kernel sharpness γ." credit="Interactive figure by Engram, after Cortes and Vapnik (1995).">
+  <KernelSvm />
+</Figure>
+
+Nothing in the solver depended on the kernel being linear. Replace $K$ by a Gaussian kernel matrix (plus 1 for the bias), and the same code learns a curved boundary.
+
+<PyCell id="rbfsvm" title="Two crescents" tests={String.raw`
+  import numpy as np
+  def test_moons():
+      "the Gaussian-kernel SVM is far more accurate than the linear one on the crescents"
+      assert acc_rbf > 0.95 and acc_rbf > acc_lin_moons + 0.08
+  def test_sv():
+      "support vectors are a minority of the training set"
+      assert n_sv < 100
+`} prompt="Make two interleaved crescents (200 training and 2,000 test examples). Train the dual SVM with a linear kernel and with a Gaussian kernel (gamma = 2, C = 10), each with 1 added for the bias, and compare test accuracy and the number of support vectors."
+code={String.raw`
+  def moons(n, g):
+      y = np.where(g.random(n) < 0.5, -1.0, 1.0); a = np.pi * g.random(n)
+      x = np.c_[np.where(y > 0, np.cos(a), 1 - np.cos(a)), np.where(y > 0, np.sin(a), 0.5 - np.sin(a))]
+      return x + 0.15 * g.normal(size=(n, 2)), y
+
+  def rbf(A, B, gamma):
+      d2 = (A ** 2).sum(1)[:, None] - 2 * A @ B.T + (B ** 2).sum(1)[None, :]
+      return np.exp(-gamma * np.maximum(d2, 0))
+
+  Xm, Ym = moons(200, r); Xmt, Ymt = moons(2000, r)
+  a_lin, _ = svm_dual(Xm @ Xm.T + 1, Ym, 10.0)
+  acc_lin_moons = np.mean(np.sign(((Xmt @ Xm.T + 1) @ (a_lin * Ym))) == Ymt)
+  a_rbf, _ = svm_dual(rbf(Xm, Xm, 2.0) + 1, Ym, 10.0)
+  acc_rbf = ...
+  n_sv = int(np.sum(a_rbf > 1e-8))
+  print(f"linear kernel: test accuracy {acc_lin_moons:.3f}; Gaussian kernel: {acc_rbf:.3f} with {n_sv} support vectors of 200")
+`}
+hint="acc_rbf = np.mean(np.sign((rbf(Xmt, Xm, 2.0) + 1) @ (a_rbf * Ym)) == Ymt)."
+solution={String.raw`
+  def moons(n, g):
+      y = np.where(g.random(n) < 0.5, -1.0, 1.0); a = np.pi * g.random(n)
+      x = np.c_[np.where(y > 0, np.cos(a), 1 - np.cos(a)), np.where(y > 0, np.sin(a), 0.5 - np.sin(a))]
+      return x + 0.15 * g.normal(size=(n, 2)), y
+
+  def rbf(A, B, gamma):
+      d2 = (A ** 2).sum(1)[:, None] - 2 * A @ B.T + (B ** 2).sum(1)[None, :]
+      return np.exp(-gamma * np.maximum(d2, 0))
+
+  Xm, Ym = moons(200, r); Xmt, Ymt = moons(2000, r)
+  a_lin, _ = svm_dual(Xm @ Xm.T + 1, Ym, 10.0)
+  acc_lin_moons = np.mean(np.sign(((Xmt @ Xm.T + 1) @ (a_lin * Ym))) == Ymt)
+  a_rbf, _ = svm_dual(rbf(Xm, Xm, 2.0) + 1, Ym, 10.0)
+  acc_rbf = np.mean(np.sign((rbf(Xmt, Xm, 2.0) + 1) @ (a_rbf * Ym)) == Ymt)
+  n_sv = int(np.sum(a_rbf > 1e-8))
+  print(f"linear kernel: test accuracy {acc_lin_moons:.3f}; Gaussian kernel: {acc_rbf:.3f} with {n_sv} support vectors of 200")
+`} />
+
+A linear boundary gets 85.7% of the crescents right, because it cuts straight through both tips. The Gaussian kernel follows their curves and reaches 98.4%, from only 16 support vectors, 8% of the training set, which answers the prediction. The classifier is a sum of 16 Gaussian bumps centred on the hardest examples; the other 184 could be deleted without changing a single prediction. Fewer support vectors also means faster prediction, since each new example is compared only with them.
+
+<Step n={4} title="Choosing C and γ" minutes={25} />
+
+<PyCell id="grid" title="A cross-validated grid" tests={String.raw`
+  import numpy as np
+  def test_grid():
+      "cv_acc has one entry per C and gamma"
+      assert cv_acc.shape == (len(Cs), len(gammas))
+  def acc_best():
+      "the best cross-validated pair reaches test accuracy above 0.95, and the extreme gamma values do worse in cross-validation"
+      assert acc_best > 0.95 and cv_acc[:, 0].max() < cv_acc.max() and cv_acc[:, -1].max() < cv_acc.max()
+`} prompt="For each C and gamma on the grids, compute three-fold cross-validated accuracy on the 200 training crescents. Refit the best pair on all training data and report test accuracy."
+code={String.raw`
+  Cs, gammas = [0.1, 1, 10, 100], [0.05, 0.5, 2, 10, 100]
+  folds = np.array_split(r.permutation(200), 3)
+  cv_acc = np.zeros((len(Cs), len(gammas)))
+  for i, C_ in enumerate(Cs):
+      for j, gm in enumerate(gammas):
+          correct = 0
+          for te in folds:
+              tr = np.setdiff1d(np.arange(200), te)
+              a, _ = svm_dual(rbf(Xm[tr], Xm[tr], gm) + 1, Ym[tr], C_, sweeps=40)
+              correct += ...
+          cv_acc[i, j] = correct / 200
+  i, j = np.unravel_index(np.argmax(cv_acc), cv_acc.shape)
+  a, _ = svm_dual(rbf(Xm, Xm, gammas[j]) + 1, Ym, Cs[i])
+  acc_best = np.mean(np.sign((rbf(Xmt, Xm, gammas[j]) + 1) @ (a * Ym)) == Ymt)
+  print(np.round(cv_acc, 3))
+  print(f"best: C = {Cs[i]}, gamma = {gammas[j]}; test accuracy {acc_best:.3f}")
+`}
+hint="correct += np.sum(np.sign((rbf(Xm[te], Xm[tr], gm) + 1) @ (a * Ym[tr])) == Ym[te])."
+solution={String.raw`
+  Cs, gammas = [0.1, 1, 10, 100], [0.05, 0.5, 2, 10, 100]
+  folds = np.array_split(r.permutation(200), 3)
+  cv_acc = np.zeros((len(Cs), len(gammas)))
+  for i, C_ in enumerate(Cs):
+      for j, gm in enumerate(gammas):
+          correct = 0
+          for te in folds:
+              tr = np.setdiff1d(np.arange(200), te)
+              a, _ = svm_dual(rbf(Xm[tr], Xm[tr], gm) + 1, Ym[tr], C_, sweeps=40)
+              correct += np.sum(np.sign((rbf(Xm[te], Xm[tr], gm) + 1) @ (a * Ym[tr])) == Ym[te])
+          cv_acc[i, j] = correct / 200
+  i, j = np.unravel_index(np.argmax(cv_acc), cv_acc.shape)
+  a, _ = svm_dual(rbf(Xm, Xm, gammas[j]) + 1, Ym, Cs[i])
+  acc_best = np.mean(np.sign((rbf(Xmt, Xm, gammas[j]) + 1) @ (a * Ym)) == Ymt)
+  print(np.round(cv_acc, 3))
+  print(f"best: C = {Cs[i]}, gamma = {gammas[j]}; test accuracy {acc_best:.3f}")
+`} />
+
+The grid shows the expected structure. With $\gamma = 0.05$ the kernel is too broad and the boundary nearly straight (82% to 89%); with $\gamma = 100$ and small $C$ the kernel is so narrow that the SVM fails badly (55%), and even with large $C$ it plateaus at 97%. A broad ridge of good settings runs through $\gamma$ between 0.5 and 10 for $C$ of 1 or more, where cross-validated accuracy reaches 99 to 100%. The chosen pair, $C = 1$ and $\gamma = 2$, gives 98.4% on the test set. As so often, many settings are nearly equally good, and the cross-validated optimum is one point on a plateau, not a sharp peak.
+
+<Bridge title="Support vectors in brains and machines"
+  neuro="SVMs with linear kernels were the default decoder of fMRI multivoxel pattern analysis for a decade, and remain common for decoding from neural populations. Their sparsity in examples, a boundary set by a few hard trials, is useful for spotting the trials a decoder finds ambiguous, which often turn out to be the trials an animal found hard too."
+  ai="Kernel SVMs were the state of the art in many benchmarks until about 2012, when deep networks overtook them on images and speech by learning the feature map instead of fixing it. For small tabular datasets, which is what many neuroscience decoding problems are, they remain competitive and far cheaper to tune.">
+
+A boundary defined by its hardest examples, in a feature space defined by a kernel.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In the SVM dual, the data appear only through...", options: ["Inner products", "Labels alone", "Their means", "Gradients"], answer: 0, explain: "Which is what allows kernels." },
+  { q: "The dual variables satisfy...", options: ["0 ≤ αᵢ ≤ C", "αᵢ ≥ C", "αᵢ = 1", "αᵢ < 0"], answer: 0, explain: "The box constraint." },
+  { q: "The weight vector is recovered as...", options: ["w = Σ αᵢyᵢxᵢ", "w = Σ xᵢ", "w = α", "w = C"], answer: 0, explain: "From ∂L/∂w = 0." },
+  { q: "An example with αᵢ = 0 lies...", options: ["Beyond the margin, correctly classified", "On the margin", "Inside the margin", "On the boundary"], answer: 0, explain: "KKT conditions." },
+  { q: "An example with αᵢ = C...", options: ["Lies inside the margin or is misclassified", "Is far from the boundary", "Has no influence", "Is removed"], answer: 0, explain: "KKT conditions." },
+  { q: "Folding the bias into the kernel by adding 1 removes...", options: ["The equality constraint Σαᵢyᵢ = 0", "The box constraint", "The kernel", "The labels"], answer: 0, explain: "Step 2." },
+  { q: "A very large γ in a Gaussian-kernel SVM tends to...", options: ["Overfit, with many support vectors", "Underfit", "Give a linear boundary", "Remove support vectors"], answer: 0, explain: "Each point becomes its own island." },
+  { q: "Cortes and Vapnik introduced...", options: ["The soft-margin SVM", "The perceptron", "The lasso", "Random forests"], answer: 0, explain: "The deep read." },
+]} />
+
+<Flashcards cards={[
+  { front: "SVM dual?", back: "$\\max \\sum_i\\alpha_i - \\frac12\\sum_{ij}\\alpha_i\\alpha_jy_iy_jk(\\mathbf x_i, \\mathbf x_j)$, $0 \\le \\alpha_i \\le C$, $\\sum_i\\alpha_iy_i = 0$." },
+  { front: "Kernel SVM classifier?", back: "$f(\\mathbf x) = \\sum_i\\alpha_iy_ik(\\mathbf x_i, \\mathbf x) + b$." },
+  { front: "KKT conditions for the SVM?", back: "α = 0: margin ≥ 1; 0 < α < C: margin = 1; α = C: margin ≤ 1." },
+  { front: "Dual coordinate ascent update?", back: "$\\alpha_i \\leftarrow \\text{clip}_{[0, C]}(\\alpha_i - (y_if_i - 1)/K_{ii})$." },
+  { front: "C and γ?", back: "C: cost of violations (larger fits harder); γ: kernel sharpness (larger is more local)." },
+]} />
+
+<Predict revisit question="What fraction of the 200 crescent examples became support vectors?" />
+
+<Key title="Before you go">
+<ul>
+<li>The SVM dual has one variable per example and uses the data only through a kernel.</li>
+<li>Coordinate ascent with clipping solves it simply; the KKT conditions identify the support vectors.</li>
+<li>A Gaussian kernel turns the same solver into a flexible nonlinear classifier.</li>
+<li>C and γ must be chosen together, by cross-validation.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Cortes and Vapnik (1995), <em>Support-vector networks</em>, this week's deep read.</li>
+<li>Hsieh, Chang, Lin, Keerthi and Sundararajan (2008), <em>A dual coordinate descent method for large-scale linear SVM</em>, Proceedings of ICML, the method behind today's solver.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="In a decoding analysis, the support vectors are the trials nearest the decision boundary. Describe how you would test whether those trials are behaviourally special (for example, slower responses or more errors), and what it would mean if they were." />

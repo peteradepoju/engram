@@ -1,0 +1,285 @@
+export const meta = {
+  title: "Kernel ridge regression",
+  intro: "Ridge regression is the first algorithm to kernelise. Its solution can be rewritten so that the data appear only through inner products, and then any kernel can be dropped in, giving a flexible nonlinear regression that is still solved by one linear system. Today you derive that dual form, fit a neuron's nonlinear tuning curve with it, see how the kernel's length-scale and the penalty control the fit, and meet the main cost of kernel methods, an n by n matrix, together with a clever way round it: random features.",
+  goals: [
+    "Derive the dual form of ridge regression and the representer theorem",
+    "Fit a nonlinear tuning curve by kernel ridge regression and choose its hyperparameters",
+    "Explain how the length-scale and penalty trade bias against variance",
+    "Approximate a Gaussian kernel with random Fourier features and measure the error",
+  ],
+  plan: [
+    { label: "Ridge in the dual", minutes: 25 },
+    { label: "A tuning curve by kernel ridge", minutes: 30 },
+    { label: "Choosing the length-scale", minutes: 25 },
+    { label: "Random features", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "rahimi-recht-2007",
+};
+
+<Predict question="Kernel ridge regression with a Gaussian kernel is fitted to 2,000 trials. Approximating the kernel with random features instead, roughly how many random features do you need before the predictions agree with the exact method to within 1% of their spread: about 10, about 3,000, or about 100,000?" />
+
+<Step n={1} title="Ridge in the dual" minutes={25} />
+
+<Derivation title="Ridge regression needs only inner products">
+<div>
+
+Ridge's solution $\mathbf w = (X^\top X + \lambda I)^{-1}X^\top\mathbf y$ satisfies $(X^\top X + \lambda I)\mathbf w = X^\top\mathbf y$, so $\mathbf w = X^\top(\mathbf y - X\mathbf w)/\lambda = X^\top\boldsymbol\alpha$ with $\boldsymbol\alpha = (\mathbf y - X\mathbf w)/\lambda$. The weights are a combination of the training inputs.
+
+</div>
+<div>
+
+Substituting $\mathbf w = X^\top\boldsymbol\alpha$ into $\boldsymbol\alpha = (\mathbf y - X\mathbf w)/\lambda$ gives $\lambda\boldsymbol\alpha = \mathbf y - XX^\top\boldsymbol\alpha$, so
+
+$$
+\boldsymbol\alpha = (K + \lambda I)^{-1}\mathbf y, \qquad K = XX^\top.
+$$
+
+</div>
+<div>
+
+The prediction at a new input is $\mathbf w^\top\mathbf x = \sum_i \alpha_i\,\mathbf x_i^\top\mathbf x$. Both the fit and the prediction use the data only through inner products, so replacing $\mathbf x_i^\top\mathbf x_j$ by $k(\mathbf x_i, \mathbf x_j)$ gives **kernel ridge regression**: $\hat f(\mathbf x) = \sum_i \alpha_i k(\mathbf x_i, \mathbf x)$.
+
+</div>
+</Derivation>
+
+That the best function is a combination of kernels centred on the training points is not a coincidence of ridge: the **representer theorem** says it holds for any loss plus a penalty on the function's norm in the kernel's feature space. The price is that fitting needs the $n \times n$ matrix $K$, and solving with it costs about $n^3$ operations. Rahimi and Recht, today's paper, showed how to sidestep that with random features, which you build in Step 4.
+
+<Video id="Qc5IyLW_hns" title="Support vector machines part 3: the radial (RBF) kernel" by="StatQuest with Josh Starmer" note="Josh Starmer on the Gaussian (radial basis function) kernel, how it weights nearby points heavily and distant ones hardly at all, and its infinite-dimensional feature space." />
+
+<Step n={2} title="A tuning curve by kernel ridge" minutes={30} />
+
+<Figure caption="Kernel ridge regression with a Gaussian kernel fitted to 30 noisy points. Change the kernel's length-scale and the penalty and watch the fit move between wiggling and flattening." credit="Interactive figure by Engram.">
+  <KernelRidgeFit />
+</Figure>
+
+A neuron's firing rate depends on stimulus orientation through an asymmetric, double-peaked tuning curve that no simple formula fits well. Fit it with kernel ridge regression on 80 noisy trials.
+
+<PyCell id="krr" title="Kernel ridge from scratch" tests={String.raw`
+  import numpy as np
+  def test_kernel():
+      "rbf(A, B, ell) returns exp(-|a - b|² / (2 ell²)) for every pair"
+      A = np.array([[0.0], [1.0]]); assert np.allclose(rbf(A, A, 1.0), [[1, np.exp(-0.5)], [np.exp(-0.5), 1]])
+  def test_fit():
+      "krr_fit solves (K + lam I) alpha = y and krr_predict uses the cross-kernel"
+      al = krr_fit(Xo, yo, 0.3, 0.1)
+      assert np.allclose((rbf(Xo, Xo, 0.3) + 0.1 * np.eye(len(yo))) @ al, yo)
+  def test_good():
+      "the fit with ell = 0.3 and lam = 0.5 has test MSE within 50% of the noise variance"
+      assert mse_test < 1.5 * 4.0
+`} prompt="Write rbf(A, B, ell) for rows of A and B, krr_fit(X, y, ell, lam) returning alpha, and krr_predict(X_train, alpha, X_new, ell). Fit the tuning curve and report the test MSE against the noise variance of 4."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(572)
+  tuning = lambda th: 10 + 12 * np.exp(-((th - 0.6) ** 2) / 0.08) + 6 * np.exp(-((th + 0.9) ** 2) / 0.2)
+  Xo = r.uniform(-np.pi / 2, np.pi / 2, (80, 1)); yo = tuning(Xo[:, 0]) + 2.0 * r.normal(size=80)
+  Xt = np.linspace(-np.pi / 2, np.pi / 2, 400)[:, None]; yt = tuning(Xt[:, 0]) + 2.0 * r.normal(size=400)
+
+  def rbf(A, B, ell):
+      d2 = (A ** 2).sum(1)[:, None] - 2 * A @ B.T + (B ** 2).sum(1)[None, :]
+      return ...
+
+  def krr_fit(X, y, ell, lam):
+      return ...
+
+  def krr_predict(X, alpha, Xn, ell):
+      return rbf(Xn, X, ell) @ alpha
+
+  ym = yo.mean()
+  alpha = krr_fit(Xo, yo - ym, 0.3, 0.5)
+  pred = krr_predict(Xo, alpha, Xt, 0.3) + ym
+  mse_test = np.mean((pred - yt) ** 2)
+  print(f"test MSE {mse_test:.2f} (noise variance 4.00)")
+  plt.plot(Xo[:, 0], yo, "k.", label="trials"); plt.plot(Xt[:, 0], tuning(Xt[:, 0]), "k--", label="true"); plt.plot(Xt[:, 0], pred, label="kernel ridge")
+  plt.xlabel("orientation (rad)"); plt.ylabel("rate (Hz)"); plt.legend(); plt.show()
+`}
+hint="return np.exp(-np.maximum(d2, 0) / (2 * ell ** 2)); return np.linalg.solve(rbf(X, X, ell) + lam * np.eye(len(y)), y)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(572)
+  tuning = lambda th: 10 + 12 * np.exp(-((th - 0.6) ** 2) / 0.08) + 6 * np.exp(-((th + 0.9) ** 2) / 0.2)
+  Xo = r.uniform(-np.pi / 2, np.pi / 2, (80, 1)); yo = tuning(Xo[:, 0]) + 2.0 * r.normal(size=80)
+  Xt = np.linspace(-np.pi / 2, np.pi / 2, 400)[:, None]; yt = tuning(Xt[:, 0]) + 2.0 * r.normal(size=400)
+
+  def rbf(A, B, ell):
+      d2 = (A ** 2).sum(1)[:, None] - 2 * A @ B.T + (B ** 2).sum(1)[None, :]
+      return np.exp(-np.maximum(d2, 0) / (2 * ell ** 2))
+
+  def krr_fit(X, y, ell, lam):
+      return np.linalg.solve(rbf(X, X, ell) + lam * np.eye(len(y)), y)
+
+  def krr_predict(X, alpha, Xn, ell):
+      return rbf(Xn, X, ell) @ alpha
+
+  ym = yo.mean()
+  alpha = krr_fit(Xo, yo - ym, 0.3, 0.5)
+  pred = krr_predict(Xo, alpha, Xt, 0.3) + ym
+  mse_test = np.mean((pred - yt) ** 2)
+  print(f"test MSE {mse_test:.2f} (noise variance 4.00)")
+  plt.plot(Xo[:, 0], yo, "k.", label="trials"); plt.plot(Xt[:, 0], tuning(Xt[:, 0]), "k--", label="true"); plt.plot(Xt[:, 0], pred, label="kernel ridge")
+  plt.xlabel("orientation (rad)"); plt.ylabel("rate (Hz)"); plt.legend(); plt.show()
+`} />
+
+With a length-scale of 0.3 radians and a modest penalty, kernel ridge follows both peaks of the tuning curve and reaches a test MSE of 4.53, close to the noise variance of 4: the remaining 0.53 is the error in the fitted curve itself. No functional form was assumed: the fit is a weighted sum of 80 Gaussian bumps, one per trial, with weights chosen so that their sum passes near the data without chasing the noise.
+
+<Step n={3} title="Choosing the length-scale" minutes={25} />
+
+The length-scale $\ell$ plays the role the polynomial degree played in Week 54: short scales make flexible, high-variance fits, long ones smooth, high-bias fits. Choose $\ell$ and $\lambda$ together by five-fold cross-validation.
+
+<PyCell id="cvkrr" title="Cross-validating two hyperparameters" tests={String.raw`
+  import numpy as np
+  def test_grid():
+      "cv has one entry per length-scale and penalty"
+      assert cv.shape == (len(ells), len(lams))
+  def test_choice():
+      "the chosen length-scale is neither the smallest nor the largest on the grid"
+      assert ells[0] < best_ell < ells[-1]
+  def test_test():
+      "the cross-validated choice has test MSE within 15% of the best on the grid"
+      assert mse_best <= 1.15 * oracle
+`} prompt="For every length-scale and penalty on the grids, compute the five-fold cross-validated MSE on the 80 training trials. Refit with the best pair and evaluate on the test set, and compare with the best test MSE on the grid."
+code={String.raw`
+  ells, lams = np.array([0.03, 0.08, 0.15, 0.3, 0.6, 1.2]), np.logspace(-2, 1.5, 8)
+  folds = np.array_split(r.permutation(80), 5)
+  cv = np.zeros((len(ells), len(lams)))
+  for i, ell in enumerate(ells):
+      for j, lam in enumerate(lams):
+          e = 0.0
+          for te in folds:
+              tr = np.setdiff1d(np.arange(80), te)
+              m = yo[tr].mean()
+              a = krr_fit(Xo[tr], yo[tr] - m, ell, lam)
+              e += ...
+          cv[i, j] = e / 80
+  i, j = np.unravel_index(np.argmin(cv), cv.shape)
+  best_ell, best_lam = ells[i], lams[j]
+  tmse = lambda ell, lam: np.mean((krr_predict(Xo, krr_fit(Xo, yo - ym, ell, lam), Xt, ell) + ym - yt) ** 2)
+  mse_best = tmse(best_ell, best_lam)
+  oracle = min(tmse(e_, l_) for e_ in ells for l_ in lams)
+  print(f"chosen length-scale {best_ell}, penalty {best_lam:.2f}; test MSE {mse_best:.2f} (best on grid {oracle:.2f})")
+  for i_, ell in enumerate(ells):
+      print(f"ell = {ell:4.2f}: best cross-validated MSE {cv[i_].min():.2f}")
+`}
+hint="e += np.sum((krr_predict(Xo[tr], a, Xo[te], ell) + m - yo[te]) ** 2)."
+solution={String.raw`
+  ells, lams = np.array([0.03, 0.08, 0.15, 0.3, 0.6, 1.2]), np.logspace(-2, 1.5, 8)
+  folds = np.array_split(r.permutation(80), 5)
+  cv = np.zeros((len(ells), len(lams)))
+  for i, ell in enumerate(ells):
+      for j, lam in enumerate(lams):
+          e = 0.0
+          for te in folds:
+              tr = np.setdiff1d(np.arange(80), te)
+              m = yo[tr].mean()
+              a = krr_fit(Xo[tr], yo[tr] - m, ell, lam)
+              e += np.sum((krr_predict(Xo[tr], a, Xo[te], ell) + m - yo[te]) ** 2)
+          cv[i, j] = e / 80
+  i, j = np.unravel_index(np.argmin(cv), cv.shape)
+  best_ell, best_lam = ells[i], lams[j]
+  tmse = lambda ell, lam: np.mean((krr_predict(Xo, krr_fit(Xo, yo - ym, ell, lam), Xt, ell) + ym - yt) ** 2)
+  mse_best = tmse(best_ell, best_lam)
+  oracle = min(tmse(e_, l_) for e_ in ells for l_ in lams)
+  print(f"chosen length-scale {best_ell}, penalty {best_lam:.2f}; test MSE {mse_best:.2f} (best on grid {oracle:.2f})")
+  for i_, ell in enumerate(ells):
+      print(f"ell = {ell:4.2f}: best cross-validated MSE {cv[i_].min():.2f}")
+`} />
+
+CVWith a length-scale of 0.3 radians and a modest penalty, kernel ridge follows both peaks of the tuning curve and reaches a test MSE of 4.53, close to the noise variance of 4: the remaining 0.53 is the error in the fitted curve itself. No functional form was assumed: the fit is a weighted sum of 80 Gaussian bumps, one per trial, with weights chosen so that their sum passes near the data without chasing the noise.
+
+<Step n={4} title="Random features" minutes={25} />
+
+For a Gaussian kernel, Rahimi and Recht showed that $k(\mathbf x, \mathbf x') \approx \mathbf z(\mathbf x)^\top\mathbf z(\mathbf x')$ with $\mathbf z(\mathbf x) = \sqrt{2/D}\,\cos(W\mathbf x + \mathbf b)$, where the $D$ rows of $W$ are drawn from a Gaussian with standard deviation $1/\ell$ and $\mathbf b$ is uniform on $[0, 2\pi)$. The approximation follows from writing the kernel as the Fourier transform of a probability distribution (Bochner's theorem) and sampling it. Ordinary ridge on $D$ random features then costs about $nD^2$ instead of $n^3$.
+
+<PyCell id="rff" title="How many random features?" tests={String.raw`
+  import numpy as np
+  def test_z():
+      "rff_map returns n x D features whose inner products approximate the kernel"
+      g = np.random.default_rng(0); Wf = g.normal(size=(5000, 1)) / 0.3; bf = g.uniform(0, 2 * np.pi, 5000)
+      Z = rff_map(Xo[:5], Wf, bf)
+      assert Z.shape == (5, 5000) and np.abs(Z @ Z.T - rbf(Xo[:5], Xo[:5], 0.3)).max() < 0.05
+  def test_converge():
+      "the gap to exact kernel ridge falls as D grows, and is below 1% of the spread of the predictions by D = 3000"
+      assert gap[-1] < gap[0] and gap[Ds.index(3000)] < 0.01
+`} prompt="Write rff_map(X, W, b). For 2,000 training trials of the tuning curve, fit exact kernel ridge and ridge on D random features for several D, and record the RMS difference between their predictions as a fraction of the standard deviation of the exact predictions."
+code={String.raw`
+  def rff_map(X, W, b):
+      return ...
+
+  X2 = r.uniform(-np.pi / 2, np.pi / 2, (2000, 1)); y2 = tuning(X2[:, 0]) + 2.0 * r.normal(size=2000); m2 = y2.mean()
+  exact = krr_predict(X2, krr_fit(X2, y2 - m2, 0.15, 1.0), Xt, 0.15)
+  Ds = [10, 30, 100, 300, 1000, 3000]
+  gap = []
+  for D in Ds:
+      W = r.normal(size=(D, 1)) / 0.15; b = r.uniform(0, 2 * np.pi, D)
+      Z, Zt = rff_map(X2, W, b), rff_map(Xt, W, b)
+      w = np.linalg.solve(Z.T @ Z + 1.0 * np.eye(D), Z.T @ (y2 - m2))
+      gap.append(np.sqrt(np.mean((Zt @ w - exact) ** 2)) / exact.std())
+      print(f"D = {D:5d}: RMS difference from exact kernel ridge {gap[-1]:.4f} of the prediction spread")
+`}
+hint="return np.sqrt(2 / W.shape[0]) * np.cos(X @ W.T + b)."
+solution={String.raw`
+  def rff_map(X, W, b):
+      return np.sqrt(2 / W.shape[0]) * np.cos(X @ W.T + b)
+
+  X2 = r.uniform(-np.pi / 2, np.pi / 2, (2000, 1)); y2 = tuning(X2[:, 0]) + 2.0 * r.normal(size=2000); m2 = y2.mean()
+  exact = krr_predict(X2, krr_fit(X2, y2 - m2, 0.15, 1.0), Xt, 0.15)
+  Ds = [10, 30, 100, 300, 1000, 3000]
+  gap = []
+  for D in Ds:
+      W = r.normal(size=(D, 1)) / 0.15; b = r.uniform(0, 2 * np.pi, D)
+      Z, Zt = rff_map(X2, W, b), rff_map(Xt, W, b)
+      w = np.linalg.solve(Z.T @ Z + 1.0 * np.eye(D), Z.T @ (y2 - m2))
+      gap.append(np.sqrt(np.mean((Zt @ w - exact) ** 2)) / exact.std())
+      print(f"D = {D:5d}: RMS difference from exact kernel ridge {gap[-1]:.4f} of the prediction spread")
+`} />
+
+Ten random features are far too few (an error of 26% of the predictions' spread), but 30 already bring it to 3%, and the error then shrinks slowly, roughly as $1/\sqrt D$, reaching 1.3% at 1,000 features and 0.7% at 3,000, which answers the prediction. With 2,000 trials the exact method needs a 2,000 by 2,000 system; the random-feature method with 1,000 features is about four times cheaper and agrees to about 1%, and the advantage grows quickly with $n$: for a million trials, exact kernel ridge is impossible on a laptop while random features remain easy.
+
+<Bridge title="Kernels in brains and machines"
+  neuro="Random features are a striking model of how a brain might implement a kernel method: a layer of neurons with random input weights and a fixed nonlinearity, followed by a learned linear readout. Cerebellar granule cells and the fly's Kenyon cells have been proposed to work this way, with learning confined to the output synapses."
+  ai="Random features also connect kernels to neural networks: a two-layer network whose first layer is frozen at random is exactly a random-feature model, and training only the last layer of a very wide network approximates kernel ridge regression. Week 67 meets this again when asking why huge networks generalise.">
+
+Every kernel machine is a linear model in some feature space; random features make that feature space explicit, and cheap.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "In the dual form of ridge, the weights are...", options: ["A combination of the training inputs", "Independent of the data", "The labels", "Zero"], answer: 0, explain: "w = Xᵀα." },
+  { q: "Kernel ridge's coefficients are...", options: ["(K + λI)⁻¹y", "(XᵀX)⁻¹Xᵀy", "Ky", "K⁻¹"], answer: 0, explain: "Step 1." },
+  { q: "The representer theorem says the best function is...", options: ["A combination of kernels centred on training points", "A polynomial", "A constant", "Unique only for linear kernels"], answer: 0, explain: "For loss plus norm penalty." },
+  { q: "Exact kernel methods scale badly because they need...", options: ["An n × n kernel matrix", "Many features", "Gradient descent", "Labels"], answer: 0, explain: "About n³ to solve." },
+  { q: "A very short length-scale gives fits that are...", options: ["Wiggly and high-variance", "Smooth and biased", "Linear", "Constant"], answer: 0, explain: "Step 3." },
+  { q: "Random Fourier features approximate...", options: ["A shift-invariant kernel", "Any loss", "The labels", "The penalty"], answer: 0, explain: "Via Bochner's theorem." },
+  { q: "Ridge on D random features costs about...", options: ["nD²", "n³", "n", "D"], answer: 0, explain: "Instead of n³." },
+  { q: "A random first layer with a trained readout is...", options: ["A random-feature model", "A kernel SVM", "PCA", "Naive Bayes"], answer: 0, explain: "The bridge." },
+]} />
+
+<Flashcards cards={[
+  { front: "Kernel ridge prediction?", back: "$\\hat f(\\mathbf x) = \\sum_i \\alpha_i k(\\mathbf x_i, \\mathbf x)$ with $\\boldsymbol\\alpha = (K + \\lambda I)^{-1}\\mathbf y$." },
+  { front: "Representer theorem?", back: "Minimisers of loss plus a norm penalty in a kernel's feature space are combinations of kernels at the training points." },
+  { front: "Random Fourier features?", back: "$\\mathbf z(\\mathbf x) = \\sqrt{2/D}\\cos(W\\mathbf x + \\mathbf b)$, W Gaussian with SD 1/ℓ, b uniform." },
+  { front: "Length-scale ℓ?", back: "Distance over which the Gaussian kernel decays; short is flexible, long is smooth." },
+  { front: "Cost of exact kernel methods?", back: "Memory n², time about n³ for n training examples." },
+]} />
+
+<Predict revisit question="How many random features did you need to match exact kernel ridge to within 1%?" />
+
+<Key title="Before you go">
+<ul>
+<li>Ridge can be written using only inner products; any kernel then gives a nonlinear regression.</li>
+<li>Kernel ridge fits flexible tuning curves with one linear solve.</li>
+<li>The length-scale and penalty are chosen together by cross-validation.</li>
+<li>Random features trade a little accuracy for a large saving in computation.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Rahimi and Recht (2007), <em>Random features for large-scale kernel machines</em>.</li>
+<li>Schölkopf and Smola, <em>Learning with Kernels</em> (2002), chapters 1 and 4.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Describe a neural recording where you would fit a tuning curve or a response surface with kernel ridge regression instead of a parametric model. What would the length-scale mean in that setting, and what would it tell you if cross-validation chose a very short one?" />

@@ -1,0 +1,286 @@
+export const meta = {
+  title: "Choosing kernels, and decoding with them",
+  intro: "A kernel is a statement about which examples should be treated as similar, and choosing it is where knowledge of the data enters a kernel method. Today you use kernels on three neuroscience problems: decoding a context-dependent rule from a population with and without nonlinear mixed selectivity, finding structure with kernel principal component analysis, and decoding stimuli that differ only in the timing of spikes, using a kernel built for spike trains.",
+  goals: [
+    "Explain how the kernel encodes similarity and how its width changes the Gram matrix",
+    "Show when a nonlinear kernel is needed to decode a context-dependent rule",
+    "Carry out kernel principal component analysis",
+    "Build a spike-train kernel and decode a timing code that spike counts miss",
+  ],
+  plan: [
+    { label: "A kernel is a similarity", minutes: 20 },
+    { label: "Mixed selectivity and nonlinear readout", minutes: 35 },
+    { label: "Kernel PCA", minutes: 25 },
+    { label: "A kernel for spike trains", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "scholkopf-1998",
+};
+
+<Predict question="Two stimuli make a neuron fire exactly the same number of spikes, but at different times within the trial. A decoder uses a kernel that compares smoothed spike trains. Will it decode the stimulus better than chance, about as well as a decoder using spike counts, or perfectly?" />
+
+<Step n={1} title="A kernel is a similarity" minutes={20} />
+
+A Gaussian kernel says that trials are similar when their population vectors are close, on the scale set by its width. Too narrow, and every trial is similar only to itself, so the method can memorise but not generalise; too wide, and all trials look alike. In between, the kernel matrix shows the structure of the data.
+
+<Figure caption="The Gaussian kernel matrix of 36 trials from three conditions of a four-neuron population, ordered by condition. Change γ and watch the block structure appear and disappear." credit="Interactive figure by Engram.">
+  <KernelWidth />
+</Figure>
+
+Beyond the width, the *kind* of kernel is a modelling choice. A linear kernel says that only linear combinations of features matter; a polynomial kernel adds interactions up to some order; a Gaussian kernel allows any smooth function. Kernels can be built for structured objects too, such as spike trains, sequences or graphs, by deciding what makes two of them alike.
+
+<Video id="8A7L0GsBiLQ" title="Support vector machines in Python from start to finish" by="StatQuest with Josh Starmer" note="Josh Starmer's practical walk-through of a kernel SVM: preparing data, choosing C and γ by cross-validation and evaluating with a confusion matrix, the workflow you apply to neural data today." />
+
+<Step n={2} title="Mixed selectivity and nonlinear readout" minutes={35} />
+
+In a context-dependent task, the correct response is the exclusive or of the stimulus (A or B) and the context (1 or 2). Population P has **pure selectivity**: each neuron's rate depends linearly on the stimulus, the context, or both added together. Population M also contains neurons with **nonlinear mixed selectivity**, responding to particular combinations. Rigotti and colleagues argued that prefrontal cortex looks like M (Week 46). Decode the response from each with a linear and a Gaussian-kernel SVM.
+
+<PyCell id="mixed" title="Who needs a nonlinear decoder?" tests={String.raw`
+  import numpy as np
+  def test_pure():
+      "from pure selectivity, a linear decoder is near chance and a kernel decoder succeeds"
+      assert acc["pure", "linear"] < 0.65 and acc["pure", "kernel"] > 0.85
+  def test_mixed():
+      "with mixed selectivity, a linear decoder succeeds"
+      assert acc["mixed", "linear"] > 0.85
+`} prompt="The populations and the SVM solver are provided. Fill in the kernels (linear: X X' + 1; Gaussian: exp(-gamma |x - x'|²) + 1, with gamma = 1 / number of neurons) and record test accuracy for each population and decoder."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(575)
+
+  def svm_dual(K, Y, C=1.0, sweeps=60):
+      n = len(Y); a = np.zeros(n); f = np.zeros(n)
+      for s in range(sweeps):
+          for i in range(n):
+              new = min(max(a[i] - (Y[i] * f[i] - 1) / K[i, i], 0.0), C)
+              if new != a[i]:
+                  f += (new - a[i]) * Y[i] * K[:, i]; a[i] = new
+      return a
+
+  w_stim, w_ctx = np.random.default_rng(5751).normal(size=(2, 20))   # fixed tuning of the neurons
+
+  def population(n, mixed, g):
+      stim, ctx = g.integers(0, 2, n) * 2 - 1, g.integers(0, 2, n) * 2 - 1
+      pure = np.c_[np.outer(stim, w_stim), np.outer(ctx, w_ctx), np.outer(stim, np.ones(5)) + np.outer(ctx, np.ones(5))]
+      feats = np.c_[pure, np.outer(stim * ctx, np.ones(15))] if mixed else pure
+      return feats + 1.0 * g.normal(size=feats.shape), (stim * ctx).astype(float)
+
+  acc = {}
+  for kind, mixed in [("pure", False), ("mixed", True)]:
+      X, Y = population(300, mixed, r); Xt, Yt = population(1000, mixed, r)
+      mu, sd = X.mean(0), X.std(0); X, Xt = (X - mu) / sd, (Xt - mu) / sd
+      gam = 1.0 / X.shape[1]
+      lin = lambda A, B: A @ B.T + 1
+      gau = lambda A, B: ...
+      for name, k in [("linear", lin), ("kernel", gau)]:
+          a = svm_dual(k(X, X), Y)
+          acc[kind, name] = ...
+          print(f"{kind:5s} selectivity, {name:6s} decoder: test accuracy {acc[kind, name]:.3f}")
+`}
+hint="gau = lambda A, B: np.exp(-gam * ((A ** 2).sum(1)[:, None] - 2 * A @ B.T + (B ** 2).sum(1)[None, :])) + 1; acc[kind, name] = np.mean(np.sign(k(Xt, X) @ (a * Y)) == Yt)."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  r = np.random.default_rng(575)
+
+  def svm_dual(K, Y, C=1.0, sweeps=60):
+      n = len(Y); a = np.zeros(n); f = np.zeros(n)
+      for s in range(sweeps):
+          for i in range(n):
+              new = min(max(a[i] - (Y[i] * f[i] - 1) / K[i, i], 0.0), C)
+              if new != a[i]:
+                  f += (new - a[i]) * Y[i] * K[:, i]; a[i] = new
+      return a
+
+  w_stim, w_ctx = np.random.default_rng(5751).normal(size=(2, 20))   # fixed tuning of the neurons
+
+  def population(n, mixed, g):
+      stim, ctx = g.integers(0, 2, n) * 2 - 1, g.integers(0, 2, n) * 2 - 1
+      pure = np.c_[np.outer(stim, w_stim), np.outer(ctx, w_ctx), np.outer(stim, np.ones(5)) + np.outer(ctx, np.ones(5))]
+      feats = np.c_[pure, np.outer(stim * ctx, np.ones(15))] if mixed else pure
+      return feats + 1.0 * g.normal(size=feats.shape), (stim * ctx).astype(float)
+
+  acc = {}
+  for kind, mixed in [("pure", False), ("mixed", True)]:
+      X, Y = population(300, mixed, r); Xt, Yt = population(1000, mixed, r)
+      mu, sd = X.mean(0), X.std(0); X, Xt = (X - mu) / sd, (Xt - mu) / sd
+      gam = 1.0 / X.shape[1]
+      lin = lambda A, B: A @ B.T + 1
+      gau = lambda A, B: np.exp(-gam * ((A ** 2).sum(1)[:, None] - 2 * A @ B.T + (B ** 2).sum(1)[None, :])) + 1
+      for name, k in [("linear", lin), ("kernel", gau)]:
+          a = svm_dual(k(X, X), Y)
+          acc[kind, name] = np.mean(np.sign(k(Xt, X) @ (a * Y)) == Yt)
+          print(f"{kind:5s} selectivity, {name:6s} decoder: test accuracy {acc[kind, name]:.3f}")
+`} />
+
+From the pure-selectivity population, the linear decoder is exactly at chance (49.9%): every neuron's response is a sum of a stimulus effect and a context effect, so any linear combination of them is too, and the exclusive or cannot be written that way. The Gaussian-kernel decoder reads the same neurons perfectly (100%), by carving the four stimulus-context clusters apart nonlinearly. Add fifteen neurons with nonlinear mixed selectivity and the linear decoder is perfect too. The two populations carry the same information, but only one makes it linearly available; that is the sense in which mixed selectivity simplifies the job of downstream neurons, which Rigotti and colleagues argued is why prefrontal cortex has so much of it.
+
+<Step n={3} title="Kernel PCA" minutes={25} />
+
+Principal component analysis needs only the matrix of inner products between centred examples, so it too can be kernelised. Schölkopf, Smola and Müller, today's paper, showed that the principal components in a kernel's feature space come from the eigenvectors of the **centred** kernel matrix $\tilde K = HKH$, with $H = I - \frac1n\mathbf 1\mathbf 1^\top$: the projection of example $i$ onto component $k$ is $\sqrt{\lambda_k}\,v_{ik}$. With a Gaussian kernel, kernel PCA can unfold structure that ordinary PCA, which only finds linear directions, cannot.
+
+<PyCell id="kpca" title="Kernel PCA on two rings" tests={String.raw`
+  import numpy as np
+  def test_center():
+      "the centred kernel matrix has rows that sum to zero"
+      assert np.allclose(Kc.sum(1), 0, atol=1e-8)
+  def test_separate():
+      "one of the three leading kernel principal components separates the rings, while neither ordinary component does"
+      assert sep_kpca > 0.95 and sep_pca < 0.7
+`} prompt="Centre the Gaussian kernel matrix of two noisy concentric rings and compute the projections onto its three leading eigenvectors. Measure how well a threshold on each component separates the rings (the best accuracy over thresholds), and compare with the two ordinary principal components."
+code={String.raw`
+  n = 300
+  lab = np.repeat([0, 1], n // 2)
+  ang = r.uniform(0, 2 * np.pi, n); rad = np.where(lab == 0, 1.0, 2.5) + 0.2 * r.normal(size=n)
+  Xr = np.c_[rad * np.cos(ang), rad * np.sin(ang)]
+  d2 = ((Xr[:, None, :] - Xr[None, :, :]) ** 2).sum(-1)
+  K = np.exp(-0.1 * d2)
+  H = np.eye(n) - np.ones((n, n)) / n
+  Kc = ...
+  evals, evecs = np.linalg.eigh(Kc)
+  Z_kpca = np.sqrt(evals[-3:][::-1]) * evecs[:, -3:][:, ::-1]      # the three leading components
+  Xc = Xr - Xr.mean(0); Z_pca = Xc @ np.linalg.svd(Xc, full_matrices=False)[2].T
+
+  def best_threshold_acc(z, y):
+      return max(max(np.mean((z > t) == y), np.mean((z <= t) == y)) for t in np.unique(z))
+
+  kpca_seps = [best_threshold_acc(Z_kpca[:, k], lab) for k in range(3)]
+  sep_kpca, sep_pca = max(kpca_seps), max(best_threshold_acc(Z_pca[:, k], lab) for k in range(2))
+  print("kernel PCA, separation by components 1 to 3:", [round(float(v), 3) for v in kpca_seps])
+  print(f"best kernel component {sep_kpca:.3f}; best ordinary component {sep_pca:.3f}")
+`}
+hint="Kc = H @ K @ H."
+solution={String.raw`
+  n = 300
+  lab = np.repeat([0, 1], n // 2)
+  ang = r.uniform(0, 2 * np.pi, n); rad = np.where(lab == 0, 1.0, 2.5) + 0.2 * r.normal(size=n)
+  Xr = np.c_[rad * np.cos(ang), rad * np.sin(ang)]
+  d2 = ((Xr[:, None, :] - Xr[None, :, :]) ** 2).sum(-1)
+  K = np.exp(-0.1 * d2)
+  H = np.eye(n) - np.ones((n, n)) / n
+  Kc = H @ K @ H
+  evals, evecs = np.linalg.eigh(Kc)
+  Z_kpca = np.sqrt(evals[-3:][::-1]) * evecs[:, -3:][:, ::-1]      # the three leading components
+  Xc = Xr - Xr.mean(0); Z_pca = Xc @ np.linalg.svd(Xc, full_matrices=False)[2].T
+
+  def best_threshold_acc(z, y):
+      return max(max(np.mean((z > t) == y), np.mean((z <= t) == y)) for t in np.unique(z))
+
+  kpca_seps = [best_threshold_acc(Z_kpca[:, k], lab) for k in range(3)]
+  sep_kpca, sep_pca = max(kpca_seps), max(best_threshold_acc(Z_pca[:, k], lab) for k in range(2))
+  print("kernel PCA, separation by components 1 to 3:", [round(float(v), 3) for v in kpca_seps])
+  print(f"best kernel component {sep_kpca:.3f}; best ordinary component {sep_pca:.3f}")
+`} />
+
+Ordinary PCA finds only linear directions, and no straight projection separates two concentric rings (68% at best). Kernel PCA's first two components are not radial either: with the Gaussian kernel they describe position *around* the rings, the largest structure in the kernel matrix. The third component is radial and separates the rings perfectly (100%). So kernel PCA can expose nonlinear structure, but the order of its components depends on the kernel width as well as the data, and which component matters has to be checked rather than assumed, the same lesson as for linear PCA in Week 25.
+
+<Step n={4} title="A kernel for spike trains" minutes={25} />
+
+How similar are two spike trains? Smooth each with a Gaussian of width $\tau$ and take the inner product of the smoothed traces. Because it is an inner product of features (the smoothed traces), it is a valid kernel, closely related to the van Rossum distance of Week 34. Two stimuli here evoke the same number of spikes, but stimulus A tends to fire early in the trial and B late.
+
+<PyCell id="spikes" title="Decoding a timing code" tests={String.raw`
+  import numpy as np
+  def test_kernel():
+      "the spike-train kernel matrix is positive semi-definite"
+      assert np.linalg.eigvalsh(Ktr).min() > -1e-6
+  def test_decode():
+      "spike counts decode at chance; the spike-train kernel decodes well"
+      assert acc_count < 0.62 and acc_spk > 0.85
+`} prompt="Write smooth(trains, tau), mapping each trial's spike times onto a fine time grid as a sum of Gaussians. The kernel is the inner product of smoothed traces (plus 1). Decode stimulus with the SVM using this kernel, and compare with a linear SVM on spike counts."
+code={String.raw`
+  T, grid = 1.0, np.linspace(0, 1.0, 200)
+
+  def trial(stim, g):
+      n_sp = g.poisson(8)
+      centre = 0.3 if stim > 0 else 0.7
+      return np.clip(centre + 0.12 * g.normal(size=n_sp), 0, T)
+
+  def smooth(trains, tau=0.05):
+      return np.array([...])
+
+  ys = np.where(r.random(240) < 0.5, -1.0, 1.0); yt_ = np.where(r.random(1000) < 0.5, -1.0, 1.0)
+  tr_trains = [trial(s, r) for s in ys]; te_trains = [trial(s, r) for s in yt_]
+  S, St = smooth(tr_trains), smooth(te_trains)
+  Ktr = S @ S.T / len(grid) + 1
+  a = svm_dual(Ktr, ys)
+  acc_spk = np.mean(np.sign((St @ S.T / len(grid) + 1) @ (a * ys)) == yt_)
+  cnt, cnt_t = np.array([[len(t)] for t in tr_trains], float), np.array([[len(t)] for t in te_trains], float)
+  m_, s_ = cnt.mean(), cnt.std()
+  a_c = svm_dual(((cnt - m_) / s_) @ ((cnt - m_) / s_).T + 1, ys)
+  acc_count = np.mean(np.sign((((cnt_t - m_) / s_) @ ((cnt - m_) / s_).T + 1) @ (a_c * ys)) == yt_)
+  print(f"spike-count decoder {acc_count:.3f}; spike-train kernel decoder {acc_spk:.3f}")
+`}
+hint="return np.array([np.exp(-((grid[:, None] - np.asarray(t)[None, :]) ** 2) / (2 * tau ** 2)).sum(1) for t in trains])."
+solution={String.raw`
+  T, grid = 1.0, np.linspace(0, 1.0, 200)
+
+  def trial(stim, g):
+      n_sp = g.poisson(8)
+      centre = 0.3 if stim > 0 else 0.7
+      return np.clip(centre + 0.12 * g.normal(size=n_sp), 0, T)
+
+  def smooth(trains, tau=0.05):
+      return np.array([np.exp(-((grid[:, None] - np.asarray(t)[None, :]) ** 2) / (2 * tau ** 2)).sum(1) for t in trains])
+
+  ys = np.where(r.random(240) < 0.5, -1.0, 1.0); yt_ = np.where(r.random(1000) < 0.5, -1.0, 1.0)
+  tr_trains = [trial(s, r) for s in ys]; te_trains = [trial(s, r) for s in yt_]
+  S, St = smooth(tr_trains), smooth(te_trains)
+  Ktr = S @ S.T / len(grid) + 1
+  a = svm_dual(Ktr, ys)
+  acc_spk = np.mean(np.sign((St @ S.T / len(grid) + 1) @ (a * ys)) == yt_)
+  cnt, cnt_t = np.array([[len(t)] for t in tr_trains], float), np.array([[len(t)] for t in te_trains], float)
+  m_, s_ = cnt.mean(), cnt.std()
+  a_c = svm_dual(((cnt - m_) / s_) @ ((cnt - m_) / s_).T + 1, ys)
+  acc_count = np.mean(np.sign((((cnt_t - m_) / s_) @ ((cnt - m_) / s_).T + 1) @ (a_c * ys)) == yt_)
+  print(f"spike-count decoder {acc_count:.3f}; spike-train kernel decoder {acc_spk:.3f}")
+`} />
+
+Both stimuli evoke about eight spikes, so the spike-count decoder is at chance (49.4%). The spike-train kernel decoder, which compares the smoothed time courses, is right on 99.9% of trials, which answers the prediction. The kernel width, 50 ms here, sets which timing differences count: much narrower and only near-coincident spikes would look alike; much wider and the kernel would approach a count. Comparing decoders across widths is a principled way to ask at what timescale a neuron's spikes carry information, the question raised by Mainen and Sejnowski's reliability experiments in Week 31.
+
+<Bridge title="Choosing kernels in brains and machines"
+  neuro="Choosing a kernel for neural data is choosing a hypothesis about the code: a linear kernel on counts assumes a rate code read linearly, a spike-train kernel with a short width assumes that timing matters, and a Gaussian kernel on population vectors allows nonlinear readout. Comparing decoders with different kernels is therefore a way of asking which aspects of activity carry information."
+  ai="Kernel design was the main way of building knowledge into machine learning before deep networks, with string kernels for text, graph kernels for molecules and spatial pyramid kernels for images. Deep learning replaced hand-designed kernels with learned features, but the question of which similarities a model should respect is the same.">
+
+The kernel is the hypothesis: it says what makes two trials alike.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "A Gaussian kernel with very large γ makes the Gram matrix close to...", options: ["The identity", "All ones", "Zero", "The data"], answer: 0, explain: "Every trial is similar only to itself." },
+  { q: "An XOR of stimulus and context can be decoded linearly from...", options: ["Neurons with nonlinear mixed selectivity", "Pure selectivity alone", "Any population", "No population"], answer: 0, explain: "Step 2." },
+  { q: "From pure selectivity, the XOR needs...", options: ["A nonlinear decoder", "A linear decoder", "More trials only", "Fewer neurons"], answer: 0, explain: "Step 2." },
+  { q: "Kernel PCA diagonalises...", options: ["The centred kernel matrix", "The covariance of the inputs", "The labels", "The identity"], answer: 0, explain: "HKH." },
+  { q: "Centring a kernel matrix uses...", options: ["H = I − 11ᵀ/n on both sides", "Dividing by n", "Subtracting the diagonal", "Taking logs"], answer: 0, explain: "Step 3." },
+  { q: "A kernel built from inner products of smoothed spike trains is...", options: ["A valid kernel", "Never positive semi-definite", "The same as a count kernel", "Undefined"], answer: 0, explain: "It is an inner product of features." },
+  { q: "If two stimuli give equal spike counts but different timing, a count decoder is...", options: ["At chance", "Perfect", "Better than a timing decoder", "Undefined"], answer: 0, explain: "Step 4." },
+  { q: "Choosing a kernel for neural data amounts to...", options: ["A hypothesis about what carries information", "A purely technical choice", "Choosing a loss", "Choosing C"], answer: 0, explain: "The bridge." },
+]} />
+
+<Flashcards cards={[
+  { front: "Kernel width γ?", back: "Large: trials similar only to themselves (memorise); small: all alike (underfit)." },
+  { front: "Nonlinear mixed selectivity?", back: "Responses to combinations of task variables that make nonlinear rules linearly decodable." },
+  { front: "Kernel PCA?", back: "Eigenvectors of $HKH$; projections $\\sqrt{\\lambda_k}v_{ik}$." },
+  { front: "Spike-train kernel?", back: "Inner product of Gaussian-smoothed spike trains; width sets the timing precision considered." },
+  { front: "Kernel as hypothesis?", back: "It defines which inputs count as similar, and so what the readout can exploit." },
+]} />
+
+<Predict revisit question="Could a spike-train kernel decode stimuli that differ only in spike timing?" />
+
+<Key title="Before you go">
+<ul>
+<li>The kernel and its width decide what counts as similar.</li>
+<li>Pure selectivity needs a nonlinear decoder for context-dependent rules; mixed selectivity makes them linear.</li>
+<li>Kernel PCA finds nonlinear structure through the centred kernel matrix.</li>
+<li>Kernels for structured data, such as spike trains, let decoders test specific coding hypotheses.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Schölkopf, Smola and Müller (1998), <em>Nonlinear component analysis as a kernel eigenvalue problem</em>.</li>
+<li>van Rossum (2001), <em>A novel spike distance</em>, Neural Computation 13(4), 751 to 763, the distance behind today's spike-train kernel.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Propose a kernel for a kind of neural or behavioural data you care about (spike trains, calcium traces, movement trajectories, vocalisations). Say what it treats as similar, how you would check that it is a valid kernel, and what coding hypothesis a decoder built on it would test." />

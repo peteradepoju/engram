@@ -1,0 +1,246 @@
+export const meta = {
+  title: "Maximum-margin classifiers",
+  intro: "When two classes can be separated by a line, infinitely many lines will do. Which should you choose? The support vector machine's answer is the line that stays as far as possible from the closest examples of either class: the maximum-margin boundary. Today you define the margin, find the maximum-margin classifier by solving its optimisation problem, relax it to allow some errors with the hinge loss, and discover a surprising link: logistic regression trained for long enough on separable data heads towards the same boundary.",
+  goals: [
+    "Define the geometric margin of a linear classifier",
+    "Solve the hard-margin SVM as a constrained optimisation and identify its support vectors",
+    "Fit a soft-margin SVM with the hinge loss by subgradient descent",
+    "Show that gradient descent on the logistic loss converges in direction to the maximum-margin solution",
+  ],
+  plan: [
+    { label: "The margin", minutes: 20 },
+    { label: "The hard-margin SVM", minutes: 25 },
+    { label: "Soft margins and the hinge loss", minutes: 30 },
+    { label: "Logistic regression's hidden margin", minutes: 25 },
+    { label: "Quiz, flashcards, journal", minutes: 15 },
+  ],
+  paper: "boser-1992",
+};
+
+<Predict question="Unpenalised logistic regression is trained by gradient descent on perfectly separable data. Its weights grow without limit (Week 56). Does the *direction* of the weight vector settle down, and if so, towards which boundary?" />
+
+<Step n={1} title="The margin" minutes={20} />
+
+For a linear classifier with score $f(\mathbf x) = \mathbf w^\top\mathbf x + b$ and labels $y_i \in \{-1, +1\}$, the signed distance of example $i$ from the boundary is $y_if(\mathbf x_i)/\lVert\mathbf w\rVert$: positive when it is on the correct side. The **margin** of the classifier is the smallest such distance over the training set. A large margin means no example is close to the boundary, so small perturbations of the inputs, from noise or from slightly different trials, do not change any classification. That robustness is the intuition behind the support vector machine, and learning theory (Week 67) turns it into bounds on test error that do not depend on the number of features.
+
+<Figure caption="Two separable classes and a boundary whose orientation you choose. For each orientation the best boundary sits midway between the closest points; the margin is half the gap. Find the orientation with the widest margin." credit="Interactive figure by Engram.">
+  <MarginExplorer />
+</Figure>
+
+<Video id="efR1C6CvhmE" title="Support vector machines, clearly explained" by="StatQuest with Josh Starmer" note="Josh Starmer's main video on support vector classifiers: maximal margins, soft margins that tolerate misclassification, and why only the support vectors matter." />
+
+<Step n={2} title="The hard-margin SVM" minutes={25} />
+
+Scaling $\mathbf w$ and $b$ together does not move the boundary, so fix the scale by requiring $y_if(\mathbf x_i) \ge 1$ for every example, with equality for the closest ones. The margin is then $1/\lVert\mathbf w\rVert$, and maximising it is
+
+$$
+\min_{\mathbf w, b}\ \tfrac12\lVert\mathbf w\rVert^2 \quad\text{subject to}\quad y_i(\mathbf w^\top\mathbf x_i + b) \ge 1 \text{ for all } i,
+$$
+
+a convex quadratic programme with a unique solution. The examples whose constraints are active, $y_if(\mathbf x_i) = 1$, are the **support vectors**; every other example could be moved or removed without changing the answer. Boser, Guyon and Vapnik, today's paper, combined this optimal-margin idea with kernels in 1992.
+
+<PyCell id="hard" title="Solving for the widest margin" tests={String.raw`
+  import numpy as np
+  def test_feasible():
+      "every training example satisfies y (w · x + b) >= 1 at the solution"
+      assert np.all(Y * (Xs @ w_svm + b_svm) >= 1 - 1e-4)
+  def test_sv():
+      "there are between 2 and 6 support vectors, and they have y f(x) = 1"
+      assert 2 <= len(sv) <= 6 and np.allclose(Y[sv] * (Xs[sv] @ w_svm + b_svm), 1, atol=1e-3)
+  def test_margin():
+      "the margin is 1 / |w|"
+      assert abs(margin - 1 / np.linalg.norm(w_svm)) < 1e-12
+`} prompt="Solve the hard-margin SVM with scipy's SLSQP: the variable is v = (w1, w2, b), the objective 0.5 (w1² + w2²), and one inequality constraint y_i (w · x_i + b) - 1 >= 0 per example. Report the margin and the support vectors."
+code={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  r = np.random.default_rng(573)
+  Y = np.repeat([-1.0, 1.0], 20)
+  Xs = 0.5 * r.normal(size=(40, 2)) + np.outer(Y, [1.1, 0.6])
+
+  cons = {"type": "ineq", "fun": lambda v: ...}
+  res = minimize(lambda v: 0.5 * (v[0] ** 2 + v[1] ** 2), x0=np.array([1.0, 1.0, 0.0]), constraints=[cons], method="SLSQP")
+  w_svm, b_svm = res.x[:2], res.x[2]
+  margin = 1 / np.linalg.norm(w_svm)
+  sv = np.flatnonzero(np.abs(Y * (Xs @ w_svm + b_svm) - 1) < 1e-3)
+  print(f"w = {np.round(w_svm, 3)}, b = {b_svm:.3f}; margin {margin:.3f}; support vectors {[int(i) for i in sv]}")
+  xx = np.linspace(-2.5, 2.5, 2)
+  for c, ls in [(0, "-"), (1, "--"), (-1, "--")]:
+      plt.plot(xx, (c - b_svm - w_svm[0] * xx) / w_svm[1], "k" + ls)
+  plt.scatter(Xs[:, 0], Xs[:, 1], c=Y, cmap="coolwarm"); plt.scatter(Xs[sv, 0], Xs[sv, 1], s=120, facecolors="none", edgecolors="k"); plt.show()
+`}
+hint="cons = {'type': 'ineq', 'fun': lambda v: Y * (Xs @ v[:2] + v[2]) - 1}."
+solution={String.raw`
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.optimize import minimize
+  r = np.random.default_rng(573)
+  Y = np.repeat([-1.0, 1.0], 20)
+  Xs = 0.5 * r.normal(size=(40, 2)) + np.outer(Y, [1.1, 0.6])
+
+  cons = {"type": "ineq", "fun": lambda v: Y * (Xs @ v[:2] + v[2]) - 1}
+  res = minimize(lambda v: 0.5 * (v[0] ** 2 + v[1] ** 2), x0=np.array([1.0, 1.0, 0.0]), constraints=[cons], method="SLSQP")
+  w_svm, b_svm = res.x[:2], res.x[2]
+  margin = 1 / np.linalg.norm(w_svm)
+  sv = np.flatnonzero(np.abs(Y * (Xs @ w_svm + b_svm) - 1) < 1e-3)
+  print(f"w = {np.round(w_svm, 3)}, b = {b_svm:.3f}; margin {margin:.3f}; support vectors {[int(i) for i in sv]}")
+  xx = np.linspace(-2.5, 2.5, 2)
+  for c, ls in [(0, "-"), (1, "--"), (-1, "--")]:
+      plt.plot(xx, (c - b_svm - w_svm[0] * xx) / w_svm[1], "k" + ls)
+  plt.scatter(Xs[:, 0], Xs[:, 1], c=Y, cmap="coolwarm"); plt.scatter(Xs[sv, 0], Xs[sv, 1], s=120, facecolors="none", edgecolors="k"); plt.show()
+`} />
+
+The solver returns $\mathbf w = (1.71, 1.29)$ and $b = 0.36$, a margin of 0.467, and only two support vectors, examples 13 and 36, one from each class, sitting exactly on the dashed lines. The other 38 examples have no say in where the boundary goes. This sparsity is the SVM's signature: the solution is determined by the hardest cases near the boundary, not by the bulk of each class, which makes it robust to how the easy examples are distributed but sensitive to mislabelled or outlying examples near the boundary.
+
+<Step n={3} title="Soft margins and the hinge loss" minutes={30} />
+
+Real classes overlap, and a hard margin may not exist. The **soft-margin SVM** lets examples violate the margin at a price:
+
+$$
+\min_{\mathbf w, b}\ \tfrac12\lVert\mathbf w\rVert^2 + C\sum_i \max\!\left(0,\ 1 - y_if(\mathbf x_i)\right).
+$$
+
+The second term is the **hinge loss**: zero for examples beyond the margin on the right side, rising linearly for those inside it or misclassified. It is ridge-penalised empirical risk minimisation with a particular loss, just like penalised logistic regression, whose loss $\log(1 + e^{-yf})$ is a smooth version of the hinge. A simple solver takes subgradient steps on randomly chosen examples (the Pegasos algorithm).
+
+<PyCell id="hinge" title="A soft-margin SVM by subgradient descent" tests={String.raw`
+  import numpy as np
+  def test_hinge():
+      "hinge(m) is max(0, 1 - m)"
+      assert np.allclose(hinge(np.array([-1.0, 0.5, 1.0, 2.0])), [2.0, 0.5, 0.0, 0.0])
+  def test_fit():
+      "the soft-margin SVM reaches test accuracy above 0.8 and most examples lie outside the margin"
+      assert acc_svm > 0.8 and np.mean(Yo * (Xo @ w_soft + b_soft) >= 1) > 0.5
+`} prompt="Write hinge(m). Then run Pegasos on overlapping classes: at step t with learning rate 1 / (lam t), pick a random example; if its margin y f(x) is below 1, step w towards y x, and always shrink w by (1 - lr lam). Update b without shrinkage. Report test accuracy."
+code={String.raw`
+  def hinge(m):
+      return ...
+
+  Yo = np.repeat([-1.0, 1.0], 200); Xo = 1.0 * r.normal(size=(400, 2)) + np.outer(Yo, [0.8, 0.5])
+  Yot = np.repeat([-1.0, 1.0], 2000); Xot = 1.0 * r.normal(size=(4000, 2)) + np.outer(Yot, [0.8, 0.5])
+  lam = 0.01
+  w_soft, b_soft = np.zeros(2), 0.0
+  for t in range(1, 20001):
+      i = r.integers(400); lr = 1 / (lam * t)
+      m = Yo[i] * (Xo[i] @ w_soft + b_soft)
+      w_soft *= (1 - lr * lam)
+      if m < 1:
+          w_soft += ...
+          b_soft += 0.1 * lr * lam * Yo[i]
+  acc_svm = np.mean(np.sign(Xot @ w_soft + b_soft) == Yot)
+  print(f"w = {np.round(w_soft, 3)}, b = {b_soft:.3f}; test accuracy {acc_svm:.3f}")
+  print(f"mean hinge loss on training data {hinge(Yo * (Xo @ w_soft + b_soft)).mean():.3f}")
+  mm = np.linspace(-3, 3, 200)
+  plt.plot(mm, hinge(mm), label="hinge"); plt.plot(mm, np.log1p(np.exp(-mm)) / np.log(2), label="logistic (scaled)"); plt.plot(mm, (mm < 0).astype(float), label="0-1")
+  plt.xlabel("margin y f(x)"); plt.legend(); plt.show()
+`}
+hint="return np.maximum(0, 1 - m); w_soft += lr * Yo[i] * Xo[i]."
+solution={String.raw`
+  def hinge(m):
+      return np.maximum(0, 1 - m)
+
+  Yo = np.repeat([-1.0, 1.0], 200); Xo = 1.0 * r.normal(size=(400, 2)) + np.outer(Yo, [0.8, 0.5])
+  Yot = np.repeat([-1.0, 1.0], 2000); Xot = 1.0 * r.normal(size=(4000, 2)) + np.outer(Yot, [0.8, 0.5])
+  lam = 0.01
+  w_soft, b_soft = np.zeros(2), 0.0
+  for t in range(1, 20001):
+      i = r.integers(400); lr = 1 / (lam * t)
+      m = Yo[i] * (Xo[i] @ w_soft + b_soft)
+      w_soft *= (1 - lr * lam)
+      if m < 1:
+          w_soft += lr * Yo[i] * Xo[i]
+          b_soft += 0.1 * lr * lam * Yo[i]
+  acc_svm = np.mean(np.sign(Xot @ w_soft + b_soft) == Yot)
+  print(f"w = {np.round(w_soft, 3)}, b = {b_soft:.3f}; test accuracy {acc_svm:.3f}")
+  print(f"mean hinge loss on training data {hinge(Yo * (Xo @ w_soft + b_soft)).mean():.3f}")
+  mm = np.linspace(-3, 3, 200)
+  plt.plot(mm, hinge(mm), label="hinge"); plt.plot(mm, np.log1p(np.exp(-mm)) / np.log(2), label="logistic (scaled)"); plt.plot(mm, (mm < 0).astype(float), label="0-1")
+  plt.xlabel("margin y f(x)"); plt.legend(); plt.show()
+`} />
+
+On overlapping classes, 20,000 subgradient steps give a boundary with 83.1% test accuracy, close to the best possible for these classes, and a mean hinge loss of 0.37: most examples lie beyond the margin, while those inside it or on the wrong side pay linearly. The plot of the three losses shows the family resemblance. The 0-1 loss is what we care about but cannot optimise; the hinge and logistic losses are convex upper bounds on it, which differ mainly in that the hinge is exactly zero for confident correct examples, the source of the SVM's sparsity.
+
+<Step n={4} title="Logistic regression's hidden margin" minutes={25} />
+
+On separable data, unpenalised logistic regression has no finite solution, and its weights grow forever. Soudry and colleagues proved in 2018 that the *direction* of the weights nevertheless converges, slowly, to the direction of the hard-margin SVM. Check it on the separable data of Step 2.
+
+<PyCell id="implicit" title="Gradient descent finds the maximum margin" tests={String.raw`
+  import numpy as np
+  def test_angle():
+      "the angle between the logistic direction and the SVM direction shrinks with training and ends below 5 degrees"
+      assert angles[-1] < angles[0] and angles[-1] < 5
+`} prompt="Run gradient descent on the unpenalised logistic loss for the separable data (labels as 0 and 1, with an intercept column), recording at several checkpoints the angle in degrees between the weight vector (without the intercept) and w_svm."
+code={String.raw`
+  A = np.c_[np.ones(40), Xs]; t01 = (Y + 1) / 2
+  w = np.zeros(3); angles, norms = [], []; checkpoints = [100, 1000, 10000, 50000]
+  for step in range(1, 50001):
+      p = 1 / (1 + np.exp(-A @ w))
+      w -= 0.5 * A.T @ (p - t01) / 40
+      if step in checkpoints:
+          cosang = ...
+          angles.append(np.degrees(np.arccos(np.clip(cosang, -1, 1)))); norms.append(np.linalg.norm(w[1:]))
+  for c, a, nw in zip(checkpoints, angles, norms):
+      print(f"after {c:6d} steps: |w| = {nw:.1f}; angle to the SVM direction {a:.2f} degrees")
+`}
+hint="cosang = w[1:] @ w_svm / (np.linalg.norm(w[1:]) * np.linalg.norm(w_svm))."
+solution={String.raw`
+  A = np.c_[np.ones(40), Xs]; t01 = (Y + 1) / 2
+  w = np.zeros(3); angles, norms = [], []; checkpoints = [100, 1000, 10000, 50000]
+  for step in range(1, 50001):
+      p = 1 / (1 + np.exp(-A @ w))
+      w -= 0.5 * A.T @ (p - t01) / 40
+      if step in checkpoints:
+          cosang = w[1:] @ w_svm / (np.linalg.norm(w[1:]) * np.linalg.norm(w_svm))
+          angles.append(np.degrees(np.arccos(np.clip(cosang, -1, 1)))); norms.append(np.linalg.norm(w[1:]))
+  for c, a, nw in zip(checkpoints, angles, norms):
+      print(f"after {c:6d} steps: |w| = {nw:.1f}; angle to the SVM direction {a:.2f} degrees")
+`} />
+
+The weight norm keeps growing (3.7, 6.4, 9.9 and 12.8 at the checkpoints), as Week 56 showed, but the direction converges: the angle to the hard-margin SVM falls from 4.4 degrees after 100 steps to 0.7 degrees after 50,000. That answers the prediction. The convergence is slow, logarithmic in the number of steps, but its destination is exactly the maximum-margin boundary, which no one asked the logistic loss to find. Among the infinitely many separating directions, gradient descent has an implicit preference, and this is the simplest proven case of a phenomenon that is thought to matter a great deal for deep networks.
+
+<Bridge title="Margins in brains and machines"
+  neuro="A neuron that must classify inputs reliably despite synaptic and input noise benefits from a large margin, and theories of how many patterns a perceptron-like neuron can store at a given robustness, from Gardner's calculations onwards, are margin calculations. Such theories predict, for example, the fraction of silent synapses expected in cerebellar Purkinje cells."
+  ai="The implicit bias you just saw, gradient descent preferring maximum-margin solutions without being asked, is one of the leading explanations of why overparameterised networks generalise: among the many weight settings that fit the training data, the optimiser picks a particular, well-behaved one.">
+
+Among all boundaries that separate the data, prefer the one that is furthest from every example.
+
+</Bridge>
+
+<Quiz id="quiz" questions={[
+  { q: "The geometric margin of an example is...", options: ["y f(x) / ‖w‖", "f(x)", "‖w‖", "y − f(x)"], answer: 0, explain: "Its signed distance from the boundary." },
+  { q: "The hard-margin SVM minimises...", options: ["½‖w‖² subject to y f(x) ≥ 1", "The hinge loss alone", "The number of errors", "The log loss"], answer: 0, explain: "Step 2." },
+  { q: "Support vectors are the examples that...", options: ["Lie on or inside the margin", "Are furthest away", "Are misclassified only", "Have the largest features"], answer: 0, explain: "Their constraints are active." },
+  { q: "Removing a non-support example from the training set...", options: ["Does not change the SVM", "Changes it completely", "Removes the margin", "Doubles w"], answer: 0, explain: "Only support vectors matter." },
+  { q: "The hinge loss is...", options: ["max(0, 1 − y f(x))", "log(1 + e^(−yf))", "(y − f)²", "1 if wrong"], answer: 0, explain: "Step 3." },
+  { q: "C in the soft-margin SVM controls...", options: ["The price of margin violations", "The kernel width", "The number of classes", "The learning rate"], answer: 0, explain: "Large C tolerates few violations." },
+  { q: "On separable data, gradient descent on the logistic loss converges in direction to...", options: ["The maximum-margin direction", "The first principal component", "A random direction", "Zero"], answer: 0, explain: "Step 4." },
+  { q: "Boser, Guyon and Vapnik combined the optimal margin with...", options: ["Kernels", "Decision trees", "Boosting", "Bagging"], answer: 0, explain: "Today's paper." },
+]} />
+
+<Flashcards cards={[
+  { front: "Hard-margin SVM?", back: "$\\min \\frac12\\lVert\\mathbf w\\rVert^2$ s.t. $y_i(\\mathbf w^\\top\\mathbf x_i + b) \\ge 1$; margin $1/\\lVert\\mathbf w\\rVert$." },
+  { front: "Soft-margin SVM?", back: "$\\frac12\\lVert\\mathbf w\\rVert^2 + C\\sum_i \\max(0, 1 - y_if(\\mathbf x_i))$." },
+  { front: "Support vectors?", back: "Examples with $y_if(\\mathbf x_i) \\le 1$; they alone determine the boundary." },
+  { front: "Hinge against logistic loss?", back: "Both penalise small margins; the hinge is exactly zero beyond margin 1, the logistic loss never quite is." },
+  { front: "Implicit bias of gradient descent?", back: "On separable data, the logistic weights' direction converges to the hard-margin SVM direction." },
+]} />
+
+<Predict revisit question="Did the direction of the unpenalised logistic weights settle down, and towards which boundary?" />
+
+<Key title="Before you go">
+<ul>
+<li>The margin is the distance from the boundary to the closest example.</li>
+<li>The hard-margin SVM is a convex quadratic programme whose solution depends only on the support vectors.</li>
+<li>The soft margin uses the hinge loss, a close cousin of the logistic loss.</li>
+<li>Gradient descent on the logistic loss quietly finds the maximum-margin direction.</li>
+</ul>
+</Key>
+
+<Reading>
+<ul>
+<li>Today's paper: Boser, Guyon and Vapnik (1992), <em>A training algorithm for optimal margin classifiers</em>.</li>
+<li>Soudry, Hoffer, Nacson, Gunasekar and Srebro (2018), <em>The implicit bias of gradient descent on separable data</em>, Journal of Machine Learning Research 19(70), 1 to 57.</li>
+</ul>
+</Reading>
+
+<JournalPrompt prompt="Explain in your own words why a large margin should help a classifier generalise to new trials. Then think of a neural decoder where robustness to small changes in the input matters (for example across sessions with electrode drift), and say how you would measure its margin." />
