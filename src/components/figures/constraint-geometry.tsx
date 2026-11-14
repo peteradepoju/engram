@@ -19,8 +19,9 @@ export function ConstraintGeometry() {
   });
   const inside = l1 ? Math.abs(W_OLS[0]) + Math.abs(W_OLS[1]) <= t : Math.hypot(W_OLS[0], W_OLS[1]) <= t;
   const best = inside ? W_OLS : pts.reduce((b, p) => (loss(p) < loss(b) ? p : b), pts[0]);
-  const sx = (v: number): number => 150 + v * 70, sy = (v: number): number => 95 - v * 70;
-  const levels = [0.05, 0.2, 0.45, 0.8, 1.25].map((c) => loss(best) + c);
+  const sx = (v: number): number => 120 + v * 60, sy = (v: number): number => 120 - v * 60;
+  const L0 = Math.max(loss(best), 0.01);
+  const levels = [1, 2.2, 4, 6.5].map((c) => c * L0);
   const ellipse = (L: number): string => Array.from({ length: 121 }, (_, i): string => {
     const a = (2 * Math.PI * i) / 120, dir = [Math.cos(a), Math.sin(a)];
     const q = dir[0] * (H[0][0] * dir[0] + H[0][1] * dir[1]) + dir[1] * (H[1][0] * dir[0] + H[1][1] * dir[1]);
